@@ -1,5 +1,6 @@
 import os
 import itertools
+import threading
 import requests
 import pandas as pd
 
@@ -37,15 +38,13 @@ BACKTEST_SLIPPAGE_TICKS = 5
 
 H1_CHUNK_DAYS = 180
 
-# Earliest EUR/USD H1 candle found from OANDA
+# Earliest EUR/USD H1 candle confirmed from OANDA
 RESEARCH_FROM = datetime(
     2002, 5, 6, 20, 0,
     tzinfo=timezone.utc
 )
 
-# Latest fully completed H1 boundary.
-# Example: if current UTC time is 21:37,
-# this becomes 21:00.
+# Latest fully completed H1 boundary
 RESEARCH_TO = (
     datetime.now(timezone.utc)
     .replace(
@@ -55,10 +54,7 @@ RESEARCH_TO = (
     )
 )
 
-# H1 warm-up for ATR / structure
 H1_WARMUP_DAYS = 60
-
-# Daily warm-up for EMA200
 DAILY_WARMUP_DAYS = 1000
 
 OUTPUT_FILE = "eurusd_short_full_history_sweep.csv"
@@ -111,27 +107,13 @@ DAILY_EMA_LENGTHS = [
 # ==================================================
 
 RESEARCH_STATUS = {
-
-    "state":
-        "not_started",
-
-    "message":
-        "Research has not started",
-
-    "research_from":
-        RESEARCH_FROM.isoformat(),
-
-    "research_to_exclusive":
-        RESEARCH_TO.isoformat(),
-
-    "total_combinations":
-        1600,
-
-    "completed_combinations":
-        0,
-
-    "rows_saved":
-        0
+    "state": "not_started",
+    "message": "Research has not started",
+    "research_from": RESEARCH_FROM.isoformat(),
+    "research_to_exclusive": RESEARCH_TO.isoformat(),
+    "total_combinations": 1600,
+    "completed_combinations": 0,
+    "rows_saved": 0
 }
 
 
@@ -142,14 +124,12 @@ RESEARCH_STATUS = {
 def headers():
 
     if not OANDA_TOKEN:
-
         raise RuntimeError(
             "OANDA_TOKEN is not configured"
         )
 
     return {
-        "Authorization":
-            f"Bearer {OANDA_TOKEN}"
+        "Authorization": f"Bearer {OANDA_TOKEN}"
     }
 
 
@@ -162,10 +142,7 @@ def iso_utc(dt):
     )
 
 
-def oanda_get(
-    path,
-    params
-):
+def oanda_get(path, params):
 
     response = requests.get(
         OANDA_URL + path,
@@ -181,23 +158,15 @@ def oanda_get(
 
 def parse_candle(raw):
 
-    if not raw.get(
-        "complete",
-        False
-    ):
-
+    if not raw.get("complete", False):
         return None
 
-    mid = raw.get(
-        "mid"
-    )
+    mid = raw.get("mid")
 
     if not mid:
-
         return None
 
     return {
-
         "time":
             datetime.fromisoformat(
                 raw["time"].replace(
@@ -207,24 +176,16 @@ def parse_candle(raw):
             ),
 
         "open":
-            float(
-                mid["o"]
-            ),
+            float(mid["o"]),
 
         "high":
-            float(
-                mid["h"]
-            ),
+            float(mid["h"]),
 
         "low":
-            float(
-                mid["l"]
-            ),
+            float(mid["l"]),
 
         "close":
-            float(
-                mid["c"]
-            )
+            float(mid["c"])
     }
 
 
@@ -236,41 +197,21 @@ def fetch_range(
 ):
 
     params = {
-
-        "price":
-            "M",
-
-        "granularity":
-            granularity,
-
-        "from":
-            iso_utc(
-                start
-            ),
-
-        "to":
-            iso_utc(
-                end
-            ),
-
-        "smooth":
-            "false",
-
-        "includeFirst":
-            "true",
-
+        "price": "M",
+        "granularity": granularity,
+        "from": iso_utc(start),
+        "to": iso_utc(end),
+        "smooth": "false",
+        "includeFirst": "true",
         "dailyAlignment":
             DAILY_ALIGNMENT_HOUR,
-
         "alignmentTimezone":
             DAILY_ALIGNMENT_TIMEZONE
     }
 
     data = oanda_get(
-
         f"/v3/instruments/"
         f"{instrument}/candles",
-
         params
     )
 
@@ -286,10 +227,7 @@ def fetch_range(
         )
 
         if candle is not None:
-
-            candles.append(
-                candle
-            )
+            candles.append(candle)
 
     candles.sort(
         key=lambda item:
@@ -313,12 +251,10 @@ def fetch_chunked_history(
     while cursor < end:
 
         chunk_end = min(
-
             cursor
             + timedelta(
                 days=H1_CHUNK_DAYS
             ),
-
             end
         )
 
@@ -358,16 +294,12 @@ def fetch_chunked_history(
 def fetch_h1_history():
 
     return fetch_chunked_history(
-
         INSTRUMENT,
         "H1",
-
         RESEARCH_FROM
         - timedelta(
-            days=
-                H1_WARMUP_DAYS
+            days=H1_WARMUP_DAYS
         ),
-
         RESEARCH_TO
     )
 
@@ -375,16 +307,12 @@ def fetch_h1_history():
 def fetch_daily_history():
 
     return fetch_chunked_history(
-
         INSTRUMENT,
         "D",
-
         RESEARCH_FROM
         - timedelta(
-            days=
-                DAILY_WARMUP_DAYS
+            days=DAILY_WARMUP_DAYS
         ),
-
         RESEARCH_TO
     )
 
@@ -400,20 +328,13 @@ def ema_series(
 
     result = [
         None
-    ] * len(
-        values
-    )
+    ] * len(values)
 
     if len(values) < length:
-
         return result
 
     initial = (
-        sum(
-            values[
-                :length
-            ]
-        )
+        sum(values[:length])
         / length
     )
 
@@ -444,18 +365,13 @@ def ema_series(
             + previous
         )
 
-        result[
-            index
-        ] = current
-
+        result[index] = current
         previous = current
 
     return result
 
 
-def true_ranges(
-    candles
-):
+def true_ranges(candles):
 
     result = []
 
@@ -479,7 +395,6 @@ def true_ranges(
             )
 
             tr = max(
-
                 candle["high"]
                 - candle["low"],
 
@@ -494,9 +409,7 @@ def true_ranges(
                 )
             )
 
-        result.append(
-            tr
-        )
+        result.append(tr)
 
     return result
 
@@ -508,20 +421,13 @@ def rma_series(
 
     result = [
         None
-    ] * len(
-        values
-    )
+    ] * len(values)
 
     if len(values) < length:
-
         return result
 
     initial = (
-        sum(
-            values[
-                :length
-            ]
-        )
+        sum(values[:length])
         / length
     )
 
@@ -546,10 +452,7 @@ def rma_series(
             + values[index]
         ) / length
 
-        result[
-            index
-        ] = current
-
+        result[index] = current
         previous = current
 
     return result
@@ -561,9 +464,7 @@ def atr_series(
 ):
 
     return rma_series(
-        true_ranges(
-            candles
-        ),
+        true_ranges(candles),
         length
     )
 
@@ -626,7 +527,6 @@ def build_daily_state(
     ):
 
         result.append({
-
             "time":
                 candle["time"],
 
@@ -693,25 +593,17 @@ def short_signal(
         14,
         structure_lookback
     ):
-
         return False
 
-    signal = (
-        h1[index]
-    )
+    signal = h1[index]
 
-    previous = (
-        h1[
-            index - 1
-        ]
-    )
+    previous = h1[
+        index - 1
+    ]
 
-    current_atr = (
-        atr[index]
-    )
+    current_atr = atr[index]
 
     if current_atr is None:
-
         return False
 
     previous_body = abs(
@@ -725,62 +617,39 @@ def short_signal(
     )
 
     if previous_body <= 0:
-
         return False
-
-    # ==============================================
-    # BODY RATIO
-    # ==============================================
 
     body_allowed = (
         current_body
-        >= (
-            previous_body
-            * body_ratio_min
-        )
+        >= previous_body
+        * body_ratio_min
     )
 
-    # ==============================================
-    # BEARISH ENGULFING
-    # ==============================================
-
     bearish_engulfing = (
-
         previous["close"]
         > previous["open"]
 
         and
-
         signal["close"]
         < signal["open"]
 
         and
-
         signal["open"]
         >= previous["close"]
 
         and
-
         signal["close"]
         <= previous["open"]
 
         and
-
         body_allowed
     )
 
     if not bearish_engulfing:
-
         return False
 
-    # ==============================================
-    # STRUCTURE
-    # ==============================================
-
     previous_highest = max(
-
         candle["high"]
-
         for candle in h1[
             index
             - structure_lookback:
@@ -795,19 +664,12 @@ def short_signal(
 
     structure_allowed = (
         distance_from_high
-        <= (
-            current_atr
-            * max_distance_atr
-        )
+        <= current_atr
+        * max_distance_atr
     )
 
     if not structure_allowed:
-
         return False
-
-    # ==============================================
-    # DAILY BEARISH REGIME
-    # ==============================================
 
     daily = previous_daily_state(
         signal["time"],
@@ -815,7 +677,6 @@ def short_signal(
     )
 
     if daily is None:
-
         return False
 
     daily_allowed = (
@@ -824,7 +685,6 @@ def short_signal(
     )
 
     if not daily_allowed:
-
         return False
 
     return True
@@ -858,49 +718,36 @@ def simulate(
         len(h1)
     ):
 
-        candle = (
-            h1[index]
-        )
+        candle = h1[index]
 
         candle_time = (
             candle["time"]
         )
 
-        # Warm-up bars can calculate indicators,
-        # but can never become trades.
+        # Warm-up bars cannot become trades.
         if candle_time < RESEARCH_FROM:
-
             continue
 
         if candle_time >= RESEARCH_TO:
-
             break
 
         # ==========================================
-        # EXIT EXISTING TRADE FIRST
+        # EXIT OPEN TRADE FIRST
         # ==========================================
 
         if open_trade is not None:
 
             stop_hit = (
                 candle["high"]
-                >= open_trade[
-                    "stop"
-                ]
+                >= open_trade["stop"]
             )
 
             target_hit = (
                 candle["low"]
-                <= open_trade[
-                    "target"
-                ]
+                <= open_trade["target"]
             )
 
-            if (
-                stop_hit
-                or
-                target_hit
-            ):
+            if stop_hit or target_hit:
 
                 exit_reason = None
                 exit_price = None
@@ -921,63 +768,40 @@ def simulate(
                         - candle["low"]
                     )
 
-                    # Short trade:
-                    # high first = stop first
-                    # low first = target first
                     if (
                         distance_to_high
                         < distance_to_low
                     ):
 
-                        exit_reason = (
-                            "STOP"
-                        )
+                        exit_reason = "STOP"
 
                         exit_price = (
-                            open_trade[
-                                "stop"
-                            ]
+                            open_trade["stop"]
                         )
 
                     else:
 
-                        exit_reason = (
-                            "TARGET"
-                        )
+                        exit_reason = "TARGET"
 
                         exit_price = (
-                            open_trade[
-                                "target"
-                            ]
+                            open_trade["target"]
                         )
 
                 elif stop_hit:
 
-                    exit_reason = (
-                        "STOP"
-                    )
+                    exit_reason = "STOP"
 
                     exit_price = (
-                        open_trade[
-                            "stop"
-                        ]
+                        open_trade["stop"]
                     )
 
                 else:
 
-                    exit_reason = (
-                        "TARGET"
-                    )
+                    exit_reason = "TARGET"
 
                     exit_price = (
-                        open_trade[
-                            "target"
-                        ]
+                        open_trade["target"]
                     )
-
-                # ==================================
-                # ACTUAL R AFTER 5-TICK SLIPPAGE
-                # ==================================
 
                 actual_risk = (
                     open_trade["stop"]
@@ -1000,7 +824,6 @@ def simulate(
                     ) / actual_risk
 
                 open_trade.update({
-
                     "exit_time":
                         candle_time
                         + timedelta(
@@ -1028,7 +851,6 @@ def simulate(
         # ==========================================
 
         if open_trade is not None:
-
             continue
 
         # ==========================================
@@ -1036,29 +858,24 @@ def simulate(
         # ==========================================
 
         if not short_signal(
-
             h1,
             atr,
             index,
             daily_state,
-
             body_ratio_min,
             structure_lookback,
             max_distance_atr
         ):
-
             continue
 
-        signal = (
-            h1[index]
-        )
+        signal = h1[index]
 
         reference_entry = (
             signal["close"]
         )
 
-        # Adverse slippage for a short means
-        # a lower sell fill.
+        # Adverse short slippage:
+        # sell 5 ticks lower.
         backtest_entry = (
             reference_entry
             - (
@@ -1081,10 +898,8 @@ def simulate(
         )
 
         if reference_risk <= 0:
-
             continue
 
-        # Target based on reference signal close.
         target = (
             reference_entry
             - (
@@ -1094,7 +909,6 @@ def simulate(
         )
 
         open_trade = {
-
             "signal_time":
                 signal["time"],
 
@@ -1141,18 +955,14 @@ def calculate_stats(
 ):
 
     completed = [
-
         trade
-
         for trade in trades
-
         if trade[
             "result_r"
         ] is not None
     ]
 
     if not completed:
-
         return None
 
     results = [
@@ -1187,36 +997,25 @@ def calculate_stats(
     )
 
     profit_factor = (
-
         gross_profit
         / gross_loss
-
         if gross_loss > 0
-
-        else float(
-            "inf"
-        )
+        else float("inf")
     )
 
     win_rate = (
-        len(
-            winners
-        )
-        / len(
-            results
-        )
+        len(winners)
+        / len(results)
         * 100
     )
 
     expectancy = (
         total_r
-        / len(
-            results
-        )
+        / len(results)
     )
 
     # ==============================================
-    # MAX DRAWDOWN IN R
+    # MAX DRAWDOWN
     # ==============================================
 
     equity = 0.0
@@ -1265,21 +1064,14 @@ def calculate_stats(
             current_losing_streak = 0
 
     return {
-
         "trades":
-            len(
-                results
-            ),
+            len(results),
 
         "winners":
-            len(
-                winners
-            ),
+            len(winners),
 
         "losers":
-            len(
-                losers
-            ),
+            len(losers),
 
         "win_rate":
             round(
@@ -1327,12 +1119,17 @@ def run_research():
     try:
 
         RESEARCH_STATUS.update({
-
             "state":
                 "fetching_data",
 
             "message":
-                "Fetching full OANDA history"
+                "Fetching full OANDA history",
+
+            "completed_combinations":
+                0,
+
+            "rows_saved":
+                0
         })
 
         print()
@@ -1345,8 +1142,8 @@ def run_research():
         print(
             "========================================"
         )
-
         print()
+
         print(
             "Research period:"
         )
@@ -1368,7 +1165,7 @@ def run_research():
         )
 
         # ==========================================
-        # LOAD DATA
+        # FETCH DATA
         # ==========================================
 
         h1 = fetch_h1_history()
@@ -1386,26 +1183,17 @@ def run_research():
             len(daily)
         )
 
-        # ==========================================
-        # ATR
-        # ==========================================
+        RESEARCH_STATUS.update({
+            "state":
+                "calculating_indicators",
 
-        print()
-        print(
-            "Calculating ATR14..."
-        )
+            "message":
+                "Calculating ATR and daily EMA data"
+        })
 
         atr = atr_series(
             h1,
             14
-        )
-
-        # ==========================================
-        # DAILY EMA CACHE
-        # ==========================================
-
-        print(
-            "Building daily EMA cache..."
         )
 
         daily_cache = {}
@@ -1422,20 +1210,15 @@ def run_research():
             )
 
         # ==========================================
-        # GRID
+        # PARAMETER GRID
         # ==========================================
 
         combinations = list(
             itertools.product(
-
                 BODY_RATIOS,
-
                 STRUCTURE_LOOKBACKS,
-
                 MAX_DISTANCE_ATR_VALUES,
-
                 REWARD_RISKS,
-
                 DAILY_EMA_LENGTHS
             )
         )
@@ -1445,7 +1228,6 @@ def run_research():
         )
 
         RESEARCH_STATUS.update({
-
             "state":
                 "running",
 
@@ -1486,21 +1268,14 @@ def run_research():
             ) = combo
 
             trades = simulate(
-
                 h1,
-
                 atr,
-
                 daily_cache[
                     daily_ema
                 ],
-
                 body_ratio,
-
                 structure_lookback,
-
                 max_distance_atr,
-
                 reward_risk
             )
 
@@ -1511,7 +1286,6 @@ def run_research():
             if stats is not None:
 
                 row = {
-
                     "body_ratio":
                         body_ratio,
 
@@ -1540,10 +1314,7 @@ def run_research():
                 "completed_combinations"
             ] = number
 
-            if (
-                number % 100
-                == 0
-            ):
+            if number % 100 == 0:
 
                 print(
                     f"Progress: "
@@ -1552,7 +1323,7 @@ def run_research():
                 )
 
         # ==========================================
-        # RESULTS
+        # BUILD RESULTS
         # ==========================================
 
         df = pd.DataFrame(
@@ -1565,26 +1336,23 @@ def run_research():
                 "No results generated"
             )
 
-        # With roughly 24 years of data,
-        # ignore very tiny samples.
+        # Ignore very small samples
         df = df[
             df["trades"]
             >= 100
         ].copy()
 
         # ==========================================
-        # RANK
+        # SORT
         # ==========================================
 
         df = df.sort_values(
-
             by=[
                 "profit_factor",
                 "expectancy_r",
                 "total_r",
                 "trades"
             ],
-
             ascending=[
                 False,
                 False,
@@ -1594,7 +1362,7 @@ def run_research():
         )
 
         # ==========================================
-        # SAVE
+        # SAVE CSV
         # ==========================================
 
         df.to_csv(
@@ -1603,7 +1371,6 @@ def run_research():
         )
 
         RESEARCH_STATUS.update({
-
             "state":
                 "complete",
 
@@ -1611,46 +1378,30 @@ def run_research():
                 "Full-history sweep complete",
 
             "rows_saved":
-                len(
-                    df
-                ),
+                len(df),
 
             "output_file":
                 OUTPUT_FILE
         })
 
         # ==========================================
-        # PRINT TOP 30
+        # LOG TOP 30
         # ==========================================
 
         columns = [
-
             "body_ratio",
-
             "structure_lookback",
-
             "max_distance_atr",
-
             "reward_risk",
-
             "daily_ema",
-
             "trades",
-
             "winners",
-
             "losers",
-
             "win_rate",
-
             "profit_factor",
-
             "total_r",
-
             "expectancy_r",
-
             "max_drawdown_r",
-
             "longest_loss_streak"
         ]
 
@@ -1687,14 +1438,11 @@ def run_research():
     except Exception as error:
 
         RESEARCH_STATUS.update({
-
             "state":
                 "error",
 
             "message":
-                str(
-                    error
-                )
+                str(error)
         })
 
         print(
@@ -1704,14 +1452,13 @@ def run_research():
 
 
 # ==================================================
-# ROUTES
+# WEB ROUTES
 # ==================================================
 
 @app.route("/")
 def home():
 
     return jsonify({
-
         "service":
             "ERF EURUSD Short Full-History Research",
 
@@ -1751,9 +1498,7 @@ def home():
     })
 
 
-@app.route(
-    "/status"
-)
+@app.route("/status")
 def status():
 
     return jsonify(
@@ -1761,9 +1506,7 @@ def status():
     )
 
 
-@app.route(
-    "/download"
-)
+@app.route("/download")
 def download():
 
     if not os.path.exists(
@@ -1771,7 +1514,6 @@ def download():
     ):
 
         return jsonify({
-
             "status":
                 "not_ready",
 
@@ -1781,11 +1523,8 @@ def download():
         }), 404
 
     return send_file(
-
         OUTPUT_FILE,
-
         as_attachment=True,
-
         download_name=
             "eurusd_short_full_history_sweep.csv"
     )
@@ -1797,7 +1536,15 @@ def download():
 
 if __name__ == "__main__":
 
-    run_research()
+    # Run the heavy research job in the background
+    # so Railway's web server starts immediately.
+    research_thread = threading.Thread(
+        target=run_research,
+        name="eurusd-short-research",
+        daemon=True
+    )
+
+    research_thread.start()
 
     port = int(
         os.getenv(
