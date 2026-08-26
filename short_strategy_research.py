@@ -43,10 +43,16 @@ RESEARCH_FROM = datetime(
     tzinfo=timezone.utc
 )
 
-# Exclusive end
-RESEARCH_TO = datetime(
-    2026, 8, 27, 0, 0,
-    tzinfo=timezone.utc
+# Latest fully completed H1 boundary.
+# Example: if current UTC time is 21:37,
+# this becomes 21:00.
+RESEARCH_TO = (
+    datetime.now(timezone.utc)
+    .replace(
+        minute=0,
+        second=0,
+        microsecond=0
+    )
 )
 
 # H1 warm-up for ATR / structure
@@ -367,9 +373,6 @@ def fetch_h1_history():
 
 
 def fetch_daily_history():
-
-    # D1 has far fewer candles, but chunking makes
-    # the code safe regardless of the requested span.
 
     return fetch_chunked_history(
 
@@ -772,9 +775,6 @@ def short_signal(
 
     # ==============================================
     # STRUCTURE
-    #
-    # Signal high must be near the previous highest
-    # high, excluding the signal candle itself.
     # ==============================================
 
     previous_highest = max(
@@ -866,13 +866,8 @@ def simulate(
             candle["time"]
         )
 
-        # ==========================================
-        # WARM-UP PROTECTION
-        #
-        # Warm-up bars calculate ATR/structure but
-        # NEVER become trades.
-        # ==========================================
-
+        # Warm-up bars can calculate indicators,
+        # but can never become trades.
         if candle_time < RESEARCH_FROM:
 
             continue
@@ -910,10 +905,6 @@ def simulate(
                 exit_reason = None
                 exit_price = None
 
-                # ==================================
-                # BOTH TOUCHED
-                # ==================================
-
                 if (
                     stop_hit
                     and
@@ -930,13 +921,9 @@ def simulate(
                         - candle["low"]
                     )
 
-                    # TradingView-style broker
-                    # emulator path approximation.
-                    #
-                    # SHORT:
-                    # High first = stop first.
-                    # Low first = target first.
-
+                    # Short trade:
+                    # high first = stop first
+                    # low first = target first
                     if (
                         distance_to_high
                         < distance_to_low
@@ -989,7 +976,7 @@ def simulate(
                     )
 
                 # ==================================
-                # ACTUAL R AFTER ENTRY SLIPPAGE
+                # ACTUAL R AFTER 5-TICK SLIPPAGE
                 # ==================================
 
                 actual_risk = (
@@ -1066,16 +1053,12 @@ def simulate(
             h1[index]
         )
 
-        # ==========================================
-        # ENTRY
-        # ==========================================
-
         reference_entry = (
             signal["close"]
         )
 
         # Adverse slippage for a short means
-        # selling LOWER than the reference close.
+        # a lower sell fill.
         backtest_entry = (
             reference_entry
             - (
@@ -1083,10 +1066,6 @@ def simulate(
                 * TICK_SIZE
             )
         )
-
-        # ==========================================
-        # STOP
-        # ==========================================
 
         stop = (
             signal["high"]
@@ -1105,14 +1084,7 @@ def simulate(
 
             continue
 
-        # ==========================================
-        # TARGET
-        #
-        # Target remains based on reference close,
-        # matching the convention used in our
-        # existing TradingView/Python strategies.
-        # ==========================================
-
+        # Target based on reference signal close.
         target = (
             reference_entry
             - (
@@ -1593,8 +1565,8 @@ def run_research():
                 "No results generated"
             )
 
-        # With 24 years of data there is no reason
-        # to consider extremely tiny samples.
+        # With roughly 24 years of data,
+        # ignore very tiny samples.
         df = df[
             df["trades"]
             >= 100
