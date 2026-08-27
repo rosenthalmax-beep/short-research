@@ -56,19 +56,21 @@ H1_WARMUP_DAYS = 90
 DAILY_WARMUP_DAYS = 1500
 
 OUTPUT_FILE = (
-    "eurusd_short_high_ema_filters_sweep.csv"
+    "eurusd_short_final_core_refinement.csv"
 )
 
 
 # ==================================================
-# EXISTING ROBUST NEIGHBOURHOOD
-#
-# Still:
-# - ALL HOURS
-# - ALL WEEKDAYS
-#
-# RR and slow EMA have already shown strong
-# interior optima, so they stay fixed here.
+# FIXED PARAMETERS
+# ==================================================
+
+REWARD_RISK = 4.00
+
+SLOW_EMA_LENGTH = 100
+
+
+# ==================================================
+# REFINEMENT GRID
 # ==================================================
 
 BODY_RATIOS = [
@@ -82,118 +84,60 @@ STRUCTURE_LOOKBACKS = [
     60
 ]
 
-REWARD_RISK = 4.00
-
-SLOW_EMA_LENGTH = 100
+# Original-style recent-high filter:
+#
+# previous_high - signal_high
+# <= ATR * distance
+#
+# Signal is therefore allowed to make a new high too.
+RECENT_HIGH_DISTANCE_ATR_VALUES = [
+    0.10,
+    0.125,
+    0.15,
+    0.175,
+    0.20,
+    0.225,
+    0.25
+]
 
 FAST_EMA_LENGTHS = [
-    60,
-    70,
+    75,
     80,
-    90
+    85,
+    90,
+    95
 ]
 
 STRONG_CLOSE_LEVELS = [
+    0.225,
     0.25,
     0.275
 ]
 
-
-# ==================================================
-# PREVIOUS-HIGH RELATIONSHIP
-#
-# excess_atr =
-#
-#   (signal high - previous N-bar high) / ATR14
-#
-# Examples:
-#
-# -0.10 = signal stopped 0.10 ATR below old high
-#  0.00 = exactly touched old high
-# +0.10 = exceeded old high by 0.10 ATR
-#
-# The first three reproduce the old "near high"
-# logic at different thresholds, including its
-# unbounded-above behaviour.
-# ==================================================
-
-HIGH_RELATIONSHIPS = [
-
-    "NEAR_015",
-    "NEAR_020",
-    "NEAR_025",
-
-    "TOUCH_OR_EXCEED",
-
-    "EXCEED_000_TO_010",
-
-    "WITHIN_MINUS010_PLUS010",
-
-    "WITHIN_MINUS010_PLUS020"
-]
-
-
-# ==================================================
-# EMA SLOPE FILTER
-#
-# Uses previous completed daily EMA compared with
-# the EMA on the completed daily candle before it.
-# ==================================================
-
-EMA_SLOPE_MODES = [
-
-    "OFF",
-
-    "FAST_FALLING",
-
-    "SLOW_FALLING",
-
-    "BOTH_FALLING"
-]
-
-
-# ==================================================
-# EMA SEPARATION
-#
-# (slow EMA - fast EMA) / daily ATR14
-#
-# Because fast EMA must already be below slow EMA,
-# positive values mean bearish separation.
-# ==================================================
-
+# None = disabled
 EMA_SEPARATION_ATR_VALUES = [
-
     None,
-
     0.05,
-
     0.10,
-
-    0.15
+    0.15,
+    0.175,
+    0.20,
+    0.25
 ]
 
 
 # ==================================================
-# TOTAL COMBINATIONS
+# TOTAL
 #
-# 2 body
-# x 3 structure
-# x 4 fast EMA
-# x 2 strong close
-# x 7 high relationship
-# x 4 EMA slope
-# x 4 separation
-#
-# = 10,752
+# 2 × 3 × 7 × 5 × 3 × 7 = 4,410
 # ==================================================
 
 TOTAL_COMBINATIONS = (
     len(BODY_RATIOS)
     * len(STRUCTURE_LOOKBACKS)
+    * len(RECENT_HIGH_DISTANCE_ATR_VALUES)
     * len(FAST_EMA_LENGTHS)
     * len(STRONG_CLOSE_LEVELS)
-    * len(HIGH_RELATIONSHIPS)
-    * len(EMA_SLOPE_MODES)
     * len(EMA_SEPARATION_ATR_VALUES)
 )
 
@@ -294,9 +238,7 @@ def parse_candle(raw):
 
         return None
 
-    mid = raw.get(
-        "mid"
-    )
+    mid = raw.get("mid")
 
     if not mid:
 
@@ -313,24 +255,16 @@ def parse_candle(raw):
             ),
 
         "open":
-            float(
-                mid["o"]
-            ),
+            float(mid["o"]),
 
         "high":
-            float(
-                mid["h"]
-            ),
+            float(mid["h"]),
 
         "low":
-            float(
-                mid["l"]
-            ),
+            float(mid["l"]),
 
         "close":
-            float(
-                mid["c"]
-            )
+            float(mid["c"])
     }
 
 
@@ -369,10 +303,8 @@ def fetch_range(
     }
 
     data = oanda_get(
-
         f"/v3/instruments/"
         f"{instrument}/candles",
-
         params
     )
 
@@ -383,9 +315,7 @@ def fetch_range(
         []
     ):
 
-        candle = parse_candle(
-            raw
-        )
+        candle = parse_candle(raw)
 
         if candle is not None:
 
@@ -410,12 +340,10 @@ def fetch_chunked_history(
     while cursor < end:
 
         chunk_end = min(
-
             cursor
             + timedelta(
                 days=H1_CHUNK_DAYS
             ),
-
             end
         )
 
@@ -446,8 +374,8 @@ def fetch_chunked_history(
     )
 
     candles.sort(
-        key=lambda item:
-            item["time"]
+        key=lambda x:
+            x["time"]
     )
 
     return candles
@@ -511,9 +439,7 @@ def ema_series(
     return result
 
 
-def true_ranges(
-    candles
-):
+def true_ranges(candles):
 
     result = []
 
@@ -523,7 +449,7 @@ def true_ranges(
 
         if index == 0:
 
-            value = (
+            tr = (
                 candle["high"]
                 - candle["low"]
             )
@@ -536,7 +462,7 @@ def true_ranges(
                 ]["close"]
             )
 
-            value = max(
+            tr = max(
 
                 candle["high"]
                 - candle["low"],
@@ -553,7 +479,7 @@ def true_ranges(
             )
 
         result.append(
-            value
+            tr
         )
 
     return result
@@ -573,9 +499,7 @@ def rma_series(
         return result
 
     initial = (
-        sum(
-            values[:length]
-        )
+        sum(values[:length])
         / length
     )
 
@@ -601,7 +525,6 @@ def rma_series(
         ) / length
 
         result[index] = current
-
         previous = current
 
     return result
@@ -613,9 +536,7 @@ def atr_series(
 ):
 
     return rma_series(
-        true_ranges(
-            candles
-        ),
+        true_ranges(candles),
         length
     )
 
@@ -669,7 +590,7 @@ def build_daily_indicator_cache(
         for candle in daily
     ]
 
-    required_ema_lengths = sorted(
+    ema_lengths = sorted(
         set(
             [
                 SLOW_EMA_LENGTH
@@ -680,7 +601,7 @@ def build_daily_indicator_cache(
 
     ema_cache = {}
 
-    for length in required_ema_lengths:
+    for length in ema_lengths:
 
         ema_cache[
             length
@@ -703,10 +624,6 @@ def build_daily_indicator_cache(
     }
 
 
-# ==================================================
-# H1 -> PREVIOUS COMPLETED DAILY STATE
-# ==================================================
-
 def build_h1_daily_lookup(
     h1,
     daily,
@@ -714,7 +631,8 @@ def build_h1_daily_lookup(
 ):
 
     print(
-        "Building H1 -> completed daily state...",
+        "Building previous completed "
+        "daily-state lookup...",
         flush=True
     )
 
@@ -758,7 +676,7 @@ def build_h1_daily_lookup(
 
             daily_index += 1
 
-        if daily_index < 1:
+        if daily_index < 0:
 
             continue
 
@@ -785,12 +703,6 @@ def build_h1_daily_lookup(
                 daily_index
             ]
 
-            row[
-                f"prev_ema_{length}"
-            ] = series[
-                daily_index - 1
-            ]
-
         lookup[
             h1_index
         ] = row
@@ -799,7 +711,7 @@ def build_h1_daily_lookup(
 
 
 # ==================================================
-# PRECOMPUTE BASE BEARISH ENGULFINGS
+# PRECOMPUTE BASE ENGULFINGS
 # ==================================================
 
 def build_signal_candidates(
@@ -809,8 +721,7 @@ def build_signal_candidates(
 ):
 
     print(
-        "Precomputing bearish engulfing "
-        "candidates...",
+        "Precomputing bearish engulfings...",
         flush=True
     )
 
@@ -829,17 +740,11 @@ def build_signal_candidates(
             index
         ]
 
-        if (
-            signal["time"]
-            < RESEARCH_FROM
-        ):
+        if signal["time"] < RESEARCH_FROM:
 
             continue
 
-        if (
-            signal["time"]
-            >= RESEARCH_TO
-        ):
+        if signal["time"] >= RESEARCH_TO:
 
             break
 
@@ -861,8 +766,7 @@ def build_signal_candidates(
 
         if (
             current_atr is None
-            or
-            daily is None
+            or daily is None
         ):
 
             continue
@@ -884,15 +788,12 @@ def build_signal_candidates(
 
         if (
             previous_body <= 0
-            or
-            current_body <= 0
-            or
-            signal_range <= 0
+            or current_body <= 0
+            or signal_range <= 0
         ):
 
             continue
 
-        # Basic bearish engulfing.
         bearish_engulfing = (
 
             previous["close"]
@@ -931,7 +832,7 @@ def build_signal_candidates(
             / signal_range
         )
 
-        high_excess_atr = {}
+        recent_high_distance = {}
 
         for lookback in (
             STRUCTURE_LOOKBACKS
@@ -947,14 +848,16 @@ def build_signal_candidates(
                 ]
             )
 
-            excess = (
-                signal["high"]
-                - previous_highest
+            # Exact same logic as original
+            # short structure filter.
+            distance_atr = (
+                previous_highest
+                - signal["high"]
             ) / current_atr
 
-            high_excess_atr[
+            recent_high_distance[
                 lookback
-            ] = excess
+            ] = distance_atr
 
         candidates.append({
 
@@ -970,8 +873,8 @@ def build_signal_candidates(
             "close_location":
                 close_location,
 
-            "high_excess_atr":
-                high_excess_atr,
+            "recent_high_distance":
+                recent_high_distance,
 
             "daily":
                 daily
@@ -981,153 +884,82 @@ def build_signal_candidates(
 
 
 # ==================================================
-# HIGH RELATIONSHIP FILTER
+# CANDIDATE FILTER
 # ==================================================
 
-def high_relationship_allowed(
-    excess_atr,
-    mode
-):
-
-    # ----------------------------------------------
-    # Original near-high logic:
-    #
-    # previousHigh - signalHigh <= threshold * ATR
-    #
-    # Equivalent:
-    #
-    # signalHigh - previousHigh >= -threshold * ATR
-    #
-    # There is NO upper bound.
-    # ----------------------------------------------
-
-    if mode == "NEAR_015":
-
-        return (
-            excess_atr
-            >= -0.15
-        )
-
-    if mode == "NEAR_020":
-
-        return (
-            excess_atr
-            >= -0.20
-        )
-
-    if mode == "NEAR_025":
-
-        return (
-            excess_atr
-            >= -0.25
-        )
-
-    # ----------------------------------------------
-    # Must at least touch previous high
-    # ----------------------------------------------
-
-    if mode == "TOUCH_OR_EXCEED":
-
-        return (
-            excess_atr
-            >= 0.0
-        )
-
-    # ----------------------------------------------
-    # Must sweep previous high, but not by more
-    # than 0.10 ATR
-    # ----------------------------------------------
-
-    if mode == "EXCEED_000_TO_010":
-
-        return (
-            excess_atr
-            >= 0.0
-            and
-            excess_atr
-            <= 0.10
-        )
-
-    # ----------------------------------------------
-    # Tight band around previous high
-    # ----------------------------------------------
-
-    if mode == "WITHIN_MINUS010_PLUS010":
-
-        return (
-            excess_atr
-            >= -0.10
-            and
-            excess_atr
-            <= 0.10
-        )
-
-    # ----------------------------------------------
-    # Slightly wider breakout allowance
-    # ----------------------------------------------
-
-    if mode == "WITHIN_MINUS010_PLUS020":
-
-        return (
-            excess_atr
-            >= -0.10
-            and
-            excess_atr
-            <= 0.20
-        )
-
-    raise ValueError(
-        f"Unknown high relationship: {mode}"
-    )
-
-
-# ==================================================
-# EMA FILTERS
-# ==================================================
-
-def ema_filters_allowed(
-    daily,
+def candidate_allowed(
+    candidate,
+    body_ratio,
+    structure_lookback,
+    recent_high_distance_atr,
     fast_ema_length,
-    slope_mode,
+    strong_close,
     separation_atr
 ):
 
+    # ==============================================
+    # BODY
+    # ==============================================
+
+    if (
+        candidate[
+            "body_ratio"
+        ]
+        < body_ratio
+    ):
+
+        return False
+
+    # ==============================================
+    # STRONG CLOSE
+    # ==============================================
+
+    if (
+        candidate[
+            "close_location"
+        ]
+        > strong_close
+    ):
+
+        return False
+
+    # ==============================================
+    # RECENT HIGH
+    # ==============================================
+
+    if (
+        candidate[
+            "recent_high_distance"
+        ][structure_lookback]
+        > recent_high_distance_atr
+    ):
+
+        return False
+
+    # ==============================================
+    # DAILY EMA REGIME
+    # ==============================================
+
+    daily = candidate[
+        "daily"
+    ]
+
     slow_ema = daily.get(
         f"ema_{SLOW_EMA_LENGTH}"
-    )
-
-    previous_slow_ema = daily.get(
-        f"prev_ema_{SLOW_EMA_LENGTH}"
     )
 
     fast_ema = daily.get(
         f"ema_{fast_ema_length}"
     )
 
-    previous_fast_ema = daily.get(
-        f"prev_ema_{fast_ema_length}"
-    )
-
-    daily_atr = daily.get(
-        "daily_atr"
-    )
-
     if (
         slow_ema is None
-        or
-        previous_slow_ema is None
-        or
-        fast_ema is None
-        or
-        previous_fast_ema is None
+        or fast_ema is None
     ):
 
         return False
 
-    # ----------------------------------------------
-    # Existing bearish regime
-    # ----------------------------------------------
-
+    # Daily close below EMA100
     if not (
         daily["close"]
         < slow_ema
@@ -1135,7 +967,7 @@ def ema_filters_allowed(
 
         return False
 
-    # Existing EMA alignment
+    # Fast EMA below slow EMA
     if not (
         fast_ema
         < slow_ema
@@ -1143,61 +975,19 @@ def ema_filters_allowed(
 
         return False
 
-    # ----------------------------------------------
-    # EMA slope
-    # ----------------------------------------------
-
-    fast_falling = (
-        fast_ema
-        < previous_fast_ema
-    )
-
-    slow_falling = (
-        slow_ema
-        < previous_slow_ema
-    )
-
-    if slope_mode == "FAST_FALLING":
-
-        if not fast_falling:
-
-            return False
-
-    elif slope_mode == "SLOW_FALLING":
-
-        if not slow_falling:
-
-            return False
-
-    elif slope_mode == "BOTH_FALLING":
-
-        if not (
-            fast_falling
-            and
-            slow_falling
-        ):
-
-            return False
-
-    elif slope_mode != "OFF":
-
-        raise ValueError(
-            f"Unknown EMA slope mode: "
-            f"{slope_mode}"
-        )
-
-    # ----------------------------------------------
-    # EMA separation
-    #
-    # slow - fast must be at least X daily ATR.
-    # ----------------------------------------------
+    # ==============================================
+    # EMA SEPARATION
+    # ==============================================
 
     if separation_atr is not None:
 
+        daily_atr = daily.get(
+            "daily_atr"
+        )
+
         if (
             daily_atr is None
-            or
-            daily_atr <= 0
+            or daily_atr <= 0
         ):
 
             return False
@@ -1213,60 +1003,6 @@ def ema_filters_allowed(
         ):
 
             return False
-
-    return True
-
-
-# ==================================================
-# FAST CANDIDATE FILTER
-# ==================================================
-
-def fast_candidate_allowed(
-    candidate,
-    body_ratio,
-    structure_lookback,
-    fast_ema_length,
-    strong_close,
-    high_relationship,
-    slope_mode,
-    separation_atr
-):
-
-    if (
-        candidate["body_ratio"]
-        < body_ratio
-    ):
-
-        return False
-
-    if (
-        candidate["close_location"]
-        > strong_close
-    ):
-
-        return False
-
-    excess_atr = (
-        candidate[
-            "high_excess_atr"
-        ][structure_lookback]
-    )
-
-    if not high_relationship_allowed(
-        excess_atr,
-        high_relationship
-    ):
-
-        return False
-
-    if not ema_filters_allowed(
-        candidate["daily"],
-        fast_ema_length,
-        slope_mode,
-        separation_atr
-    ):
-
-        return False
 
     return True
 
@@ -1297,7 +1033,8 @@ def calculate_trade_exit(
         signal["close"]
     )
 
-    # Adverse short slippage
+    # Adverse short slippage:
+    # sell lower than signal close
     backtest_entry = (
         reference_entry
         - (
@@ -1376,16 +1113,18 @@ def calculate_trade_exit(
 
         if not (
             stop_hit
-            or
-            target_hit
+            or target_hit
         ):
 
             continue
 
+        # ==========================================
+        # BOTH HIT SAME H1
+        # ==========================================
+
         if (
             stop_hit
-            and
-            target_hit
+            and target_hit
         ):
 
             distance_to_high = abs(
@@ -1479,11 +1218,13 @@ def simulate_fast(
     for candidate in candidates:
 
         signal_index = (
-            candidate["index"]
+            candidate[
+                "index"
+            ]
         )
 
-        # Same-candle signal allowed after
-        # an existing trade exits.
+        # Existing trade may exit during this H1
+        # and a fresh signal may occur at its close.
         if (
             signal_index
             < position_exit_index
@@ -1505,7 +1246,9 @@ def simulate_fast(
         )
 
         position_exit_index = (
-            trade["exit_index"]
+            trade[
+                "exit_index"
+            ]
         )
 
     return trades
@@ -1522,10 +1265,9 @@ def slow_signal_allowed(
     index,
     body_ratio,
     structure_lookback,
+    recent_high_distance_atr,
     fast_ema_length,
     strong_close,
-    high_relationship,
-    slope_mode,
     separation_atr
 ):
 
@@ -1536,44 +1278,31 @@ def slow_signal_allowed(
 
         return False
 
-    signal = h1[
-        index
-    ]
+    signal = h1[index]
 
     previous = h1[
         index - 1
     ]
 
-    if (
-        signal["time"]
-        < RESEARCH_FROM
-    ):
+    if signal["time"] < RESEARCH_FROM:
 
         return False
 
-    if (
-        signal["time"]
-        >= RESEARCH_TO
-    ):
+    if signal["time"] >= RESEARCH_TO:
 
         return False
 
     current_atr = (
-        h1_atr[
-            index
-        ]
+        h1_atr[index]
     )
 
     daily = (
-        daily_lookup[
-            index
-        ]
+        daily_lookup[index]
     )
 
     if (
         current_atr is None
-        or
-        daily is None
+        or daily is None
     ):
 
         return False
@@ -1595,17 +1324,15 @@ def slow_signal_allowed(
 
     if (
         previous_body <= 0
-        or
-        current_body <= 0
-        or
-        signal_range <= 0
+        or current_body <= 0
+        or signal_range <= 0
     ):
 
         return False
 
-    # ----------------------------------------------
-    # Bearish engulfing
-    # ----------------------------------------------
+    # ==============================================
+    # BEARISH ENGULFING
+    # ==============================================
 
     if not (
 
@@ -1630,9 +1357,9 @@ def slow_signal_allowed(
 
         return False
 
-    # ----------------------------------------------
-    # Body
-    # ----------------------------------------------
+    # ==============================================
+    # BODY
+    # ==============================================
 
     if (
         current_body
@@ -1642,9 +1369,9 @@ def slow_signal_allowed(
 
         return False
 
-    # ----------------------------------------------
-    # Strong close
-    # ----------------------------------------------
+    # ==============================================
+    # STRONG CLOSE
+    # ==============================================
 
     close_location = (
         (
@@ -1661,9 +1388,9 @@ def slow_signal_allowed(
 
         return False
 
-    # ----------------------------------------------
-    # Previous high relationship
-    # ----------------------------------------------
+    # ==============================================
+    # RECENT HIGH
+    # ==============================================
 
     previous_highest = max(
 
@@ -1675,30 +1402,80 @@ def slow_signal_allowed(
         ]
     )
 
-    excess_atr = (
-        signal["high"]
-        - previous_highest
-    ) / current_atr
+    distance_from_high = (
+        previous_highest
+        - signal["high"]
+    )
 
-    if not high_relationship_allowed(
-        excess_atr,
-        high_relationship
+    if (
+        distance_from_high
+        > current_atr
+        * recent_high_distance_atr
     ):
 
         return False
 
-    # ----------------------------------------------
-    # EMA regime/slope/separation
-    # ----------------------------------------------
+    # ==============================================
+    # EMA REGIME
+    # ==============================================
 
-    if not ema_filters_allowed(
-        daily,
-        fast_ema_length,
-        slope_mode,
-        separation_atr
+    slow_ema = daily.get(
+        f"ema_{SLOW_EMA_LENGTH}"
+    )
+
+    fast_ema = daily.get(
+        f"ema_{fast_ema_length}"
+    )
+
+    if (
+        slow_ema is None
+        or fast_ema is None
     ):
 
         return False
+
+    if not (
+        daily["close"]
+        < slow_ema
+    ):
+
+        return False
+
+    if not (
+        fast_ema
+        < slow_ema
+    ):
+
+        return False
+
+    # ==============================================
+    # EMA SEPARATION
+    # ==============================================
+
+    if separation_atr is not None:
+
+        daily_atr = daily.get(
+            "daily_atr"
+        )
+
+        if (
+            daily_atr is None
+            or daily_atr <= 0
+        ):
+
+            return False
+
+        separation = (
+            slow_ema
+            - fast_ema
+        ) / daily_atr
+
+        if (
+            separation
+            < separation_atr
+        ):
+
+            return False
 
     return True
 
@@ -1713,10 +1490,9 @@ def simulate_slow_reference(
     daily_lookup,
     body_ratio,
     structure_lookback,
+    recent_high_distance_atr,
     fast_ema_length,
     strong_close,
-    high_relationship,
-    slope_mode,
     separation_atr
 ):
 
@@ -1742,23 +1518,17 @@ def simulate_slow_reference(
             candle["time"]
         )
 
-        if (
-            candle_time
-            < RESEARCH_FROM
-        ):
+        if candle_time < RESEARCH_FROM:
 
             continue
 
-        if (
-            candle_time
-            >= RESEARCH_TO
-        ):
+        if candle_time >= RESEARCH_TO:
 
             break
 
-        # ------------------------------------------
-        # EXIT EXISTING TRADE FIRST
-        # ------------------------------------------
+        # ==========================================
+        # EXIT FIRST
+        # ==========================================
 
         if open_trade is not None:
 
@@ -1774,14 +1544,12 @@ def simulate_slow_reference(
 
             if (
                 stop_hit
-                or
-                target_hit
+                or target_hit
             ):
 
                 if (
                     stop_hit
-                    and
-                    target_hit
+                    and target_hit
                 ):
 
                     distance_to_high = abs(
@@ -1856,14 +1624,6 @@ def simulate_slow_reference(
                     "exit_index":
                         index,
 
-                    "signal_time":
-                        open_trade[
-                            "signal_time"
-                        ],
-
-                    "exit_time":
-                        candle_time,
-
                     "exit_reason":
                         exit_reason,
 
@@ -1877,21 +1637,27 @@ def simulate_slow_reference(
 
             continue
 
-        # ------------------------------------------
-        # NEW SIGNAL
-        # ------------------------------------------
+        # ==========================================
+        # SIGNAL
+        # ==========================================
 
         if not slow_signal_allowed(
+
             h1,
             h1_atr,
             daily_lookup,
             index,
+
             body_ratio,
+
             structure_lookback,
+
+            recent_high_distance_atr,
+
             fast_ema_length,
+
             strong_close,
-            high_relationship,
-            slope_mode,
+
             separation_atr
         ):
 
@@ -1943,9 +1709,6 @@ def simulate_slow_reference(
             "signal_index":
                 index,
 
-            "signal_time":
-                signal["time"],
-
             "backtest_entry":
                 backtest_entry,
 
@@ -1976,7 +1739,7 @@ def trades_match(
         return (
             False,
             (
-                f"Count mismatch: "
+                f"Trade count mismatch: "
                 f"slow={len(slow_trades)}, "
                 f"fast={len(fast_trades)}"
             )
@@ -2013,8 +1776,10 @@ def trades_match(
                 )
 
         if not math.isclose(
+
             slow_trade["result_r"],
             fast_trade["result_r"],
+
             rel_tol=1e-12,
             abs_tol=1e-12
         ):
@@ -2037,7 +1802,7 @@ def run_parity_test(
     h1,
     h1_atr,
     daily_lookup,
-    all_candidates
+    candidates
 ):
 
     RESEARCH_STATUS.update({
@@ -2046,7 +1811,7 @@ def run_parity_test(
             "parity_test",
 
         "message":
-            "Checking fast engine against slow engine",
+            "Validating fast engine",
 
         "parity_test":
             "running",
@@ -2057,65 +1822,59 @@ def run_parity_test(
 
     cases = [
 
-        {
-            "body": 1.30,
-            "lookback": 55,
-            "fast": 70,
-            "close": 0.25,
-            "high": "NEAR_025",
-            "slope": "OFF",
-            "separation": None
-        },
+        (
+            1.30,
+            50,
+            0.10,
+            75,
+            0.225,
+            None
+        ),
 
-        {
-            "body": 1.35,
-            "lookback": 55,
-            "fast": 90,
-            "close": 0.25,
-            "high": "TOUCH_OR_EXCEED",
-            "slope": "FAST_FALLING",
-            "separation": 0.05
-        },
+        (
+            1.30,
+            55,
+            0.25,
+            80,
+            0.25,
+            0.05
+        ),
 
-        {
-            "body": 1.30,
-            "lookback": 50,
-            "fast": 60,
-            "close": 0.275,
-            "high": "EXCEED_000_TO_010",
-            "slope": "BOTH_FALLING",
-            "separation": 0.10
-        },
+        (
+            1.35,
+            60,
+            0.15,
+            95,
+            0.275,
+            0.10
+        ),
 
-        {
-            "body": 1.35,
-            "lookback": 60,
-            "fast": 80,
-            "close": 0.275,
-            "high": "WITHIN_MINUS010_PLUS010",
-            "slope": "SLOW_FALLING",
-            "separation": 0.15
-        },
+        (
+            1.30,
+            55,
+            0.175,
+            90,
+            0.25,
+            0.15
+        ),
 
-        {
-            "body": 1.30,
-            "lookback": 55,
-            "fast": 70,
-            "close": 0.25,
-            "high": "WITHIN_MINUS010_PLUS020",
-            "slope": "BOTH_FALLING",
-            "separation": None
-        },
+        (
+            1.35,
+            50,
+            0.225,
+            85,
+            0.225,
+            0.20
+        ),
 
-        {
-            "body": 1.35,
-            "lookback": 50,
-            "fast": 90,
-            "close": 0.25,
-            "high": "NEAR_015",
-            "slope": "FAST_FALLING",
-            "separation": 0.15
-        }
+        (
+            1.35,
+            60,
+            0.25,
+            95,
+            0.275,
+            0.25
+        )
     ]
 
     for number, case in enumerate(
@@ -2123,58 +1882,62 @@ def run_parity_test(
         start=1
     ):
 
-        slow_trades = (
-            simulate_slow_reference(
-                h1,
-                h1_atr,
-                daily_lookup,
+        (
+            body,
+            lookback,
+            distance,
+            fast_ema,
+            strong_close,
+            separation
+        ) = case
 
-                case["body"],
-                case["lookback"],
-                case["fast"],
-                case["close"],
-                case["high"],
-                case["slope"],
-                case["separation"]
-            )
+        slow = simulate_slow_reference(
+
+            h1,
+            h1_atr,
+            daily_lookup,
+
+            body,
+            lookback,
+            distance,
+            fast_ema,
+            strong_close,
+            separation
         )
 
         eligible = [
 
             candidate
 
-            for candidate in all_candidates
+            for candidate in candidates
 
-            if fast_candidate_allowed(
+            if candidate_allowed(
 
                 candidate,
 
-                case["body"],
-                case["lookback"],
-                case["fast"],
-                case["close"],
-                case["high"],
-                case["slope"],
-                case["separation"]
+                body,
+                lookback,
+                distance,
+                fast_ema,
+                strong_close,
+                separation
             )
         ]
 
-        fast_trades = (
-            simulate_fast(
-                h1,
-                eligible
-            )
+        fast = simulate_fast(
+            h1,
+            eligible
         )
 
         match, message = trades_match(
-            slow_trades,
-            fast_trades
+            slow,
+            fast
         )
 
         print(
             f"Parity {number}: "
-            f"slow={len(slow_trades)}, "
-            f"fast={len(fast_trades)} "
+            f"slow={len(slow)}, "
+            f"fast={len(fast)} "
             f"-> {message}",
             flush=True
         )
@@ -2189,7 +1952,7 @@ def run_parity_test(
                 "message":
                     (
                         f"Parity failed "
-                        f"in case {number}: "
+                        f"case {number}: "
                         f"{message}"
                     )
             })
@@ -2277,9 +2040,9 @@ def calculate_stats(
         / len(results)
     )
 
-    # ----------------------------------------------
+    # ==============================================
     # DRAWDOWN
-    # ----------------------------------------------
+    # ==============================================
 
     equity = 0.0
     peak = 0.0
@@ -2299,9 +2062,9 @@ def calculate_stats(
             equity - peak
         )
 
-    # ----------------------------------------------
+    # ==============================================
     # LOSING STREAK
-    # ----------------------------------------------
+    # ==============================================
 
     longest_loss_streak = 0
     current_loss_streak = 0
@@ -2407,19 +2170,18 @@ def run_research():
             "========================================"
         )
         print(
-            "EUR/USD HIGH + EMA FILTER SWEEP"
+            "EUR/USD FINAL CORE REFINEMENT"
         )
         print(
             "========================================"
         )
-        print()
 
         print(
-            "ALL HOURS ENABLED"
+            "ALL HOURS"
         )
 
         print(
-            "ALL WEEKDAYS ENABLED"
+            "ALL WEEKDAYS"
         )
 
         print(
@@ -2428,6 +2190,10 @@ def run_research():
 
         print(
             "Slow EMA = 100"
+        )
+
+        print(
+            "EMA slope = OFF"
         )
 
         print(
@@ -2477,17 +2243,17 @@ def run_research():
         )
 
         print(
-            "H1 candles:",
+            "H1:",
             len(h1)
         )
 
         print(
-            "Daily candles:",
+            "Daily:",
             len(daily)
         )
 
         # ==========================================
-        # INDICATORS
+        # PRECOMPUTE
         # ==========================================
 
         RESEARCH_STATUS.update({
@@ -2496,7 +2262,7 @@ def run_research():
                 "precomputing",
 
             "message":
-                "Building ATR, EMA and signal cache"
+                "Building ATR / EMA / signal cache"
         })
 
         h1_atr = atr_series(
@@ -2518,7 +2284,7 @@ def run_research():
             )
         )
 
-        all_candidates = (
+        candidates = (
             build_signal_candidates(
                 h1,
                 h1_atr,
@@ -2529,15 +2295,12 @@ def run_research():
         RESEARCH_STATUS[
             "base_signal_candidates"
         ] = len(
-            all_candidates
+            candidates
         )
 
         print(
-            "Base candidates:",
-            len(
-                all_candidates
-            ),
-            flush=True
+            "Base bearish engulfings:",
+            len(candidates)
         )
 
         # ==========================================
@@ -2548,30 +2311,26 @@ def run_research():
             h1,
             h1_atr,
             daily_lookup,
-            all_candidates
+            candidates
         )
 
         # ==========================================
         # GRID
         # ==========================================
 
-        combinations = (
-            itertools.product(
+        combinations = itertools.product(
 
-                BODY_RATIOS,
+            BODY_RATIOS,
 
-                STRUCTURE_LOOKBACKS,
+            STRUCTURE_LOOKBACKS,
 
-                FAST_EMA_LENGTHS,
+            RECENT_HIGH_DISTANCE_ATR_VALUES,
 
-                STRONG_CLOSE_LEVELS,
+            FAST_EMA_LENGTHS,
 
-                HIGH_RELATIONSHIPS,
+            STRONG_CLOSE_LEVELS,
 
-                EMA_SLOPE_MODES,
-
-                EMA_SEPARATION_ATR_VALUES
-            )
+            EMA_SEPARATION_ATR_VALUES
         )
 
         RESEARCH_STATUS.update({
@@ -2582,7 +2341,7 @@ def run_research():
             "message":
                 (
                     "Parity passed. "
-                    "Testing high / EMA filters."
+                    "Running 4,410 combinations."
                 ),
 
             "completed_combinations":
@@ -2599,29 +2358,33 @@ def run_research():
             (
                 body_ratio,
                 structure_lookback,
+                recent_high_distance,
                 fast_ema,
                 strong_close,
-                high_relationship,
-                slope_mode,
-                separation_atr
+                separation
             ) = combo
 
             eligible = [
 
                 candidate
 
-                for candidate in all_candidates
+                for candidate in candidates
 
-                if fast_candidate_allowed(
+                if candidate_allowed(
 
                     candidate,
+
                     body_ratio,
+
                     structure_lookback,
+
+                    recent_high_distance,
+
                     fast_ema,
+
                     strong_close,
-                    high_relationship,
-                    slope_mode,
-                    separation_atr
+
+                    separation
                 )
             ]
 
@@ -2644,6 +2407,9 @@ def run_research():
                     "structure_lookback":
                         structure_lookback,
 
+                    "recent_high_distance_atr":
+                        recent_high_distance,
+
                     "reward_risk":
                         REWARD_RISK,
 
@@ -2656,18 +2422,11 @@ def run_research():
                     "strong_bearish_close":
                         strong_close,
 
-                    "high_relationship":
-                        high_relationship,
-
-                    "ema_slope":
-                        slope_mode,
-
                     "ema_separation_atr":
                         (
                             "OFF"
-                            if separation_atr
-                            is None
-                            else separation_atr
+                            if separation is None
+                            else separation
                         ),
 
                     "raw_signals":
@@ -2686,7 +2445,7 @@ def run_research():
                 "completed_combinations"
             ] = number
 
-            if number % 500 == 0:
+            if number % 250 == 0:
 
                 print(
                     f"Progress: "
@@ -2738,7 +2497,7 @@ def run_research():
 
             "message":
                 (
-                    "High / EMA filter sweep "
+                    "Final core refinement "
                     "completed successfully."
                 ),
 
@@ -2754,6 +2513,10 @@ def run_research():
             "parity_test":
                 "PASSED"
         })
+
+        # ==========================================
+        # LOG TOP RESULTS
+        # ==========================================
 
         print()
         print(
@@ -2814,9 +2577,7 @@ def run_research():
                 "error",
 
             "message":
-                str(
-                    error
-                )
+                str(error)
         })
 
         print(
@@ -2836,7 +2597,7 @@ def home():
     return jsonify({
 
         "service":
-            "EURUSD Short High + EMA Filter Research",
+            "EURUSD Final Core Refinement",
 
         "status":
             RESEARCH_STATUS,
@@ -2861,6 +2622,9 @@ def home():
 
                 "slow_ema":
                     SLOW_EMA_LENGTH,
+
+                "ema_slope":
+                    "OFF",
 
                 "total_combinations":
                     TOTAL_COMBINATIONS,
@@ -2917,7 +2681,7 @@ def download():
         as_attachment=True,
 
         download_name=
-            "eurusd_short_high_ema_filters_sweep.csv"
+            "eurusd_short_final_core_refinement.csv"
     )
 
 
@@ -2933,7 +2697,7 @@ if __name__ == "__main__":
             run_research,
 
         name=
-            "eurusd-high-ema-research",
+            "eurusd-final-core-refinement",
 
         daemon=True
     )
