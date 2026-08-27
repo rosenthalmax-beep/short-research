@@ -26,9 +26,9 @@ OANDA_URL = "https://api-fxtrade.oanda.com"
 INSTRUMENT = "EUR_USD"
 
 TICK_SIZE = 0.00001
-PRICE_PRECISION = 5
 
 NY_TZ = ZoneInfo("America/New_York")
+LONDON_TZ = ZoneInfo("Europe/London")
 
 DAILY_ALIGNMENT_HOUR = 17
 DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
@@ -38,13 +38,11 @@ BACKTEST_SLIPPAGE_TICKS = 5
 
 H1_CHUNK_DAYS = 180
 
-# Earliest EUR/USD H1 candle confirmed from OANDA
 RESEARCH_FROM = datetime(
     2002, 5, 6, 20, 0,
     tzinfo=timezone.utc
 )
 
-# Latest fully completed H1 boundary
 RESEARCH_TO = (
     datetime.now(timezone.utc)
     .replace(
@@ -57,48 +55,198 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 60
 DAILY_WARMUP_DAYS = 1000
 
-OUTPUT_FILE = "eurusd_short_full_history_sweep.csv"
+OUTPUT_FILE = "eurusd_short_session_weekday_sweep.csv"
 
 
 # ==================================================
-# PARAMETER GRID
+# TIGHT CORE PARAMETERS
 # ==================================================
 
 BODY_RATIOS = [
-    1.00,
-    1.10,
     1.20,
     1.30,
     1.40
 ]
 
 STRUCTURE_LOOKBACKS = [
-    10,
-    20,
-    30,
     40
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
     0.15,
-    0.25,
-    0.40,
-    0.60
+    0.25
+]
+
+DAILY_EMA_LENGTHS = [
+    150
 ]
 
 REWARD_RISKS = [
     2.0,
-    2.5,
     3.0,
-    3.5,
     4.0
 ]
 
-DAILY_EMA_LENGTHS = [
-    50,
-    100,
-    150,
-    200
+
+# ==================================================
+# SESSION TESTS
+#
+# Each tuple:
+# (
+#   name,
+#   timezone,
+#   mode,
+#   start_hour,
+#   end_hour
+# )
+# ==================================================
+
+SESSION_CONFIGS = [
+
+    (
+        "ALL_HOURS",
+        "America/New_York",
+        "all",
+        None,
+        None
+    ),
+
+    (
+        "NY_00_05_EXCLUDED",
+        "America/New_York",
+        "exclude",
+        0,
+        5
+    ),
+
+    (
+        "NY_01_03_EXCLUDED",
+        "America/New_York",
+        "exclude",
+        1,
+        3
+    ),
+
+    (
+        "NY_08_17_INCLUDED",
+        "America/New_York",
+        "include",
+        8,
+        17
+    ),
+
+    (
+        "NY_07_17_INCLUDED",
+        "America/New_York",
+        "include",
+        7,
+        17
+    ),
+
+    (
+        "NY_08_14_INCLUDED",
+        "America/New_York",
+        "include",
+        8,
+        14
+    ),
+
+    (
+        "NY_14_19_EXCLUDED",
+        "America/New_York",
+        "exclude",
+        14,
+        19
+    ),
+
+    (
+        "LONDON_08_17_INCLUDED",
+        "Europe/London",
+        "include",
+        8,
+        17
+    ),
+
+    (
+        "LONDON_07_17_INCLUDED",
+        "Europe/London",
+        "include",
+        7,
+        17
+    ),
+
+    (
+        "LONDON_08_14_INCLUDED",
+        "Europe/London",
+        "include",
+        8,
+        14
+    )
+]
+
+
+# ==================================================
+# WEEKDAY TESTS
+#
+# Python weekday:
+# Monday=0
+# Tuesday=1
+# Wednesday=2
+# Thursday=3
+# Friday=4
+# ==================================================
+
+WEEKDAY_CONFIGS = [
+
+    (
+        "ALL_DAYS",
+        set()
+    ),
+
+    (
+        "EXCLUDE_MONDAY",
+        {0}
+    ),
+
+    (
+        "EXCLUDE_TUESDAY",
+        {1}
+    ),
+
+    (
+        "EXCLUDE_WEDNESDAY",
+        {2}
+    ),
+
+    (
+        "EXCLUDE_THURSDAY",
+        {3}
+    ),
+
+    (
+        "EXCLUDE_FRIDAY",
+        {4}
+    ),
+
+    (
+        "EXCLUDE_MON_FRI",
+        {0, 4}
+    ),
+
+    (
+        "EXCLUDE_TUE_FRI",
+        {1, 4}
+    ),
+
+    (
+        "EXCLUDE_WED_THU",
+        {2, 3}
+    ),
+
+    (
+        "EXCLUDE_THU_FRI",
+        {3, 4}
+    )
 ]
 
 
@@ -109,10 +257,8 @@ DAILY_EMA_LENGTHS = [
 RESEARCH_STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "research_from": RESEARCH_FROM.isoformat(),
-    "research_to_exclusive": RESEARCH_TO.isoformat(),
-    "total_combinations": 1600,
     "completed_combinations": 0,
+    "total_combinations": 0,
     "rows_saved": 0
 }
 
@@ -129,7 +275,8 @@ def headers():
         )
 
     return {
-        "Authorization": f"Bearer {OANDA_TOKEN}"
+        "Authorization":
+            f"Bearer {OANDA_TOKEN}"
     }
 
 
@@ -142,7 +289,10 @@ def iso_utc(dt):
     )
 
 
-def oanda_get(path, params):
+def oanda_get(
+    path,
+    params
+):
 
     response = requests.get(
         OANDA_URL + path,
@@ -158,10 +308,15 @@ def oanda_get(path, params):
 
 def parse_candle(raw):
 
-    if not raw.get("complete", False):
+    if not raw.get(
+        "complete",
+        False
+    ):
         return None
 
-    mid = raw.get("mid")
+    mid = raw.get(
+        "mid"
+    )
 
     if not mid:
         return None
@@ -176,16 +331,24 @@ def parse_candle(raw):
             ),
 
         "open":
-            float(mid["o"]),
+            float(
+                mid["o"]
+            ),
 
         "high":
-            float(mid["h"]),
+            float(
+                mid["h"]
+            ),
 
         "low":
-            float(mid["l"]),
+            float(
+                mid["l"]
+            ),
 
         "close":
-            float(mid["c"])
+            float(
+                mid["c"]
+            )
     }
 
 
@@ -197,14 +360,27 @@ def fetch_range(
 ):
 
     params = {
-        "price": "M",
-        "granularity": granularity,
-        "from": iso_utc(start),
-        "to": iso_utc(end),
-        "smooth": "false",
-        "includeFirst": "true",
+        "price":
+            "M",
+
+        "granularity":
+            granularity,
+
+        "from":
+            iso_utc(start),
+
+        "to":
+            iso_utc(end),
+
+        "smooth":
+            "false",
+
+        "includeFirst":
+            "true",
+
         "dailyAlignment":
             DAILY_ALIGNMENT_HOUR,
+
         "alignmentTimezone":
             DAILY_ALIGNMENT_TIMEZONE
     }
@@ -227,7 +403,9 @@ def fetch_range(
         )
 
         if candle is not None:
-            candles.append(candle)
+            candles.append(
+                candle
+            )
 
     candles.sort(
         key=lambda item:
@@ -272,7 +450,6 @@ def fetch_chunked_history(
         )
 
         for candle in chunk:
-
             candles_by_time[
                 candle["time"]
             ] = candle
@@ -289,32 +466,6 @@ def fetch_chunked_history(
     )
 
     return result
-
-
-def fetch_h1_history():
-
-    return fetch_chunked_history(
-        INSTRUMENT,
-        "H1",
-        RESEARCH_FROM
-        - timedelta(
-            days=H1_WARMUP_DAYS
-        ),
-        RESEARCH_TO
-    )
-
-
-def fetch_daily_history():
-
-    return fetch_chunked_history(
-        INSTRUMENT,
-        "D",
-        RESEARCH_FROM
-        - timedelta(
-            days=DAILY_WARMUP_DAYS
-        ),
-        RESEARCH_TO
-    )
 
 
 # ==================================================
@@ -371,7 +522,9 @@ def ema_series(
     return result
 
 
-def true_ranges(candles):
+def true_ranges(
+    candles
+):
 
     result = []
 
@@ -576,6 +729,83 @@ def previous_daily_state(
 
 
 # ==================================================
+# SESSION + WEEKDAY
+# ==================================================
+
+def timezone_from_name(
+    name
+):
+
+    if name == "America/New_York":
+        return NY_TZ
+
+    if name == "Europe/London":
+        return LONDON_TZ
+
+    return ZoneInfo(name)
+
+
+def session_allowed(
+    signal_time,
+    timezone_name,
+    mode,
+    start_hour,
+    end_hour
+):
+
+    if mode == "all":
+        return True
+
+    local_time = (
+        signal_time
+        .astimezone(
+            timezone_from_name(
+                timezone_name
+            )
+        )
+    )
+
+    inside = (
+        local_time.hour
+        >= start_hour
+        and
+        local_time.hour
+        < end_hour
+    )
+
+    if mode == "include":
+        return inside
+
+    if mode == "exclude":
+        return not inside
+
+    raise ValueError(
+        f"Unknown session mode: {mode}"
+    )
+
+
+def weekday_allowed(
+    signal_time,
+    timezone_name,
+    excluded_weekdays
+):
+
+    local_time = (
+        signal_time
+        .astimezone(
+            timezone_from_name(
+                timezone_name
+            )
+        )
+    )
+
+    return (
+        local_time.weekday()
+        not in excluded_weekdays
+    )
+
+
+# ==================================================
 # SHORT SIGNAL
 # ==================================================
 
@@ -586,7 +816,12 @@ def short_signal(
     daily_state,
     body_ratio_min,
     structure_lookback,
-    max_distance_atr
+    max_distance_atr,
+    session_timezone,
+    session_mode,
+    session_start,
+    session_end,
+    excluded_weekdays
 ):
 
     if index < max(
@@ -679,12 +914,26 @@ def short_signal(
     if daily is None:
         return False
 
-    daily_allowed = (
+    if not (
         daily["close"]
         < daily["ema"]
-    )
+    ):
+        return False
 
-    if not daily_allowed:
+    if not session_allowed(
+        signal["time"],
+        session_timezone,
+        session_mode,
+        session_start,
+        session_end
+    ):
+        return False
+
+    if not weekday_allowed(
+        signal["time"],
+        session_timezone,
+        excluded_weekdays
+    ):
         return False
 
     return True
@@ -701,7 +950,12 @@ def simulate(
     body_ratio_min,
     structure_lookback,
     max_distance_atr,
-    reward_risk
+    reward_risk,
+    session_timezone,
+    session_mode,
+    session_start,
+    session_end,
+    excluded_weekdays
 ):
 
     trades = []
@@ -719,12 +973,8 @@ def simulate(
     ):
 
         candle = h1[index]
+        candle_time = candle["time"]
 
-        candle_time = (
-            candle["time"]
-        )
-
-        # Warm-up bars cannot become trades.
         if candle_time < RESEARCH_FROM:
             continue
 
@@ -732,7 +982,7 @@ def simulate(
             break
 
         # ==========================================
-        # EXIT OPEN TRADE FIRST
+        # EXIT EXISTING POSITION
         # ==========================================
 
         if open_trade is not None:
@@ -749,13 +999,9 @@ def simulate(
 
             if stop_hit or target_hit:
 
-                exit_reason = None
-                exit_price = None
-
                 if (
                     stop_hit
-                    and
-                    target_hit
+                    and target_hit
                 ):
 
                     distance_to_high = abs(
@@ -773,15 +1019,11 @@ def simulate(
                         < distance_to_low
                     ):
 
-                        exit_reason = "STOP"
-
                         exit_price = (
                             open_trade["stop"]
                         )
 
                     else:
-
-                        exit_reason = "TARGET"
 
                         exit_price = (
                             open_trade["target"]
@@ -789,15 +1031,11 @@ def simulate(
 
                 elif stop_hit:
 
-                    exit_reason = "STOP"
-
                     exit_price = (
                         open_trade["stop"]
                     )
 
                 else:
-
-                    exit_reason = "TARGET"
 
                     exit_price = (
                         open_trade["target"]
@@ -810,35 +1048,19 @@ def simulate(
                     ]
                 )
 
-                if actual_risk <= 0:
-
-                    result_r = 0.0
-
-                else:
-
-                    result_r = (
+                result_r = (
+                    (
                         open_trade[
                             "backtest_entry"
                         ]
                         - exit_price
-                    ) / actual_risk
+                    )
+                    / actual_risk
+                )
 
-                open_trade.update({
-                    "exit_time":
-                        candle_time
-                        + timedelta(
-                            hours=1
-                        ),
-
-                    "exit_reason":
-                        exit_reason,
-
-                    "exit_price":
-                        exit_price,
-
-                    "result_r":
-                        result_r
-                })
+                open_trade[
+                    "result_r"
+                ] = result_r
 
                 trades.append(
                     open_trade
@@ -846,15 +1068,12 @@ def simulate(
 
                 open_trade = None
 
-        # ==========================================
-        # PYRAMIDING = 0
-        # ==========================================
-
+        # pyramiding 0
         if open_trade is not None:
             continue
 
         # ==========================================
-        # SIGNAL
+        # ENTRY
         # ==========================================
 
         if not short_signal(
@@ -864,7 +1083,12 @@ def simulate(
             daily_state,
             body_ratio_min,
             structure_lookback,
-            max_distance_atr
+            max_distance_atr,
+            session_timezone,
+            session_mode,
+            session_start,
+            session_end,
+            excluded_weekdays
         ):
             continue
 
@@ -874,8 +1098,6 @@ def simulate(
             signal["close"]
         )
 
-        # Adverse short slippage:
-        # sell 5 ticks lower.
         backtest_entry = (
             reference_entry
             - (
@@ -909,18 +1131,6 @@ def simulate(
         )
 
         open_trade = {
-            "signal_time":
-                signal["time"],
-
-            "entry_time":
-                signal["time"]
-                + timedelta(
-                    hours=1
-                ),
-
-            "reference_entry":
-                reference_entry,
-
             "backtest_entry":
                 backtest_entry,
 
@@ -929,15 +1139,6 @@ def simulate(
 
             "target":
                 target,
-
-            "exit_time":
-                None,
-
-            "exit_reason":
-                None,
-
-            "exit_price":
-                None,
 
             "result_r":
                 None
@@ -954,47 +1155,32 @@ def calculate_stats(
     trades
 ):
 
-    completed = [
-        trade
-        for trade in trades
-        if trade[
-            "result_r"
-        ] is not None
-    ]
-
-    if not completed:
-        return None
-
     results = [
         trade["result_r"]
-        for trade in completed
+        for trade in trades
+        if trade["result_r"]
+        is not None
     ]
 
+    if not results:
+        return None
+
     winners = [
-        result
-        for result in results
-        if result > 0
+        x
+        for x in results
+        if x > 0
     ]
 
     losers = [
-        result
-        for result in results
-        if result < 0
+        x
+        for x in results
+        if x < 0
     ]
 
-    total_r = sum(
-        results
-    )
+    total_r = sum(results)
 
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(
-            losers
-        )
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
 
     profit_factor = (
         gross_profit
@@ -1014,10 +1200,6 @@ def calculate_stats(
         / len(results)
     )
 
-    # ==============================================
-    # MAX DRAWDOWN
-    # ==============================================
-
     equity = 0.0
     peak = 0.0
     max_drawdown = 0.0
@@ -1025,43 +1207,33 @@ def calculate_stats(
     for result in results:
 
         equity += result
-
         peak = max(
             peak,
             equity
         )
 
-        drawdown = (
-            equity
-            - peak
-        )
-
         max_drawdown = min(
             max_drawdown,
-            drawdown
+            equity - peak
         )
 
-    # ==============================================
-    # LONGEST LOSING STREAK
-    # ==============================================
-
-    longest_losing_streak = 0
-    current_losing_streak = 0
+    longest_loss_streak = 0
+    current_loss_streak = 0
 
     for result in results:
 
         if result < 0:
 
-            current_losing_streak += 1
+            current_loss_streak += 1
 
-            longest_losing_streak = max(
-                longest_losing_streak,
-                current_losing_streak
+            longest_loss_streak = max(
+                longest_loss_streak,
+                current_loss_streak
             )
 
         else:
 
-            current_losing_streak = 0
+            current_loss_streak = 0
 
     return {
         "trades":
@@ -1104,7 +1276,7 @@ def calculate_stats(
             ),
 
         "longest_loss_streak":
-            longest_losing_streak
+            longest_loss_streak
     }
 
 
@@ -1118,78 +1290,47 @@ def run_research():
 
     try:
 
-        RESEARCH_STATUS.update({
-            "state":
-                "fetching_data",
+        RESEARCH_STATUS[
+            "state"
+        ] = "fetching_data"
 
-            "message":
-                "Fetching full OANDA history",
-
-            "completed_combinations":
-                0,
-
-            "rows_saved":
-                0
-        })
-
-        print()
         print(
-            "========================================"
+            "Fetching full EUR/USD H1 history..."
         )
-        print(
-            "EUR/USD SHORT FULL-HISTORY SWEEP"
-        )
-        print(
-            "========================================"
-        )
-        print()
 
-        print(
-            "Research period:"
+        h1 = fetch_chunked_history(
+            INSTRUMENT,
+            "H1",
+            RESEARCH_FROM
+            - timedelta(
+                days=H1_WARMUP_DAYS
+            ),
+            RESEARCH_TO
         )
 
         print(
-            iso_utc(
-                RESEARCH_FROM
-            )
+            "Fetching daily history..."
+        )
+
+        daily = fetch_chunked_history(
+            INSTRUMENT,
+            "D",
+            RESEARCH_FROM
+            - timedelta(
+                days=DAILY_WARMUP_DAYS
+            ),
+            RESEARCH_TO
         )
 
         print(
-            "to"
-        )
-
-        print(
-            iso_utc(
-                RESEARCH_TO
-            )
-        )
-
-        # ==========================================
-        # FETCH DATA
-        # ==========================================
-
-        h1 = fetch_h1_history()
-
-        daily = fetch_daily_history()
-
-        print()
-        print(
-            "H1 candles loaded:",
+            "H1 candles:",
             len(h1)
         )
 
         print(
-            "Daily candles loaded:",
+            "Daily candles:",
             len(daily)
         )
-
-        RESEARCH_STATUS.update({
-            "state":
-                "calculating_indicators",
-
-            "message":
-                "Calculating ATR and daily EMA data"
-        })
 
         atr = atr_series(
             h1,
@@ -1209,21 +1350,19 @@ def run_research():
                 ema_length
             )
 
-        # ==========================================
-        # PARAMETER GRID
-        # ==========================================
-
         combinations = list(
             itertools.product(
                 BODY_RATIOS,
                 STRUCTURE_LOOKBACKS,
                 MAX_DISTANCE_ATR_VALUES,
                 REWARD_RISKS,
-                DAILY_EMA_LENGTHS
+                DAILY_EMA_LENGTHS,
+                SESSION_CONFIGS,
+                WEEKDAY_CONFIGS
             )
         )
 
-        total_combinations = len(
+        total = len(
             combinations
         )
 
@@ -1232,27 +1371,21 @@ def run_research():
                 "running",
 
             "message":
-                "Running full-history parameter sweep",
+                "Testing session and weekday filters",
 
             "total_combinations":
-                total_combinations,
+                total,
 
             "completed_combinations":
                 0
         })
 
-        print()
         print(
-            f"Testing "
-            f"{total_combinations} "
-            f"combinations..."
+            "Total combinations:",
+            total
         )
 
         results = []
-
-        # ==========================================
-        # SWEEP
-        # ==========================================
 
         for number, combo in enumerate(
             combinations,
@@ -1261,22 +1394,42 @@ def run_research():
 
             (
                 body_ratio,
-                structure_lookback,
-                max_distance_atr,
-                reward_risk,
-                daily_ema
+                lookback,
+                distance,
+                rr,
+                ema_length,
+                session_config,
+                weekday_config
             ) = combo
+
+            (
+                session_name,
+                session_timezone,
+                session_mode,
+                session_start,
+                session_end
+            ) = session_config
+
+            (
+                weekday_name,
+                excluded_weekdays
+            ) = weekday_config
 
             trades = simulate(
                 h1,
                 atr,
                 daily_cache[
-                    daily_ema
+                    ema_length
                 ],
                 body_ratio,
-                structure_lookback,
-                max_distance_atr,
-                reward_risk
+                lookback,
+                distance,
+                rr,
+                session_timezone,
+                session_mode,
+                session_start,
+                session_end,
+                excluded_weekdays
             )
 
             stats = calculate_stats(
@@ -1290,16 +1443,25 @@ def run_research():
                         body_ratio,
 
                     "structure_lookback":
-                        structure_lookback,
+                        lookback,
 
                     "max_distance_atr":
-                        max_distance_atr,
+                        distance,
 
                     "reward_risk":
-                        reward_risk,
+                        rr,
 
                     "daily_ema":
-                        daily_ema
+                        ema_length,
+
+                    "session":
+                        session_name,
+
+                    "session_timezone":
+                        session_timezone,
+
+                    "weekday_filter":
+                        weekday_name
                 }
 
                 row.update(
@@ -1317,14 +1479,8 @@ def run_research():
             if number % 100 == 0:
 
                 print(
-                    f"Progress: "
-                    f"{number}/"
-                    f"{total_combinations}"
+                    f"{number}/{total}"
                 )
-
-        # ==========================================
-        # BUILD RESULTS
-        # ==========================================
 
         df = pd.DataFrame(
             results
@@ -1336,15 +1492,12 @@ def run_research():
                 "No results generated"
             )
 
-        # Ignore very small samples
+        # Keep enough sample size to avoid tiny,
+        # meaningless optimised results.
         df = df[
             df["trades"]
             >= 100
         ].copy()
-
-        # ==========================================
-        # SORT
-        # ==========================================
 
         df = df.sort_values(
             by=[
@@ -1361,10 +1514,6 @@ def run_research():
             ]
         )
 
-        # ==========================================
-        # SAVE CSV
-        # ==========================================
-
         df.to_csv(
             OUTPUT_FILE,
             index=False
@@ -1375,7 +1524,7 @@ def run_research():
                 "complete",
 
             "message":
-                "Full-history sweep complete",
+                "Session/weekday sweep complete",
 
             "rows_saved":
                 len(df),
@@ -1384,56 +1533,23 @@ def run_research():
                 OUTPUT_FILE
         })
 
-        # ==========================================
-        # LOG TOP 30
-        # ==========================================
-
-        columns = [
-            "body_ratio",
-            "structure_lookback",
-            "max_distance_atr",
-            "reward_risk",
-            "daily_ema",
-            "trades",
-            "winners",
-            "losers",
-            "win_rate",
-            "profit_factor",
-            "total_r",
-            "expectancy_r",
-            "max_drawdown_r",
-            "longest_loss_streak"
-        ]
-
         print()
         print(
-            "========================================"
+            "============================="
         )
         print(
-            "TOP 30 FULL-HISTORY RESULTS"
+            "TOP 30 RESULTS"
         )
         print(
-            "========================================"
+            "============================="
         )
 
         print(
-            df[
-                columns
-            ]
-            .head(30)
+            df.head(30)
             .to_string(
                 index=False
             )
         )
-
-        print()
-        print(
-            "CSV saved:"
-        )
-        print(
-            OUTPUT_FILE
-        )
-        print()
 
     except Exception as error:
 
@@ -1452,7 +1568,7 @@ def run_research():
 
 
 # ==================================================
-# WEB ROUTES
+# ROUTES
 # ==================================================
 
 @app.route("/")
@@ -1460,26 +1576,10 @@ def home():
 
     return jsonify({
         "service":
-            "ERF EURUSD Short Full-History Research",
+            "EURUSD Short Session Research",
 
         "status":
             RESEARCH_STATUS,
-
-        "research_period":
-            {
-                "from":
-                    iso_utc(
-                        RESEARCH_FROM
-                    ),
-
-                "to_exclusive":
-                    iso_utc(
-                        RESEARCH_TO
-                    )
-            },
-
-        "parameter_combinations":
-            1600,
 
         "trading_enabled":
             False,
@@ -1489,9 +1589,6 @@ def home():
 
         "executor_connected":
             False,
-
-        "status_endpoint":
-            "/status",
 
         "download_endpoint":
             "/download"
@@ -1515,18 +1612,14 @@ def download():
 
         return jsonify({
             "status":
-                "not_ready",
-
-            "message":
-                "Research CSV has "
-                "not been generated yet."
+                "not_ready"
         }), 404
 
     return send_file(
         OUTPUT_FILE,
         as_attachment=True,
         download_name=
-            "eurusd_short_full_history_sweep.csv"
+            "eurusd_short_session_weekday_sweep.csv"
     )
 
 
@@ -1536,11 +1629,8 @@ def download():
 
 if __name__ == "__main__":
 
-    # Run the heavy research job in the background
-    # so Railway's web server starts immediately.
     research_thread = threading.Thread(
         target=run_research,
-        name="eurusd-short-research",
         daemon=True
     )
 
