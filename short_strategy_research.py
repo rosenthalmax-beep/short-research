@@ -1,5 +1,4 @@
 import os
-import itertools
 import threading
 import requests
 import pandas as pd
@@ -54,8 +53,12 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 90
 DAILY_WARMUP_DAYS = 1500
 
-OUTPUT_FILE = (
-    "eurusd_short_combined_time_day_sweep.csv"
+ERA_OUTPUT_FILE = (
+    "eurusd_short_era_robustness.csv"
+)
+
+YEARLY_OUTPUT_FILE = (
+    "eurusd_short_yearly_robustness.csv"
 )
 
 
@@ -84,86 +87,85 @@ EMA_SEPARATION_ATR = 0.05
 # TIMING CANDIDATES
 # ==================================================
 
-CANDIDATE_HOURS = [
-    2,
-    10,
-    12,
-    14
-]
+TIMING_VARIANTS = {
 
+    "BASELINE_ALL_HOURS":
+        tuple(),
 
-# weekday():
-# Monday    = 0
-# Tuesday   = 1
-# Wednesday = 2
-# Thursday  = 3
-# Friday    = 4
+    "A_EXCLUDE_10_12_14":
+        (
+            10,
+            12,
+            14
+        ),
 
-WEEKDAY_STATES = [
-
-    (
-        "NONE",
-        tuple()
-    ),
-
-    (
-        "EXCLUDE_WEDNESDAY",
-        (2,)
-    ),
-
-    (
-        "EXCLUDE_TUESDAY",
-        (1,)
-    ),
-
-    (
-        "EXCLUDE_FRIDAY",
-        (4,)
-    ),
-
-    (
-        "EXCLUDE_TUESDAY_WEDNESDAY",
-        (1, 2)
-    ),
-
-    (
-        "EXCLUDE_WEDNESDAY_FRIDAY",
-        (2, 4)
-    )
-]
-
-
-WEEKDAY_NAMES = {
-
-    0: "MONDAY",
-    1: "TUESDAY",
-    2: "WEDNESDAY",
-    3: "THURSDAY",
-    4: "FRIDAY"
+    "B_EXCLUDE_02_10_12_14":
+        (
+            2,
+            10,
+            12,
+            14
+        )
 }
 
 
-# 16 possible subsets of four candidate hours.
-HOUR_COMBINATIONS = []
+# ==================================================
+# HISTORICAL ERAS
+# ==================================================
 
-for subset_size in range(
-    len(CANDIDATE_HOURS) + 1
-):
+ERAS = [
 
-    for combination in itertools.combinations(
-        CANDIDATE_HOURS,
-        subset_size
-    ):
-
-        HOUR_COMBINATIONS.append(
-            tuple(combination)
+    (
+        "2002_2009",
+        datetime(
+            2002, 5, 6, 20, 0,
+            tzinfo=timezone.utc
+        ),
+        datetime(
+            2010, 1, 1, 0, 0,
+            tzinfo=timezone.utc
         )
+    ),
 
+    (
+        "2010_2017",
+        datetime(
+            2010, 1, 1, 0, 0,
+            tzinfo=timezone.utc
+        ),
+        datetime(
+            2018, 1, 1, 0, 0,
+            tzinfo=timezone.utc
+        )
+    ),
 
-TOTAL_TESTS = (
-    len(HOUR_COMBINATIONS)
-    * len(WEEKDAY_STATES)
-)
+    (
+        "2018_2023",
+        datetime(
+            2018, 1, 1, 0, 0,
+            tzinfo=timezone.utc
+        ),
+        datetime(
+            2024, 1, 1, 0, 0,
+            tzinfo=timezone.utc
+        )
+    ),
+
+    (
+        "2024_PRESENT",
+        datetime(
+            2024, 1, 1, 0, 0,
+            tzinfo=timezone.utc
+        ),
+        RESEARCH_TO
+    ),
+
+    (
+        "FULL_HISTORY",
+        RESEARCH_FROM,
+        RESEARCH_TO
+    )
+]
 
 
 # ==================================================
@@ -184,17 +186,20 @@ RESEARCH_STATUS = {
     "research_to":
         RESEARCH_TO.isoformat(),
 
-    "completed_tests":
-        0,
-
-    "total_tests":
-        TOTAL_TESTS,
-
-    "rows_saved":
-        0,
-
     "base_signal_candidates":
-        0
+        0,
+
+    "era_tests_completed":
+        0,
+
+    "year_tests_completed":
+        0,
+
+    "era_output_file":
+        None,
+
+    "yearly_output_file":
+        None
 }
 
 
@@ -211,7 +216,6 @@ def headers():
         )
 
     return {
-
         "Authorization":
             f"Bearer {OANDA_TOKEN}"
     }
@@ -245,7 +249,6 @@ def oanda_get(
     if not response.ok:
 
         raise RuntimeError(
-
             f"OANDA {response.status_code}: "
             f"{response.text[:500]}"
         )
@@ -392,11 +395,9 @@ def fetch_chunked_history(
         )
 
         print(
-
             f"Fetching {granularity}: "
             f"{cursor.date()} -> "
             f"{chunk_end.date()}",
-
             flush=True
         )
 
@@ -476,6 +477,7 @@ def ema_series(
                 values[index]
                 - previous
             )
+
             * multiplier
 
             + previous
@@ -761,7 +763,7 @@ def build_h1_daily_lookup(
 
 
 # ==================================================
-# BUILD FROZEN STRUCTURAL SIGNALS
+# FROZEN CORE SIGNALS
 # ==================================================
 
 def build_core_candidates(
@@ -856,7 +858,7 @@ def build_core_candidates(
             continue
 
         # ==========================================
-        # BEARISH ENGULFING
+        # BEARISH ENGULF
         # ==========================================
 
         if not (
@@ -883,7 +885,7 @@ def build_core_candidates(
             continue
 
         # ==========================================
-        # BODY RATIO
+        # BODY
         # ==========================================
 
         if (
@@ -921,7 +923,7 @@ def build_core_candidates(
             continue
 
         # ==========================================
-        # RECENT HIGH
+        # STRUCTURE
         # ==========================================
 
         previous_highest = max(
@@ -956,7 +958,7 @@ def build_core_candidates(
             continue
 
         # ==========================================
-        # DAILY FILTERS
+        # DAILY REGIME
         # ==========================================
 
         slow_ema = daily[
@@ -1045,7 +1047,10 @@ def build_core_candidates(
                 ny_time.hour,
 
             "ny_weekday":
-                ny_time.weekday()
+                ny_time.weekday(),
+
+            "utc_year":
+                signal["time"].year
         })
 
     return candidates
@@ -1077,8 +1082,6 @@ def calculate_trade_exit(
         signal["close"]
     )
 
-    # Short adverse slippage:
-    # entry is lower than signal close.
     backtest_entry = (
 
         reference_entry
@@ -1108,7 +1111,7 @@ def calculate_trade_exit(
     if reference_risk <= 0:
 
         raise RuntimeError(
-            "Invalid short reference risk"
+            "Invalid reference risk"
         )
 
     target = (
@@ -1130,11 +1133,9 @@ def calculate_trade_exit(
     if actual_risk <= 0:
 
         raise RuntimeError(
-            "Invalid short actual risk"
+            "Invalid actual risk"
         )
 
-    # Entry occurs at signal close.
-    # Earliest exit is next H1.
     for index in range(
 
         signal_index + 1,
@@ -1147,7 +1148,6 @@ def calculate_trade_exit(
         ]
 
         if (
-
             candle["time"]
             >= RESEARCH_TO
         ):
@@ -1173,10 +1173,6 @@ def calculate_trade_exit(
         ):
 
             continue
-
-        # ==========================================
-        # BOTH HIT SAME H1
-        # ==========================================
 
         if (
 
@@ -1238,11 +1234,11 @@ def calculate_trade_exit(
             "signal_index":
                 signal_index,
 
-            "exit_index":
-                index,
-
             "signal_time":
                 signal["time"],
+
+            "exit_index":
+                index,
 
             "exit_time":
                 candle["time"],
@@ -1260,13 +1256,7 @@ def calculate_trade_exit(
 
         return result
 
-    # ==============================================
-    # STILL OPEN AT END OF DATA
-    #
-    # Important:
-    # this trade must block later signals.
-    # ==========================================
-
+    # Still open at end of history.
     result = {
 
         "status":
@@ -1313,6 +1303,8 @@ def simulate(
 
     still_open = False
 
+    ignored_signals = 0
+
     for candidate in candidates:
 
         signal_index = (
@@ -1321,30 +1313,28 @@ def simulate(
             ]
         )
 
-        # Existing position has not yet exited.
+        # Pyramiding = 0
         if (
-
             signal_index
             < position_exit_index
         ):
 
+            ignored_signals += 1
+
             continue
 
         trade = calculate_trade_exit(
-
             h1,
             signal_index
         )
 
-        # If this signal remains open through the
-        # end of the backtest, pyramiding=0 means
-        # every subsequent signal must be ignored.
         if (
             trade["status"]
             == "OPEN"
         ):
 
             still_open = True
+
             break
 
         trades.append(
@@ -1359,7 +1349,8 @@ def simulate(
 
     return (
         trades,
-        still_open
+        still_open,
+        ignored_signals
     )
 
 
@@ -1368,41 +1359,72 @@ def simulate(
 # ==================================================
 
 def calculate_stats(
-    trades
+    trades,
+    period_start,
+    period_end
 ):
 
     if not trades:
 
-        return None
+        return {
+
+            "trades":
+                0,
+
+            "winners":
+                0,
+
+            "losers":
+                0,
+
+            "win_rate":
+                0.0,
+
+            "profit_factor":
+                0.0,
+
+            "total_r":
+                0.0,
+
+            "expectancy_r":
+                0.0,
+
+            "max_drawdown_r":
+                0.0,
+
+            "longest_loss_streak":
+                0,
+
+            "trades_per_year":
+                0.0
+        }
 
     results = [
 
-        trade["result_r"]
+        trade[
+            "result_r"
+        ]
 
         for trade in trades
     ]
 
     winners = [
 
-        value
+        result
 
-        for value in results
+        for result in results
 
-        if value > 0
+        if result > 0
     ]
 
     losers = [
 
-        value
+        result
 
-        for value in results
+        for result in results
 
-        if value < 0
+        if result < 0
     ]
-
-    total_r = sum(
-        results
-    )
 
     gross_profit = sum(
         winners
@@ -1414,21 +1436,33 @@ def calculate_stats(
         )
     )
 
-    profit_factor = (
-
-        gross_profit
-        / gross_loss
-
-        if gross_loss > 0
-
-        else float("inf")
+    total_r = sum(
+        results
     )
+
+    if gross_loss > 0:
+
+        profit_factor = (
+            gross_profit
+            / gross_loss
+        )
+
+    elif gross_profit > 0:
+
+        profit_factor = float(
+            "inf"
+        )
+
+    else:
+
+        profit_factor = 0.0
 
     win_rate = (
 
         len(winners)
         / len(results)
-        * 100
+
+        * 100.0
     )
 
     expectancy = (
@@ -1462,34 +1496,34 @@ def calculate_stats(
         )
 
     # ==============================================
-    # LONGEST LOSS STREAK
+    # LOSING STREAK
     # ==========================================
 
-    longest_loss_streak = 0
-    current_loss_streak = 0
+    current_streak = 0
+    longest_streak = 0
 
     for result in results:
 
         if result < 0:
 
-            current_loss_streak += 1
+            current_streak += 1
 
-            longest_loss_streak = max(
+            longest_streak = max(
 
-                longest_loss_streak,
+                longest_streak,
 
-                current_loss_streak
+                current_streak
             )
 
         else:
 
-            current_loss_streak = 0
+            current_streak = 0
 
     years = (
 
         (
-            RESEARCH_TO
-            - RESEARCH_FROM
+            period_end
+            - period_start
         ).total_seconds()
 
         /
@@ -1506,18 +1540,16 @@ def calculate_stats(
 
         len(results)
         / years
+
+        if years > 0
+
+        else 0.0
     )
 
     return {
 
         "trades":
             len(results),
-
-        "trades_per_year":
-            round(
-                trades_per_year,
-                2
-            ),
 
         "winners":
             len(winners),
@@ -1532,9 +1564,16 @@ def calculate_stats(
             ),
 
         "profit_factor":
-            round(
-                profit_factor,
-                3
+            (
+                round(
+                    profit_factor,
+                    3
+                )
+
+                if profit_factor
+                != float("inf")
+
+                else "INF"
             ),
 
         "total_r":
@@ -1556,138 +1595,310 @@ def calculate_stats(
             ),
 
         "longest_loss_streak":
-            longest_loss_streak
+            longest_streak,
+
+        "trades_per_year":
+            round(
+                trades_per_year,
+                2
+            )
     }
 
 
 # ==================================================
-# LABEL HELPERS
+# FILTER CANDIDATES
 # ==================================================
 
-def hour_label(
-    excluded_hours
-):
-
-    if not excluded_hours:
-
-        return "NONE"
-
-    return ",".join(
-
-        f"{hour:02d}:00"
-
-        for hour in excluded_hours
-    )
-
-
-def weekday_label(
-    weekdays
-):
-
-    if not weekdays:
-
-        return "NONE"
-
-    return ",".join(
-
-        WEEKDAY_NAMES[
-            day
-        ]
-
-        for day in weekdays
-    )
-
-
-# ==================================================
-# RUN ONE TIMING CONFIGURATION
-# ==================================================
-
-def run_timing_test(
-    h1,
-    core_candidates,
+def filter_candidates(
+    candidates,
     excluded_hours,
-    excluded_weekdays
+    start_time,
+    end_time
 ):
 
-    eligible = []
+    return [
 
-    for candidate in core_candidates:
+        candidate
+
+        for candidate in candidates
 
         if (
+
+            candidate[
+                "time"
+            ]
+            >= start_time
+
+            and
+
+            candidate[
+                "time"
+            ]
+            < end_time
+
+            and
 
             candidate[
                 "ny_hour"
             ]
+            not in excluded_hours
+        )
+    ]
 
-            in excluded_hours
-        ):
 
-            continue
+# ==================================================
+# ERA TEST
+# ==================================================
 
-        if (
+def run_era_tests(
+    h1,
+    candidates
+):
 
-            candidate[
-                "ny_weekday"
-            ]
+    rows = []
 
-            in excluded_weekdays
-        ):
+    completed = 0
 
-            continue
+    for (
+        era_name,
+        era_start,
+        era_end
+    ) in ERAS:
 
-        eligible.append(
-            candidate
+        actual_start = max(
+            era_start,
+            RESEARCH_FROM
         )
 
-    trades, still_open = simulate(
-        h1,
-        eligible
-    )
+        actual_end = min(
+            era_end,
+            RESEARCH_TO
+        )
 
-    stats = calculate_stats(
-        trades
-    )
+        if actual_end <= actual_start:
 
-    if stats is None:
+            continue
 
-        return None
+        for (
+            variant_name,
+            excluded_hours
+        ) in TIMING_VARIANTS.items():
 
-    row = {
+            eligible = filter_candidates(
 
-        "excluded_hours":
-            hour_label(
-                excluded_hours
-            ),
+                candidates,
 
-        "number_hours_excluded":
-            len(
-                excluded_hours
-            ),
+                excluded_hours,
 
-        "weekday_filter":
-            weekday_label(
-                excluded_weekdays
-            ),
+                actual_start,
 
-        "number_weekdays_excluded":
-            len(
-                excluded_weekdays
-            ),
+                actual_end
+            )
 
-        "raw_signals_after_filter":
-            len(
+            trades, still_open, ignored = simulate(
+
+                h1,
                 eligible
-            ),
+            )
 
-        "still_open_at_end":
-            still_open
-    }
+            stats = calculate_stats(
 
-    row.update(
-        stats
+                trades,
+
+                actual_start,
+
+                actual_end
+            )
+
+            row = {
+
+                "era":
+                    era_name,
+
+                "variant":
+                    variant_name,
+
+                "excluded_ny_hours":
+                    (
+                        "NONE"
+                        if not excluded_hours
+                        else ",".join(
+                            f"{hour:02d}:00"
+                            for hour
+                            in excluded_hours
+                        )
+                    ),
+
+                "period_start":
+                    actual_start.isoformat(),
+
+                "period_end":
+                    actual_end.isoformat(),
+
+                "raw_signals":
+                    len(
+                        eligible
+                    ),
+
+                "ignored_due_to_open_trade":
+                    ignored,
+
+                "still_open_at_end":
+                    still_open
+            }
+
+            row.update(
+                stats
+            )
+
+            rows.append(
+                row
+            )
+
+            completed += 1
+
+            RESEARCH_STATUS[
+                "era_tests_completed"
+            ] = completed
+
+    return pd.DataFrame(
+        rows
     )
 
-    return row
+
+# ==================================================
+# YEARLY TEST
+# ==================================================
+
+def run_yearly_tests(
+    h1,
+    candidates
+):
+
+    rows = []
+
+    completed = 0
+
+    first_year = (
+        RESEARCH_FROM.year
+    )
+
+    final_year = (
+        RESEARCH_TO.year
+    )
+
+    for year in range(
+        first_year,
+        final_year + 1
+    ):
+
+        year_start = datetime(
+            year,
+            1,
+            1,
+            tzinfo=timezone.utc
+        )
+
+        year_end = datetime(
+            year + 1,
+            1,
+            1,
+            tzinfo=timezone.utc
+        )
+
+        actual_start = max(
+            year_start,
+            RESEARCH_FROM
+        )
+
+        actual_end = min(
+            year_end,
+            RESEARCH_TO
+        )
+
+        if actual_end <= actual_start:
+
+            continue
+
+        for (
+            variant_name,
+            excluded_hours
+        ) in TIMING_VARIANTS.items():
+
+            eligible = filter_candidates(
+
+                candidates,
+
+                excluded_hours,
+
+                actual_start,
+
+                actual_end
+            )
+
+            trades, still_open, ignored = simulate(
+
+                h1,
+                eligible
+            )
+
+            stats = calculate_stats(
+
+                trades,
+
+                actual_start,
+
+                actual_end
+            )
+
+            row = {
+
+                "year":
+                    year,
+
+                "variant":
+                    variant_name,
+
+                "excluded_ny_hours":
+                    (
+                        "NONE"
+                        if not excluded_hours
+                        else ",".join(
+                            f"{hour:02d}:00"
+                            for hour
+                            in excluded_hours
+                        )
+                    ),
+
+                "raw_signals":
+                    len(
+                        eligible
+                    ),
+
+                "ignored_due_to_open_trade":
+                    ignored,
+
+                "still_open_at_end":
+                    still_open
+            }
+
+            row.update(
+                stats
+            )
+
+            rows.append(
+                row
+            )
+
+            completed += 1
+
+            RESEARCH_STATUS[
+                "year_tests_completed"
+            ] = completed
+
+    return pd.DataFrame(
+        rows
+    )
 
 
 # ==================================================
@@ -1705,7 +1916,7 @@ def run_research():
             "========================================"
         )
         print(
-            "EUR/USD COMBINED TIMING SWEEP"
+            "EUR/USD HISTORICAL ROBUSTNESS"
         )
         print(
             "========================================"
@@ -1717,31 +1928,27 @@ def run_research():
         )
 
         print(
-            "Candidate NY hours:",
-            CANDIDATE_HOURS
+            "No weekday exclusions"
         )
 
         print(
-            "Hour combinations:",
-            len(
-                HOUR_COMBINATIONS
-            )
+            "Testing:"
         )
 
         print(
-            "Weekday states:",
-            len(
-                WEEKDAY_STATES
-            )
+            "BASELINE = all hours"
         )
 
         print(
-            "Total tests:",
-            TOTAL_TESTS
+            "A = exclude 10,12,14 NY"
+        )
+
+        print(
+            "B = exclude 02,10,12,14 NY"
         )
 
         # ==========================================
-        # FETCH DATA
+        # FETCH
         # ==========================================
 
         RESEARCH_STATUS.update({
@@ -1750,7 +1957,7 @@ def run_research():
                 "fetching_data",
 
             "message":
-                "Fetching EUR/USD history"
+                "Fetching complete EUR/USD history"
         })
 
         h1 = fetch_chunked_history(
@@ -1783,16 +1990,20 @@ def run_research():
 
         print(
             "H1 candles:",
-            len(h1)
+            len(
+                h1
+            )
         )
 
         print(
             "Daily candles:",
-            len(daily)
+            len(
+                daily
+            )
         )
 
         # ==========================================
-        # BUILD FROZEN CORE
+        # BUILD STRATEGY
         # ==========================================
 
         RESEARCH_STATUS.update({
@@ -1801,7 +2012,7 @@ def run_research():
                 "precomputing",
 
             "message":
-                "Building frozen core signals"
+                "Building frozen strategy signals"
         })
 
         h1_atr = atr_series(
@@ -1824,7 +2035,7 @@ def run_research():
             )
         )
 
-        core_candidates = (
+        candidates = (
             build_core_candidates(
 
                 h1,
@@ -1836,311 +2047,65 @@ def run_research():
         RESEARCH_STATUS[
             "base_signal_candidates"
         ] = len(
-            core_candidates
+            candidates
         )
 
         print(
             "Frozen core raw signals:",
             len(
-                core_candidates
+                candidates
             )
         )
 
         # ==========================================
-        # TIMING TESTS
+        # ERA TESTS
         # ==========================================
 
         RESEARCH_STATUS.update({
 
             "state":
-                "running",
+                "era_tests",
 
             "message":
-                "Testing combined timing filters",
-
-            "completed_tests":
-                0
+                "Running historical era tests"
         })
 
-        rows = []
+        era_df = run_era_tests(
 
-        test_number = 0
-
-        for (
-            weekday_state_name,
-            excluded_weekdays
-        ) in WEEKDAY_STATES:
-
-            for excluded_hours in (
-                HOUR_COMBINATIONS
-            ):
-
-                row = run_timing_test(
-
-                    h1,
-                    core_candidates,
-
-                    excluded_hours,
-
-                    excluded_weekdays
-                )
-
-                if row is not None:
-
-                    row[
-                        "weekday_state_name"
-                    ] = weekday_state_name
-
-                    rows.append(
-                        row
-                    )
-
-                test_number += 1
-
-                RESEARCH_STATUS[
-                    "completed_tests"
-                ] = test_number
-
-                if (
-                    test_number % 10
-                    == 0
-                ):
-
-                    print(
-
-                        f"Progress: "
-                        f"{test_number}/"
-                        f"{TOTAL_TESTS}",
-
-                        flush=True
-                    )
-
-        # ==========================================
-        # DATAFRAME
-        # ==========================================
-
-        df = pd.DataFrame(
-            rows
+            h1,
+            candidates
         )
 
-        if df.empty:
+        era_df.to_csv(
 
-            raise RuntimeError(
-                "No timing results generated"
-            )
+            ERA_OUTPUT_FILE,
 
-        # ==========================================
-        # FIND TRUE BASELINE
-        # ==========================================
-
-        baseline_matches = df[
-            (
-                df[
-                    "number_hours_excluded"
-                ] == 0
-            )
-            &
-            (
-                df[
-                    "number_weekdays_excluded"
-                ] == 0
-            )
-        ]
-
-        if len(
-            baseline_matches
-        ) != 1:
-
-            raise RuntimeError(
-                "Could not uniquely identify baseline"
-            )
-
-        baseline = (
-            baseline_matches
-            .iloc[0]
-        )
-
-        baseline_pf = (
-            baseline[
-                "profit_factor"
-            ]
-        )
-
-        baseline_r = (
-            baseline[
-                "total_r"
-            ]
-        )
-
-        baseline_dd = (
-            baseline[
-                "max_drawdown_r"
-            ]
-        )
-
-        baseline_expectancy = (
-            baseline[
-                "expectancy_r"
-            ]
-        )
-
-        baseline_trades = (
-            baseline[
-                "trades"
-            ]
+            index=False
         )
 
         # ==========================================
-        # COMPARISON COLUMNS
+        # YEARLY TESTS
         # ==========================================
 
-        df[
-            "pf_change_vs_baseline"
-        ] = (
+        RESEARCH_STATUS.update({
 
-            df[
-                "profit_factor"
-            ]
+            "state":
+                "yearly_tests",
 
-            - baseline_pf
+            "message":
+                "Running individual yearly tests"
+        })
 
-        ).round(
-            3
+        yearly_df = run_yearly_tests(
+
+            h1,
+            candidates
         )
 
-        df[
-            "total_r_change_vs_baseline"
-        ] = (
+        yearly_df.to_csv(
 
-            df[
-                "total_r"
-            ]
+            YEARLY_OUTPUT_FILE,
 
-            - baseline_r
-
-        ).round(
-            2
-        )
-
-        df[
-            "expectancy_change_vs_baseline"
-        ] = (
-
-            df[
-                "expectancy_r"
-            ]
-
-            - baseline_expectancy
-
-        ).round(
-            3
-        )
-
-        df[
-            "drawdown_change_vs_baseline"
-        ] = (
-
-            df[
-                "max_drawdown_r"
-            ]
-
-            - baseline_dd
-
-        ).round(
-            2
-        )
-
-        df[
-            "trades_removed"
-        ] = (
-
-            baseline_trades
-
-            - df[
-                "trades"
-            ]
-        )
-
-        df[
-            "trade_retention_pct"
-        ] = (
-
-            df[
-                "trades"
-            ]
-
-            / baseline_trades
-
-            * 100.0
-
-        ).round(
-            1
-        )
-
-        # ==========================================
-        # SIMPLE SCORE
-        #
-        # Not used to choose automatically.
-        # Just useful as an extra sorting reference.
-        #
-        # Rewards:
-        # PF
-        # expectancy
-        # trade retention
-        #
-        # We will still inspect manually.
-        # ==========================================
-
-        df[
-            "robustness_score"
-        ] = (
-
-            df[
-                "profit_factor"
-            ]
-
-            * df[
-                "expectancy_r"
-            ]
-
-            * (
-                df[
-                    "trade_retention_pct"
-                ]
-                / 100.0
-            )
-        ).round(
-            4
-        )
-
-        # ==========================================
-        # SORT
-        # ==========================================
-
-        df = df.sort_values(
-
-            by=[
-
-                "profit_factor",
-
-                "expectancy_r",
-
-                "total_r",
-
-                "trades"
-            ],
-
-            ascending=[
-
-                False,
-                False,
-                False,
-                False
-            ]
-        )
-
-        df.to_csv(
-            OUTPUT_FILE,
             index=False
         )
 
@@ -2155,24 +2120,19 @@ def run_research():
 
             "message":
                 (
-                    "Combined timing sweep "
-                    "completed successfully."
+                    "Historical era and yearly "
+                    "tests completed successfully."
                 ),
 
-            "completed_tests":
-                TOTAL_TESTS,
+            "era_output_file":
+                ERA_OUTPUT_FILE,
 
-            "rows_saved":
-                len(
-                    df
-                ),
-
-            "output_file":
-                OUTPUT_FILE
+            "yearly_output_file":
+                YEARLY_OUTPUT_FILE
         })
 
         # ==========================================
-        # LOG BASELINE
+        # PRINT ERA RESULTS
         # ==========================================
 
         print()
@@ -2180,26 +2140,7 @@ def run_research():
             "========================================"
         )
         print(
-            "BASELINE"
-        )
-        print(
-            "========================================"
-        )
-
-        print(
-            baseline.to_string()
-        )
-
-        # ==========================================
-        # TOP ALL
-        # ==========================================
-
-        print()
-        print(
-            "========================================"
-        )
-        print(
-            "TOP 25 BY PROFIT FACTOR"
+            "ERA RESULTS"
         )
         print(
             "========================================"
@@ -2207,45 +2148,28 @@ def run_research():
 
         print(
 
-            df.head(
-                25
-            ).to_string(
-                index=False
-            )
-        )
-
-        # ==========================================
-        # TOP WITH >= 75 TRADES
-        # ==========================================
-
-        print()
-        print(
-            "========================================"
-        )
-        print(
-            "TOP >= 75 TRADES"
-        )
-        print(
-            "========================================"
-        )
-
-        print(
-
-            df[
-                df[
-                    "trades"
-                ] >= 75
+            era_df[
+                [
+                    "era",
+                    "variant",
+                    "trades",
+                    "winners",
+                    "losers",
+                    "win_rate",
+                    "profit_factor",
+                    "total_r",
+                    "expectancy_r",
+                    "max_drawdown_r",
+                    "longest_loss_streak"
+                ]
             ]
-            .head(
-                25
-            )
             .to_string(
                 index=False
             )
         )
 
         # ==========================================
-        # TOP WITH >= 80% TRADE RETENTION
+        # PRINT YEARLY RESULTS
         # ==========================================
 
         print()
@@ -2253,7 +2177,7 @@ def run_research():
             "========================================"
         )
         print(
-            "TOP >= 80% TRADE RETENTION"
+            "YEARLY RESULTS"
         )
         print(
             "========================================"
@@ -2261,14 +2185,17 @@ def run_research():
 
         print(
 
-            df[
-                df[
-                    "trade_retention_pct"
-                ] >= 80
+            yearly_df[
+                [
+                    "year",
+                    "variant",
+                    "trades",
+                    "win_rate",
+                    "profit_factor",
+                    "total_r",
+                    "expectancy_r"
+                ]
             ]
-            .head(
-                25
-            )
             .to_string(
                 index=False
             )
@@ -2276,8 +2203,15 @@ def run_research():
 
         print()
         print(
-            "Saved:",
-            OUTPUT_FILE,
+            "Saved:"
+        )
+
+        print(
+            ERA_OUTPUT_FILE
+        )
+
+        print(
+            YEARLY_OUTPUT_FILE,
             flush=True
         )
 
@@ -2311,12 +2245,12 @@ def home():
     return jsonify({
 
         "service":
-            "EURUSD Combined Time / Day Sweep",
+            "EURUSD Historical Robustness Research",
 
         "status":
             RESEARCH_STATUS,
 
-        "frozen_core":
+        "frozen_strategy":
             {
 
                 "body_ratio":
@@ -2341,31 +2275,27 @@ def home():
                     STRONG_CLOSE_LEVEL,
 
                 "ema_separation_atr":
-                    EMA_SEPARATION_ATR
+                    EMA_SEPARATION_ATR,
+
+                "weekday_exclusions":
+                    "NONE"
             },
 
-        "timing_research":
+        "variants":
             {
 
-                "candidate_hours":
-                    CANDIDATE_HOURS,
+                name:
+                    list(hours)
 
-                "hour_combinations":
-                    len(
-                        HOUR_COMBINATIONS
-                    ),
-
-                "weekday_states":
-                    len(
-                        WEEKDAY_STATES
-                    ),
-
-                "total_tests":
-                    TOTAL_TESTS,
-
-                "timezone":
-                    "America/New_York"
+                for name, hours
+                in TIMING_VARIANTS.items()
             },
+
+        "era_download":
+            "/download-era",
+
+        "yearly_download":
+            "/download-yearly",
 
         "trading_enabled":
             False,
@@ -2374,10 +2304,7 @@ def home():
             False,
 
         "executor_connected":
-            False,
-
-        "download_endpoint":
-            "/download"
+            False
     })
 
 
@@ -2389,11 +2316,11 @@ def status():
     )
 
 
-@app.route("/download")
-def download():
+@app.route("/download-era")
+def download_era():
 
     if not os.path.exists(
-        OUTPUT_FILE
+        ERA_OUTPUT_FILE
     ):
 
         return jsonify({
@@ -2402,17 +2329,44 @@ def download():
                 "not_ready",
 
             "message":
-                "CSV has not been generated yet."
+                "Era CSV is not ready yet."
         }), 404
 
     return send_file(
 
-        OUTPUT_FILE,
+        ERA_OUTPUT_FILE,
 
         as_attachment=True,
 
         download_name=
-            "eurusd_short_combined_time_day_sweep.csv"
+            "eurusd_short_era_robustness.csv"
+    )
+
+
+@app.route("/download-yearly")
+def download_yearly():
+
+    if not os.path.exists(
+        YEARLY_OUTPUT_FILE
+    ):
+
+        return jsonify({
+
+            "status":
+                "not_ready",
+
+            "message":
+                "Yearly CSV is not ready yet."
+        }), 404
+
+    return send_file(
+
+        YEARLY_OUTPUT_FILE,
+
+        as_attachment=True,
+
+        download_name=
+            "eurusd_short_yearly_robustness.csv"
     )
 
 
@@ -2428,7 +2382,7 @@ if __name__ == "__main__":
             run_research,
 
         name=
-            "eurusd-combined-timing",
+            "eurusd-historical-robustness",
 
         daemon=True
     )
