@@ -1,6 +1,7 @@
 import os
 import itertools
 import threading
+import math
 import requests
 import pandas as pd
 
@@ -37,7 +38,7 @@ BACKTEST_SLIPPAGE_TICKS = 5
 
 H1_CHUNK_DAYS = 180
 
-# Earliest available EUR/USD H1 history found
+# Earliest EUR/USD H1 candle confirmed from OANDA
 RESEARCH_FROM = datetime(
     2002, 5, 6, 20, 0,
     tzinfo=timezone.utc
@@ -57,38 +58,52 @@ H1_WARMUP_DAYS = 60
 DAILY_WARMUP_DAYS = 1500
 
 OUTPUT_FILE = (
-    "eurusd_short_combined_structural_sweep.csv"
+    "eurusd_short_refinement_sweep.csv"
 )
 
 
 # ==================================================
-# PARAMETER GRID
+# REFINEMENT GRID
 #
-# NO SESSION FILTERS
-# NO WEEKDAY FILTERS
+# IMPORTANT:
+# ALL HOURS
+# ALL WEEKDAYS
+#
+# NO SESSION FILTER
+# NO WEEKDAY FILTER
+# NO MINIMUM RANGE FILTER
+# NO UPPER-WICK FILTER
 # ==================================================
 
 BODY_RATIOS = [
+    1.00,
+    1.10,
     1.20,
     1.30,
     1.40
 ]
 
 STRUCTURE_LOOKBACKS = [
-    20,
     30,
-    40
+    40,
+    50,
+    60
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
+    0.05,
+    0.10,
     0.15,
+    0.20,
     0.25
 ]
 
 REWARD_RISKS = [
-    2.0,
     3.0,
-    4.0
+    3.5,
+    4.0,
+    4.5,
+    5.0
 ]
 
 SLOW_EMA_LENGTHS = [
@@ -97,38 +112,32 @@ SLOW_EMA_LENGTHS = [
     200
 ]
 
-# None = second EMA disabled
+# None = alignment disabled
 FAST_EMA_LENGTHS = [
     None,
-    20,
     30,
-    50
+    50,
+    70
 ]
 
 # None = strong-close filter disabled
 #
-# 0.25 means signal close must be within
-# bottom 25% of its H1 range.
+# 0.15 = close must be inside bottom 15%
+# 0.25 = close must be inside bottom 25%
+# 0.35 = close must be inside bottom 35%
 STRONG_CLOSE_LEVELS = [
     None,
-    0.25
-]
-
-# None = minimum-range filter disabled
-MINIMUM_RANGE_ATR_VALUES = [
-    None,
-    0.90
-]
-
-# None = upper-wick filter disabled
-UPPER_WICK_BODY_RATIOS = [
-    None,
-    0.20
+    0.15,
+    0.25,
+    0.35
 ]
 
 
 # ==================================================
 # TOTAL COMBINATIONS
+#
+# 5 x 4 x 5 x 5 x 3 x 4 x 4
+# = 24,000
 # ==================================================
 
 TOTAL_COMBINATIONS = (
@@ -139,8 +148,6 @@ TOTAL_COMBINATIONS = (
     * len(SLOW_EMA_LENGTHS)
     * len(FAST_EMA_LENGTHS)
     * len(STRONG_CLOSE_LEVELS)
-    * len(MINIMUM_RANGE_ATR_VALUES)
-    * len(UPPER_WICK_BODY_RATIOS)
 )
 
 
@@ -149,17 +156,35 @@ TOTAL_COMBINATIONS = (
 # ==================================================
 
 RESEARCH_STATUS = {
-    "state": "not_started",
-    "message": "Research has not started",
+    "state":
+        "not_started",
+
+    "message":
+        "Research has not started",
+
     "research_from":
         RESEARCH_FROM.isoformat(),
+
     "research_to":
         RESEARCH_TO.isoformat(),
+
     "total_combinations":
         TOTAL_COMBINATIONS,
-    "completed_combinations": 0,
-    "rows_saved": 0,
-    "base_signal_candidates": 0
+
+    "completed_combinations":
+        0,
+
+    "rows_saved":
+        0,
+
+    "base_signal_candidates":
+        0,
+
+    "parity_test":
+        "not_started",
+
+    "parity_cases_completed":
+        0
 }
 
 
@@ -221,7 +246,9 @@ def parse_candle(raw):
 
         return None
 
-    mid = raw.get("mid")
+    mid = raw.get(
+        "mid"
+    )
 
     if not mid:
 
@@ -237,16 +264,24 @@ def parse_candle(raw):
             ),
 
         "open":
-            float(mid["o"]),
+            float(
+                mid["o"]
+            ),
 
         "high":
-            float(mid["h"]),
+            float(
+                mid["h"]
+            ),
 
         "low":
-            float(mid["l"]),
+            float(
+                mid["l"]
+            ),
 
         "close":
-            float(mid["c"])
+            float(
+                mid["c"]
+            )
     }
 
 
@@ -296,11 +331,15 @@ def fetch_range(
         []
     ):
 
-        candle = parse_candle(raw)
+        candle = parse_candle(
+            raw
+        )
 
         if candle is not None:
 
-            candles.append(candle)
+            candles.append(
+                candle
+            )
 
     return candles
 
@@ -353,8 +392,8 @@ def fetch_chunked_history(
     )
 
     candles.sort(
-        key=lambda x:
-            x["time"]
+        key=lambda item:
+            item["time"]
     )
 
     return candles
@@ -418,7 +457,7 @@ def ema_series(
 
 def true_ranges(candles):
 
-    values = []
+    result = []
 
     for index, candle in enumerate(
         candles
@@ -454,9 +493,11 @@ def true_ranges(candles):
                 )
             )
 
-        values.append(value)
+        result.append(
+            value
+        )
 
-    return values
+    return result
 
 
 def rma_series(
@@ -511,13 +552,15 @@ def atr_series(
 ):
 
     return rma_series(
-        true_ranges(candles),
+        true_ranges(
+            candles
+        ),
         length
     )
 
 
 # ==================================================
-# DAILY STATE
+# DAILY ALIGNMENT
 # ==================================================
 
 def current_daily_start(
@@ -531,12 +574,14 @@ def current_daily_start(
         )
     )
 
-    candidate = ny_time.replace(
-        hour=
-            DAILY_ALIGNMENT_HOUR,
-        minute=0,
-        second=0,
-        microsecond=0
+    candidate = (
+        ny_time.replace(
+            hour=
+                DAILY_ALIGNMENT_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
     )
 
     if ny_time < candidate:
@@ -559,21 +604,21 @@ def build_daily_indicator_cache(
         for candle in daily
     ]
 
-    required_lengths = sorted(
+    lengths = sorted(
         set(
             SLOW_EMA_LENGTHS
             + [
-                value
-                for value
+                length
+                for length
                 in FAST_EMA_LENGTHS
-                if value is not None
+                if length is not None
             ]
         )
     )
 
     cache = {}
 
-    for length in required_lengths:
+    for length in lengths:
 
         cache[length] = ema_series(
             closes,
@@ -590,8 +635,8 @@ def build_h1_daily_lookup(
 ):
 
     print(
-        "Building H1 -> previous daily "
-        "state lookup...",
+        "Building H1 -> previous completed "
+        "daily candle lookup...",
         flush=True
     )
 
@@ -634,23 +679,26 @@ def build_h1_daily_lookup(
                 ]["close"]
         }
 
-        for length, values in (
+        for length, series in (
             daily_ema_cache.items()
         ):
 
             row[
                 f"ema_{length}"
-            ] = values[
+            ] = series[
                 daily_index
             ]
 
-        lookup[h1_index] = row
+        lookup[
+            h1_index
+        ] = row
 
     return lookup
 
 
 # ==================================================
-# PRECOMPUTE SIGNAL INFORMATION
+# FAST ENGINE:
+# PRECOMPUTED SIGNAL CANDIDATES
 # ==================================================
 
 def build_signal_candidates(
@@ -660,29 +708,35 @@ def build_signal_candidates(
 ):
 
     print(
-        "Precomputing bearish-engulfing "
-        "signal candidates...",
+        "Precomputing bearish engulfing "
+        "candidates...",
         flush=True
     )
 
     candidates = []
 
-    maximum_lookback = max(
+    minimum_index = max(
         STRUCTURE_LOOKBACKS
     )
 
     for index in range(
-        maximum_lookback,
+        minimum_index,
         len(h1)
     ):
 
         signal = h1[index]
 
-        if signal["time"] < RESEARCH_FROM:
+        if (
+            signal["time"]
+            < RESEARCH_FROM
+        ):
 
             continue
 
-        if signal["time"] >= RESEARCH_TO:
+        if (
+            signal["time"]
+            >= RESEARCH_TO
+        ):
 
             break
 
@@ -690,17 +744,19 @@ def build_signal_candidates(
             index - 1
         ]
 
-        current_atr = atr[index]
+        current_atr = atr[
+            index
+        ]
 
         if current_atr is None:
 
             continue
 
-        daily_state = (
-            daily_lookup[index]
-        )
+        daily = daily_lookup[
+            index
+        ]
 
-        if daily_state is None:
+        if daily is None:
 
             continue
 
@@ -719,36 +775,31 @@ def build_signal_candidates(
             - signal["low"]
         )
 
-        if previous_body <= 0:
+        if (
+            previous_body <= 0
+            or
+            current_body <= 0
+            or
+            signal_range <= 0
+        ):
 
             continue
 
-        if current_body <= 0:
-
-            continue
-
-        if signal_range <= 0:
-
-            continue
-
-        # Basic bearish engulfing.
-        # Body-ratio threshold is applied later.
+        # Base engulfing only.
+        # Ratio threshold comes later.
         bearish_engulfing = (
             previous["close"]
             > previous["open"]
 
             and
-
             signal["close"]
             < signal["open"]
 
             and
-
             signal["open"]
             >= previous["close"]
 
             and
-
             signal["close"]
             <= previous["open"]
         )
@@ -770,24 +821,6 @@ def build_signal_candidates(
             / signal_range
         )
 
-        range_atr = (
-            signal_range
-            / current_atr
-        )
-
-        upper_wick = (
-            signal["high"]
-            - max(
-                signal["open"],
-                signal["close"]
-            )
-        )
-
-        upper_wick_body_ratio = (
-            upper_wick
-            / current_body
-        )
-
         structure_distances = {}
 
         for lookback in (
@@ -802,14 +835,15 @@ def build_signal_candidates(
                 ]
             )
 
-            distance_atr = (
-                previous_highest
-                - signal["high"]
-            ) / current_atr
-
             structure_distances[
                 lookback
-            ] = distance_atr
+            ] = (
+                (
+                    previous_highest
+                    - signal["high"]
+                )
+                / current_atr
+            )
 
         candidates.append({
             "index":
@@ -824,36 +858,24 @@ def build_signal_candidates(
             "close_location":
                 close_location,
 
-            "range_atr":
-                range_atr,
-
-            "upper_wick_body_ratio":
-                upper_wick_body_ratio,
-
             "structure_distances":
                 structure_distances,
 
             "daily":
-                daily_state
+                daily
         })
 
     return candidates
 
 
-# ==================================================
-# FILTER SIGNAL CANDIDATES
-# ==================================================
-
-def candidate_allowed(
+def fast_candidate_allowed(
     candidate,
     body_ratio,
     structure_lookback,
     max_distance_atr,
     slow_ema,
     fast_ema,
-    strong_close,
-    minimum_range_atr,
-    minimum_upper_wick_ratio
+    strong_close
 ):
 
     if (
@@ -872,7 +894,9 @@ def candidate_allowed(
 
         return False
 
-    daily = candidate["daily"]
+    daily = candidate[
+        "daily"
+    ]
 
     slow_value = daily.get(
         f"ema_{slow_ema}"
@@ -882,7 +906,8 @@ def candidate_allowed(
 
         return False
 
-    # Main bearish daily regime
+    # Previous completed daily close
+    # must be below slow EMA.
     if not (
         daily["close"]
         < slow_value
@@ -890,7 +915,7 @@ def candidate_allowed(
 
         return False
 
-    # Optional fast/slow bearish EMA alignment
+    # Optional bearish EMA alignment
     if fast_ema is not None:
 
         fast_value = daily.get(
@@ -920,38 +945,11 @@ def candidate_allowed(
 
             return False
 
-    # Optional large candle filter
-    if minimum_range_atr is not None:
-
-        if (
-            candidate[
-                "range_atr"
-            ]
-            < minimum_range_atr
-        ):
-
-            return False
-
-    # Optional upper-wick rejection
-    if (
-        minimum_upper_wick_ratio
-        is not None
-    ):
-
-        if (
-            candidate[
-                "upper_wick_body_ratio"
-            ]
-            < minimum_upper_wick_ratio
-        ):
-
-            return False
-
     return True
 
 
 # ==================================================
-# TRADE EXIT CACHE
+# EXIT CACHE
 # ==================================================
 
 EXIT_CACHE = {}
@@ -968,7 +966,10 @@ def calculate_trade_exit(
         reward_risk
     )
 
-    if cache_key in EXIT_CACHE:
+    if (
+        cache_key
+        in EXIT_CACHE
+    ):
 
         return EXIT_CACHE[
             cache_key
@@ -982,6 +983,8 @@ def calculate_trade_exit(
         signal["close"]
     )
 
+    # Adverse short slippage:
+    # fill 5 ticks below reference close.
     backtest_entry = (
         reference_entry
         - (
@@ -1032,16 +1035,22 @@ def calculate_trade_exit(
 
         return None
 
-    # First possible exit is the candle AFTER
-    # the signal candle.
+    # Entry occurs on signal close.
+    # Therefore first possible exit is
+    # the NEXT H1 candle.
     for index in range(
         signal_index + 1,
         len(h1)
     ):
 
-        candle = h1[index]
+        candle = h1[
+            index
+        ]
 
-        if candle["time"] >= RESEARCH_TO:
+        if (
+            candle["time"]
+            >= RESEARCH_TO
+        ):
 
             break
 
@@ -1057,7 +1066,8 @@ def calculate_trade_exit(
 
         if not (
             stop_hit
-            or target_hit
+            or
+            target_hit
         ):
 
             continue
@@ -1078,28 +1088,34 @@ def calculate_trade_exit(
                 - candle["low"]
             )
 
-            # Same approximation used previously:
-            # for a short:
-            # high first -> stop
-            # low first -> target
+            # Same intrabar approximation
+            # used in previous research.
+            #
+            # Short:
+            # high first = stop
+            # low first = target
             if (
                 distance_to_high
                 < distance_to_low
             ):
 
                 exit_price = stop
+                exit_reason = "STOP"
 
             else:
 
                 exit_price = target
+                exit_reason = "TARGET"
 
         elif stop_hit:
 
             exit_price = stop
+            exit_reason = "STOP"
 
         else:
 
             exit_price = target
+            exit_reason = "TARGET"
 
         result_r = (
             (
@@ -1110,8 +1126,20 @@ def calculate_trade_exit(
         )
 
         result = {
+            "signal_index":
+                signal_index,
+
             "exit_index":
                 index,
+
+            "signal_time":
+                signal["time"],
+
+            "exit_time":
+                candle["time"],
+
+            "exit_reason":
+                exit_reason,
 
             "result_r":
                 result_r
@@ -1131,21 +1159,17 @@ def calculate_trade_exit(
 
 
 # ==================================================
-# SIMULATE SIGNAL LIST
+# FAST SIMULATOR
 # ==================================================
 
-def simulate_candidates(
+def simulate_fast(
     h1,
     candidates,
     reward_risk
 ):
 
-    results = []
+    trades = []
 
-    # Mimics pyramiding=0.
-    #
-    # Signals occurring before the current trade
-    # exits are ignored.
     position_exit_index = -1
 
     for candidate in candidates:
@@ -1154,9 +1178,17 @@ def simulate_candidates(
             candidate["index"]
         )
 
+        # IMPORTANT:
+        #
+        # "<", not "<="
+        #
+        # If the existing trade exits during
+        # this candle, the original simulator
+        # is allowed to evaluate a fresh signal
+        # at this candle's close.
         if (
             signal_index
-            <= position_exit_index
+            < position_exit_index
         ):
 
             continue
@@ -1171,61 +1203,979 @@ def simulate_candidates(
 
             continue
 
-        results.append(
-            trade["result_r"]
+        trades.append(
+            trade
         )
 
         position_exit_index = (
             trade["exit_index"]
         )
 
-    return results
+    return trades
+
+
+# ==================================================
+# SLOW REFERENCE SIGNAL
+#
+# This deliberately calculates everything directly
+# from the raw candle data.
+#
+# It does NOT use the precomputed candidate filter.
+#
+# This gives us an independent reference implementation
+# for the parity test.
+# ==================================================
+
+def slow_signal_allowed(
+    h1,
+    atr,
+    daily_lookup,
+    index,
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    slow_ema,
+    fast_ema,
+    strong_close
+):
+
+    if index < max(
+        14,
+        structure_lookback
+    ):
+
+        return False
+
+    signal = h1[
+        index
+    ]
+
+    previous = h1[
+        index - 1
+    ]
+
+    if (
+        signal["time"]
+        < RESEARCH_FROM
+    ):
+
+        return False
+
+    if (
+        signal["time"]
+        >= RESEARCH_TO
+    ):
+
+        return False
+
+    current_atr = atr[
+        index
+    ]
+
+    if current_atr is None:
+
+        return False
+
+    daily = daily_lookup[
+        index
+    ]
+
+    if daily is None:
+
+        return False
+
+    previous_body = abs(
+        previous["close"]
+        - previous["open"]
+    )
+
+    current_body = abs(
+        signal["close"]
+        - signal["open"]
+    )
+
+    signal_range = (
+        signal["high"]
+        - signal["low"]
+    )
+
+    if (
+        previous_body <= 0
+        or
+        current_body <= 0
+        or
+        signal_range <= 0
+    ):
+
+        return False
+
+    # ==============================================
+    # BEARISH ENGULF
+    # ==============================================
+
+    if not (
+        previous["close"]
+        > previous["open"]
+
+        and
+        signal["close"]
+        < signal["open"]
+
+        and
+        signal["open"]
+        >= previous["close"]
+
+        and
+        signal["close"]
+        <= previous["open"]
+    ):
+
+        return False
+
+    # ==============================================
+    # BODY RATIO
+    # ==============================================
+
+    if not (
+        current_body
+        >= previous_body
+        * body_ratio
+    ):
+
+        return False
+
+    # ==============================================
+    # STRUCTURE
+    # ==============================================
+
+    previous_highest = max(
+        candle["high"]
+        for candle in h1[
+            index - structure_lookback:
+            index
+        ]
+    )
+
+    distance_from_high = (
+        previous_highest
+        - signal["high"]
+    )
+
+    if (
+        distance_from_high
+        > current_atr
+        * max_distance_atr
+    ):
+
+        return False
+
+    # ==============================================
+    # DAILY REGIME
+    # ==============================================
+
+    slow_value = daily.get(
+        f"ema_{slow_ema}"
+    )
+
+    if slow_value is None:
+
+        return False
+
+    if not (
+        daily["close"]
+        < slow_value
+    ):
+
+        return False
+
+    # ==============================================
+    # FAST EMA ALIGNMENT
+    # ==============================================
+
+    if fast_ema is not None:
+
+        fast_value = daily.get(
+            f"ema_{fast_ema}"
+        )
+
+        if fast_value is None:
+
+            return False
+
+        if not (
+            fast_value
+            < slow_value
+        ):
+
+            return False
+
+    # ==============================================
+    # STRONG BEARISH CLOSE
+    # ==============================================
+
+    if strong_close is not None:
+
+        close_location = (
+            (
+                signal["close"]
+                - signal["low"]
+            )
+            / signal_range
+        )
+
+        if (
+            close_location
+            > strong_close
+        ):
+
+            return False
+
+    return True
+
+
+# ==================================================
+# SLOW REFERENCE SIMULATOR
+# ==================================================
+
+def simulate_slow_reference(
+    h1,
+    atr,
+    daily_lookup,
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    reward_risk,
+    slow_ema,
+    fast_ema,
+    strong_close
+):
+
+    trades = []
+
+    open_trade = None
+
+    start_index = max(
+        14,
+        structure_lookback
+    )
+
+    for index in range(
+        start_index,
+        len(h1)
+    ):
+
+        candle = h1[
+            index
+        ]
+
+        candle_time = (
+            candle["time"]
+        )
+
+        if (
+            candle_time
+            < RESEARCH_FROM
+        ):
+
+            continue
+
+        if (
+            candle_time
+            >= RESEARCH_TO
+        ):
+
+            break
+
+        # ==========================================
+        # EXIT EXISTING POSITION FIRST
+        # ==========================================
+
+        if open_trade is not None:
+
+            stop_hit = (
+                candle["high"]
+                >= open_trade[
+                    "stop"
+                ]
+            )
+
+            target_hit = (
+                candle["low"]
+                <= open_trade[
+                    "target"
+                ]
+            )
+
+            if (
+                stop_hit
+                or
+                target_hit
+            ):
+
+                if (
+                    stop_hit
+                    and
+                    target_hit
+                ):
+
+                    distance_to_high = abs(
+                        candle["high"]
+                        - candle["open"]
+                    )
+
+                    distance_to_low = abs(
+                        candle["open"]
+                        - candle["low"]
+                    )
+
+                    if (
+                        distance_to_high
+                        < distance_to_low
+                    ):
+
+                        exit_price = (
+                            open_trade[
+                                "stop"
+                            ]
+                        )
+
+                        exit_reason = (
+                            "STOP"
+                        )
+
+                    else:
+
+                        exit_price = (
+                            open_trade[
+                                "target"
+                            ]
+                        )
+
+                        exit_reason = (
+                            "TARGET"
+                        )
+
+                elif stop_hit:
+
+                    exit_price = (
+                        open_trade[
+                            "stop"
+                        ]
+                    )
+
+                    exit_reason = (
+                        "STOP"
+                    )
+
+                else:
+
+                    exit_price = (
+                        open_trade[
+                            "target"
+                        ]
+                    )
+
+                    exit_reason = (
+                        "TARGET"
+                    )
+
+                actual_risk = (
+                    open_trade[
+                        "stop"
+                    ]
+                    - open_trade[
+                        "backtest_entry"
+                    ]
+                )
+
+                result_r = (
+                    (
+                        open_trade[
+                            "backtest_entry"
+                        ]
+                        - exit_price
+                    )
+                    / actual_risk
+                )
+
+                trades.append({
+                    "signal_index":
+                        open_trade[
+                            "signal_index"
+                        ],
+
+                    "exit_index":
+                        index,
+
+                    "signal_time":
+                        open_trade[
+                            "signal_time"
+                        ],
+
+                    "exit_time":
+                        candle_time,
+
+                    "exit_reason":
+                        exit_reason,
+
+                    "result_r":
+                        result_r
+                })
+
+                open_trade = None
+
+        # ==========================================
+        # PYRAMIDING = 0
+        # ==========================================
+
+        if open_trade is not None:
+
+            continue
+
+        # ==========================================
+        # CHECK SIGNAL
+        # ==========================================
+
+        if not slow_signal_allowed(
+            h1,
+            atr,
+            daily_lookup,
+            index,
+            body_ratio,
+            structure_lookback,
+            max_distance_atr,
+            slow_ema,
+            fast_ema,
+            strong_close
+        ):
+
+            continue
+
+        signal = h1[
+            index
+        ]
+
+        reference_entry = (
+            signal["close"]
+        )
+
+        backtest_entry = (
+            reference_entry
+            - (
+                BACKTEST_SLIPPAGE_TICKS
+                * TICK_SIZE
+            )
+        )
+
+        stop = (
+            signal["high"]
+            + (
+                STOP_BUFFER_TICKS
+                * TICK_SIZE
+            )
+        )
+
+        reference_risk = (
+            stop
+            - reference_entry
+        )
+
+        if reference_risk <= 0:
+
+            continue
+
+        target = (
+            reference_entry
+            - (
+                reference_risk
+                * reward_risk
+            )
+        )
+
+        open_trade = {
+            "signal_index":
+                index,
+
+            "signal_time":
+                signal["time"],
+
+            "backtest_entry":
+                backtest_entry,
+
+            "stop":
+                stop,
+
+            "target":
+                target
+        }
+
+    return trades
+
+
+# ==================================================
+# PARITY TEST
+# ==================================================
+
+def trades_match(
+    slow_trades,
+    fast_trades
+):
+
+    if (
+        len(slow_trades)
+        != len(fast_trades)
+    ):
+
+        return (
+            False,
+            (
+                f"Trade count mismatch: "
+                f"slow={len(slow_trades)}, "
+                f"fast={len(fast_trades)}"
+            )
+        )
+
+    for number, (
+        slow_trade,
+        fast_trade
+    ) in enumerate(
+        zip(
+            slow_trades,
+            fast_trades
+        ),
+        start=1
+    ):
+
+        if (
+            slow_trade[
+                "signal_index"
+            ]
+            !=
+            fast_trade[
+                "signal_index"
+            ]
+        ):
+
+            return (
+                False,
+                (
+                    f"Trade {number}: "
+                    f"signal index mismatch "
+                    f"{slow_trade['signal_index']} "
+                    f"vs "
+                    f"{fast_trade['signal_index']}"
+                )
+            )
+
+        if (
+            slow_trade[
+                "exit_index"
+            ]
+            !=
+            fast_trade[
+                "exit_index"
+            ]
+        ):
+
+            return (
+                False,
+                (
+                    f"Trade {number}: "
+                    f"exit index mismatch "
+                    f"{slow_trade['exit_index']} "
+                    f"vs "
+                    f"{fast_trade['exit_index']}"
+                )
+            )
+
+        if (
+            slow_trade[
+                "exit_reason"
+            ]
+            !=
+            fast_trade[
+                "exit_reason"
+            ]
+        ):
+
+            return (
+                False,
+                (
+                    f"Trade {number}: "
+                    f"exit reason mismatch "
+                    f"{slow_trade['exit_reason']} "
+                    f"vs "
+                    f"{fast_trade['exit_reason']}"
+                )
+            )
+
+        if not math.isclose(
+            slow_trade[
+                "result_r"
+            ],
+            fast_trade[
+                "result_r"
+            ],
+            rel_tol=1e-12,
+            abs_tol=1e-12
+        ):
+
+            return (
+                False,
+                (
+                    f"Trade {number}: "
+                    f"R mismatch "
+                    f"{slow_trade['result_r']} "
+                    f"vs "
+                    f"{fast_trade['result_r']}"
+                )
+            )
+
+    return (
+        True,
+        "Exact match"
+    )
+
+
+def run_parity_test(
+    h1,
+    atr,
+    daily_lookup,
+    all_candidates
+):
+
+    print()
+    print(
+        "========================================"
+    )
+    print(
+        "RUNNING SLOW / FAST PARITY TEST"
+    )
+    print(
+        "========================================"
+    )
+
+    RESEARCH_STATUS.update({
+        "state":
+            "parity_test",
+
+        "message":
+            "Validating optimised engine against slow reference",
+
+        "parity_test":
+            "running",
+
+        "parity_cases_completed":
+            0
+    })
+
+    # Deliberately varied cases:
+    # loose / strict / different EMA / RR /
+    # structure / strong-close settings.
+    parity_cases = [
+
+        {
+            "body_ratio": 1.00,
+            "structure_lookback": 30,
+            "max_distance_atr": 0.25,
+            "reward_risk": 3.0,
+            "slow_ema": 100,
+            "fast_ema": None,
+            "strong_close": None
+        },
+
+        {
+            "body_ratio": 1.20,
+            "structure_lookback": 40,
+            "max_distance_atr": 0.15,
+            "reward_risk": 4.0,
+            "slow_ema": 150,
+            "fast_ema": 50,
+            "strong_close": 0.25
+        },
+
+        {
+            "body_ratio": 1.40,
+            "structure_lookback": 60,
+            "max_distance_atr": 0.05,
+            "reward_risk": 5.0,
+            "slow_ema": 200,
+            "fast_ema": 70,
+            "strong_close": 0.15
+        },
+
+        {
+            "body_ratio": 1.10,
+            "structure_lookback": 50,
+            "max_distance_atr": 0.20,
+            "reward_risk": 3.5,
+            "slow_ema": 150,
+            "fast_ema": 30,
+            "strong_close": 0.35
+        },
+
+        {
+            "body_ratio": 1.30,
+            "structure_lookback": 40,
+            "max_distance_atr": 0.15,
+            "reward_risk": 4.0,
+            "slow_ema": 100,
+            "fast_ema": 50,
+            "strong_close": 0.25
+        },
+
+        {
+            "body_ratio": 1.00,
+            "structure_lookback": 60,
+            "max_distance_atr": 0.10,
+            "reward_risk": 4.5,
+            "slow_ema": 200,
+            "fast_ema": None,
+            "strong_close": 0.35
+        },
+
+        {
+            "body_ratio": 1.40,
+            "structure_lookback": 30,
+            "max_distance_atr": 0.25,
+            "reward_risk": 3.0,
+            "slow_ema": 100,
+            "fast_ema": 30,
+            "strong_close": None
+        },
+
+        {
+            "body_ratio": 1.20,
+            "structure_lookback": 50,
+            "max_distance_atr": 0.05,
+            "reward_risk": 5.0,
+            "slow_ema": 150,
+            "fast_ema": 70,
+            "strong_close": 0.15
+        }
+    ]
+
+    for case_number, case in enumerate(
+        parity_cases,
+        start=1
+    ):
+
+        print()
+        print(
+            f"Parity case "
+            f"{case_number}/"
+            f"{len(parity_cases)}",
+            flush=True
+        )
+
+        # ==========================================
+        # SLOW REFERENCE
+        # ==========================================
+
+        slow_trades = (
+            simulate_slow_reference(
+                h1,
+                atr,
+                daily_lookup,
+
+                case[
+                    "body_ratio"
+                ],
+
+                case[
+                    "structure_lookback"
+                ],
+
+                case[
+                    "max_distance_atr"
+                ],
+
+                case[
+                    "reward_risk"
+                ],
+
+                case[
+                    "slow_ema"
+                ],
+
+                case[
+                    "fast_ema"
+                ],
+
+                case[
+                    "strong_close"
+                ]
+            )
+        )
+
+        # ==========================================
+        # FAST ENGINE
+        # ==========================================
+
+        eligible = [
+            candidate
+            for candidate
+            in all_candidates
+            if fast_candidate_allowed(
+                candidate,
+
+                case[
+                    "body_ratio"
+                ],
+
+                case[
+                    "structure_lookback"
+                ],
+
+                case[
+                    "max_distance_atr"
+                ],
+
+                case[
+                    "slow_ema"
+                ],
+
+                case[
+                    "fast_ema"
+                ],
+
+                case[
+                    "strong_close"
+                ]
+            )
+        ]
+
+        fast_trades = simulate_fast(
+            h1,
+            eligible,
+            case[
+                "reward_risk"
+            ]
+        )
+
+        match, message = trades_match(
+            slow_trades,
+            fast_trades
+        )
+
+        print(
+            f"Slow trades: "
+            f"{len(slow_trades)}"
+        )
+
+        print(
+            f"Fast trades: "
+            f"{len(fast_trades)}"
+        )
+
+        print(
+            f"Result: {message}",
+            flush=True
+        )
+
+        if not match:
+
+            RESEARCH_STATUS.update({
+                "parity_test":
+                    "FAILED",
+
+                "message":
+                    (
+                        f"Parity failure in "
+                        f"case {case_number}: "
+                        f"{message}"
+                    )
+            })
+
+            raise RuntimeError(
+                (
+                    f"FAST ENGINE PARITY FAILED "
+                    f"IN CASE {case_number}: "
+                    f"{message}"
+                )
+            )
+
+        RESEARCH_STATUS[
+            "parity_cases_completed"
+        ] = case_number
+
+    RESEARCH_STATUS.update({
+        "parity_test":
+            "PASSED",
+
+        "message":
+            (
+                "Slow and fast engines match. "
+                "Starting refinement sweep."
+            )
+    })
+
+    print()
+    print(
+        "========================================"
+    )
+    print(
+        "PARITY TEST PASSED"
+    )
+    print(
+        "========================================"
+    )
+    print(
+        "Fast engine exactly matched "
+        "slow reference on all test cases.",
+        flush=True
+    )
 
 
 # ==================================================
 # PERFORMANCE
 # ==================================================
 
-def calculate_stats(results):
+def calculate_stats(
+    trades
+):
 
-    if not results:
+    if not trades:
 
         return None
 
+    results = [
+        trade["result_r"]
+        for trade in trades
+    ]
+
     winners = [
-        value
-        for value in results
-        if value > 0
+        result
+        for result in results
+        if result > 0
     ]
 
     losers = [
-        value
-        for value in results
-        if value < 0
+        result
+        for result in results
+        if result < 0
     ]
 
-    total_r = sum(results)
+    total_r = sum(
+        results
+    )
 
     gross_profit = sum(
         winners
     )
 
     gross_loss = abs(
-        sum(losers)
+        sum(
+            losers
+        )
     )
 
-    if gross_loss > 0:
-
-        profit_factor = (
-            gross_profit
-            / gross_loss
-        )
-
-    else:
-
-        profit_factor = (
-            float("inf")
-        )
+    profit_factor = (
+        gross_profit
+        / gross_loss
+        if gross_loss > 0
+        else float("inf")
+    )
 
     win_rate = (
         len(winners)
@@ -1246,41 +2196,46 @@ def calculate_stats(results):
     peak = 0.0
     max_drawdown = 0.0
 
-    for value in results:
+    for result in results:
 
-        equity += value
+        equity += result
 
         peak = max(
             peak,
             equity
         )
 
+        drawdown = (
+            equity
+            - peak
+        )
+
         max_drawdown = min(
             max_drawdown,
-            equity - peak
+            drawdown
         )
 
     # ==============================================
     # LONGEST LOSING STREAK
     # ==============================================
 
-    longest_losing_streak = 0
-    current_losing_streak = 0
+    longest_loss_streak = 0
+    current_loss_streak = 0
 
-    for value in results:
+    for result in results:
 
-        if value < 0:
+        if result < 0:
 
-            current_losing_streak += 1
+            current_loss_streak += 1
 
-            longest_losing_streak = max(
-                longest_losing_streak,
-                current_losing_streak
+            longest_loss_streak = max(
+                longest_loss_streak,
+                current_loss_streak
             )
 
         else:
 
-            current_losing_streak = 0
+            current_loss_streak = 0
 
     years = (
         (
@@ -1347,7 +2302,7 @@ def calculate_stats(results):
             ),
 
         "longest_loss_streak":
-            longest_losing_streak
+            longest_loss_streak
     }
 
 
@@ -1366,7 +2321,7 @@ def run_research():
             "========================================"
         )
         print(
-            "EUR/USD SHORT COMBINED STRUCTURAL SWEEP"
+            "EUR/USD SHORT REFINEMENT SWEEP"
         )
         print(
             "========================================"
@@ -1379,6 +2334,14 @@ def run_research():
 
         print(
             "ALL WEEKDAYS ENABLED"
+        )
+
+        print(
+            "Minimum range filter: OFF"
+        )
+
+        print(
+            "Upper-wick filter: OFF"
         )
 
         print(
@@ -1428,12 +2391,12 @@ def run_research():
 
         print()
         print(
-            "H1 candles:",
+            "H1 candles loaded:",
             len(h1)
         )
 
         print(
-            "Daily candles:",
+            "Daily candles loaded:",
             len(daily)
         )
 
@@ -1479,7 +2442,7 @@ def run_research():
             )
         )
 
-        candidates = (
+        all_candidates = (
             build_signal_candidates(
                 h1,
                 atr,
@@ -1489,30 +2452,44 @@ def run_research():
 
         RESEARCH_STATUS[
             "base_signal_candidates"
-        ] = len(candidates)
+        ] = len(
+            all_candidates
+        )
 
         print()
         print(
             "Base bearish-engulfing candidates:",
-            len(candidates)
+            len(
+                all_candidates
+            )
         )
 
         # ==========================================
-        # COMBINATIONS
+        # PARITY CHECK
         # ==========================================
 
-        combinations = list(
-            itertools.product(
-                BODY_RATIOS,
-                STRUCTURE_LOOKBACKS,
-                MAX_DISTANCE_ATR_VALUES,
-                REWARD_RISKS,
-                SLOW_EMA_LENGTHS,
-                FAST_EMA_LENGTHS,
-                STRONG_CLOSE_LEVELS,
-                MINIMUM_RANGE_ATR_VALUES,
-                UPPER_WICK_BODY_RATIOS
-            )
+        run_parity_test(
+            h1,
+            atr,
+            daily_lookup,
+            all_candidates
+        )
+
+        # If parity fails, an exception is raised
+        # above and the sweep NEVER starts.
+
+        # ==========================================
+        # GRID
+        # ==========================================
+
+        combinations = itertools.product(
+            BODY_RATIOS,
+            STRUCTURE_LOOKBACKS,
+            MAX_DISTANCE_ATR_VALUES,
+            REWARD_RISKS,
+            SLOW_EMA_LENGTHS,
+            FAST_EMA_LENGTHS,
+            STRONG_CLOSE_LEVELS
         )
 
         RESEARCH_STATUS.update({
@@ -1520,13 +2497,17 @@ def run_research():
                 "running",
 
             "message":
-                "Running 10,368 structural combinations",
+                (
+                    "Parity passed. "
+                    "Running 24,000-combination "
+                    "refinement sweep."
+                ),
 
             "completed_combinations":
                 0,
 
             "total_combinations":
-                len(combinations)
+                TOTAL_COMBINATIONS
         })
 
         results = []
@@ -1547,38 +2528,32 @@ def run_research():
                 reward_risk,
                 slow_ema,
                 fast_ema,
-                strong_close,
-                minimum_range_atr,
-                upper_wick_ratio
+                strong_close
             ) = combo
 
             eligible = [
                 candidate
                 for candidate
-                in candidates
-                if candidate_allowed(
+                in all_candidates
+                if fast_candidate_allowed(
                     candidate,
                     body_ratio,
                     structure_lookback,
                     max_distance_atr,
                     slow_ema,
                     fast_ema,
-                    strong_close,
-                    minimum_range_atr,
-                    upper_wick_ratio
+                    strong_close
                 )
             ]
 
-            trade_results = (
-                simulate_candidates(
-                    h1,
-                    eligible,
-                    reward_risk
-                )
+            trades = simulate_fast(
+                h1,
+                eligible,
+                reward_risk
             )
 
             stats = calculate_stats(
-                trade_results
+                trades
             )
 
             if stats is not None:
@@ -1602,7 +2577,8 @@ def run_research():
                     "fast_ema":
                         (
                             "OFF"
-                            if fast_ema is None
+                            if fast_ema
+                            is None
                             else fast_ema
                         ),
 
@@ -1614,45 +2590,36 @@ def run_research():
                             else strong_close
                         ),
 
-                    "minimum_range_atr":
-                        (
-                            "OFF"
-                            if minimum_range_atr
-                            is None
-                            else minimum_range_atr
-                        ),
-
-                    "upper_wick_body_ratio":
-                        (
-                            "OFF"
-                            if upper_wick_ratio
-                            is None
-                            else upper_wick_ratio
-                        ),
-
                     "raw_signals":
                         len(eligible)
                 }
 
-                row.update(stats)
+                row.update(
+                    stats
+                )
 
-                results.append(row)
+                results.append(
+                    row
+                )
 
             RESEARCH_STATUS[
                 "completed_combinations"
             ] = number
 
-            if number % 250 == 0:
+            if (
+                number % 500
+                == 0
+            ):
 
                 print(
                     f"Progress: "
                     f"{number}/"
-                    f"{len(combinations)}",
+                    f"{TOTAL_COMBINATIONS}",
                     flush=True
                 )
 
         # ==========================================
-        # SAVE
+        # DATAFRAME
         # ==========================================
 
         df = pd.DataFrame(
@@ -1665,11 +2632,9 @@ def run_research():
                 "No results generated"
             )
 
-        # Do NOT throw away low-trade variants here.
-        #
-        # We want the complete dataset so we can
-        # analyse whether filters improve robustness
-        # while reducing frequency.
+        # Keep EVERYTHING in the CSV.
+        # We can impose trade-count thresholds
+        # during analysis rather than deleting data.
         df = df.sort_values(
             by=[
                 "profit_factor",
@@ -1691,41 +2656,53 @@ def run_research():
             index=False
         )
 
+        # ==========================================
+        # COMPLETE
+        # ==========================================
+
         RESEARCH_STATUS.update({
             "state":
                 "complete",
 
             "message":
-                "Combined structural sweep complete",
+                (
+                    "Parity passed and refinement "
+                    "sweep completed successfully."
+                ),
 
             "completed_combinations":
-                len(combinations),
+                TOTAL_COMBINATIONS,
 
             "rows_saved":
                 len(df),
 
             "output_file":
-                OUTPUT_FILE
+                OUTPUT_FILE,
+
+            "parity_test":
+                "PASSED"
         })
 
+        # ==========================================
+        # LOG RESULTS
+        # ==========================================
+
         print()
         print(
             "========================================"
         )
         print(
-            "TOP RESULTS WITH >= 75 TRADES"
+            "TOP RESULTS >= 100 TRADES"
         )
         print(
             "========================================"
         )
 
-        meaningful = df[
-            df["trades"]
-            >= 75
-        ]
-
         print(
-            meaningful
+            df[
+                df["trades"]
+                >= 100
+            ]
             .head(30)
             .to_string(
                 index=False
@@ -1737,19 +2714,17 @@ def run_research():
             "========================================"
         )
         print(
-            "TOP RESULTS WITH >= 100 TRADES"
+            "TOP RESULTS >= 75 TRADES"
         )
         print(
             "========================================"
         )
 
-        meaningful_100 = df[
-            df["trades"]
-            >= 100
-        ]
-
         print(
-            meaningful_100
+            df[
+                df["trades"]
+                >= 75
+            ]
             .head(30)
             .to_string(
                 index=False
@@ -1758,11 +2733,12 @@ def run_research():
 
         print()
         print(
-            "Saved:"
+            "CSV saved:"
         )
 
         print(
-            OUTPUT_FILE
+            OUTPUT_FILE,
+            flush=True
         )
 
     except Exception as error:
@@ -1775,6 +2751,7 @@ def run_research():
                 str(error)
         })
 
+        print()
         print(
             "ERROR:",
             error,
@@ -1791,7 +2768,7 @@ def home():
 
     return jsonify({
         "service":
-            "EURUSD Short Combined Structural Research",
+            "EURUSD Short Refinement Research",
 
         "status":
             RESEARCH_STATUS,
@@ -1804,14 +2781,23 @@ def home():
                 "all_weekdays":
                     True,
 
-                "session_filters":
+                "session_filter":
                     False,
 
-                "weekday_filters":
+                "weekday_filter":
+                    False,
+
+                "minimum_range_filter":
+                    False,
+
+                "upper_wick_filter":
                     False,
 
                 "total_combinations":
-                    TOTAL_COMBINATIONS
+                    TOTAL_COMBINATIONS,
+
+                "slow_fast_parity_required":
+                    True
             },
 
         "trading_enabled":
@@ -1851,8 +2837,10 @@ def download():
                 "not_ready",
 
             "message":
-                "Research CSV has not "
-                "been generated yet."
+                (
+                    "Research CSV has not "
+                    "been generated yet."
+                )
         }), 404
 
     return send_file(
@@ -1860,7 +2848,7 @@ def download():
         as_attachment=True,
 
         download_name=
-            "eurusd_short_combined_structural_sweep.csv"
+            "eurusd_short_refinement_sweep.csv"
     )
 
 
@@ -1873,7 +2861,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=
-            "eurusd-short-combined-research",
+            "eurusd-short-refinement",
         daemon=True
     )
 
@@ -1891,4 +2879,3 @@ if __name__ == "__main__":
         port=port,
         debug=False
     )
-    
