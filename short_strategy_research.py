@@ -10,11 +10,11 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/JPY SHORT - TIMING / WEEKDAY DIAGNOSTIC
+# USD/JPY SHORT - FINAL TIMING STABILITY CHECK
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Frozen high-frequency core:
+# Frozen structural core:
 #   Bearish engulfing
 #   Body >= 1.45
 #   Structure lookback = 90 H1 bars
@@ -23,26 +23,23 @@ from zoneinfo import ZoneInfo
 #   RR = 2.50
 #   NO strong-close filter
 #   NO upper-wick filter
+#   ALL weekdays
 #
-# Purpose:
-#   Diagnose whether a small number of New York signal hours
-#   or weekdays are independently destructive enough to remove.
+# Candidate excluded NY hours from prior diagnostic:
+#   01, 02, 05, 06, 10, 11
 #
-# IMPORTANT:
-#   - Baseline starts with ALL hours and ALL weekdays.
-#   - Exclusions are re-simulated from the signal stream rather
-#     than simply deleting trades from the baseline result.
-#   - "Independently bad" bucket threshold:
-#         >= 6 baseline trades
-#         total R < 0
-#         PF < 0.85
-#   - We test:
-#         baseline
-#         each single hour exclusion
-#         each single weekday exclusion
-#         all pairs of independently bad hours
-#         all independently bad hours together
-#         each independently bad weekday + bad-hour set
+# This script tests:
+#   1. Baseline: no hour exclusions
+#   2. Full six-hour exclusion
+#   3. Leave-one-back-in variants
+#   4. Individual bad-hour exclusions
+#   5. Natural pairs: 01+02, 05+06, 10+11
+#   6. All combinations of those natural pairs
+#   7. All combinations of the six candidate hours
+#      containing at least 2 exclusions
+#
+# This lets us find the simplest timing rule that retains most
+# of the robustness of the full six-hour exclusion.
 #
 # Exact execution conventions retained:
 #   OANDA midpoint H1
@@ -98,8 +95,8 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 220
 DAILY_WARMUP_DAYS = 2600
 
-OUTPUT_FILE = "usdjpy_short_timing_diagnostic.csv"
-BUCKET_FILE = "usdjpy_short_timing_buckets.csv"
+OUTPUT_FILE = "usdjpy_short_final_timing_stability.csv"
+HOUR_ERAS_FILE = "usdjpy_short_bad_hours_by_era.csv"
 
 
 # ============================================================
@@ -114,11 +111,23 @@ REWARD_RISK = 2.50
 
 
 # ============================================================
-# BAD-BUCKET RULE
+# TIMING CANDIDATES
 # ============================================================
 
-MIN_BUCKET_TRADES = 6
-MAX_BAD_BUCKET_PF = 0.85
+CANDIDATE_BAD_HOURS = [
+    1,
+    2,
+    5,
+    6,
+    10,
+    11,
+]
+
+NATURAL_PAIRS = {
+    "PAIR_01_02": {1, 2},
+    "PAIR_05_06": {5, 6},
+    "PAIR_10_11": {10, 11},
+}
 
 
 # ============================================================
@@ -156,13 +165,14 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDJPY Short Timing Diagnostic",
+    "service": "USDJPY Short Final Timing Stability",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
+    "candidate_bad_hours": CANDIDATE_BAD_HOURS,
     "completed_scenarios": 0,
     "output_file": None,
-    "bucket_file": None,
+    "hour_eras_file": None,
 }
 
 
@@ -757,23 +767,17 @@ def simulate(
     h1,
     candidates,
     excluded_hours=None,
-    excluded_weekdays=None,
 ):
     excluded_hours = set(
         excluded_hours or []
     )
 
-    excluded_weekdays = set(
-        excluded_weekdays or []
-    )
-
     filtered = [
         candidate
         for candidate in candidates
-        if candidate["ny_hour"]
-        not in excluded_hours
-        and candidate["ny_weekday"]
-        not in excluded_weekdays
+        if candidate[
+            "ny_hour"
+        ] not in excluded_hours
     ]
 
     trades = []
@@ -802,18 +806,6 @@ def simulate(
             "ny_hour"
         ] = candidate[
             "ny_hour"
-        ]
-
-        trade[
-            "ny_weekday"
-        ] = candidate[
-            "ny_weekday"
-        ]
-
-        trade[
-            "ny_weekday_name"
-        ] = candidate[
-            "ny_weekday_name"
         ]
 
         if (
@@ -971,8 +963,7 @@ def stats_for_trades(
             2,
         ),
         "expectancy_r": round(
-            total_r
-            / len(results),
+            total_r / len(results),
             3,
         ),
         "max_drawdown_r": round(
@@ -986,16 +977,16 @@ def stats_for_trades(
 
 
 # ============================================================
-# BUCKET DIAGNOSTICS
+# ERA / HOUR DIAGNOSTIC
 # ============================================================
 
-def bucket_stats(
+def build_hour_era_table(
     baseline_trades,
 ):
     rows = []
 
-    for hour in range(24):
-        trades = [
+    for hour in CANDIDATE_BAD_HOURS:
+        hour_trades = [
             trade
             for trade in baseline_trades
             if trade[
@@ -1003,72 +994,75 @@ def bucket_stats(
             ] == hour
         ]
 
-        s = stats_for_trades(
-            trades
+        full = stats_for_trades(
+            hour_trades
         )
 
-        independently_bad = (
-            s["trades"]
-            >= MIN_BUCKET_TRADES
-            and s["total_r"] < 0
-            and s["profit_factor"]
-            < MAX_BAD_BUCKET_PF
+        row = {
+            "ny_hour": hour,
+            "full_trades": full[
+                "trades"
+            ],
+            "full_pf": full[
+                "profit_factor"
+            ],
+            "full_r": full[
+                "total_r"
+            ],
+            "full_expectancy": full[
+                "expectancy_r"
+            ],
+        }
+
+        positive_eras = 0
+        negative_eras = 0
+
+        for (
+            era_name,
+            era_start,
+            era_end,
+        ) in ERAS:
+            era = stats_for_trades(
+                hour_trades,
+                era_start,
+                era_end,
+            )
+
+            row[
+                f"{era_name}_trades"
+            ] = era[
+                "trades"
+            ]
+
+            row[
+                f"{era_name}_pf"
+            ] = era[
+                "profit_factor"
+            ]
+
+            row[
+                f"{era_name}_r"
+            ] = era[
+                "total_r"
+            ]
+
+            if era["trades"] > 0:
+                if era["total_r"] > 0:
+                    positive_eras += 1
+                elif era["total_r"] < 0:
+                    negative_eras += 1
+
+        row[
+            "positive_eras"
+        ] = positive_eras
+
+        row[
+            "negative_eras"
+        ] = negative_eras
+
+        rows.append(
+            row
         )
-
-        rows.append({
-            "bucket_type": "NY_HOUR",
-            "bucket_value": hour,
-            "bucket_name": (
-                f"{hour:02d}:00"
-            ),
-            **s,
-            "independently_bad": (
-                independently_bad
-            ),
-        })
-
-    weekday_names = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-    ]
-
-    for weekday in range(5):
-        trades = [
-            trade
-            for trade in baseline_trades
-            if trade[
-                "ny_weekday"
-            ] == weekday
-        ]
-
-        s = stats_for_trades(
-            trades
-        )
-
-        independently_bad = (
-            s["trades"]
-            >= MIN_BUCKET_TRADES
-            and s["total_r"] < 0
-            and s["profit_factor"]
-            < MAX_BAD_BUCKET_PF
-        )
-
-        rows.append({
-            "bucket_type": "WEEKDAY",
-            "bucket_value": weekday,
-            "bucket_name": (
-                weekday_names[
-                    weekday
-                ]
-            ),
-            **s,
-            "independently_bad": (
-                independently_bad
-            ),
-        })
 
     return pd.DataFrame(
         rows
@@ -1083,7 +1077,6 @@ def scenario_row(
     name,
     scenario_type,
     excluded_hours,
-    excluded_weekdays,
     trades,
     ignored,
     still_open,
@@ -1095,18 +1088,17 @@ def scenario_row(
 
     row = {
         "scenario": name,
-        "scenario_type": scenario_type,
+        "scenario_type": (
+            scenario_type
+        ),
         "excluded_hours": ",".join(
             str(value)
             for value in sorted(
                 excluded_hours
             )
         ),
-        "excluded_weekdays": ",".join(
-            str(value)
-            for value in sorted(
-                excluded_weekdays
-            )
+        "excluded_hour_count": len(
+            excluded_hours
         ),
         "trades": full[
             "trades"
@@ -1223,6 +1215,145 @@ def scenario_row(
 
 
 # ============================================================
+# SCENARIO GENERATION
+# ============================================================
+
+def generate_scenarios():
+    scenarios = {}
+
+    def add(
+        name,
+        scenario_type,
+        excluded,
+    ):
+        key = tuple(
+            sorted(
+                excluded
+            )
+        )
+
+        if key not in scenarios:
+            scenarios[
+                key
+            ] = {
+                "name": name,
+                "type": scenario_type,
+                "excluded": set(
+                    excluded
+                ),
+            }
+
+    # Baseline.
+    add(
+        "BASELINE_ALL_HOURS",
+        "BASELINE",
+        set(),
+    )
+
+    # Full six-hour rule.
+    all_bad = set(
+        CANDIDATE_BAD_HOURS
+    )
+
+    add(
+        "EXCLUDE_ALL_01_02_05_06_10_11",
+        "FULL_SIX",
+        all_bad,
+    )
+
+    # Individual exclusions.
+    for hour in CANDIDATE_BAD_HOURS:
+        add(
+            f"EXCLUDE_{hour:02d}",
+            "SINGLE_HOUR",
+            {hour},
+        )
+
+    # Leave one hour back in from full six.
+    for hour in CANDIDATE_BAD_HOURS:
+        excluded = (
+            all_bad
+            - {hour}
+        )
+
+        add(
+            f"FULL_SIX_LEAVE_{hour:02d}_BACK_IN",
+            "LEAVE_ONE_BACK_IN",
+            excluded,
+        )
+
+    # Natural pairs.
+    for pair_name, pair_hours in (
+        NATURAL_PAIRS.items()
+    ):
+        add(
+            f"EXCLUDE_{pair_name}",
+            "NATURAL_PAIR",
+            pair_hours,
+        )
+
+    # Combinations of natural pairs.
+    pair_items = list(
+        NATURAL_PAIRS.items()
+    )
+
+    for pair_count in range(
+        2,
+        len(pair_items) + 1,
+    ):
+        for combo in itertools.combinations(
+            pair_items,
+            pair_count,
+        ):
+            names = [
+                item[0]
+                for item in combo
+            ]
+
+            excluded = set()
+
+            for _, hours in combo:
+                excluded |= hours
+
+            add(
+                "EXCLUDE_"
+                + "__".join(
+                    names
+                ),
+                "PAIR_COMBINATION",
+                excluded,
+            )
+
+    # Exhaustive combinations of candidate hours,
+    # at least 2 exclusions.
+    for count in range(
+        2,
+        len(CANDIDATE_BAD_HOURS) + 1,
+    ):
+        for combo in itertools.combinations(
+            CANDIDATE_BAD_HOURS,
+            count,
+        ):
+            excluded = set(
+                combo
+            )
+
+            add(
+                "EXCLUDE_"
+                + "_".join(
+                    f"{hour:02d}"
+                    for hour in combo
+                ),
+                "EXHAUSTIVE_BAD_HOUR_COMBO",
+                excluded,
+            )
+
+    return list(
+        scenarios.values()
+    )
+
+
+# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1233,18 +1364,12 @@ def run_research():
         print()
         print("=" * 78)
         print(
-            "USD/JPY SHORT - TIMING / WEEKDAY DIAGNOSTIC"
+            "USD/JPY SHORT - FINAL TIMING STABILITY CHECK"
         )
         print("=" * 78)
         print(
-            "Frozen core:",
-            {
-                "body": BODY_RATIO,
-                "structure": STRUCTURE_LOOKBACK,
-                "distance_atr": MAX_DISTANCE_ATR,
-                "daily_ema": SLOW_DAILY_EMA,
-                "rr": REWARD_RISK,
-            },
+            "Candidate bad hours:",
+            CANDIDATE_BAD_HOURS,
         )
         print()
 
@@ -1304,10 +1429,12 @@ def run_research():
             )
         )
 
-        candidates = build_candidates(
-            h1,
-            h1_atr,
-            daily_lookup,
+        candidates = (
+            build_candidates(
+                h1,
+                h1_atr,
+                daily_lookup,
+            )
         )
 
         STATUS[
@@ -1329,14 +1456,11 @@ def run_research():
         STATUS.update({
             "state": "running",
             "message": (
-                "Running timing and weekday diagnostics"
+                "Running final timing stability scenarios"
             ),
         })
 
-        scenario_rows = []
-
-        # ---------------- BASELINE ----------------
-
+        # Baseline first for per-hour era breakdown.
         (
             baseline_trades,
             baseline_ignored,
@@ -1344,153 +1468,30 @@ def run_research():
         ) = simulate(
             h1,
             candidates,
+            excluded_hours=set(),
         )
 
-        scenario_rows.append(
-            scenario_row(
-                "BASELINE_ALL_HOURS_ALL_WEEKDAYS",
-                "BASELINE",
-                set(),
-                set(),
-                baseline_trades,
-                baseline_ignored,
-                baseline_open,
-                years,
+        hour_era_df = (
+            build_hour_era_table(
+                baseline_trades
             )
         )
 
-        # ---------------- BUCKET STATS ----------------
-
-        buckets = bucket_stats(
-            baseline_trades
-        )
-
-        buckets.to_csv(
-            BUCKET_FILE,
+        hour_era_df.to_csv(
+            HOUR_ERAS_FILE,
             index=False,
         )
 
-        bad_hours = sorted(
-            buckets[
-                (
-                    buckets[
-                        "bucket_type"
-                    ] == "NY_HOUR"
-                )
-                & (
-                    buckets[
-                        "independently_bad"
-                    ] == True
-                )
-            ][
-                "bucket_value"
-            ].astype(
-                int
-            ).tolist()
+        scenarios = (
+            generate_scenarios()
         )
 
-        bad_weekdays = sorted(
-            buckets[
-                (
-                    buckets[
-                        "bucket_type"
-                    ] == "WEEKDAY"
-                )
-                & (
-                    buckets[
-                        "independently_bad"
-                    ] == True
-                )
-            ][
-                "bucket_value"
-            ].astype(
-                int
-            ).tolist()
-        )
+        rows = []
 
-        STATUS[
-            "independently_bad_hours"
-        ] = bad_hours
-
-        STATUS[
-            "independently_bad_weekdays"
-        ] = bad_weekdays
-
-        # ---------------- SINGLE HOUR EXCLUSIONS ----------------
-
-        for hour in range(24):
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                candidates,
-                excluded_hours={
-                    hour
-                },
-            )
-
-            scenario_rows.append(
-                scenario_row(
-                    f"EXCLUDE_HOUR_{hour:02d}",
-                    "SINGLE_HOUR",
-                    {hour},
-                    set(),
-                    trades,
-                    ignored,
-                    still_open,
-                    years,
-                )
-            )
-
-        # ---------------- SINGLE WEEKDAY EXCLUSIONS ----------------
-
-        weekday_names = [
-            "MONDAY",
-            "TUESDAY",
-            "WEDNESDAY",
-            "THURSDAY",
-            "FRIDAY",
-        ]
-
-        for weekday in range(5):
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                candidates,
-                excluded_weekdays={
-                    weekday
-                },
-            )
-
-            scenario_rows.append(
-                scenario_row(
-                    f"EXCLUDE_{weekday_names[weekday]}",
-                    "SINGLE_WEEKDAY",
-                    set(),
-                    {weekday},
-                    trades,
-                    ignored,
-                    still_open,
-                    years,
-                )
-            )
-
-        # ---------------- PAIRS OF INDEPENDENTLY BAD HOURS ----------------
-
-        for hour_a, hour_b in itertools.combinations(
-            bad_hours,
-            2,
+        for number, scenario in enumerate(
+            scenarios,
+            start=1,
         ):
-            excluded = {
-                hour_a,
-                hour_b,
-            }
-
             (
                 trades,
                 ignored,
@@ -1498,18 +1499,22 @@ def run_research():
             ) = simulate(
                 h1,
                 candidates,
-                excluded_hours=excluded,
+                excluded_hours=scenario[
+                    "excluded"
+                ],
             )
 
-            scenario_rows.append(
+            rows.append(
                 scenario_row(
-                    (
-                        f"EXCLUDE_BAD_HOURS_"
-                        f"{hour_a:02d}_{hour_b:02d}"
-                    ),
-                    "BAD_HOUR_PAIR",
-                    excluded,
-                    set(),
+                    scenario[
+                        "name"
+                    ],
+                    scenario[
+                        "type"
+                    ],
+                    scenario[
+                        "excluded"
+                    ],
                     trades,
                     ignored,
                     still_open,
@@ -1517,89 +1522,49 @@ def run_research():
                 )
             )
 
-        # ---------------- ALL INDEPENDENTLY BAD HOURS ----------------
-
-        if bad_hours:
-            bad_hour_set = set(
-                bad_hours
-            )
-
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                candidates,
-                excluded_hours=bad_hour_set,
-            )
-
-            scenario_rows.append(
-                scenario_row(
-                    "EXCLUDE_ALL_INDEPENDENTLY_BAD_HOURS",
-                    "ALL_BAD_HOURS",
-                    bad_hour_set,
-                    set(),
-                    trades,
-                    ignored,
-                    still_open,
-                    years,
-                )
-            )
-
-            # Combine bad-hour set with each independently
-            # bad weekday, but only those weekdays that passed
-            # the same mechanical independent-bucket rule.
-            for weekday in bad_weekdays:
-                (
-                    trades,
-                    ignored,
-                    still_open,
-                ) = simulate(
-                    h1,
-                    candidates,
-                    excluded_hours=bad_hour_set,
-                    excluded_weekdays={
-                        weekday
-                    },
-                )
-
-                scenario_rows.append(
-                    scenario_row(
-                        (
-                            "BAD_HOURS_PLUS_"
-                            f"{weekday_names[weekday]}"
-                        ),
-                        "BAD_HOURS_PLUS_BAD_WEEKDAY",
-                        bad_hour_set,
-                        {weekday},
-                        trades,
-                        ignored,
-                        still_open,
-                        years,
-                    )
-                )
+            STATUS[
+                "completed_scenarios"
+            ] = number
 
         df = pd.DataFrame(
-            scenario_rows
+            rows
         )
 
+        # Baseline comparisons.
+        baseline = df[
+            df[
+                "excluded_hour_count"
+            ] == 0
+        ].iloc[0]
+
+        full_six = df[
+            df[
+                "excluded_hours"
+            ] == "1,2,5,6,10,11"
+        ].iloc[0]
+
         baseline_pf = float(
-            df.loc[
-                df[
-                    "scenario_type"
-                ] == "BASELINE",
-                "profit_factor",
-            ].iloc[0]
+            baseline[
+                "profit_factor"
+            ]
         )
 
         baseline_tpy = float(
-            df.loc[
-                df[
-                    "scenario_type"
-                ] == "BASELINE",
-                "trades_per_year",
-            ].iloc[0]
+            baseline[
+                "trades_per_year"
+            ]
+        )
+
+        full_six_pf = float(
+            full_six[
+                "profit_factor"
+            ]
+        )
+
+        full_six_tpy = float(
+            full_six[
+                "trades_per_year"
+            ]
         )
 
         df[
@@ -1614,7 +1579,7 @@ def run_research():
         )
 
         df[
-            "trades_per_year_change_vs_baseline"
+            "tpy_change_vs_baseline"
         ] = (
             df[
                 "trades_per_year"
@@ -1625,20 +1590,45 @@ def run_research():
         )
 
         df[
-            "preferred_zone"
+            "pf_change_vs_full_six"
+        ] = (
+            df[
+                "profit_factor"
+            ]
+            - full_six_pf
+        ).round(
+            3
+        )
+
+        df[
+            "tpy_change_vs_full_six"
+        ] = (
+            df[
+                "trades_per_year"
+            ]
+            - full_six_tpy
+        ).round(
+            2
+        )
+
+        # Main target:
+        # keep all eras positive, preserve at least 6 trades/yr,
+        # PF >= 1.50, worst-era PF >= 1.10.
+        df[
+            "strong_candidate"
         ] = (
             df[
                 "all_four_eras_profitable"
             ]
             & (
                 df[
-                    "profit_factor"
-                ] >= 1.35
+                    "trades_per_year"
+                ] >= 6.0
             )
             & (
                 df[
-                    "trades_per_year"
-                ] >= 6.0
+                    "profit_factor"
+                ] >= 1.50
             )
             & (
                 df[
@@ -1648,13 +1638,16 @@ def run_research():
             )
         )
 
+        # Simplicity preference:
+        # among robust rules, prefer fewer excluded hours.
         df = df.sort_values(
             by=[
-                "preferred_zone",
+                "strong_candidate",
                 "all_four_eras_profitable",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "trades_per_year",
+                "excluded_hour_count",
                 "total_r",
             ],
             ascending=[
@@ -1663,6 +1656,7 @@ def run_research():
                 False,
                 False,
                 False,
+                True,
                 False,
             ],
         )
@@ -1675,55 +1669,55 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/JPY timing diagnostic completed"
+                "USD/JPY final timing stability check completed"
             ),
             "completed_scenarios": len(
                 df
             ),
-            "independently_bad_hours": (
-                bad_hours
-            ),
-            "independently_bad_weekdays": (
-                bad_weekdays
-            ),
-            "preferred_zone_rows": int(
+            "strong_candidate_rows": int(
                 df[
-                    "preferred_zone"
+                    "strong_candidate"
                 ].sum()
             ),
             "output_file": (
                 OUTPUT_FILE
             ),
-            "bucket_file": (
-                BUCKET_FILE
+            "hour_eras_file": (
+                HOUR_ERAS_FILE
+            ),
+            "full_six_pf": (
+                full_six_pf
+            ),
+            "full_six_trades_per_year": (
+                full_six_tpy
             ),
         })
 
         print()
         print("=" * 78)
         print(
-            "USD/JPY TIMING DIAGNOSTIC COMPLETE"
+            "USD/JPY FINAL TIMING STABILITY COMPLETE"
         )
         print("=" * 78)
         print(
-            "Independent bad hours:",
-            bad_hours,
-        )
-        print(
-            "Independent bad weekdays:",
-            bad_weekdays,
-        )
-        print(
-            "Scenario rows:",
+            "Scenarios:",
             len(df),
+        )
+        print(
+            "Strong candidates:",
+            int(
+                df[
+                    "strong_candidate"
+                ].sum()
+            ),
         )
         print(
             "Saved:",
             OUTPUT_FILE,
         )
         print(
-            "Buckets:",
-            BUCKET_FILE,
+            "Hour-by-era file:",
+            HOUR_ERAS_FILE,
         )
         print()
 
@@ -1748,7 +1742,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDJPY Short Timing Diagnostic"
+            "USDJPY Short Final Timing Stability"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1771,19 +1765,21 @@ def home():
             ),
             "strong_close_filter": False,
             "upper_wick_filter": False,
+            "weekdays": "ALL",
         },
-        "bad_bucket_rule": {
-            "minimum_trades": (
-                MIN_BUCKET_TRADES
-            ),
-            "total_r_must_be_negative": True,
-            "profit_factor_below": (
-                MAX_BAD_BUCKET_PF
-            ),
+        "candidate_bad_hours": (
+            CANDIDATE_BAD_HOURS
+        ),
+        "natural_pairs": {
+            key: sorted(
+                value
+            )
+            for key, value
+            in NATURAL_PAIRS.items()
         },
         "downloads": {
             "scenarios": "/download",
-            "buckets": "/download-buckets",
+            "hour_eras": "/download-hour-eras",
         },
         "trading_enabled": False,
         "orders_supported": False,
@@ -1814,19 +1810,19 @@ def download():
     )
 
 
-@app.route("/download-buckets")
-def download_buckets():
+@app.route("/download-hour-eras")
+def download_hour_eras():
     if not os.path.exists(
-        BUCKET_FILE
+        HOUR_ERAS_FILE
     ):
         return jsonify({
             "status": "not_ready",
         }), 404
 
     return send_file(
-        BUCKET_FILE,
+        HOUR_ERAS_FILE,
         as_attachment=True,
-        download_name=BUCKET_FILE,
+        download_name=HOUR_ERAS_FILE,
     )
 
 
@@ -1838,7 +1834,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdjpy-short-timing-diagnostic"
+            "usdjpy-short-final-timing-stability"
         ),
         daemon=True,
     )
