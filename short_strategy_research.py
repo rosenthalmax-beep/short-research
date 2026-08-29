@@ -10,34 +10,45 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/JPY SHORT - NARROW STABILITY REFINEMENT
+# USD/JPY SHORT - FREQUENCY EXPANSION + FILTER SUBSTITUTION
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Purpose:
-#   Validate whether the current best USD/JPY short setup sits
-#   on a genuine parameter plateau rather than one lucky point.
+# Goal:
+#   Increase trade frequency without throwing away the all-era
+#   robustness found in the narrow stability sweep.
 #
-# Current winner around:
-#   Body >= 1.50
-#   Structure 90
-#   Distance <= 0.30 ATR
-#   Previous completed daily close < EMA90
-#   Strong bearish close <= 0.40
-#   Upper wick >= 0.25 x body
-#   RR 2.75
+# Instead of simply weakening every filter, this run tests
+# whether more informative market-state features can replace
+# restrictive candle filters such as strong-close / upper-wick.
 #
-# This sweep tests the surrounding neighbourhood only.
+# Structural grid:
+#   Body:       1.25 -> 1.50
+#   Structure:  50 -> 90
+#   Distance:   .30 -> .50 ATR
+#   Slow EMA:   80 -> 125
+#   RR:         2.50 / 2.75 / 3.00
+#
+# Replacement feature recipes include:
+#   - no extra candle filter
+#   - strong close only
+#   - wick only
+#   - lighter strong-close + wick
+#   - actual sweep above prior structure high
+#   - prior 5-bar bullish pullback
+#   - daily ATR regime
+#   - fast/slow EMA alignment
+#   - not-too-extended below daily EMA
+#   - combinations of the above
 #
 # NO timing / weekday optimisation.
-# NO EMA slope.
 #
-# Exact backtest conventions retained:
+# Exact execution conventions retained:
 #   OANDA midpoint H1
-#   Daily alignment = 17:00 America/New_York
 #   Previous completed daily candle only
+#   Daily alignment = 17:00 America/New_York
 #   ATR14 = Wilder/RMA
-#   Daily EMA = SMA-seeded EMA
+#   Daily EMA = SMA-seeded
 #   Stop = signal high + 10 ticks
 #   Adverse short slippage = 5 ticks
 #   Target from reference signal close
@@ -86,76 +97,304 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 220
 DAILY_WARMUP_DAYS = 2600
 
-OUTPUT_FILE = "usdjpy_short_narrow_stability_refinement.csv"
+OUTPUT_FILE = "usdjpy_short_frequency_substitution.csv"
 
 
 # ============================================================
-# NARROW STABILITY GRID
+# FREQUENCY-EXPANSION STRUCTURAL GRID
 # ============================================================
 
 BODY_RATIOS = [
+    1.25,
+    1.30,
+    1.35,
     1.40,
     1.45,
     1.50,
-    1.55,
-    1.60,
 ]
 
 STRUCTURE_LOOKBACKS = [
+    50,
+    60,
+    70,
     80,
-    85,
     90,
-    95,
-    100,
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
-    0.250,
-    0.275,
-    0.300,
-    0.325,
-    0.350,
+    0.30,
+    0.35,
+    0.40,
+    0.45,
+    0.50,
 ]
 
 SLOW_EMAS = [
     80,
-    85,
     90,
-    95,
     100,
-]
-
-MAX_CLOSE_LOCATION_VALUES = [
-    0.350,
-    0.375,
-    0.400,
-    0.425,
-    0.450,
-]
-
-MIN_UPPER_WICK_BODY_VALUES = [
-    0.15,
-    0.20,
-    0.25,
-    0.30,
-    0.35,
+    110,
+    125,
 ]
 
 REWARD_RISKS = [
     2.50,
     2.75,
     3.00,
-    3.25,
 ]
 
-TOTAL_COMBINATIONS = (
+
+# ============================================================
+# FEATURE RECIPES
+# ============================================================
+#
+# None = feature OFF.
+#
+# maximum_close_location:
+#   (close-low)/(high-low), lower is stronger bearish close.
+#
+# minimum_upper_wick_body:
+#   upper wick / body.
+#
+# minimum_sweep_atr:
+#   (signal high - previous structure high) / H1 ATR.
+#   0.00 means signal must actually reach/exceed prior high.
+#
+# minimum_prior_5bar_upmove_atr:
+#   (signal open - close 5 H1 bars ago) / H1 ATR.
+#
+# minimum_daily_atr_ratio_50:
+#   Daily ATR14 / 50-day average of Daily ATR14.
+#
+# fast_ema:
+#   require fast EMA < slow EMA.
+#
+# maximum_daily_extension_atr:
+#   (slow EMA - previous daily close) / Daily ATR14.
+#   Caps how far price is already stretched below the slow EMA.
+#
+# These recipes intentionally test SUBSTITUTION, not only
+# increasingly restrictive combinations.
+# ============================================================
+
+FEATURE_RECIPES = [
+    {
+        "name": "NONE",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "CLOSE_045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "CLOSE_040",
+        "maximum_close_location": 0.40,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "WICK_015",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": 0.15,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "WICK_025",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": 0.25,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "LIGHT_CANDLE",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": 0.15,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "SWEEP_PRIOR_HIGH",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": 0.00,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "SWEEP_005_ATR",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": 0.05,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "PULLBACK_050",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": 0.50,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "DAILY_ATR_080",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": 0.80,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "FAST40_ALIGNMENT",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": 40,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "MAX_EXTENSION_075",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": 0.75,
+    },
+    {
+        "name": "SWEEP_PLUS_CLOSE045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": 0.00,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "PULLBACK_PLUS_CLOSE045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": 0.50,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "ATR_PLUS_CLOSE045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": 0.80,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "ALIGNMENT_PLUS_CLOSE045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": 40,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "SWEEP_PLUS_ATR",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": 0.00,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": 0.80,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "PULLBACK_PLUS_ATR",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": 0.50,
+        "minimum_daily_atr_ratio_50": 0.80,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+    {
+        "name": "EXTENSION_PLUS_CLOSE045",
+        "maximum_close_location": 0.45,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": None,
+        "minimum_prior_5bar_upmove_atr": None,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": 0.75,
+    },
+    {
+        "name": "SWEEP_PULLBACK",
+        "maximum_close_location": None,
+        "minimum_upper_wick_body": None,
+        "minimum_sweep_atr": 0.00,
+        "minimum_prior_5bar_upmove_atr": 0.50,
+        "minimum_daily_atr_ratio_50": None,
+        "fast_ema": None,
+        "maximum_daily_extension_atr": None,
+    },
+]
+
+TOTAL_STRUCTURAL_COMBINATIONS = (
     len(BODY_RATIOS)
     * len(STRUCTURE_LOOKBACKS)
     * len(MAX_DISTANCE_ATR_VALUES)
     * len(SLOW_EMAS)
-    * len(MAX_CLOSE_LOCATION_VALUES)
-    * len(MIN_UPPER_WICK_BODY_VALUES)
     * len(REWARD_RISKS)
+)
+
+TOTAL_COMBINATIONS = (
+    TOTAL_STRUCTURAL_COMBINATIONS
+    * len(FEATURE_RECIPES)
+)
+
+ALL_DAILY_EMAS = sorted(
+    set(SLOW_EMAS + [40])
 )
 
 
@@ -194,10 +433,12 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDJPY Short Narrow Stability Refinement",
+    "service": "USDJPY Short Frequency Expansion Substitution",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
+    "structural_combinations": TOTAL_STRUCTURAL_COMBINATIONS,
+    "feature_recipes": len(FEATURE_RECIPES),
     "total_combinations": TOTAL_COMBINATIONS,
     "completed_combinations": 0,
     "rows_saved": 0,
@@ -402,7 +643,8 @@ def true_ranges(candles):
             )
 
             tr = max(
-                candle["high"] - candle["low"],
+                candle["high"]
+                - candle["low"],
                 abs(
                     candle["high"]
                     - previous_close
@@ -457,8 +699,39 @@ def atr_series(candles, length=14):
     )
 
 
+def rolling_mean(values, length):
+    result = [None] * len(values)
+    window = []
+    running = 0.0
+    valid = 0
+
+    for index, value in enumerate(values):
+        window.append(value)
+
+        if value is not None:
+            running += value
+            valid += 1
+
+        if len(window) > length:
+            removed = window.pop(0)
+
+            if removed is not None:
+                running -= removed
+                valid -= 1
+
+        if (
+            len(window) == length
+            and valid == length
+        ):
+            result[index] = (
+                running / length
+            )
+
+    return result
+
+
 # ============================================================
-# DAILY ALIGNMENT
+# DAILY STATE
 # ============================================================
 
 def current_daily_start(timestamp_utc):
@@ -488,20 +761,38 @@ def build_daily_state(daily):
         for candle in daily
     ]
 
-    return {
+    ema_map = {
         length: ema_series(
             closes,
             length,
         )
         for length
-        in SLOW_EMAS
+        in ALL_DAILY_EMAS
     }
+
+    daily_atr = atr_series(
+        daily,
+        14,
+    )
+
+    daily_atr_mean_50 = rolling_mean(
+        daily_atr,
+        50,
+    )
+
+    return (
+        ema_map,
+        daily_atr,
+        daily_atr_mean_50,
+    )
 
 
 def build_h1_daily_lookup(
     h1,
     daily,
     daily_ema_map,
+    daily_atr,
+    daily_atr_mean_50,
 ):
     lookup = [None] * len(h1)
     daily_index = -1
@@ -521,17 +812,42 @@ def build_h1_daily_lookup(
         if daily_index < 0:
             continue
 
+        atr_now = daily_atr[
+            daily_index
+        ]
+
+        atr_mean = (
+            daily_atr_mean_50[
+                daily_index
+            ]
+        )
+
+        atr_ratio = None
+
+        if (
+            atr_now is not None
+            and atr_mean is not None
+            and atr_mean > 0
+        ):
+            atr_ratio = (
+                atr_now / atr_mean
+            )
+
         lookup[h1_index] = {
             "close": daily[
                 daily_index
             ]["close"],
+            "daily_atr14": atr_now,
+            "daily_atr_ratio_50": (
+                atr_ratio
+            ),
             "emas": {
                 length:
                 daily_ema_map[
                     length
                 ][daily_index]
                 for length
-                in SLOW_EMAS
+                in ALL_DAILY_EMAS
             },
         }
 
@@ -554,7 +870,10 @@ def build_candidates(
     )
 
     for index in range(
-        max_lookback,
+        max(
+            max_lookback,
+            5,
+        ),
         len(h1),
     ):
         signal = h1[index]
@@ -612,7 +931,7 @@ def build_candidates(
         if not bearish_engulfing:
             continue
 
-        structure_distances = {}
+        structure_data = {}
 
         for lookback in STRUCTURE_LOOKBACKS:
             previous_highest = max(
@@ -622,12 +941,18 @@ def build_candidates(
                 ]
             )
 
-            structure_distances[
+            structure_data[
                 lookback
-            ] = (
-                previous_highest
-                - signal["high"]
-            ) / atr
+            ] = {
+                "distance_atr": (
+                    previous_highest
+                    - signal["high"]
+                ) / atr,
+                "sweep_atr": (
+                    signal["high"]
+                    - previous_highest
+                ) / atr,
+            }
 
         upper_wick = (
             signal["high"]
@@ -641,6 +966,11 @@ def build_candidates(
             signal["close"]
             - signal["low"]
         ) / signal_range
+
+        prior_5bar_upmove_atr = (
+            signal["open"]
+            - h1[index - 5]["close"]
+        ) / atr
 
         candidates.append({
             "index": index,
@@ -656,8 +986,11 @@ def build_candidates(
                 upper_wick
                 / current_body
             ),
-            "structure_distances": (
-                structure_distances
+            "prior_5bar_upmove_atr": (
+                prior_5bar_upmove_atr
+            ),
+            "structure": (
+                structure_data
             ),
             "daily": daily,
         })
@@ -675,8 +1008,7 @@ def candidate_allowed(
     structure_lookback,
     max_distance_atr,
     slow_ema,
-    maximum_close_location,
-    minimum_upper_wick_body,
+    recipe,
 ):
     if (
         candidate["body_ratio"]
@@ -684,44 +1016,153 @@ def candidate_allowed(
     ):
         return False
 
+    structure = candidate[
+        "structure"
+    ][structure_lookback]
+
     if (
-        candidate[
-            "structure_distances"
-        ][structure_lookback]
-        > max_distance_atr
+        structure[
+            "distance_atr"
+        ] > max_distance_atr
     ):
         return False
 
     daily = candidate["daily"]
 
-    ema = daily[
+    slow_value = daily[
         "emas"
     ].get(
         slow_ema
     )
 
-    if ema is None:
+    if slow_value is None:
         return False
 
     if not (
         daily["close"]
-        < ema
+        < slow_value
     ):
         return False
 
+    maximum_close_location = recipe[
+        "maximum_close_location"
+    ]
+
     if (
-        candidate[
+        maximum_close_location
+        is not None
+        and candidate[
             "close_location"
         ] > maximum_close_location
     ):
         return False
 
+    minimum_upper_wick_body = recipe[
+        "minimum_upper_wick_body"
+    ]
+
     if (
-        candidate[
+        minimum_upper_wick_body
+        is not None
+        and candidate[
             "upper_wick_body"
         ] < minimum_upper_wick_body
     ):
         return False
+
+    minimum_sweep_atr = recipe[
+        "minimum_sweep_atr"
+    ]
+
+    if (
+        minimum_sweep_atr
+        is not None
+        and structure[
+            "sweep_atr"
+        ] < minimum_sweep_atr
+    ):
+        return False
+
+    minimum_prior_5bar_upmove_atr = recipe[
+        "minimum_prior_5bar_upmove_atr"
+    ]
+
+    if (
+        minimum_prior_5bar_upmove_atr
+        is not None
+        and candidate[
+            "prior_5bar_upmove_atr"
+        ] < minimum_prior_5bar_upmove_atr
+    ):
+        return False
+
+    minimum_daily_atr_ratio_50 = recipe[
+        "minimum_daily_atr_ratio_50"
+    ]
+
+    if (
+        minimum_daily_atr_ratio_50
+        is not None
+    ):
+        ratio = daily[
+            "daily_atr_ratio_50"
+        ]
+
+        if (
+            ratio is None
+            or ratio
+            < minimum_daily_atr_ratio_50
+        ):
+            return False
+
+    fast_ema = recipe[
+        "fast_ema"
+    ]
+
+    if fast_ema is not None:
+        fast_value = daily[
+            "emas"
+        ].get(
+            fast_ema
+        )
+
+        if (
+            fast_value is None
+            or not (
+                fast_value
+                < slow_value
+            )
+        ):
+            return False
+
+    maximum_daily_extension_atr = recipe[
+        "maximum_daily_extension_atr"
+    ]
+
+    if (
+        maximum_daily_extension_atr
+        is not None
+    ):
+        daily_atr = daily[
+            "daily_atr14"
+        ]
+
+        if (
+            daily_atr is None
+            or daily_atr <= 0
+        ):
+            return False
+
+        extension = (
+            slow_value
+            - daily["close"]
+        ) / daily_atr
+
+        if (
+            extension
+            > maximum_daily_extension_atr
+        ):
+            return False
 
     return True
 
@@ -940,9 +1381,9 @@ def stats_for_trades(
     filtered = []
 
     for trade in trades:
-        signal_time = (
-            trade["signal_time"]
-        )
+        signal_time = trade[
+            "signal_time"
+        ]
 
         if (
             start is not None
@@ -988,17 +1429,9 @@ def stats_for_trades(
         if result < 0
     ]
 
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(losers)
-    )
-
-    total_r = sum(
-        results
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
+    total_r = sum(results)
 
     if gross_loss > 0:
         profit_factor = (
@@ -1084,9 +1517,8 @@ def make_result_row(
     structure_lookback,
     max_distance_atr,
     slow_ema,
-    maximum_close_location,
-    minimum_upper_wick_body,
     reward_risk,
+    recipe,
     eligible,
     trades,
     ignored,
@@ -1098,6 +1530,9 @@ def make_result_row(
     )
 
     row = {
+        "feature_recipe": recipe[
+            "name"
+        ],
         "body_ratio": body_ratio,
         "structure_lookback": (
             structure_lookback
@@ -1105,14 +1540,33 @@ def make_result_row(
         "max_distance_atr": (
             max_distance_atr
         ),
-        "slow_daily_ema": slow_ema,
-        "maximum_close_location": (
-            maximum_close_location
+        "slow_daily_ema": (
+            slow_ema
         ),
-        "minimum_upper_wick_body": (
-            minimum_upper_wick_body
+        "reward_risk": (
+            reward_risk
         ),
-        "reward_risk": reward_risk,
+        "maximum_close_location": recipe[
+            "maximum_close_location"
+        ],
+        "minimum_upper_wick_body": recipe[
+            "minimum_upper_wick_body"
+        ],
+        "minimum_sweep_atr": recipe[
+            "minimum_sweep_atr"
+        ],
+        "minimum_prior_5bar_upmove_atr": recipe[
+            "minimum_prior_5bar_upmove_atr"
+        ],
+        "minimum_daily_atr_ratio_50": recipe[
+            "minimum_daily_atr_ratio_50"
+        ],
+        "fast_ema": recipe[
+            "fast_ema"
+        ],
+        "maximum_daily_extension_atr": recipe[
+            "maximum_daily_extension_atr"
+        ],
         "raw_signals": len(
             eligible
         ),
@@ -1122,46 +1576,43 @@ def make_result_row(
         "still_open_at_end": (
             still_open
         ),
-        "trades": (
-            full["trades"]
-        ),
+        "trades": full[
+            "trades"
+        ],
         "trades_per_year": round(
             full["trades"]
             / years,
             2,
         ),
-        "winners": (
-            full["winners"]
-        ),
-        "losers": (
-            full["losers"]
-        ),
-        "win_rate": (
-            full["win_rate"]
-        ),
-        "profit_factor": (
-            full["profit_factor"]
-        ),
-        "total_r": (
-            full["total_r"]
-        ),
-        "expectancy_r": (
-            full["expectancy_r"]
-        ),
-        "max_drawdown_r": (
-            full["max_drawdown_r"]
-        ),
-        "longest_loss_streak": (
-            full[
-                "longest_loss_streak"
-            ]
-        ),
+        "winners": full[
+            "winners"
+        ],
+        "losers": full[
+            "losers"
+        ],
+        "win_rate": full[
+            "win_rate"
+        ],
+        "profit_factor": full[
+            "profit_factor"
+        ],
+        "total_r": full[
+            "total_r"
+        ],
+        "expectancy_r": full[
+            "expectancy_r"
+        ],
+        "max_drawdown_r": full[
+            "max_drawdown_r"
+        ],
+        "longest_loss_streak": full[
+            "longest_loss_streak"
+        ],
     }
 
     profitable_eras = 0
     eras_with_5_plus = 0
     profitable_eras_with_5_plus = 0
-
     minimum_era_pf_5_plus = None
     minimum_era_expectancy_5_plus = None
 
@@ -1178,7 +1629,9 @@ def make_result_row(
 
         row[
             f"{era_name}_trades"
-        ] = era["trades"]
+        ] = era[
+            "trades"
+        ]
 
         row[
             f"{era_name}_pf"
@@ -1273,11 +1726,19 @@ def run_research():
 
     try:
         print()
-        print("=" * 78)
+        print("=" * 80)
         print(
-            "USD/JPY SHORT - NARROW STABILITY REFINEMENT"
+            "USD/JPY SHORT - FREQUENCY EXPANSION + FILTER SUBSTITUTION"
         )
-        print("=" * 78)
+        print("=" * 80)
+        print(
+            "Structural combinations:",
+            TOTAL_STRUCTURAL_COMBINATIONS,
+        )
+        print(
+            "Feature recipes:",
+            len(FEATURE_RECIPES),
+        )
         print(
             "Total combinations:",
             TOTAL_COMBINATIONS,
@@ -1327,8 +1788,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building indicators and "
-                "bearish engulfing feature matrix"
+                "Building indicators and feature matrix"
             ),
         })
 
@@ -1337,10 +1797,12 @@ def run_research():
             14,
         )
 
-        daily_ema_map = (
-            build_daily_state(
-                daily
-            )
+        (
+            daily_ema_map,
+            daily_atr,
+            daily_atr_mean_50,
+        ) = build_daily_state(
+            daily
         )
 
         daily_lookup = (
@@ -1348,6 +1810,8 @@ def run_research():
                 h1,
                 daily,
                 daily_ema_map,
+                daily_atr,
+                daily_atr_mean_50,
             )
         )
 
@@ -1376,88 +1840,92 @@ def run_research():
         )
 
         rows = []
+        completed = 0
 
         STATUS.update({
             "state": "running",
             "message": (
-                "Running USD/JPY narrow stability sweep"
+                "Running frequency/substitution sweep"
             ),
         })
 
-        combinations = itertools.product(
-            BODY_RATIOS,
-            STRUCTURE_LOOKBACKS,
-            MAX_DISTANCE_ATR_VALUES,
-            SLOW_EMAS,
-            MAX_CLOSE_LOCATION_VALUES,
-            MIN_UPPER_WICK_BODY_VALUES,
-            REWARD_RISKS,
+        structural_grid = list(
+            itertools.product(
+                BODY_RATIOS,
+                STRUCTURE_LOOKBACKS,
+                MAX_DISTANCE_ATR_VALUES,
+                SLOW_EMAS,
+                REWARD_RISKS,
+            )
         )
 
-        for number, (
-            body_ratio,
-            structure_lookback,
-            max_distance_atr,
-            slow_ema,
-            maximum_close_location,
-            minimum_upper_wick_body,
-            reward_risk,
-        ) in enumerate(
-            combinations,
-            start=1,
-        ):
-            eligible = [
-                candidate
-                for candidate in candidates
-                if candidate_allowed(
-                    candidate,
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    slow_ema,
-                    maximum_close_location,
-                    minimum_upper_wick_body,
-                )
-            ]
-
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                eligible,
-                reward_risk,
+        for recipe in FEATURE_RECIPES:
+            print()
+            print(
+                "Recipe:",
+                recipe["name"],
+                flush=True,
             )
 
-            rows.append(
-                make_result_row(
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    slow_ema,
-                    maximum_close_location,
-                    minimum_upper_wick_body,
-                    reward_risk,
-                    eligible,
+            for (
+                body_ratio,
+                structure_lookback,
+                max_distance_atr,
+                slow_ema,
+                reward_risk,
+            ) in structural_grid:
+                completed += 1
+
+                eligible = [
+                    candidate
+                    for candidate in candidates
+                    if candidate_allowed(
+                        candidate,
+                        body_ratio,
+                        structure_lookback,
+                        max_distance_atr,
+                        slow_ema,
+                        recipe,
+                    )
+                ]
+
+                (
                     trades,
                     ignored,
                     still_open,
-                    years,
+                ) = simulate(
+                    h1,
+                    eligible,
+                    reward_risk,
                 )
-            )
 
-            STATUS[
-                "completed_combinations"
-            ] = number
-
-            if number % 1000 == 0:
-                print(
-                    f"Progress: "
-                    f"{number}/"
-                    f"{TOTAL_COMBINATIONS}",
-                    flush=True,
+                rows.append(
+                    make_result_row(
+                        body_ratio,
+                        structure_lookback,
+                        max_distance_atr,
+                        slow_ema,
+                        reward_risk,
+                        recipe,
+                        eligible,
+                        trades,
+                        ignored,
+                        still_open,
+                        years,
+                    )
                 )
+
+                STATUS[
+                    "completed_combinations"
+                ] = completed
+
+                if completed % 1000 == 0:
+                    print(
+                        f"Progress: "
+                        f"{completed}/"
+                        f"{TOTAL_COMBINATIONS}",
+                        flush=True,
+                    )
 
         df = pd.DataFrame(
             rows
@@ -1465,25 +1933,28 @@ def run_research():
 
         if df.empty:
             raise RuntimeError(
-                "No USD/JPY stability rows generated"
+                "No USD/JPY frequency/substitution rows generated"
             )
 
         df[
-            "adequate_60"
+            "frequency_5_plus"
         ] = (
-            df["trades"] >= 60
+            df["trades_per_year"]
+            >= 5.0
         )
 
         df[
-            "adequate_80"
+            "frequency_6_plus"
         ] = (
-            df["trades"] >= 80
+            df["trades_per_year"]
+            >= 6.0
         )
 
         df[
-            "adequate_100"
+            "frequency_8_plus"
         ] = (
-            df["trades"] >= 100
+            df["trades_per_year"]
+            >= 8.0
         )
 
         df[
@@ -1496,7 +1967,16 @@ def run_research():
         )
 
         df[
-            "robust_era_pf_120"
+            "worst_era_pf_115"
+        ] = (
+            df[
+                "minimum_era_pf_5_plus"
+            ].fillna(0)
+            >= 1.15
+        )
+
+        df[
+            "worst_era_pf_120"
         ] = (
             df[
                 "minimum_era_pf_5_plus"
@@ -1505,12 +1985,41 @@ def run_research():
         )
 
         df[
-            "robust_era_pf_150"
+            "overall_pf_140"
         ] = (
             df[
-                "minimum_era_pf_5_plus"
-            ].fillna(0)
-            >= 1.50
+                "profit_factor"
+            ]
+            >= 1.40
+        )
+
+        df[
+            "expectancy_020"
+        ] = (
+            df[
+                "expectancy_r"
+            ]
+            >= 0.20
+        )
+
+        df[
+            "target_zone"
+        ] = (
+            df[
+                "frequency_5_plus"
+            ]
+            & df[
+                "all_four_eras_profitable"
+            ]
+            & df[
+                "worst_era_pf_115"
+            ]
+            & df[
+                "overall_pf_140"
+            ]
+            & df[
+                "expectancy_020"
+            ]
         )
 
         df[
@@ -1526,9 +2035,9 @@ def run_research():
 
         df = df.sort_values(
             by=[
+                "target_zone",
+                "frequency_6_plus",
                 "all_four_eras_profitable",
-                "adequate_80",
-                "robust_era_pf_120",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "annual_r_linear",
@@ -1550,83 +2059,54 @@ def run_research():
             index=False,
         )
 
-        all_era_count = int(
-            df[
-                "all_four_eras_profitable"
-            ].sum()
-        )
-
-        robust_120_count = int(
-            (
-                df[
-                    "all_four_eras_profitable"
-                ]
-                & df[
-                    "robust_era_pf_120"
-                ]
-            ).sum()
-        )
-
-        robust_150_count = int(
-            (
-                df[
-                    "all_four_eras_profitable"
-                ]
-                & df[
-                    "robust_era_pf_150"
-                ]
-            ).sum()
-        )
-
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/JPY narrow stability refinement "
-                "completed successfully"
+                "USD/JPY frequency expansion / "
+                "filter substitution completed"
             ),
             "completed_combinations": (
                 TOTAL_COMBINATIONS
             ),
             "rows_saved": len(df),
-            "all_four_eras_profitable": (
-                all_era_count
+            "target_zone_rows": int(
+                df["target_zone"].sum()
             ),
-            "all_four_eras_and_worst_pf_120": (
-                robust_120_count
+            "all_four_eras_profitable": int(
+                df[
+                    "all_four_eras_profitable"
+                ].sum()
             ),
-            "all_four_eras_and_worst_pf_150": (
-                robust_150_count
+            "five_plus_per_year": int(
+                df[
+                    "frequency_5_plus"
+                ].sum()
+            ),
+            "six_plus_per_year": int(
+                df[
+                    "frequency_6_plus"
+                ].sum()
             ),
             "output_file": OUTPUT_FILE,
-            "earliest_h1": (
-                h1[0]["time"].isoformat()
-            ),
-            "latest_h1": (
-                h1[-1]["time"].isoformat()
-            ),
         })
 
         print()
-        print("=" * 78)
+        print("=" * 80)
         print(
-            "USD/JPY NARROW STABILITY REFINEMENT COMPLETE"
+            "USD/JPY FREQUENCY / SUBSTITUTION COMPLETE"
         )
-        print("=" * 78)
+        print("=" * 80)
         print(
-            "Rows saved:",
+            "Rows:",
             len(df),
         )
         print(
-            "All four eras profitable:",
-            all_era_count,
-        )
-        print(
-            "All four + worst era PF >= 1.20:",
-            robust_120_count,
-        )
-        print(
-            "All four + worst era PF >= 1.50:",
-            robust_150_count,
+            "Target-zone rows:",
+            int(
+                df[
+                    "target_zone"
+                ].sum()
+            ),
         )
         print(
             "Saved:",
@@ -1655,7 +2135,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDJPY Short Narrow Stability Refinement"
+            "USDJPY Short Frequency Expansion Substitution"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1663,7 +2143,7 @@ def home():
         "timing_filters": (
             "NONE - all hours and weekdays"
         ),
-        "grid": {
+        "structural_grid": {
             "body_ratios": BODY_RATIOS,
             "structure_lookbacks": (
                 STRUCTURE_LOOKBACKS
@@ -1672,19 +2152,18 @@ def home():
                 MAX_DISTANCE_ATR_VALUES
             ),
             "slow_emas": SLOW_EMAS,
-            "maximum_close_location": (
-                MAX_CLOSE_LOCATION_VALUES
-            ),
-            "minimum_upper_wick_body": (
-                MIN_UPPER_WICK_BODY_VALUES
-            ),
             "reward_risks": (
                 REWARD_RISKS
             ),
-            "total_combinations": (
-                TOTAL_COMBINATIONS
-            ),
         },
+        "feature_recipes": [
+            recipe["name"]
+            for recipe
+            in FEATURE_RECIPES
+        ],
+        "total_combinations": (
+            TOTAL_COMBINATIONS
+        ),
         "download": "/download",
         "trading_enabled": False,
         "orders_supported": False,
@@ -1707,8 +2186,8 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "USD/JPY narrow stability CSV "
-                "is not ready yet"
+                "USD/JPY frequency/substitution "
+                "CSV is not ready yet"
             ),
         }), 404
 
@@ -1727,7 +2206,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdjpy-short-narrow-stability-refinement"
+            "usdjpy-short-frequency-substitution"
         ),
         daemon=True,
     )
