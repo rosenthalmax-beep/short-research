@@ -10,45 +10,46 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/JPY SHORT - FREQUENCY EXPANSION + FILTER SUBSTITUTION
+# USD/JPY SHORT - TIMING / WEEKDAY DIAGNOSTIC
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Goal:
-#   Increase trade frequency without throwing away the all-era
-#   robustness found in the narrow stability sweep.
+# Frozen high-frequency core:
+#   Bearish engulfing
+#   Body >= 1.45
+#   Structure lookback = 90 H1 bars
+#   Signal high within 0.50 ATR14 of prior 90-bar high
+#   Previous completed daily close < EMA90
+#   RR = 2.50
+#   NO strong-close filter
+#   NO upper-wick filter
 #
-# Instead of simply weakening every filter, this run tests
-# whether more informative market-state features can replace
-# restrictive candle filters such as strong-close / upper-wick.
+# Purpose:
+#   Diagnose whether a small number of New York signal hours
+#   or weekdays are independently destructive enough to remove.
 #
-# Structural grid:
-#   Body:       1.25 -> 1.50
-#   Structure:  50 -> 90
-#   Distance:   .30 -> .50 ATR
-#   Slow EMA:   80 -> 125
-#   RR:         2.50 / 2.75 / 3.00
-#
-# Replacement feature recipes include:
-#   - no extra candle filter
-#   - strong close only
-#   - wick only
-#   - lighter strong-close + wick
-#   - actual sweep above prior structure high
-#   - prior 5-bar bullish pullback
-#   - daily ATR regime
-#   - fast/slow EMA alignment
-#   - not-too-extended below daily EMA
-#   - combinations of the above
-#
-# NO timing / weekday optimisation.
+# IMPORTANT:
+#   - Baseline starts with ALL hours and ALL weekdays.
+#   - Exclusions are re-simulated from the signal stream rather
+#     than simply deleting trades from the baseline result.
+#   - "Independently bad" bucket threshold:
+#         >= 6 baseline trades
+#         total R < 0
+#         PF < 0.85
+#   - We test:
+#         baseline
+#         each single hour exclusion
+#         each single weekday exclusion
+#         all pairs of independently bad hours
+#         all independently bad hours together
+#         each independently bad weekday + bad-hour set
 #
 # Exact execution conventions retained:
 #   OANDA midpoint H1
-#   Previous completed daily candle only
 #   Daily alignment = 17:00 America/New_York
+#   Previous completed daily candle only
 #   ATR14 = Wilder/RMA
-#   Daily EMA = SMA-seeded
+#   Daily EMA = SMA-seeded EMA
 #   Stop = signal high + 10 ticks
 #   Adverse short slippage = 5 ticks
 #   Target from reference signal close
@@ -97,305 +98,27 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 220
 DAILY_WARMUP_DAYS = 2600
 
-OUTPUT_FILE = "usdjpy_short_frequency_substitution.csv"
+OUTPUT_FILE = "usdjpy_short_timing_diagnostic.csv"
+BUCKET_FILE = "usdjpy_short_timing_buckets.csv"
 
 
 # ============================================================
-# FREQUENCY-EXPANSION STRUCTURAL GRID
+# FROZEN CORE
 # ============================================================
 
-BODY_RATIOS = [
-    1.25,
-    1.30,
-    1.35,
-    1.40,
-    1.45,
-    1.50,
-]
-
-STRUCTURE_LOOKBACKS = [
-    50,
-    60,
-    70,
-    80,
-    90,
-]
-
-MAX_DISTANCE_ATR_VALUES = [
-    0.30,
-    0.35,
-    0.40,
-    0.45,
-    0.50,
-]
-
-SLOW_EMAS = [
-    80,
-    90,
-    100,
-    110,
-    125,
-]
-
-REWARD_RISKS = [
-    2.50,
-    2.75,
-    3.00,
-]
+BODY_RATIO = 1.45
+STRUCTURE_LOOKBACK = 90
+MAX_DISTANCE_ATR = 0.50
+SLOW_DAILY_EMA = 90
+REWARD_RISK = 2.50
 
 
 # ============================================================
-# FEATURE RECIPES
-# ============================================================
-#
-# None = feature OFF.
-#
-# maximum_close_location:
-#   (close-low)/(high-low), lower is stronger bearish close.
-#
-# minimum_upper_wick_body:
-#   upper wick / body.
-#
-# minimum_sweep_atr:
-#   (signal high - previous structure high) / H1 ATR.
-#   0.00 means signal must actually reach/exceed prior high.
-#
-# minimum_prior_5bar_upmove_atr:
-#   (signal open - close 5 H1 bars ago) / H1 ATR.
-#
-# minimum_daily_atr_ratio_50:
-#   Daily ATR14 / 50-day average of Daily ATR14.
-#
-# fast_ema:
-#   require fast EMA < slow EMA.
-#
-# maximum_daily_extension_atr:
-#   (slow EMA - previous daily close) / Daily ATR14.
-#   Caps how far price is already stretched below the slow EMA.
-#
-# These recipes intentionally test SUBSTITUTION, not only
-# increasingly restrictive combinations.
+# BAD-BUCKET RULE
 # ============================================================
 
-FEATURE_RECIPES = [
-    {
-        "name": "NONE",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "CLOSE_045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "CLOSE_040",
-        "maximum_close_location": 0.40,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "WICK_015",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": 0.15,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "WICK_025",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": 0.25,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "LIGHT_CANDLE",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": 0.15,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "SWEEP_PRIOR_HIGH",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": 0.00,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "SWEEP_005_ATR",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": 0.05,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "PULLBACK_050",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": 0.50,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "DAILY_ATR_080",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": 0.80,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "FAST40_ALIGNMENT",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": 40,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "MAX_EXTENSION_075",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": 0.75,
-    },
-    {
-        "name": "SWEEP_PLUS_CLOSE045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": 0.00,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "PULLBACK_PLUS_CLOSE045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": 0.50,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "ATR_PLUS_CLOSE045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": 0.80,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "ALIGNMENT_PLUS_CLOSE045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": 40,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "SWEEP_PLUS_ATR",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": 0.00,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": 0.80,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "PULLBACK_PLUS_ATR",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": 0.50,
-        "minimum_daily_atr_ratio_50": 0.80,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-    {
-        "name": "EXTENSION_PLUS_CLOSE045",
-        "maximum_close_location": 0.45,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": None,
-        "minimum_prior_5bar_upmove_atr": None,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": 0.75,
-    },
-    {
-        "name": "SWEEP_PULLBACK",
-        "maximum_close_location": None,
-        "minimum_upper_wick_body": None,
-        "minimum_sweep_atr": 0.00,
-        "minimum_prior_5bar_upmove_atr": 0.50,
-        "minimum_daily_atr_ratio_50": None,
-        "fast_ema": None,
-        "maximum_daily_extension_atr": None,
-    },
-]
-
-TOTAL_STRUCTURAL_COMBINATIONS = (
-    len(BODY_RATIOS)
-    * len(STRUCTURE_LOOKBACKS)
-    * len(MAX_DISTANCE_ATR_VALUES)
-    * len(SLOW_EMAS)
-    * len(REWARD_RISKS)
-)
-
-TOTAL_COMBINATIONS = (
-    TOTAL_STRUCTURAL_COMBINATIONS
-    * len(FEATURE_RECIPES)
-)
-
-ALL_DAILY_EMAS = sorted(
-    set(SLOW_EMAS + [40])
-)
+MIN_BUCKET_TRADES = 6
+MAX_BAD_BUCKET_PF = 0.85
 
 
 # ============================================================
@@ -433,16 +156,13 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDJPY Short Frequency Expansion Substitution",
+    "service": "USDJPY Short Timing Diagnostic",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "structural_combinations": TOTAL_STRUCTURAL_COMBINATIONS,
-    "feature_recipes": len(FEATURE_RECIPES),
-    "total_combinations": TOTAL_COMBINATIONS,
-    "completed_combinations": 0,
-    "rows_saved": 0,
+    "completed_scenarios": 0,
     "output_file": None,
+    "bucket_file": None,
 }
 
 
@@ -643,8 +363,7 @@ def true_ranges(candles):
             )
 
             tr = max(
-                candle["high"]
-                - candle["low"],
+                candle["high"] - candle["low"],
                 abs(
                     candle["high"]
                     - previous_close
@@ -699,39 +418,8 @@ def atr_series(candles, length=14):
     )
 
 
-def rolling_mean(values, length):
-    result = [None] * len(values)
-    window = []
-    running = 0.0
-    valid = 0
-
-    for index, value in enumerate(values):
-        window.append(value)
-
-        if value is not None:
-            running += value
-            valid += 1
-
-        if len(window) > length:
-            removed = window.pop(0)
-
-            if removed is not None:
-                running -= removed
-                valid -= 1
-
-        if (
-            len(window) == length
-            and valid == length
-        ):
-            result[index] = (
-                running / length
-            )
-
-    return result
-
-
 # ============================================================
-# DAILY STATE
+# DAILY ALIGNMENT
 # ============================================================
 
 def current_daily_start(timestamp_utc):
@@ -755,45 +443,20 @@ def current_daily_start(timestamp_utc):
     )
 
 
-def build_daily_state(daily):
+def build_h1_daily_lookup(
+    h1,
+    daily,
+):
     closes = [
         candle["close"]
         for candle in daily
     ]
 
-    ema_map = {
-        length: ema_series(
-            closes,
-            length,
-        )
-        for length
-        in ALL_DAILY_EMAS
-    }
-
-    daily_atr = atr_series(
-        daily,
-        14,
+    ema90 = ema_series(
+        closes,
+        SLOW_DAILY_EMA,
     )
 
-    daily_atr_mean_50 = rolling_mean(
-        daily_atr,
-        50,
-    )
-
-    return (
-        ema_map,
-        daily_atr,
-        daily_atr_mean_50,
-    )
-
-
-def build_h1_daily_lookup(
-    h1,
-    daily,
-    daily_ema_map,
-    daily_atr,
-    daily_atr_mean_50,
-):
     lookup = [None] * len(h1)
     daily_index = -1
 
@@ -812,50 +475,20 @@ def build_h1_daily_lookup(
         if daily_index < 0:
             continue
 
-        atr_now = daily_atr[
-            daily_index
-        ]
-
-        atr_mean = (
-            daily_atr_mean_50[
-                daily_index
-            ]
-        )
-
-        atr_ratio = None
-
-        if (
-            atr_now is not None
-            and atr_mean is not None
-            and atr_mean > 0
-        ):
-            atr_ratio = (
-                atr_now / atr_mean
-            )
-
         lookup[h1_index] = {
             "close": daily[
                 daily_index
             ]["close"],
-            "daily_atr14": atr_now,
-            "daily_atr_ratio_50": (
-                atr_ratio
-            ),
-            "emas": {
-                length:
-                daily_ema_map[
-                    length
-                ][daily_index]
-                for length
-                in ALL_DAILY_EMAS
-            },
+            "ema90": ema90[
+                daily_index
+            ],
         }
 
     return lookup
 
 
 # ============================================================
-# SIGNAL FEATURE MATRIX
+# SIGNALS
 # ============================================================
 
 def build_candidates(
@@ -865,15 +498,8 @@ def build_candidates(
 ):
     candidates = []
 
-    max_lookback = max(
-        STRUCTURE_LOOKBACKS
-    )
-
     for index in range(
-        max(
-            max_lookback,
-            5,
-        ),
+        STRUCTURE_LOOKBACK,
         len(h1),
     ):
         signal = h1[index]
@@ -892,6 +518,7 @@ def build_candidates(
             atr is None
             or atr <= 0
             or daily is None
+            or daily["ema90"] is None
         ):
             continue
 
@@ -905,15 +532,9 @@ def build_candidates(
             - signal["open"]
         )
 
-        signal_range = (
-            signal["high"]
-            - signal["low"]
-        )
-
         if (
             previous_body <= 0
             or current_body <= 0
-            or signal_range <= 0
         ):
             continue
 
@@ -931,240 +552,52 @@ def build_candidates(
         if not bearish_engulfing:
             continue
 
-        structure_data = {}
+        if (
+            current_body
+            / previous_body
+            < BODY_RATIO
+        ):
+            continue
 
-        for lookback in STRUCTURE_LOOKBACKS:
-            previous_highest = max(
-                candle["high"]
-                for candle in h1[
-                    index - lookback:index
-                ]
-            )
-
-            structure_data[
-                lookback
-            ] = {
-                "distance_atr": (
-                    previous_highest
-                    - signal["high"]
-                ) / atr,
-                "sweep_atr": (
-                    signal["high"]
-                    - previous_highest
-                ) / atr,
-            }
-
-        upper_wick = (
-            signal["high"]
-            - max(
-                signal["open"],
-                signal["close"],
-            )
+        previous_highest = max(
+            candle["high"]
+            for candle in h1[
+                index - STRUCTURE_LOOKBACK:index
+            ]
         )
 
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / signal_range
-
-        prior_5bar_upmove_atr = (
-            signal["open"]
-            - h1[index - 5]["close"]
+        distance_atr = (
+            previous_highest
+            - signal["high"]
         ) / atr
+
+        if (
+            distance_atr
+            > MAX_DISTANCE_ATR
+        ):
+            continue
+
+        if not (
+            daily["close"]
+            < daily["ema90"]
+        ):
+            continue
+
+        ny_time = signal[
+            "time"
+        ].astimezone(
+            NY_TZ
+        )
 
         candidates.append({
             "index": index,
             "time": signal["time"],
-            "body_ratio": (
-                current_body
-                / previous_body
-            ),
-            "close_location": (
-                close_location
-            ),
-            "upper_wick_body": (
-                upper_wick
-                / current_body
-            ),
-            "prior_5bar_upmove_atr": (
-                prior_5bar_upmove_atr
-            ),
-            "structure": (
-                structure_data
-            ),
-            "daily": daily,
+            "ny_hour": ny_time.hour,
+            "ny_weekday": ny_time.weekday(),
+            "ny_weekday_name": ny_time.strftime("%A"),
         })
 
     return candidates
-
-
-# ============================================================
-# FILTER
-# ============================================================
-
-def candidate_allowed(
-    candidate,
-    body_ratio,
-    structure_lookback,
-    max_distance_atr,
-    slow_ema,
-    recipe,
-):
-    if (
-        candidate["body_ratio"]
-        < body_ratio
-    ):
-        return False
-
-    structure = candidate[
-        "structure"
-    ][structure_lookback]
-
-    if (
-        structure[
-            "distance_atr"
-        ] > max_distance_atr
-    ):
-        return False
-
-    daily = candidate["daily"]
-
-    slow_value = daily[
-        "emas"
-    ].get(
-        slow_ema
-    )
-
-    if slow_value is None:
-        return False
-
-    if not (
-        daily["close"]
-        < slow_value
-    ):
-        return False
-
-    maximum_close_location = recipe[
-        "maximum_close_location"
-    ]
-
-    if (
-        maximum_close_location
-        is not None
-        and candidate[
-            "close_location"
-        ] > maximum_close_location
-    ):
-        return False
-
-    minimum_upper_wick_body = recipe[
-        "minimum_upper_wick_body"
-    ]
-
-    if (
-        minimum_upper_wick_body
-        is not None
-        and candidate[
-            "upper_wick_body"
-        ] < minimum_upper_wick_body
-    ):
-        return False
-
-    minimum_sweep_atr = recipe[
-        "minimum_sweep_atr"
-    ]
-
-    if (
-        minimum_sweep_atr
-        is not None
-        and structure[
-            "sweep_atr"
-        ] < minimum_sweep_atr
-    ):
-        return False
-
-    minimum_prior_5bar_upmove_atr = recipe[
-        "minimum_prior_5bar_upmove_atr"
-    ]
-
-    if (
-        minimum_prior_5bar_upmove_atr
-        is not None
-        and candidate[
-            "prior_5bar_upmove_atr"
-        ] < minimum_prior_5bar_upmove_atr
-    ):
-        return False
-
-    minimum_daily_atr_ratio_50 = recipe[
-        "minimum_daily_atr_ratio_50"
-    ]
-
-    if (
-        minimum_daily_atr_ratio_50
-        is not None
-    ):
-        ratio = daily[
-            "daily_atr_ratio_50"
-        ]
-
-        if (
-            ratio is None
-            or ratio
-            < minimum_daily_atr_ratio_50
-        ):
-            return False
-
-    fast_ema = recipe[
-        "fast_ema"
-    ]
-
-    if fast_ema is not None:
-        fast_value = daily[
-            "emas"
-        ].get(
-            fast_ema
-        )
-
-        if (
-            fast_value is None
-            or not (
-                fast_value
-                < slow_value
-            )
-        ):
-            return False
-
-    maximum_daily_extension_atr = recipe[
-        "maximum_daily_extension_atr"
-    ]
-
-    if (
-        maximum_daily_extension_atr
-        is not None
-    ):
-        daily_atr = daily[
-            "daily_atr14"
-        ]
-
-        if (
-            daily_atr is None
-            or daily_atr <= 0
-        ):
-            return False
-
-        extension = (
-            slow_value
-            - daily["close"]
-        ) / daily_atr
-
-        if (
-            extension
-            > maximum_daily_extension_atr
-        ):
-            return False
-
-    return True
 
 
 # ============================================================
@@ -1177,19 +610,15 @@ EXIT_CACHE = {}
 def calculate_trade_exit(
     h1,
     signal_index,
-    reward_risk,
 ):
-    cache_key = (
-        signal_index,
-        reward_risk,
-    )
-
-    if cache_key in EXIT_CACHE:
+    if signal_index in EXIT_CACHE:
         return EXIT_CACHE[
-            cache_key
+            signal_index
         ]
 
-    signal = h1[signal_index]
+    signal = h1[
+        signal_index
+    ]
 
     reference_entry = (
         signal["close"]
@@ -1220,7 +649,7 @@ def calculate_trade_exit(
     target = (
         reference_entry
         - reference_risk
-        * reward_risk
+        * REWARD_RISK
     )
 
     actual_risk = (
@@ -1302,7 +731,7 @@ def calculate_trade_exit(
         }
 
         EXIT_CACHE[
-            cache_key
+            signal_index
         ] = result
 
         return result
@@ -1318,7 +747,7 @@ def calculate_trade_exit(
     }
 
     EXIT_CACHE[
-        cache_key
+        signal_index
     ] = result
 
     return result
@@ -1327,14 +756,32 @@ def calculate_trade_exit(
 def simulate(
     h1,
     candidates,
-    reward_risk,
+    excluded_hours=None,
+    excluded_weekdays=None,
 ):
+    excluded_hours = set(
+        excluded_hours or []
+    )
+
+    excluded_weekdays = set(
+        excluded_weekdays or []
+    )
+
+    filtered = [
+        candidate
+        for candidate in candidates
+        if candidate["ny_hour"]
+        not in excluded_hours
+        and candidate["ny_weekday"]
+        not in excluded_weekdays
+    ]
+
     trades = []
     position_exit_index = -1
     ignored = 0
     still_open = False
 
-    for candidate in candidates:
+    for candidate in filtered:
         signal_index = (
             candidate["index"]
         )
@@ -1349,14 +796,36 @@ def simulate(
         trade = calculate_trade_exit(
             h1,
             signal_index,
-            reward_risk,
-        )
+        ).copy()
 
-        if trade["status"] == "OPEN":
+        trade[
+            "ny_hour"
+        ] = candidate[
+            "ny_hour"
+        ]
+
+        trade[
+            "ny_weekday"
+        ] = candidate[
+            "ny_weekday"
+        ]
+
+        trade[
+            "ny_weekday_name"
+        ] = candidate[
+            "ny_weekday_name"
+        ]
+
+        if (
+            trade["status"]
+            == "OPEN"
+        ):
             still_open = True
             break
 
-        trades.append(trade)
+        trades.append(
+            trade
+        )
 
         position_exit_index = (
             trade["exit_index"]
@@ -1381,9 +850,9 @@ def stats_for_trades(
     filtered = []
 
     for trade in trades:
-        signal_time = trade[
-            "signal_time"
-        ]
+        signal_time = (
+            trade["signal_time"]
+        )
 
         if (
             start is not None
@@ -1397,7 +866,9 @@ def stats_for_trades(
         ):
             continue
 
-        filtered.append(trade)
+        filtered.append(
+            trade
+        )
 
     if not filtered:
         return {
@@ -1429,9 +900,17 @@ def stats_for_trades(
         if result < 0
     ]
 
-    gross_profit = sum(winners)
-    gross_loss = abs(sum(losers))
-    total_r = sum(results)
+    gross_profit = sum(
+        winners
+    )
+
+    gross_loss = abs(
+        sum(losers)
+    )
+
+    total_r = sum(
+        results
+    )
 
     if gross_loss > 0:
         profit_factor = (
@@ -1466,12 +945,10 @@ def stats_for_trades(
 
         if result < 0:
             current_streak += 1
-
             longest_streak = max(
                 longest_streak,
                 current_streak,
             )
-
         else:
             current_streak = 0
 
@@ -1509,17 +986,104 @@ def stats_for_trades(
 
 
 # ============================================================
-# RESULT ROW
+# BUCKET DIAGNOSTICS
 # ============================================================
 
-def make_result_row(
-    body_ratio,
-    structure_lookback,
-    max_distance_atr,
-    slow_ema,
-    reward_risk,
-    recipe,
-    eligible,
+def bucket_stats(
+    baseline_trades,
+):
+    rows = []
+
+    for hour in range(24):
+        trades = [
+            trade
+            for trade in baseline_trades
+            if trade[
+                "ny_hour"
+            ] == hour
+        ]
+
+        s = stats_for_trades(
+            trades
+        )
+
+        independently_bad = (
+            s["trades"]
+            >= MIN_BUCKET_TRADES
+            and s["total_r"] < 0
+            and s["profit_factor"]
+            < MAX_BAD_BUCKET_PF
+        )
+
+        rows.append({
+            "bucket_type": "NY_HOUR",
+            "bucket_value": hour,
+            "bucket_name": (
+                f"{hour:02d}:00"
+            ),
+            **s,
+            "independently_bad": (
+                independently_bad
+            ),
+        })
+
+    weekday_names = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+    ]
+
+    for weekday in range(5):
+        trades = [
+            trade
+            for trade in baseline_trades
+            if trade[
+                "ny_weekday"
+            ] == weekday
+        ]
+
+        s = stats_for_trades(
+            trades
+        )
+
+        independently_bad = (
+            s["trades"]
+            >= MIN_BUCKET_TRADES
+            and s["total_r"] < 0
+            and s["profit_factor"]
+            < MAX_BAD_BUCKET_PF
+        )
+
+        rows.append({
+            "bucket_type": "WEEKDAY",
+            "bucket_value": weekday,
+            "bucket_name": (
+                weekday_names[
+                    weekday
+                ]
+            ),
+            **s,
+            "independently_bad": (
+                independently_bad
+            ),
+        })
+
+    return pd.DataFrame(
+        rows
+    )
+
+
+# ============================================================
+# SCENARIO OUTPUT
+# ============================================================
+
+def scenario_row(
+    name,
+    scenario_type,
+    excluded_hours,
+    excluded_weekdays,
     trades,
     ignored,
     still_open,
@@ -1530,51 +1094,19 @@ def make_result_row(
     )
 
     row = {
-        "feature_recipe": recipe[
-            "name"
-        ],
-        "body_ratio": body_ratio,
-        "structure_lookback": (
-            structure_lookback
+        "scenario": name,
+        "scenario_type": scenario_type,
+        "excluded_hours": ",".join(
+            str(value)
+            for value in sorted(
+                excluded_hours
+            )
         ),
-        "max_distance_atr": (
-            max_distance_atr
-        ),
-        "slow_daily_ema": (
-            slow_ema
-        ),
-        "reward_risk": (
-            reward_risk
-        ),
-        "maximum_close_location": recipe[
-            "maximum_close_location"
-        ],
-        "minimum_upper_wick_body": recipe[
-            "minimum_upper_wick_body"
-        ],
-        "minimum_sweep_atr": recipe[
-            "minimum_sweep_atr"
-        ],
-        "minimum_prior_5bar_upmove_atr": recipe[
-            "minimum_prior_5bar_upmove_atr"
-        ],
-        "minimum_daily_atr_ratio_50": recipe[
-            "minimum_daily_atr_ratio_50"
-        ],
-        "fast_ema": recipe[
-            "fast_ema"
-        ],
-        "maximum_daily_extension_atr": recipe[
-            "maximum_daily_extension_atr"
-        ],
-        "raw_signals": len(
-            eligible
-        ),
-        "ignored_due_to_open_trade": (
-            ignored
-        ),
-        "still_open_at_end": (
-            still_open
+        "excluded_weekdays": ",".join(
+            str(value)
+            for value in sorted(
+                excluded_weekdays
+            )
         ),
         "trades": full[
             "trades"
@@ -1608,13 +1140,16 @@ def make_result_row(
         "longest_loss_streak": full[
             "longest_loss_streak"
         ],
+        "ignored_due_to_open_trade": (
+            ignored
+        ),
+        "still_open_at_end": (
+            still_open
+        ),
     }
 
     profitable_eras = 0
-    eras_with_5_plus = 0
-    profitable_eras_with_5_plus = 0
-    minimum_era_pf_5_plus = None
-    minimum_era_expectancy_5_plus = None
+    min_era_pf = None
 
     for (
         era_name,
@@ -1651,68 +1186,38 @@ def make_result_row(
             "expectancy_r"
         ]
 
-        if era["total_r"] > 0:
+        if (
+            era["trades"] >= 5
+            and era["total_r"] > 0
+        ):
             profitable_eras += 1
 
         if era["trades"] >= 5:
-            eras_with_5_plus += 1
-
-            if era["total_r"] > 0:
-                profitable_eras_with_5_plus += 1
-
-            if (
-                minimum_era_pf_5_plus
-                is None
-            ):
-                minimum_era_pf_5_plus = (
-                    era[
-                        "profit_factor"
-                    ]
-                )
+            if min_era_pf is None:
+                min_era_pf = era[
+                    "profit_factor"
+                ]
             else:
-                minimum_era_pf_5_plus = min(
-                    minimum_era_pf_5_plus,
+                min_era_pf = min(
+                    min_era_pf,
                     era[
                         "profit_factor"
                     ],
                 )
-
-            if (
-                minimum_era_expectancy_5_plus
-                is None
-            ):
-                minimum_era_expectancy_5_plus = (
-                    era[
-                        "expectancy_r"
-                    ]
-                )
-            else:
-                minimum_era_expectancy_5_plus = min(
-                    minimum_era_expectancy_5_plus,
-                    era[
-                        "expectancy_r"
-                    ],
-                )
-
-    row[
-        "profitable_eras"
-    ] = profitable_eras
-
-    row[
-        "eras_with_5_plus_trades"
-    ] = eras_with_5_plus
 
     row[
         "profitable_eras_with_5_plus_trades"
-    ] = profitable_eras_with_5_plus
+    ] = profitable_eras
 
     row[
         "minimum_era_pf_5_plus"
-    ] = minimum_era_pf_5_plus
+    ] = min_era_pf
 
     row[
-        "minimum_era_expectancy_5_plus"
-    ] = minimum_era_expectancy_5_plus
+        "all_four_eras_profitable"
+    ] = (
+        profitable_eras >= 4
+    )
 
     return row
 
@@ -1726,25 +1231,20 @@ def run_research():
 
     try:
         print()
-        print("=" * 80)
+        print("=" * 78)
         print(
-            "USD/JPY SHORT - FREQUENCY EXPANSION + FILTER SUBSTITUTION"
+            "USD/JPY SHORT - TIMING / WEEKDAY DIAGNOSTIC"
         )
-        print("=" * 80)
+        print("=" * 78)
         print(
-            "Structural combinations:",
-            TOTAL_STRUCTURAL_COMBINATIONS,
-        )
-        print(
-            "Feature recipes:",
-            len(FEATURE_RECIPES),
-        )
-        print(
-            "Total combinations:",
-            TOTAL_COMBINATIONS,
-        )
-        print(
-            "NO TIMING / WEEKDAY FILTERS"
+            "Frozen core:",
+            {
+                "body": BODY_RATIO,
+                "structure": STRUCTURE_LOOKBACK,
+                "distance_atr": MAX_DISTANCE_ATR,
+                "daily_ema": SLOW_DAILY_EMA,
+                "rr": REWARD_RISK,
+            },
         )
         print()
 
@@ -1788,7 +1288,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building indicators and feature matrix"
+                "Building frozen-core signal stream"
             ),
         })
 
@@ -1797,34 +1297,21 @@ def run_research():
             14,
         )
 
-        (
-            daily_ema_map,
-            daily_atr,
-            daily_atr_mean_50,
-        ) = build_daily_state(
-            daily
-        )
-
         daily_lookup = (
             build_h1_daily_lookup(
                 h1,
                 daily,
-                daily_ema_map,
-                daily_atr,
-                daily_atr_mean_50,
             )
         )
 
-        candidates = (
-            build_candidates(
-                h1,
-                h1_atr,
-                daily_lookup,
-            )
+        candidates = build_candidates(
+            h1,
+            h1_atr,
+            daily_lookup,
         )
 
         STATUS[
-            "base_bearish_engulfings"
+            "raw_frozen_core_signals"
         ] = len(
             candidates
         )
@@ -1839,75 +1326,253 @@ def run_research():
             * 60
         )
 
-        rows = []
-        completed = 0
-
         STATUS.update({
             "state": "running",
             "message": (
-                "Running frequency/substitution sweep"
+                "Running timing and weekday diagnostics"
             ),
         })
 
-        structural_grid = list(
-            itertools.product(
-                BODY_RATIOS,
-                STRUCTURE_LOOKBACKS,
-                MAX_DISTANCE_ATR_VALUES,
-                SLOW_EMAS,
-                REWARD_RISKS,
+        scenario_rows = []
+
+        # ---------------- BASELINE ----------------
+
+        (
+            baseline_trades,
+            baseline_ignored,
+            baseline_open,
+        ) = simulate(
+            h1,
+            candidates,
+        )
+
+        scenario_rows.append(
+            scenario_row(
+                "BASELINE_ALL_HOURS_ALL_WEEKDAYS",
+                "BASELINE",
+                set(),
+                set(),
+                baseline_trades,
+                baseline_ignored,
+                baseline_open,
+                years,
             )
         )
 
-        for recipe in FEATURE_RECIPES:
-            print()
-            print(
-                "Recipe:",
-                recipe["name"],
-                flush=True,
+        # ---------------- BUCKET STATS ----------------
+
+        buckets = bucket_stats(
+            baseline_trades
+        )
+
+        buckets.to_csv(
+            BUCKET_FILE,
+            index=False,
+        )
+
+        bad_hours = sorted(
+            buckets[
+                (
+                    buckets[
+                        "bucket_type"
+                    ] == "NY_HOUR"
+                )
+                & (
+                    buckets[
+                        "independently_bad"
+                    ] == True
+                )
+            ][
+                "bucket_value"
+            ].astype(
+                int
+            ).tolist()
+        )
+
+        bad_weekdays = sorted(
+            buckets[
+                (
+                    buckets[
+                        "bucket_type"
+                    ] == "WEEKDAY"
+                )
+                & (
+                    buckets[
+                        "independently_bad"
+                    ] == True
+                )
+            ][
+                "bucket_value"
+            ].astype(
+                int
+            ).tolist()
+        )
+
+        STATUS[
+            "independently_bad_hours"
+        ] = bad_hours
+
+        STATUS[
+            "independently_bad_weekdays"
+        ] = bad_weekdays
+
+        # ---------------- SINGLE HOUR EXCLUSIONS ----------------
+
+        for hour in range(24):
+            (
+                trades,
+                ignored,
+                still_open,
+            ) = simulate(
+                h1,
+                candidates,
+                excluded_hours={
+                    hour
+                },
             )
 
-            for (
-                body_ratio,
-                structure_lookback,
-                max_distance_atr,
-                slow_ema,
-                reward_risk,
-            ) in structural_grid:
-                completed += 1
+            scenario_rows.append(
+                scenario_row(
+                    f"EXCLUDE_HOUR_{hour:02d}",
+                    "SINGLE_HOUR",
+                    {hour},
+                    set(),
+                    trades,
+                    ignored,
+                    still_open,
+                    years,
+                )
+            )
 
-                eligible = [
-                    candidate
-                    for candidate in candidates
-                    if candidate_allowed(
-                        candidate,
-                        body_ratio,
-                        structure_lookback,
-                        max_distance_atr,
-                        slow_ema,
-                        recipe,
-                    )
-                ]
+        # ---------------- SINGLE WEEKDAY EXCLUSIONS ----------------
 
+        weekday_names = [
+            "MONDAY",
+            "TUESDAY",
+            "WEDNESDAY",
+            "THURSDAY",
+            "FRIDAY",
+        ]
+
+        for weekday in range(5):
+            (
+                trades,
+                ignored,
+                still_open,
+            ) = simulate(
+                h1,
+                candidates,
+                excluded_weekdays={
+                    weekday
+                },
+            )
+
+            scenario_rows.append(
+                scenario_row(
+                    f"EXCLUDE_{weekday_names[weekday]}",
+                    "SINGLE_WEEKDAY",
+                    set(),
+                    {weekday},
+                    trades,
+                    ignored,
+                    still_open,
+                    years,
+                )
+            )
+
+        # ---------------- PAIRS OF INDEPENDENTLY BAD HOURS ----------------
+
+        for hour_a, hour_b in itertools.combinations(
+            bad_hours,
+            2,
+        ):
+            excluded = {
+                hour_a,
+                hour_b,
+            }
+
+            (
+                trades,
+                ignored,
+                still_open,
+            ) = simulate(
+                h1,
+                candidates,
+                excluded_hours=excluded,
+            )
+
+            scenario_rows.append(
+                scenario_row(
+                    (
+                        f"EXCLUDE_BAD_HOURS_"
+                        f"{hour_a:02d}_{hour_b:02d}"
+                    ),
+                    "BAD_HOUR_PAIR",
+                    excluded,
+                    set(),
+                    trades,
+                    ignored,
+                    still_open,
+                    years,
+                )
+            )
+
+        # ---------------- ALL INDEPENDENTLY BAD HOURS ----------------
+
+        if bad_hours:
+            bad_hour_set = set(
+                bad_hours
+            )
+
+            (
+                trades,
+                ignored,
+                still_open,
+            ) = simulate(
+                h1,
+                candidates,
+                excluded_hours=bad_hour_set,
+            )
+
+            scenario_rows.append(
+                scenario_row(
+                    "EXCLUDE_ALL_INDEPENDENTLY_BAD_HOURS",
+                    "ALL_BAD_HOURS",
+                    bad_hour_set,
+                    set(),
+                    trades,
+                    ignored,
+                    still_open,
+                    years,
+                )
+            )
+
+            # Combine bad-hour set with each independently
+            # bad weekday, but only those weekdays that passed
+            # the same mechanical independent-bucket rule.
+            for weekday in bad_weekdays:
                 (
                     trades,
                     ignored,
                     still_open,
                 ) = simulate(
                     h1,
-                    eligible,
-                    reward_risk,
+                    candidates,
+                    excluded_hours=bad_hour_set,
+                    excluded_weekdays={
+                        weekday
+                    },
                 )
 
-                rows.append(
-                    make_result_row(
-                        body_ratio,
-                        structure_lookback,
-                        max_distance_atr,
-                        slow_ema,
-                        reward_risk,
-                        recipe,
-                        eligible,
+                scenario_rows.append(
+                    scenario_row(
+                        (
+                            "BAD_HOURS_PLUS_"
+                            f"{weekday_names[weekday]}"
+                        ),
+                        "BAD_HOURS_PLUS_BAD_WEEKDAY",
+                        bad_hour_set,
+                        {weekday},
                         trades,
                         ignored,
                         still_open,
@@ -1915,136 +1580,84 @@ def run_research():
                     )
                 )
 
-                STATUS[
-                    "completed_combinations"
-                ] = completed
-
-                if completed % 1000 == 0:
-                    print(
-                        f"Progress: "
-                        f"{completed}/"
-                        f"{TOTAL_COMBINATIONS}",
-                        flush=True,
-                    )
-
         df = pd.DataFrame(
-            rows
+            scenario_rows
         )
 
-        if df.empty:
-            raise RuntimeError(
-                "No USD/JPY frequency/substitution rows generated"
-            )
-
-        df[
-            "frequency_5_plus"
-        ] = (
-            df["trades_per_year"]
-            >= 5.0
+        baseline_pf = float(
+            df.loc[
+                df[
+                    "scenario_type"
+                ] == "BASELINE",
+                "profit_factor",
+            ].iloc[0]
         )
 
-        df[
-            "frequency_6_plus"
-        ] = (
-            df["trades_per_year"]
-            >= 6.0
-        )
-
-        df[
-            "frequency_8_plus"
-        ] = (
-            df["trades_per_year"]
-            >= 8.0
+        baseline_tpy = float(
+            df.loc[
+                df[
+                    "scenario_type"
+                ] == "BASELINE",
+                "trades_per_year",
+            ].iloc[0]
         )
 
         df[
-            "all_four_eras_profitable"
-        ] = (
-            df[
-                "profitable_eras_with_5_plus_trades"
-            ]
-            >= 4
-        )
-
-        df[
-            "worst_era_pf_115"
-        ] = (
-            df[
-                "minimum_era_pf_5_plus"
-            ].fillna(0)
-            >= 1.15
-        )
-
-        df[
-            "worst_era_pf_120"
-        ] = (
-            df[
-                "minimum_era_pf_5_plus"
-            ].fillna(0)
-            >= 1.20
-        )
-
-        df[
-            "overall_pf_140"
+            "pf_change_vs_baseline"
         ] = (
             df[
                 "profit_factor"
             ]
-            >= 1.40
+            - baseline_pf
+        ).round(
+            3
         )
 
         df[
-            "expectancy_020"
+            "trades_per_year_change_vs_baseline"
         ] = (
             df[
-                "expectancy_r"
-            ]
-            >= 0.20
-        )
-
-        df[
-            "target_zone"
-        ] = (
-            df[
-                "frequency_5_plus"
-            ]
-            & df[
-                "all_four_eras_profitable"
-            ]
-            & df[
-                "worst_era_pf_115"
-            ]
-            & df[
-                "overall_pf_140"
-            ]
-            & df[
-                "expectancy_020"
-            ]
-        )
-
-        df[
-            "annual_r_linear"
-        ] = (
-            df[
-                "expectancy_r"
-            ]
-            * df[
                 "trades_per_year"
             ]
+            - baseline_tpy
+        ).round(
+            2
+        )
+
+        df[
+            "preferred_zone"
+        ] = (
+            df[
+                "all_four_eras_profitable"
+            ]
+            & (
+                df[
+                    "profit_factor"
+                ] >= 1.35
+            )
+            & (
+                df[
+                    "trades_per_year"
+                ] >= 6.0
+            )
+            & (
+                df[
+                    "minimum_era_pf_5_plus"
+                ].fillna(0)
+                >= 1.10
+            )
         )
 
         df = df.sort_values(
             by=[
-                "target_zone",
-                "frequency_6_plus",
+                "preferred_zone",
                 "all_four_eras_profitable",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
-                "annual_r_linear",
                 "trades_per_year",
+                "total_r",
             ],
             ascending=[
-                False,
                 False,
                 False,
                 False,
@@ -2062,55 +1675,55 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/JPY frequency expansion / "
-                "filter substitution completed"
+                "USD/JPY timing diagnostic completed"
             ),
-            "completed_combinations": (
-                TOTAL_COMBINATIONS
+            "completed_scenarios": len(
+                df
             ),
-            "rows_saved": len(df),
-            "target_zone_rows": int(
-                df["target_zone"].sum()
+            "independently_bad_hours": (
+                bad_hours
             ),
-            "all_four_eras_profitable": int(
+            "independently_bad_weekdays": (
+                bad_weekdays
+            ),
+            "preferred_zone_rows": int(
                 df[
-                    "all_four_eras_profitable"
+                    "preferred_zone"
                 ].sum()
             ),
-            "five_plus_per_year": int(
-                df[
-                    "frequency_5_plus"
-                ].sum()
+            "output_file": (
+                OUTPUT_FILE
             ),
-            "six_plus_per_year": int(
-                df[
-                    "frequency_6_plus"
-                ].sum()
+            "bucket_file": (
+                BUCKET_FILE
             ),
-            "output_file": OUTPUT_FILE,
         })
 
         print()
-        print("=" * 80)
+        print("=" * 78)
         print(
-            "USD/JPY FREQUENCY / SUBSTITUTION COMPLETE"
+            "USD/JPY TIMING DIAGNOSTIC COMPLETE"
         )
-        print("=" * 80)
+        print("=" * 78)
         print(
-            "Rows:",
+            "Independent bad hours:",
+            bad_hours,
+        )
+        print(
+            "Independent bad weekdays:",
+            bad_weekdays,
+        )
+        print(
+            "Scenario rows:",
             len(df),
-        )
-        print(
-            "Target-zone rows:",
-            int(
-                df[
-                    "target_zone"
-                ].sum()
-            ),
         )
         print(
             "Saved:",
             OUTPUT_FILE,
+        )
+        print(
+            "Buckets:",
+            BUCKET_FILE,
         )
         print()
 
@@ -2135,36 +1748,43 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDJPY Short Frequency Expansion Substitution"
+            "USDJPY Short Timing Diagnostic"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
-        "timing_filters": (
-            "NONE - all hours and weekdays"
-        ),
-        "structural_grid": {
-            "body_ratios": BODY_RATIOS,
-            "structure_lookbacks": (
-                STRUCTURE_LOOKBACKS
+        "frozen_core": {
+            "minimum_body_ratio": (
+                BODY_RATIO
             ),
-            "max_distance_atr": (
-                MAX_DISTANCE_ATR_VALUES
+            "structure_lookback": (
+                STRUCTURE_LOOKBACK
             ),
-            "slow_emas": SLOW_EMAS,
-            "reward_risks": (
-                REWARD_RISKS
+            "maximum_distance_atr": (
+                MAX_DISTANCE_ATR
+            ),
+            "previous_daily_close_below_ema": (
+                SLOW_DAILY_EMA
+            ),
+            "reward_risk": (
+                REWARD_RISK
+            ),
+            "strong_close_filter": False,
+            "upper_wick_filter": False,
+        },
+        "bad_bucket_rule": {
+            "minimum_trades": (
+                MIN_BUCKET_TRADES
+            ),
+            "total_r_must_be_negative": True,
+            "profit_factor_below": (
+                MAX_BAD_BUCKET_PF
             ),
         },
-        "feature_recipes": [
-            recipe["name"]
-            for recipe
-            in FEATURE_RECIPES
-        ],
-        "total_combinations": (
-            TOTAL_COMBINATIONS
-        ),
-        "download": "/download",
+        "downloads": {
+            "scenarios": "/download",
+            "buckets": "/download-buckets",
+        },
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
@@ -2185,16 +1805,28 @@ def download():
     ):
         return jsonify({
             "status": "not_ready",
-            "message": (
-                "USD/JPY frequency/substitution "
-                "CSV is not ready yet"
-            ),
         }), 404
 
     return send_file(
         OUTPUT_FILE,
         as_attachment=True,
         download_name=OUTPUT_FILE,
+    )
+
+
+@app.route("/download-buckets")
+def download_buckets():
+    if not os.path.exists(
+        BUCKET_FILE
+    ):
+        return jsonify({
+            "status": "not_ready",
+        }), 404
+
+    return send_file(
+        BUCKET_FILE,
+        as_attachment=True,
+        download_name=BUCKET_FILE,
     )
 
 
@@ -2206,7 +1838,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdjpy-short-frequency-substitution"
+            "usdjpy-short-timing-diagnostic"
         ),
         daemon=True,
     )
