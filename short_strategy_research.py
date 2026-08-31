@@ -10,47 +10,46 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/CAD SHORT - WINNER NEIGHBOURHOOD STABILITY TEST
+# USD/CAD SHORT - FREQUENCY RECOVERY TEST
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Purpose:
-#   Validate whether the current best robust USD/CAD short setup
-#   sits on a genuine parameter plateau rather than one lucky point.
+# Goal:
+#   Recover useful trade frequency without destroying robustness.
 #
-# Current best robust region:
-#   body >= 1.55
-#   structure ~85
-#   distance <= 0.10 ATR
-#   previous completed daily close < EMA300
-#   24h upward momentum >= 0.75 ATR
-#   signal range >= 1.20 ATR
-#   RR = 3.25
+# Explicit preference:
+#   >= 4 trades/year
+#   >= ~90-100 total trades
+#   PF preferably >= 1.40
+#   all four eras profitable
+#   worst-era PF preferably >= 1.15-1.20
 #
-# This run refines only the neighbourhood around that winner:
+# This intentionally loosens the strongest filters from the
+# low-frequency winner and searches for a better portfolio fit.
 #
+# Grid:
 #   Body:
-#     1.50 / 1.55 / 1.60
+#     1.30 / 1.40 / 1.50 / 1.55
 #
 #   Structure:
-#     80 / 85 / 90
+#     40 / 50 / 60 / 70 / 80 / 85
 #
 #   Distance:
-#     0.075 / 0.100 / 0.125 ATR
-#
-#   Slow daily EMA:
-#     275 / 300 / 325
+#     0.10 / 0.15 / 0.20 / 0.25 ATR
 #
 #   24h upward momentum:
-#     0.60 / 0.70 / 0.75 / 0.80 / 0.90 ATR
+#     OFF / 0.25 / 0.50 / 0.75 ATR
 #
 #   Minimum signal range:
-#     1.10 / 1.15 / 1.20 / 1.25 / 1.30 ATR
+#     OFF / 0.90 / 1.00 / 1.10 ATR
+#
+#   Daily slow EMA:
+#     200 / 250 / 300 / 325
 #
 #   RR:
-#     3.00 / 3.25 / 3.50
+#     2.50 / 2.75 / 3.00 / 3.25 / 3.50
 #
-# Total combinations = 6,075
+# Total combinations = 30,720
 #
 # NO timing / weekday optimisation.
 #
@@ -108,56 +107,62 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 220
 DAILY_WARMUP_DAYS = 3000
 
-OUTPUT_FILE = "usdcad_short_winner_neighbourhood.csv"
+OUTPUT_FILE = "usdcad_short_frequency_recovery.csv"
 
 
 # ============================================================
-# NEIGHBOURHOOD GRID
+# FREQUENCY-RECOVERY GRID
 # ============================================================
 
 BODY_RATIOS = [
+    1.30,
+    1.40,
     1.50,
     1.55,
-    1.60,
 ]
 
 STRUCTURE_LOOKBACKS = [
+    40,
+    50,
+    60,
+    70,
     80,
     85,
-    90,
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
-    0.075,
-    0.100,
-    0.125,
-]
-
-SLOW_EMAS = [
-    275,
-    300,
-    325,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
 ]
 
 MOMENTUM_LOOKBACK = 24
 
-MIN_UP_MOMENTUM_ATR = [
-    0.60,
-    0.70,
+MOMENTUM_OPTIONS = [
+    None,
+    0.25,
+    0.50,
     0.75,
-    0.80,
-    0.90,
 ]
 
-MIN_RANGE_ATR_VALUES = [
+MIN_RANGE_ATR_OPTIONS = [
+    None,
+    0.90,
+    1.00,
     1.10,
-    1.15,
-    1.20,
-    1.25,
-    1.30,
+]
+
+SLOW_EMAS = [
+    200,
+    250,
+    300,
+    325,
 ]
 
 REWARD_RISKS = [
+    2.50,
+    2.75,
     3.00,
     3.25,
     3.50,
@@ -167,9 +172,9 @@ TOTAL_COMBINATIONS = (
     len(BODY_RATIOS)
     * len(STRUCTURE_LOOKBACKS)
     * len(MAX_DISTANCE_ATR_VALUES)
+    * len(MOMENTUM_OPTIONS)
+    * len(MIN_RANGE_ATR_OPTIONS)
     * len(SLOW_EMAS)
-    * len(MIN_UP_MOMENTUM_ATR)
-    * len(MIN_RANGE_ATR_VALUES)
     * len(REWARD_RISKS)
 )
 
@@ -209,7 +214,7 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDCAD Short Winner Neighbourhood Stability",
+    "service": "USDCAD Short Frequency Recovery",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
@@ -675,21 +680,23 @@ def candidate_allowed(
     ):
         return False
 
-    if (
-        candidate[
-            "up_momentum_24"
-        ]
-        < momentum_threshold
-    ):
-        return False
+    if momentum_threshold is not None:
+        if (
+            candidate[
+                "up_momentum_24"
+            ]
+            < momentum_threshold
+        ):
+            return False
 
-    if (
-        candidate[
-            "range_atr"
-        ]
-        < range_threshold
-    ):
-        return False
+    if range_threshold is not None:
+        if (
+            candidate[
+                "range_atr"
+            ]
+            < range_threshold
+        ):
+            return False
 
     return True
 
@@ -880,9 +887,7 @@ def simulate(
             reward_risk,
         )
 
-        if trade[
-            "status"
-        ] == "OPEN":
+        if trade["status"] == "OPEN":
             still_open = True
             break
 
@@ -980,10 +985,8 @@ def stats_for_trades(
             gross_profit
             / gross_loss
         )
-
     elif gross_profit > 0:
         profit_factor = 999.0
-
     else:
         profit_factor = 0.0
 
@@ -1056,9 +1059,9 @@ def make_result_row(
     body_ratio,
     structure_lookback,
     max_distance_atr,
-    slow_ema,
     momentum_threshold,
     range_threshold,
+    slow_ema,
     reward_risk,
     eligible,
     trades,
@@ -1078,17 +1081,19 @@ def make_result_row(
         "max_distance_atr": (
             max_distance_atr
         ),
-        "slow_daily_ema": (
-            slow_ema
-        ),
         "momentum_lookback_h": (
             MOMENTUM_LOOKBACK
+            if momentum_threshold is not None
+            else None
         ),
         "min_up_momentum_atr": (
             momentum_threshold
         ),
         "min_range_atr": (
             range_threshold
+        ),
+        "slow_daily_ema": (
+            slow_ema
         ),
         "reward_risk": (
             reward_risk
@@ -1106,8 +1111,7 @@ def make_result_row(
             "trades"
         ],
         "trades_per_year": round(
-            full["trades"]
-            / years,
+            full["trades"] / years,
             2,
         ),
         "winners": full[
@@ -1239,12 +1243,15 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD SHORT - WINNER NEIGHBOURHOOD STABILITY"
+            "USD/CAD SHORT - FREQUENCY RECOVERY"
         )
         print("=" * 76)
         print(
             "Total combinations:",
             TOTAL_COMBINATIONS,
+        )
+        print(
+            "Target: >=4 trades/year with robust PF"
         )
         print(
             "NO timing / weekday optimisation"
@@ -1300,26 +1307,20 @@ def run_research():
             14,
         )
 
-        daily_ema_map = (
-            build_daily_state(
-                daily
-            )
+        daily_ema_map = build_daily_state(
+            daily
         )
 
-        daily_lookup = (
-            build_h1_daily_lookup(
-                h1,
-                daily,
-                daily_ema_map,
-            )
+        daily_lookup = build_h1_daily_lookup(
+            h1,
+            daily,
+            daily_ema_map,
         )
 
-        candidates = (
-            build_candidates(
-                h1,
-                h1_atr,
-                daily_lookup,
-            )
+        candidates = build_candidates(
+            h1,
+            h1_atr,
+            daily_lookup,
         )
 
         STATUS[
@@ -1341,7 +1342,7 @@ def run_research():
         STATUS.update({
             "state": "running",
             "message": (
-                "Running USD/CAD winner neighbourhood sweep"
+                "Running USD/CAD frequency-recovery sweep"
             ),
         })
 
@@ -1351,9 +1352,9 @@ def run_research():
             BODY_RATIOS,
             STRUCTURE_LOOKBACKS,
             MAX_DISTANCE_ATR_VALUES,
+            MOMENTUM_OPTIONS,
+            MIN_RANGE_ATR_OPTIONS,
             SLOW_EMAS,
-            MIN_UP_MOMENTUM_ATR,
-            MIN_RANGE_ATR_VALUES,
             REWARD_RISKS,
         )
 
@@ -1361,9 +1362,9 @@ def run_research():
             body_ratio,
             structure_lookback,
             max_distance_atr,
-            slow_ema,
             momentum_threshold,
             range_threshold,
+            slow_ema,
             reward_risk,
         ) in enumerate(
             combinations,
@@ -1398,9 +1399,9 @@ def run_research():
                     body_ratio,
                     structure_lookback,
                     max_distance_atr,
-                    slow_ema,
                     momentum_threshold,
                     range_threshold,
+                    slow_ema,
                     reward_risk,
                     eligible,
                     trades,
@@ -1414,7 +1415,7 @@ def run_research():
                 "completed_combinations"
             ] = number
 
-            if number % 250 == 0:
+            if number % 500 == 0:
                 print(
                     f"Progress: "
                     f"{number}/"
@@ -1428,23 +1429,39 @@ def run_research():
 
         if df.empty:
             raise RuntimeError(
-                "No USD/CAD neighbourhood rows generated"
+                "No USD/CAD frequency-recovery rows generated"
             )
 
         df[
-            "adequate_40"
+            "frequency_4py"
         ] = (
             df[
-                "trades"
-            ] >= 40
+                "trades_per_year"
+            ] >= 4.0
         )
 
         df[
-            "adequate_50"
+            "frequency_5py"
+        ] = (
+            df[
+                "trades_per_year"
+            ] >= 5.0
+        )
+
+        df[
+            "adequate_90"
         ] = (
             df[
                 "trades"
-            ] >= 50
+            ] >= 90
+        )
+
+        df[
+            "adequate_100"
+        ] = (
+            df[
+                "trades"
+            ] >= 100
         )
 
         df[
@@ -1457,6 +1474,15 @@ def run_research():
         )
 
         df[
+            "worst_era_pf_115"
+        ] = (
+            df[
+                "minimum_era_pf_5_plus"
+            ].fillna(0)
+            >= 1.15
+        )
+
+        df[
             "worst_era_pf_120"
         ] = (
             df[
@@ -1466,20 +1492,59 @@ def run_research():
         )
 
         df[
-            "worst_era_pf_130"
+            "pf_140"
         ] = (
             df[
-                "minimum_era_pf_5_plus"
-            ].fillna(0)
-            >= 1.30
+                "profit_factor"
+            ] >= 1.40
         )
 
         df[
-            "profit_factor_150"
+            "pf_150"
         ] = (
             df[
                 "profit_factor"
             ] >= 1.50
+        )
+
+        df[
+            "target_profile"
+        ] = (
+            df[
+                "frequency_4py"
+            ]
+            & df[
+                "adequate_90"
+            ]
+            & df[
+                "all_four_eras_profitable"
+            ]
+            & df[
+                "pf_140"
+            ]
+            & df[
+                "worst_era_pf_115"
+            ]
+        )
+
+        df[
+            "strong_target_profile"
+        ] = (
+            df[
+                "frequency_4py"
+            ]
+            & df[
+                "adequate_100"
+            ]
+            & df[
+                "all_four_eras_profitable"
+            ]
+            & df[
+                "pf_150"
+            ]
+            & df[
+                "worst_era_pf_120"
+            ]
         )
 
         df[
@@ -1495,17 +1560,19 @@ def run_research():
 
         df = df.sort_values(
             by=[
+                "strong_target_profile",
+                "target_profile",
                 "all_four_eras_profitable",
-                "adequate_50",
-                "worst_era_pf_130",
+                "frequency_4py",
+                "adequate_90",
                 "worst_era_pf_120",
-                "profit_factor_150",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "annual_r_linear",
                 "trades_per_year",
             ],
             ascending=[
+                False,
                 False,
                 False,
                 False,
@@ -1526,8 +1593,8 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD winner neighbourhood stability "
-                "test completed successfully"
+                "USD/CAD frequency recovery "
+                "completed successfully"
             ),
             "completed_combinations": (
                 TOTAL_COMBINATIONS
@@ -1535,30 +1602,25 @@ def run_research():
             "rows_saved": len(
                 df
             ),
+            "target_profile_count": int(
+                df[
+                    "target_profile"
+                ].sum()
+            ),
+            "strong_target_profile_count": int(
+                df[
+                    "strong_target_profile"
+                ].sum()
+            ),
             "all_four_eras_profitable": int(
                 df[
                     "all_four_eras_profitable"
                 ].sum()
             ),
-            "all_four_and_pf_150": int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "profit_factor_150"
-                    ]
-                ).sum()
-            ),
-            "all_four_and_worst_pf_130": int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "worst_era_pf_130"
-                    ]
-                ).sum()
+            "frequency_4py_count": int(
+                df[
+                    "frequency_4py"
+                ].sum()
             ),
             "output_file": (
                 OUTPUT_FILE
@@ -1568,7 +1630,7 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD WINNER NEIGHBOURHOOD COMPLETE"
+            "USD/CAD FREQUENCY RECOVERY COMPLETE"
         )
         print("=" * 76)
         print(
@@ -1576,37 +1638,27 @@ def run_research():
             len(df),
         )
         print(
-            "All-four-era profitable:",
+            ">=4 trades/year:",
             int(
                 df[
-                    "all_four_eras_profitable"
+                    "frequency_4py"
                 ].sum()
             ),
         )
         print(
-            "All-four + PF >= 1.50:",
+            "Target profiles:",
             int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "profit_factor_150"
-                    ]
-                ).sum()
+                df[
+                    "target_profile"
+                ].sum()
             ),
         )
         print(
-            "All-four + worst-era PF >= 1.30:",
+            "Strong target profiles:",
             int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "worst_era_pf_130"
-                    ]
-                ).sum()
+                df[
+                    "strong_target_profile"
+                ].sum()
             ),
         )
         print(
@@ -1636,11 +1688,15 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDCAD Short Winner Neighbourhood Stability"
+            "USDCAD Short Frequency Recovery"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
+        "objective": (
+            "Recover >=4 trades/year while retaining "
+            "robust profitability"
+        ),
         "timing_filters": (
             "NONE - all hours and weekdays"
         ),
@@ -1654,17 +1710,17 @@ def home():
             "max_distance_atr": (
                 MAX_DISTANCE_ATR_VALUES
             ),
-            "slow_emas": (
-                SLOW_EMAS
-            ),
             "momentum_lookback_h": (
                 MOMENTUM_LOOKBACK
             ),
-            "min_up_momentum_atr": (
-                MIN_UP_MOMENTUM_ATR
+            "momentum_options": (
+                MOMENTUM_OPTIONS
             ),
-            "min_range_atr": (
-                MIN_RANGE_ATR_VALUES
+            "min_range_atr_options": (
+                MIN_RANGE_ATR_OPTIONS
+            ),
+            "slow_emas": (
+                SLOW_EMAS
             ),
             "reward_risks": (
                 REWARD_RISKS
@@ -1697,7 +1753,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "USD/CAD neighbourhood CSV "
+                "USD/CAD frequency recovery CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1717,7 +1773,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdcad-short-winner-neighbourhood"
+            "usdcad-short-frequency-recovery"
         ),
         daemon=True,
     )
