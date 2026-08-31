@@ -10,47 +10,90 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/CAD SHORT - FREQUENCY RECOVERY TEST
+# USD/CAD SHORT - FINAL GEOMETRY / REGIME FEATURE SWEEP
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Goal:
-#   Recover useful trade frequency without destroying robustness.
+# Purpose:
+#   Give USD/CAD short one final serious attempt using genuinely
+#   different information from the earlier searches.
 #
-# Explicit preference:
-#   >= 4 trades/year
-#   >= ~90-100 total trades
-#   PF preferably >= 1.40
-#   all four eras profitable
-#   worst-era PF preferably >= 1.15-1.20
+# Starting point:
+#   We already know that loosening filters can recover frequency
+#   to ~4-5 trades/year, but PF tends to fall into ~1.35-1.39.
 #
-# This intentionally loosens the strongest filters from the
-# low-frequency winner and searches for a better portfolio fit.
+# This run asks whether geometry / regime information can improve
+# that compromise without simply re-tightening the old filters.
 #
-# Grid:
-#   Body:
-#     1.30 / 1.40 / 1.50 / 1.55
+# Structural baseline grid:
+#   Body ratio:
+#     1.40 / 1.50 / 1.55
 #
 #   Structure:
-#     40 / 50 / 60 / 70 / 80 / 85
+#     50 / 60 / 70
 #
-#   Distance:
-#     0.10 / 0.15 / 0.20 / 0.25 ATR
+#   Distance to prior H1 high:
+#     0.15 / 0.20 / 0.25 ATR
+#
+#   Daily close below slow EMA:
+#     EMA250 / EMA300 / EMA325
 #
 #   24h upward momentum:
-#     OFF / 0.25 / 0.50 / 0.75 ATR
+#     0.50 / 0.75 ATR
 #
 #   Minimum signal range:
-#     OFF / 0.90 / 1.00 / 1.10 ATR
-#
-#   Daily slow EMA:
-#     200 / 250 / 300 / 325
+#     OFF / 0.90 ATR
 #
 #   RR:
-#     2.50 / 2.75 / 3.00 / 3.25 / 3.50
+#     2.75 / 3.00 / 3.25
 #
-# Total combinations = 30,720
+# NEW feature families tested ONE AT A TIME:
 #
+#   1) STOP_SIZE_MAX
+#      stop distance / H1 ATR <=
+#      0.80 / 1.00 / 1.20 / 1.40 / 1.60
+#
+#   2) RANGE_BAND
+#      signal candle range / ATR inside:
+#      0.80-1.20
+#      0.90-1.30
+#      1.00-1.40
+#      1.00-1.60
+#      1.10-1.50
+#
+#   3) DAILY_EMA_DISTANCE_BAND
+#      (EMA - daily close) / daily ATR14 inside:
+#      0.00-0.25
+#      0.00-0.50
+#      0.25-0.75
+#      0.25-1.00
+#      0.50-1.25
+#
+#   4) DAILY_SWING_HIGH_DISTANCE
+#      prior completed daily close within X ATR14
+#      of previous N-day high:
+#      N = 5 / 10 / 20
+#      X = 0.50 / 1.00 / 1.50
+#
+#   5) PREVIOUS_BULL_CANDLE_QUALITY
+#      previous candle body / ATR >=
+#      0.20 / 0.30 / 0.40 / 0.50
+#
+#   6) SHORT_RALLY_CONTEXT
+#      close relative to N bars ago / ATR >=
+#      N = 3 / 6 / 12
+#      threshold = 0.25 / 0.50 / 0.75
+#
+#   7) DAILY_ATR_PERCENTILE
+#      current daily ATR14 percentile over prior 100 days >=
+#      40 / 50 / 60 / 70
+#
+#   8) EMA_ACCELERATION
+#      slow EMA 5-day slope more negative than previous 5-day slope
+#      by at least:
+#      0.00 / 0.02 / 0.05 ATR
+#
+# One feature family is active at a time.
 # NO timing / weekday optimisation.
 #
 # Exact backtest conventions:
@@ -104,44 +147,43 @@ RESEARCH_TO = (
     )
 )
 
-H1_WARMUP_DAYS = 220
-DAILY_WARMUP_DAYS = 3000
+H1_WARMUP_DAYS = 260
+DAILY_WARMUP_DAYS = 3200
 
-OUTPUT_FILE = "usdcad_short_frequency_recovery.csv"
+OUTPUT_FILE = "usdcad_short_geometry_regime_features.csv"
 
 
 # ============================================================
-# FREQUENCY-RECOVERY GRID
+# STRUCTURAL BASELINES
 # ============================================================
 
 BODY_RATIOS = [
-    1.30,
     1.40,
     1.50,
     1.55,
 ]
 
 STRUCTURE_LOOKBACKS = [
-    40,
     50,
     60,
     70,
-    80,
-    85,
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
-    0.10,
     0.15,
     0.20,
     0.25,
 ]
 
+SLOW_EMAS = [
+    250,
+    300,
+    325,
+]
+
 MOMENTUM_LOOKBACK = 24
 
-MOMENTUM_OPTIONS = [
-    None,
-    0.25,
+MIN_UP_MOMENTUM_ATR = [
     0.50,
     0.75,
 ]
@@ -149,34 +191,86 @@ MOMENTUM_OPTIONS = [
 MIN_RANGE_ATR_OPTIONS = [
     None,
     0.90,
-    1.00,
-    1.10,
-]
-
-SLOW_EMAS = [
-    200,
-    250,
-    300,
-    325,
 ]
 
 REWARD_RISKS = [
-    2.50,
     2.75,
     3.00,
     3.25,
-    3.50,
 ]
 
-TOTAL_COMBINATIONS = (
-    len(BODY_RATIOS)
-    * len(STRUCTURE_LOOKBACKS)
-    * len(MAX_DISTANCE_ATR_VALUES)
-    * len(MOMENTUM_OPTIONS)
-    * len(MIN_RANGE_ATR_OPTIONS)
-    * len(SLOW_EMAS)
-    * len(REWARD_RISKS)
-)
+
+# ============================================================
+# NEW FEATURE VALUES
+# ============================================================
+
+STOP_SIZE_MAX_VALUES = [
+    0.80,
+    1.00,
+    1.20,
+    1.40,
+    1.60,
+]
+
+RANGE_BANDS = [
+    (0.80, 1.20),
+    (0.90, 1.30),
+    (1.00, 1.40),
+    (1.00, 1.60),
+    (1.10, 1.50),
+]
+
+DAILY_EMA_DISTANCE_BANDS = [
+    (0.00, 0.25),
+    (0.00, 0.50),
+    (0.25, 0.75),
+    (0.25, 1.00),
+    (0.50, 1.25),
+]
+
+DAILY_SWING_LOOKBACKS = [
+    5,
+    10,
+    20,
+]
+
+DAILY_SWING_MAX_DISTANCE_ATR = [
+    0.50,
+    1.00,
+    1.50,
+]
+
+PREVIOUS_BULL_BODY_ATR_MIN = [
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+]
+
+SHORT_RALLY_LOOKBACKS = [
+    3,
+    6,
+    12,
+]
+
+SHORT_RALLY_MIN_ATR = [
+    0.25,
+    0.50,
+    0.75,
+]
+
+DAILY_ATR_PERCENTILE_MIN = [
+    40,
+    50,
+    60,
+    70,
+]
+
+EMA_ACCELERATION_MIN_ATR = [
+    0.00,
+    0.02,
+    0.05,
+]
 
 
 # ============================================================
@@ -214,12 +308,11 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDCAD Short Frequency Recovery",
+    "service": "USDCAD Short Final Geometry Regime Feature Sweep",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "total_combinations": TOTAL_COMBINATIONS,
-    "completed_combinations": 0,
+    "completed_tests": 0,
     "rows_saved": 0,
     "output_file": None,
 }
@@ -442,8 +535,46 @@ def atr_series(candles, length=14):
     )
 
 
+def rolling_percentile_rank(values, lookback):
+    result = [None] * len(values)
+
+    for index in range(len(values)):
+        current = values[index]
+
+        if current is None:
+            continue
+
+        start = index - lookback
+
+        if start < 0:
+            continue
+
+        window = [
+            value
+            for value in values[start:index]
+            if value is not None
+        ]
+
+        if len(window) < lookback:
+            continue
+
+        less_equal = sum(
+            1
+            for value in window
+            if value <= current
+        )
+
+        result[index] = (
+            less_equal
+            / len(window)
+            * 100.0
+        )
+
+    return result
+
+
 # ============================================================
-# DAILY ALIGNMENT
+# DAILY ALIGNMENT / FEATURES
 # ============================================================
 
 def current_daily_start(timestamp_utc):
@@ -468,7 +599,17 @@ def build_daily_state(daily):
         for candle in daily
     ]
 
-    return {
+    daily_atr = atr_series(
+        daily,
+        14,
+    )
+
+    atr_percentile_100 = rolling_percentile_rank(
+        daily_atr,
+        100,
+    )
+
+    ema_map = {
         length: ema_series(
             closes,
             length,
@@ -476,11 +617,17 @@ def build_daily_state(daily):
         for length in SLOW_EMAS
     }
 
+    return {
+        "emas": ema_map,
+        "atr14": daily_atr,
+        "atr_percentile_100": atr_percentile_100,
+    }
+
 
 def build_h1_daily_lookup(
     h1,
     daily,
-    daily_ema_map,
+    daily_state,
 ):
     lookup = [None] * len(h1)
     daily_index = -1
@@ -501,16 +648,29 @@ def build_h1_daily_lookup(
             continue
 
         lookup[h1_index] = {
+            "daily_index": daily_index,
             "close": daily[
                 daily_index
             ]["close"],
+            "high": daily[
+                daily_index
+            ]["high"],
+            "atr14": daily_state[
+                "atr14"
+            ][daily_index],
+            "atr_percentile_100": daily_state[
+                "atr_percentile_100"
+            ][daily_index],
             "emas": {
                 length:
-                daily_ema_map[
-                    length
-                ][daily_index]
+                daily_state[
+                    "emas"
+                ][length][daily_index]
                 for length in SLOW_EMAS
             },
+            "ema_series": daily_state[
+                "emas"
+            ],
         }
 
     return lookup
@@ -523,6 +683,7 @@ def build_h1_daily_lookup(
 def build_candidates(
     h1,
     h1_atr,
+    daily,
     daily_lookup,
 ):
     candidates = []
@@ -530,6 +691,7 @@ def build_candidates(
     max_lookback = max(
         max(STRUCTURE_LOOKBACKS),
         MOMENTUM_LOOKBACK,
+        max(SHORT_RALLY_LOOKBACKS),
     )
 
     for index in range(
@@ -546,12 +708,12 @@ def build_candidates(
 
         previous = h1[index - 1]
         atr = h1_atr[index]
-        daily = daily_lookup[index]
+        daily_info = daily_lookup[index]
 
         if (
             atr is None
             or atr <= 0
-            or daily is None
+            or daily_info is None
         ):
             continue
 
@@ -615,6 +777,78 @@ def build_candidates(
             ]["close"]
         ) / atr
 
+        previous_body_atr = (
+            previous_body / atr
+        )
+
+        stop = (
+            signal["high"]
+            + STOP_BUFFER_TICKS
+            * TICK_SIZE
+        )
+
+        stop_size_atr = (
+            stop
+            - signal["close"]
+        ) / atr
+
+        short_rally = {}
+
+        for lookback in SHORT_RALLY_LOOKBACKS:
+            short_rally[
+                lookback
+            ] = (
+                signal["close"]
+                - h1[
+                    index - lookback
+                ]["close"]
+            ) / atr
+
+        daily_index = daily_info[
+            "daily_index"
+        ]
+
+        daily_swing_distances = {}
+
+        daily_atr = daily_info[
+            "atr14"
+        ]
+
+        if (
+            daily_atr is not None
+            and daily_atr > 0
+        ):
+            for lookback in DAILY_SWING_LOOKBACKS:
+                start = (
+                    daily_index
+                    - lookback
+                )
+
+                if start >= 0:
+                    previous_daily_high = max(
+                        candle["high"]
+                        for candle in daily[
+                            start:daily_index
+                        ]
+                    )
+
+                    daily_swing_distances[
+                        lookback
+                    ] = (
+                        previous_daily_high
+                        - daily_info["close"]
+                    ) / daily_atr
+
+                else:
+                    daily_swing_distances[
+                        lookback
+                    ] = None
+        else:
+            for lookback in DAILY_SWING_LOOKBACKS:
+                daily_swing_distances[
+                    lookback
+                ] = None
+
         candidates.append({
             "index": index,
             "time": signal["time"],
@@ -630,43 +864,58 @@ def build_candidates(
             "up_momentum_24": (
                 up_momentum_24
             ),
-            "daily": daily,
+            "previous_body_atr": (
+                previous_body_atr
+            ),
+            "stop_size_atr": (
+                stop_size_atr
+            ),
+            "short_rally": (
+                short_rally
+            ),
+            "daily_swing_distances": (
+                daily_swing_distances
+            ),
+            "daily": daily_info,
         })
 
     return candidates
 
 
 # ============================================================
-# FILTER
+# BASELINE FILTER
 # ============================================================
 
-def candidate_allowed(
+def baseline_allowed(
     candidate,
-    body_ratio,
-    structure_lookback,
-    max_distance_atr,
-    slow_ema,
-    momentum_threshold,
-    range_threshold,
+    baseline,
 ):
     if (
         candidate["body_ratio"]
-        < body_ratio
+        < baseline["body_ratio"]
     ):
         return False
 
     if (
         candidate[
             "structure_distances"
-        ][structure_lookback]
-        > max_distance_atr
+        ][
+            baseline[
+                "structure_lookback"
+            ]
+        ]
+        > baseline[
+            "max_distance_atr"
+        ]
     ):
         return False
 
     slow = candidate[
         "daily"
     ]["emas"].get(
-        slow_ema
+        baseline[
+            "slow_ema"
+        ]
     )
 
     if slow is None:
@@ -680,25 +929,233 @@ def candidate_allowed(
     ):
         return False
 
-    if momentum_threshold is not None:
-        if (
-            candidate[
-                "up_momentum_24"
-            ]
-            < momentum_threshold
-        ):
-            return False
+    if (
+        candidate[
+            "up_momentum_24"
+        ]
+        < baseline[
+            "momentum_threshold"
+        ]
+    ):
+        return False
 
-    if range_threshold is not None:
+    if (
+        baseline[
+            "min_range_atr"
+        ]
+        is not None
+    ):
         if (
             candidate[
                 "range_atr"
             ]
-            < range_threshold
+            < baseline[
+                "min_range_atr"
+            ]
         ):
             return False
 
     return True
+
+
+# ============================================================
+# NEW FEATURE FILTER
+# ============================================================
+
+def feature_allowed(
+    candidate,
+    feature_family,
+    feature_value,
+    slow_ema,
+):
+    if feature_family == "BASELINE":
+        return True
+
+    if feature_family == "STOP_SIZE_MAX":
+        return (
+            candidate[
+                "stop_size_atr"
+            ]
+            <= feature_value
+        )
+
+    if feature_family == "RANGE_BAND":
+        minimum, maximum = (
+            feature_value
+        )
+
+        return (
+            candidate[
+                "range_atr"
+            ]
+            >= minimum
+            and candidate[
+                "range_atr"
+            ]
+            <= maximum
+        )
+
+    if feature_family == "DAILY_EMA_DISTANCE_BAND":
+        minimum, maximum = (
+            feature_value
+        )
+
+        daily = candidate[
+            "daily"
+        ]
+
+        slow = daily[
+            "emas"
+        ].get(
+            slow_ema
+        )
+
+        atr = daily[
+            "atr14"
+        ]
+
+        if (
+            slow is None
+            or atr is None
+            or atr <= 0
+        ):
+            return False
+
+        distance = (
+            slow
+            - daily[
+                "close"
+            ]
+        ) / atr
+
+        return (
+            distance >= minimum
+            and distance <= maximum
+        )
+
+    if feature_family == "DAILY_SWING_HIGH_DISTANCE":
+        lookback, maximum = (
+            feature_value
+        )
+
+        distance = candidate[
+            "daily_swing_distances"
+        ].get(
+            lookback
+        )
+
+        if distance is None:
+            return False
+
+        return (
+            distance <= maximum
+        )
+
+    if feature_family == "PREVIOUS_BULL_CANDLE_QUALITY":
+        return (
+            candidate[
+                "previous_body_atr"
+            ]
+            >= feature_value
+        )
+
+    if feature_family == "SHORT_RALLY_CONTEXT":
+        lookback, minimum = (
+            feature_value
+        )
+
+        return (
+            candidate[
+                "short_rally"
+            ][lookback]
+            >= minimum
+        )
+
+    if feature_family == "DAILY_ATR_PERCENTILE":
+        percentile = candidate[
+            "daily"
+        ][
+            "atr_percentile_100"
+        ]
+
+        if percentile is None:
+            return False
+
+        return (
+            percentile
+            >= feature_value
+        )
+
+    if feature_family == "EMA_ACCELERATION":
+        minimum_acceleration = (
+            feature_value
+        )
+
+        daily = candidate[
+            "daily"
+        ]
+
+        daily_index = daily[
+            "daily_index"
+        ]
+
+        if daily_index < 10:
+            return False
+
+        ema_values = daily[
+            "ema_series"
+        ][slow_ema]
+
+        current = ema_values[
+            daily_index
+        ]
+
+        five_ago = ema_values[
+            daily_index - 5
+        ]
+
+        ten_ago = ema_values[
+            daily_index - 10
+        ]
+
+        atr = daily[
+            "atr14"
+        ]
+
+        if (
+            current is None
+            or five_ago is None
+            or ten_ago is None
+            or atr is None
+            or atr <= 0
+        ):
+            return False
+
+        recent_slope = (
+            current
+            - five_ago
+        ) / atr
+
+        previous_slope = (
+            five_ago
+            - ten_ago
+        ) / atr
+
+        acceleration = (
+            previous_slope
+            - recent_slope
+        )
+
+        return (
+            recent_slope < 0
+            and acceleration
+            >= minimum_acceleration
+        )
+
+    raise RuntimeError(
+        f"Unknown feature family: "
+        f"{feature_family}"
+    )
 
 
 # ============================================================
@@ -887,7 +1344,9 @@ def simulate(
             reward_risk,
         )
 
-        if trade["status"] == "OPEN":
+        if trade[
+            "status"
+        ] == "OPEN":
             still_open = True
             break
 
@@ -985,8 +1444,10 @@ def stats_for_trades(
             gross_profit
             / gross_loss
         )
+
     elif gross_profit > 0:
         profit_factor = 999.0
+
     else:
         profit_factor = 0.0
 
@@ -1011,6 +1472,7 @@ def stats_for_trades(
 
         if result < 0:
             current_streak += 1
+
             longest_streak = max(
                 longest_streak,
                 current_streak,
@@ -1056,13 +1518,10 @@ def stats_for_trades(
 # ============================================================
 
 def make_result_row(
-    body_ratio,
-    structure_lookback,
-    max_distance_atr,
-    momentum_threshold,
-    range_threshold,
-    slow_ema,
-    reward_risk,
+    baseline,
+    feature_family,
+    feature_label,
+    feature_value_serialized,
     eligible,
     trades,
     ignored,
@@ -1074,29 +1533,52 @@ def make_result_row(
     )
 
     row = {
-        "body_ratio": body_ratio,
+        "body_ratio": (
+            baseline[
+                "body_ratio"
+            ]
+        ),
         "structure_lookback": (
-            structure_lookback
+            baseline[
+                "structure_lookback"
+            ]
         ),
         "max_distance_atr": (
-            max_distance_atr
+            baseline[
+                "max_distance_atr"
+            ]
+        ),
+        "slow_daily_ema": (
+            baseline[
+                "slow_ema"
+            ]
         ),
         "momentum_lookback_h": (
             MOMENTUM_LOOKBACK
-            if momentum_threshold is not None
-            else None
         ),
         "min_up_momentum_atr": (
-            momentum_threshold
+            baseline[
+                "momentum_threshold"
+            ]
         ),
-        "min_range_atr": (
-            range_threshold
-        ),
-        "slow_daily_ema": (
-            slow_ema
+        "baseline_min_range_atr": (
+            baseline[
+                "min_range_atr"
+            ]
         ),
         "reward_risk": (
-            reward_risk
+            baseline[
+                "reward_risk"
+            ]
+        ),
+        "feature_family": (
+            feature_family
+        ),
+        "feature_label": (
+            feature_label
+        ),
+        "feature_value": (
+            feature_value_serialized
         ),
         "raw_signals": len(
             eligible
@@ -1111,7 +1593,8 @@ def make_result_row(
             "trades"
         ],
         "trades_per_year": round(
-            full["trades"] / years,
+            full["trades"]
+            / years,
             2,
         ),
         "winners": full[
@@ -1233,6 +1716,150 @@ def make_result_row(
 
 
 # ============================================================
+# FEATURE TEST DEFINITIONS
+# ============================================================
+
+def feature_tests():
+    tests = [
+        (
+            "BASELINE",
+            "baseline",
+            None,
+            "none",
+        ),
+    ]
+
+    for value in STOP_SIZE_MAX_VALUES:
+        tests.append(
+            (
+                "STOP_SIZE_MAX",
+                f"stop_size_atr_le_{value:.2f}",
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    for minimum, maximum in RANGE_BANDS:
+        tests.append(
+            (
+                "RANGE_BAND",
+                (
+                    f"range_atr_"
+                    f"{minimum:.2f}_to_{maximum:.2f}"
+                ),
+                (
+                    minimum,
+                    maximum,
+                ),
+                (
+                    f"{minimum:.2f},"
+                    f"{maximum:.2f}"
+                ),
+            )
+        )
+
+    for minimum, maximum in DAILY_EMA_DISTANCE_BANDS:
+        tests.append(
+            (
+                "DAILY_EMA_DISTANCE_BAND",
+                (
+                    f"daily_ema_distance_"
+                    f"{minimum:.2f}_to_{maximum:.2f}_atr"
+                ),
+                (
+                    minimum,
+                    maximum,
+                ),
+                (
+                    f"{minimum:.2f},"
+                    f"{maximum:.2f}"
+                ),
+            )
+        )
+
+    for lookback in DAILY_SWING_LOOKBACKS:
+        for maximum in DAILY_SWING_MAX_DISTANCE_ATR:
+            tests.append(
+                (
+                    "DAILY_SWING_HIGH_DISTANCE",
+                    (
+                        f"daily_{lookback}d_high_"
+                        f"distance_le_{maximum:.2f}_atr"
+                    ),
+                    (
+                        lookback,
+                        maximum,
+                    ),
+                    (
+                        f"{lookback},"
+                        f"{maximum:.2f}"
+                    ),
+                )
+            )
+
+    for value in PREVIOUS_BULL_BODY_ATR_MIN:
+        tests.append(
+            (
+                "PREVIOUS_BULL_CANDLE_QUALITY",
+                (
+                    f"previous_bull_body_atr_"
+                    f"ge_{value:.2f}"
+                ),
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    for lookback in SHORT_RALLY_LOOKBACKS:
+        for minimum in SHORT_RALLY_MIN_ATR:
+            tests.append(
+                (
+                    "SHORT_RALLY_CONTEXT",
+                    (
+                        f"rally_{lookback}h_"
+                        f"ge_{minimum:.2f}_atr"
+                    ),
+                    (
+                        lookback,
+                        minimum,
+                    ),
+                    (
+                        f"{lookback},"
+                        f"{minimum:.2f}"
+                    ),
+                )
+            )
+
+    for value in DAILY_ATR_PERCENTILE_MIN:
+        tests.append(
+            (
+                "DAILY_ATR_PERCENTILE",
+                (
+                    f"daily_atr_percentile_"
+                    f"ge_{value}"
+                ),
+                value,
+                str(value),
+            )
+        )
+
+    for value in EMA_ACCELERATION_MIN_ATR:
+        tests.append(
+            (
+                "EMA_ACCELERATION",
+                (
+                    f"ema_negative_acceleration_"
+                    f"ge_{value:.2f}_atr"
+                ),
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    return tests
+
+
+# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1243,15 +1870,11 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD SHORT - FREQUENCY RECOVERY"
+            "USD/CAD SHORT - FINAL GEOMETRY / REGIME FEATURE SWEEP"
         )
         print("=" * 76)
         print(
-            "Total combinations:",
-            TOTAL_COMBINATIONS,
-        )
-        print(
-            "Target: >=4 trades/year with robust PF"
+            "One genuinely new feature family at a time"
         )
         print(
             "NO timing / weekday optimisation"
@@ -1298,7 +1921,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building USD/CAD signal matrix"
+                "Building USD/CAD geometry/regime matrix"
             ),
         })
 
@@ -1307,19 +1930,20 @@ def run_research():
             14,
         )
 
-        daily_ema_map = build_daily_state(
+        daily_state = build_daily_state(
             daily
         )
 
         daily_lookup = build_h1_daily_lookup(
             h1,
             daily,
-            daily_ema_map,
+            daily_state,
         )
 
         candidates = build_candidates(
             h1,
             h1_atr,
+            daily,
             daily_lookup,
         )
 
@@ -1339,89 +1963,140 @@ def run_research():
             * 60
         )
 
+        baselines = []
+
+        for (
+            body_ratio,
+            structure_lookback,
+            max_distance_atr,
+            slow_ema,
+            momentum_threshold,
+            min_range_atr,
+            reward_risk,
+        ) in itertools.product(
+            BODY_RATIOS,
+            STRUCTURE_LOOKBACKS,
+            MAX_DISTANCE_ATR_VALUES,
+            SLOW_EMAS,
+            MIN_UP_MOMENTUM_ATR,
+            MIN_RANGE_ATR_OPTIONS,
+            REWARD_RISKS,
+        ):
+            baselines.append({
+                "body_ratio": body_ratio,
+                "structure_lookback": structure_lookback,
+                "max_distance_atr": max_distance_atr,
+                "slow_ema": slow_ema,
+                "momentum_threshold": momentum_threshold,
+                "min_range_atr": min_range_atr,
+                "reward_risk": reward_risk,
+            })
+
+        tests = feature_tests()
+
+        total_tests = (
+            len(baselines)
+            * len(tests)
+        )
+
+        STATUS[
+            "total_baselines"
+        ] = len(
+            baselines
+        )
+
+        STATUS[
+            "tests_per_baseline"
+        ] = len(
+            tests
+        )
+
+        STATUS[
+            "total_tests"
+        ] = total_tests
+
         STATUS.update({
             "state": "running",
             "message": (
-                "Running USD/CAD frequency-recovery sweep"
+                "Running final USD/CAD geometry/regime sweep"
             ),
         })
 
         rows = []
+        test_number = 0
 
-        combinations = itertools.product(
-            BODY_RATIOS,
-            STRUCTURE_LOOKBACKS,
-            MAX_DISTANCE_ATR_VALUES,
-            MOMENTUM_OPTIONS,
-            MIN_RANGE_ATR_OPTIONS,
-            SLOW_EMAS,
-            REWARD_RISKS,
-        )
-
-        for number, (
-            body_ratio,
-            structure_lookback,
-            max_distance_atr,
-            momentum_threshold,
-            range_threshold,
-            slow_ema,
-            reward_risk,
-        ) in enumerate(
-            combinations,
-            start=1,
-        ):
-            eligible = [
+        for baseline in baselines:
+            baseline_candidates = [
                 candidate
                 for candidate in candidates
-                if candidate_allowed(
+                if baseline_allowed(
                     candidate,
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    slow_ema,
-                    momentum_threshold,
-                    range_threshold,
+                    baseline,
                 )
             ]
 
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                eligible,
-                reward_risk,
-            )
+            for (
+                feature_family,
+                feature_label,
+                feature_value,
+                feature_value_serialized,
+            ) in tests:
+                eligible = [
+                    candidate
+                    for candidate in baseline_candidates
+                    if feature_allowed(
+                        candidate,
+                        feature_family,
+                        feature_value,
+                        baseline[
+                            "slow_ema"
+                        ],
+                    )
+                ]
 
-            rows.append(
-                make_result_row(
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    momentum_threshold,
-                    range_threshold,
-                    slow_ema,
-                    reward_risk,
-                    eligible,
+                (
                     trades,
                     ignored,
                     still_open,
-                    years,
+                ) = simulate(
+                    h1,
+                    eligible,
+                    baseline[
+                        "reward_risk"
+                    ],
                 )
-            )
 
-            STATUS[
-                "completed_combinations"
-            ] = number
-
-            if number % 500 == 0:
-                print(
-                    f"Progress: "
-                    f"{number}/"
-                    f"{TOTAL_COMBINATIONS}",
-                    flush=True,
+                rows.append(
+                    make_result_row(
+                        baseline,
+                        feature_family,
+                        feature_label,
+                        feature_value_serialized,
+                        eligible,
+                        trades,
+                        ignored,
+                        still_open,
+                        years,
+                    )
                 )
+
+                test_number += 1
+
+                STATUS[
+                    "completed_tests"
+                ] = test_number
+
+                if (
+                    test_number
+                    % 500
+                    == 0
+                ):
+                    print(
+                        f"Progress: "
+                        f"{test_number}/"
+                        f"{total_tests}",
+                        flush=True,
+                    )
 
         df = pd.DataFrame(
             rows
@@ -1429,7 +2104,7 @@ def run_research():
 
         if df.empty:
             raise RuntimeError(
-                "No USD/CAD frequency-recovery rows generated"
+                "No USD/CAD geometry/regime rows generated"
             )
 
         df[
@@ -1437,7 +2112,8 @@ def run_research():
         ] = (
             df[
                 "trades_per_year"
-            ] >= 4.0
+            ]
+            >= 4.0
         )
 
         df[
@@ -1445,7 +2121,8 @@ def run_research():
         ] = (
             df[
                 "trades_per_year"
-            ] >= 5.0
+            ]
+            >= 5.0
         )
 
         df[
@@ -1453,7 +2130,8 @@ def run_research():
         ] = (
             df[
                 "trades"
-            ] >= 90
+            ]
+            >= 90
         )
 
         df[
@@ -1461,7 +2139,8 @@ def run_research():
         ] = (
             df[
                 "trades"
-            ] >= 100
+            ]
+            >= 100
         )
 
         df[
@@ -1496,7 +2175,8 @@ def run_research():
         ] = (
             df[
                 "profit_factor"
-            ] >= 1.40
+            ]
+            >= 1.40
         )
 
         df[
@@ -1504,7 +2184,8 @@ def run_research():
         ] = (
             df[
                 "profit_factor"
-            ] >= 1.50
+            ]
+            >= 1.50
         )
 
         df[
@@ -1593,11 +2274,11 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD frequency recovery "
+                "USD/CAD final geometry/regime sweep "
                 "completed successfully"
             ),
-            "completed_combinations": (
-                TOTAL_COMBINATIONS
+            "completed_tests": (
+                total_tests
             ),
             "rows_saved": len(
                 df
@@ -1630,7 +2311,7 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD FREQUENCY RECOVERY COMPLETE"
+            "USD/CAD FINAL GEOMETRY / REGIME SWEEP COMPLETE"
         )
         print("=" * 76)
         print(
@@ -1686,52 +2367,44 @@ def run_research():
 
 @app.route("/")
 def home():
+    tests = feature_tests()
+
     return jsonify({
         "service": (
-            "USDCAD Short Frequency Recovery"
+            "USDCAD Short Final Geometry Regime Feature Sweep"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
         "objective": (
-            "Recover >=4 trades/year while retaining "
-            "robust profitability"
+            "Find >=4 trades/year with PF >=1.40 "
+            "using genuinely new geometry/regime information"
         ),
         "timing_filters": (
             "NONE - all hours and weekdays"
         ),
-        "grid": {
-            "body_ratios": (
-                BODY_RATIOS
-            ),
-            "structure_lookbacks": (
-                STRUCTURE_LOOKBACKS
-            ),
-            "max_distance_atr": (
-                MAX_DISTANCE_ATR_VALUES
-            ),
-            "momentum_lookback_h": (
-                MOMENTUM_LOOKBACK
-            ),
-            "momentum_options": (
-                MOMENTUM_OPTIONS
-            ),
-            "min_range_atr_options": (
-                MIN_RANGE_ATR_OPTIONS
-            ),
-            "slow_emas": (
-                SLOW_EMAS
-            ),
-            "reward_risks": (
-                REWARD_RISKS
-            ),
-            "total_combinations": (
-                TOTAL_COMBINATIONS
-            ),
+        "baseline_grid": {
+            "body_ratios": BODY_RATIOS,
+            "structure_lookbacks": STRUCTURE_LOOKBACKS,
+            "max_distance_atr": MAX_DISTANCE_ATR_VALUES,
+            "slow_emas": SLOW_EMAS,
+            "momentum_lookback_h": MOMENTUM_LOOKBACK,
+            "min_up_momentum_atr": MIN_UP_MOMENTUM_ATR,
+            "min_range_atr_options": MIN_RANGE_ATR_OPTIONS,
+            "reward_risks": REWARD_RISKS,
         },
-        "download": (
-            "/download"
+        "feature_families": sorted(
+            list(
+                set(
+                    item[0]
+                    for item in tests
+                )
+            )
         ),
+        "tests_per_baseline": len(
+            tests
+        ),
+        "download": "/download",
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
@@ -1753,7 +2426,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "USD/CAD frequency recovery CSV "
+                "USD/CAD geometry/regime CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1773,7 +2446,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdcad-short-frequency-recovery"
+            "usdcad-short-final-geometry-regime"
         ),
         daemon=True,
     )
