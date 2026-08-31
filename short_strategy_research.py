@@ -10,40 +10,47 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/CAD SHORT - CONTROLLED FEATURE COMBINATION TEST
+# USD/CAD SHORT - WINNER NEIGHBOURHOOD STABILITY TEST
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
 # Purpose:
-#   Combine only the feature families that survived the previous
-#   USD/CAD short feature-discovery pass:
+#   Validate whether the current best robust USD/CAD short setup
+#   sits on a genuine parameter plateau rather than one lucky point.
 #
-#     1) Daily EMA alignment
-#     2) Prior upward momentum
-#     3) Minimum signal-candle range
-#
-# We test:
-#   - baseline
-#   - EMA alignment only
-#   - momentum only
-#   - range only
-#   - EMA + momentum
-#   - EMA + range
-#   - momentum + range
-#   - EMA + momentum + range
-#
-# Structural area retained:
-#   bearish engulfing
-#   body ratio >= 1.55 / 1.60
-#   structure = 75 / 80 / 85
+# Current best robust region:
+#   body >= 1.55
+#   structure ~85
 #   distance <= 0.10 ATR
-#   previous completed daily close < EMA300 / EMA325
-#   RR = 3.25 / 3.50
+#   previous completed daily close < EMA300
+#   24h upward momentum >= 0.75 ATR
+#   signal range >= 1.20 ATR
+#   RR = 3.25
 #
-# Feature refinement:
-#   Fast EMA alignment: EMA50 / 75 / 100 below slow EMA
-#   24H momentum: >= 0.50 / 0.75 / 1.00 ATR
-#   Range: >= 1.00 / 1.10 / 1.20 ATR
+# This run refines only the neighbourhood around that winner:
+#
+#   Body:
+#     1.50 / 1.55 / 1.60
+#
+#   Structure:
+#     80 / 85 / 90
+#
+#   Distance:
+#     0.075 / 0.100 / 0.125 ATR
+#
+#   Slow daily EMA:
+#     275 / 300 / 325
+#
+#   24h upward momentum:
+#     0.60 / 0.70 / 0.75 / 0.80 / 0.90 ATR
+#
+#   Minimum signal range:
+#     1.10 / 1.15 / 1.20 / 1.25 / 1.30 ATR
+#
+#   RR:
+#     3.00 / 3.25 / 3.50
+#
+# Total combinations = 6,075
 #
 # NO timing / weekday optimisation.
 #
@@ -101,62 +108,70 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 220
 DAILY_WARMUP_DAYS = 3000
 
-OUTPUT_FILE = "usdcad_short_feature_combinations.csv"
+OUTPUT_FILE = "usdcad_short_winner_neighbourhood.csv"
 
 
 # ============================================================
-# STRUCTURAL BASELINES
+# NEIGHBOURHOOD GRID
 # ============================================================
 
 BODY_RATIOS = [
+    1.50,
     1.55,
     1.60,
 ]
 
 STRUCTURE_LOOKBACKS = [
-    75,
     80,
     85,
+    90,
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
-    0.10,
+    0.075,
+    0.100,
+    0.125,
 ]
 
 SLOW_EMAS = [
+    275,
     300,
     325,
-]
-
-REWARD_RISKS = [
-    3.25,
-    3.50,
-]
-
-
-# ============================================================
-# SURVIVING FEATURE VALUES
-# ============================================================
-
-FAST_EMAS = [
-    50,
-    75,
-    100,
 ]
 
 MOMENTUM_LOOKBACK = 24
 
 MIN_UP_MOMENTUM_ATR = [
-    0.50,
+    0.60,
+    0.70,
     0.75,
-    1.00,
+    0.80,
+    0.90,
 ]
 
 MIN_RANGE_ATR_VALUES = [
-    1.00,
     1.10,
+    1.15,
     1.20,
+    1.25,
+    1.30,
 ]
+
+REWARD_RISKS = [
+    3.00,
+    3.25,
+    3.50,
+]
+
+TOTAL_COMBINATIONS = (
+    len(BODY_RATIOS)
+    * len(STRUCTURE_LOOKBACKS)
+    * len(MAX_DISTANCE_ATR_VALUES)
+    * len(SLOW_EMAS)
+    * len(MIN_UP_MOMENTUM_ATR)
+    * len(MIN_RANGE_ATR_VALUES)
+    * len(REWARD_RISKS)
+)
 
 
 # ============================================================
@@ -194,11 +209,12 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDCAD Short Controlled Feature Combination Test",
+    "service": "USDCAD Short Winner Neighbourhood Stability",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "completed_tests": 0,
+    "total_combinations": TOTAL_COMBINATIONS,
+    "completed_combinations": 0,
     "rows_saved": 0,
     "output_file": None,
 }
@@ -447,19 +463,12 @@ def build_daily_state(daily):
         for candle in daily
     ]
 
-    ema_lengths = sorted(
-        set(
-            SLOW_EMAS
-            + FAST_EMAS
-        )
-    )
-
     return {
         length: ema_series(
             closes,
             length,
         )
-        for length in ema_lengths
+        for length in SLOW_EMAS
     }
 
 
@@ -495,8 +504,7 @@ def build_h1_daily_lookup(
                 daily_ema_map[
                     length
                 ][daily_index]
-                for length
-                in daily_ema_map
+                for length in SLOW_EMAS
             },
         }
 
@@ -611,7 +619,9 @@ def build_candidates(
             "structure_distances": (
                 structure_distances
             ),
-            "range_atr": range_atr,
+            "range_atr": (
+                range_atr
+            ),
             "up_momentum_24": (
                 up_momentum_24
             ),
@@ -622,103 +632,64 @@ def build_candidates(
 
 
 # ============================================================
-# FILTERS
+# FILTER
 # ============================================================
 
-def baseline_allowed(
+def candidate_allowed(
     candidate,
-    baseline,
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    slow_ema,
+    momentum_threshold,
+    range_threshold,
 ):
     if (
         candidate["body_ratio"]
-        < baseline["body_ratio"]
+        < body_ratio
     ):
         return False
 
     if (
         candidate[
             "structure_distances"
-        ][
-            baseline[
-                "structure_lookback"
-            ]
-        ]
-        > baseline[
-            "max_distance_atr"
-        ]
+        ][structure_lookback]
+        > max_distance_atr
     ):
         return False
 
     slow = candidate[
         "daily"
     ]["emas"].get(
-        baseline[
-            "slow_ema"
-        ]
+        slow_ema
     )
 
     if slow is None:
         return False
 
-    return (
+    if not (
         candidate[
             "daily"
         ]["close"]
         < slow
-    )
+    ):
+        return False
 
+    if (
+        candidate[
+            "up_momentum_24"
+        ]
+        < momentum_threshold
+    ):
+        return False
 
-def combination_allowed(
-    candidate,
-    baseline,
-    use_alignment,
-    fast_ema,
-    use_momentum,
-    momentum_threshold,
-    use_range,
-    range_threshold,
-):
-    if use_alignment:
-        fast = candidate[
-            "daily"
-        ]["emas"].get(
-            fast_ema
-        )
-
-        slow = candidate[
-            "daily"
-        ]["emas"].get(
-            baseline[
-                "slow_ema"
-            ]
-        )
-
-        if (
-            fast is None
-            or slow is None
-            or not (
-                fast < slow
-            )
-        ):
-            return False
-
-    if use_momentum:
-        if (
-            candidate[
-                "up_momentum_24"
-            ]
-            < momentum_threshold
-        ):
-            return False
-
-    if use_range:
-        if (
-            candidate[
-                "range_atr"
-            ]
-            < range_threshold
-        ):
-            return False
+    if (
+        candidate[
+            "range_atr"
+        ]
+        < range_threshold
+    ):
+        return False
 
     return True
 
@@ -981,15 +952,15 @@ def stats_for_trades(
     ]
 
     winners = [
-        value
-        for value in results
-        if value > 0
+        result
+        for result in results
+        if result > 0
     ]
 
     losers = [
-        value
-        for value in results
-        if value < 0
+        result
+        for result in results
+        if result < 0
     ]
 
     gross_profit = sum(
@@ -1009,8 +980,10 @@ def stats_for_trades(
             gross_profit
             / gross_loss
         )
+
     elif gross_profit > 0:
         profit_factor = 999.0
+
     else:
         profit_factor = 0.0
 
@@ -1080,11 +1053,13 @@ def stats_for_trades(
 # ============================================================
 
 def make_result_row(
-    baseline,
-    mode,
-    fast_ema,
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    slow_ema,
     momentum_threshold,
     range_threshold,
+    reward_risk,
     eligible,
     trades,
     ignored,
@@ -1096,44 +1071,27 @@ def make_result_row(
     )
 
     row = {
-        "body_ratio": (
-            baseline[
-                "body_ratio"
-            ]
-        ),
+        "body_ratio": body_ratio,
         "structure_lookback": (
-            baseline[
-                "structure_lookback"
-            ]
+            structure_lookback
         ),
         "max_distance_atr": (
-            baseline[
-                "max_distance_atr"
-            ]
+            max_distance_atr
         ),
         "slow_daily_ema": (
-            baseline[
-                "slow_ema"
-            ]
+            slow_ema
         ),
-        "reward_risk": (
-            baseline[
-                "reward_risk"
-            ]
-        ),
-        "combination_mode": mode,
-        "fast_ema": fast_ema,
         "momentum_lookback_h": (
             MOMENTUM_LOOKBACK
-            if momentum_threshold
-            is not None
-            else None
         ),
         "min_up_momentum_atr": (
             momentum_threshold
         ),
         "min_range_atr": (
             range_threshold
+        ),
+        "reward_risk": (
+            reward_risk
         ),
         "raw_signals": len(
             eligible
@@ -1271,108 +1229,6 @@ def make_result_row(
 
 
 # ============================================================
-# COMBINATION DEFINITIONS
-# ============================================================
-
-def combination_tests():
-    tests = []
-
-    tests.append({
-        "mode": "BASELINE",
-        "use_alignment": False,
-        "fast_ema": None,
-        "use_momentum": False,
-        "momentum_threshold": None,
-        "use_range": False,
-        "range_threshold": None,
-    })
-
-    for fast_ema in FAST_EMAS:
-        tests.append({
-            "mode": "EMA_ONLY",
-            "use_alignment": True,
-            "fast_ema": fast_ema,
-            "use_momentum": False,
-            "momentum_threshold": None,
-            "use_range": False,
-            "range_threshold": None,
-        })
-
-    for momentum_threshold in MIN_UP_MOMENTUM_ATR:
-        tests.append({
-            "mode": "MOMENTUM_ONLY",
-            "use_alignment": False,
-            "fast_ema": None,
-            "use_momentum": True,
-            "momentum_threshold": momentum_threshold,
-            "use_range": False,
-            "range_threshold": None,
-        })
-
-    for range_threshold in MIN_RANGE_ATR_VALUES:
-        tests.append({
-            "mode": "RANGE_ONLY",
-            "use_alignment": False,
-            "fast_ema": None,
-            "use_momentum": False,
-            "momentum_threshold": None,
-            "use_range": True,
-            "range_threshold": range_threshold,
-        })
-
-    for fast_ema in FAST_EMAS:
-        for momentum_threshold in MIN_UP_MOMENTUM_ATR:
-            tests.append({
-                "mode": "EMA_PLUS_MOMENTUM",
-                "use_alignment": True,
-                "fast_ema": fast_ema,
-                "use_momentum": True,
-                "momentum_threshold": momentum_threshold,
-                "use_range": False,
-                "range_threshold": None,
-            })
-
-    for fast_ema in FAST_EMAS:
-        for range_threshold in MIN_RANGE_ATR_VALUES:
-            tests.append({
-                "mode": "EMA_PLUS_RANGE",
-                "use_alignment": True,
-                "fast_ema": fast_ema,
-                "use_momentum": False,
-                "momentum_threshold": None,
-                "use_range": True,
-                "range_threshold": range_threshold,
-            })
-
-    for momentum_threshold in MIN_UP_MOMENTUM_ATR:
-        for range_threshold in MIN_RANGE_ATR_VALUES:
-            tests.append({
-                "mode": "MOMENTUM_PLUS_RANGE",
-                "use_alignment": False,
-                "fast_ema": None,
-                "use_momentum": True,
-                "momentum_threshold": momentum_threshold,
-                "use_range": True,
-                "range_threshold": range_threshold,
-            })
-
-    for fast_ema in FAST_EMAS:
-        for momentum_threshold in MIN_UP_MOMENTUM_ATR:
-            for range_threshold in MIN_RANGE_ATR_VALUES:
-                tests.append({
-                    "mode": "EMA_PLUS_MOMENTUM_PLUS_RANGE",
-                    "use_alignment": True,
-                    "fast_ema": fast_ema,
-                    "use_momentum": True,
-                    "momentum_threshold": momentum_threshold,
-                    "use_range": True,
-                    "range_threshold": range_threshold,
-                })
-
-    return tests
-
-
-# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1383,9 +1239,13 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD SHORT - CONTROLLED FEATURE COMBINATIONS"
+            "USD/CAD SHORT - WINNER NEIGHBOURHOOD STABILITY"
         )
         print("=" * 76)
+        print(
+            "Total combinations:",
+            TOTAL_COMBINATIONS,
+        )
         print(
             "NO timing / weekday optimisation"
         )
@@ -1440,20 +1300,26 @@ def run_research():
             14,
         )
 
-        daily_ema_map = build_daily_state(
-            daily
+        daily_ema_map = (
+            build_daily_state(
+                daily
+            )
         )
 
-        daily_lookup = build_h1_daily_lookup(
-            h1,
-            daily,
-            daily_ema_map,
+        daily_lookup = (
+            build_h1_daily_lookup(
+                h1,
+                daily,
+                daily_ema_map,
+            )
         )
 
-        candidates = build_candidates(
-            h1,
-            h1_atr,
-            daily_lookup,
+        candidates = (
+            build_candidates(
+                h1,
+                h1_atr,
+                daily_lookup,
+            )
         )
 
         STATUS[
@@ -1472,151 +1338,89 @@ def run_research():
             * 60
         )
 
-        baselines = []
-
-        for (
-            body_ratio,
-            structure_lookback,
-            max_distance_atr,
-            slow_ema,
-            reward_risk,
-        ) in itertools.product(
-            BODY_RATIOS,
-            STRUCTURE_LOOKBACKS,
-            MAX_DISTANCE_ATR_VALUES,
-            SLOW_EMAS,
-            REWARD_RISKS,
-        ):
-            baselines.append({
-                "body_ratio": body_ratio,
-                "structure_lookback": (
-                    structure_lookback
-                ),
-                "max_distance_atr": (
-                    max_distance_atr
-                ),
-                "slow_ema": slow_ema,
-                "reward_risk": reward_risk,
-            })
-
-        tests = combination_tests()
-
-        total_tests = (
-            len(baselines)
-            * len(tests)
-        )
-
-        STATUS[
-            "total_tests"
-        ] = total_tests
-
-        STATUS[
-            "tests_per_baseline"
-        ] = len(
-            tests
-        )
-
         STATUS.update({
             "state": "running",
             "message": (
-                "Running controlled USD/CAD "
-                "feature combinations"
+                "Running USD/CAD winner neighbourhood sweep"
             ),
         })
 
         rows = []
-        test_number = 0
 
-        for baseline in baselines:
-            baseline_candidates = [
+        combinations = itertools.product(
+            BODY_RATIOS,
+            STRUCTURE_LOOKBACKS,
+            MAX_DISTANCE_ATR_VALUES,
+            SLOW_EMAS,
+            MIN_UP_MOMENTUM_ATR,
+            MIN_RANGE_ATR_VALUES,
+            REWARD_RISKS,
+        )
+
+        for number, (
+            body_ratio,
+            structure_lookback,
+            max_distance_atr,
+            slow_ema,
+            momentum_threshold,
+            range_threshold,
+            reward_risk,
+        ) in enumerate(
+            combinations,
+            start=1,
+        ):
+            eligible = [
                 candidate
                 for candidate in candidates
-                if baseline_allowed(
+                if candidate_allowed(
                     candidate,
-                    baseline,
+                    body_ratio,
+                    structure_lookback,
+                    max_distance_atr,
+                    slow_ema,
+                    momentum_threshold,
+                    range_threshold,
                 )
             ]
 
-            for test in tests:
-                eligible = [
-                    candidate
-                    for candidate in baseline_candidates
-                    if combination_allowed(
-                        candidate,
-                        baseline,
-                        test[
-                            "use_alignment"
-                        ],
-                        test[
-                            "fast_ema"
-                        ],
-                        test[
-                            "use_momentum"
-                        ],
-                        test[
-                            "momentum_threshold"
-                        ],
-                        test[
-                            "use_range"
-                        ],
-                        test[
-                            "range_threshold"
-                        ],
-                    )
-                ]
+            (
+                trades,
+                ignored,
+                still_open,
+            ) = simulate(
+                h1,
+                eligible,
+                reward_risk,
+            )
 
-                (
+            rows.append(
+                make_result_row(
+                    body_ratio,
+                    structure_lookback,
+                    max_distance_atr,
+                    slow_ema,
+                    momentum_threshold,
+                    range_threshold,
+                    reward_risk,
+                    eligible,
                     trades,
                     ignored,
                     still_open,
-                ) = simulate(
-                    h1,
-                    eligible,
-                    baseline[
-                        "reward_risk"
-                    ],
+                    years,
                 )
+            )
 
-                rows.append(
-                    make_result_row(
-                        baseline,
-                        test[
-                            "mode"
-                        ],
-                        test[
-                            "fast_ema"
-                        ],
-                        test[
-                            "momentum_threshold"
-                        ],
-                        test[
-                            "range_threshold"
-                        ],
-                        eligible,
-                        trades,
-                        ignored,
-                        still_open,
-                        years,
-                    )
+            STATUS[
+                "completed_combinations"
+            ] = number
+
+            if number % 250 == 0:
+                print(
+                    f"Progress: "
+                    f"{number}/"
+                    f"{TOTAL_COMBINATIONS}",
+                    flush=True,
                 )
-
-                test_number += 1
-
-                STATUS[
-                    "completed_tests"
-                ] = test_number
-
-                if (
-                    test_number
-                    % 250
-                    == 0
-                ):
-                    print(
-                        f"Progress: "
-                        f"{test_number}/"
-                        f"{total_tests}",
-                        flush=True,
-                    )
 
         df = pd.DataFrame(
             rows
@@ -1624,8 +1428,16 @@ def run_research():
 
         if df.empty:
             raise RuntimeError(
-                "No USD/CAD combination rows generated"
+                "No USD/CAD neighbourhood rows generated"
             )
+
+        df[
+            "adequate_40"
+        ] = (
+            df[
+                "trades"
+            ] >= 40
+        )
 
         df[
             "adequate_50"
@@ -1633,14 +1445,6 @@ def run_research():
             df[
                 "trades"
             ] >= 50
-        )
-
-        df[
-            "adequate_60"
-        ] = (
-            df[
-                "trades"
-            ] >= 60
         )
 
         df[
@@ -1693,6 +1497,7 @@ def run_research():
             by=[
                 "all_four_eras_profitable",
                 "adequate_50",
+                "worst_era_pf_130",
                 "worst_era_pf_120",
                 "profit_factor_150",
                 "minimum_era_pf_5_plus",
@@ -1701,6 +1506,7 @@ def run_research():
                 "trades_per_year",
             ],
             ascending=[
+                False,
                 False,
                 False,
                 False,
@@ -1720,11 +1526,11 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD controlled feature "
-                "combination test completed successfully"
+                "USD/CAD winner neighbourhood stability "
+                "test completed successfully"
             ),
-            "completed_tests": (
-                total_tests
+            "completed_combinations": (
+                TOTAL_COMBINATIONS
             ),
             "rows_saved": len(
                 df
@@ -1744,13 +1550,13 @@ def run_research():
                     ]
                 ).sum()
             ),
-            "all_four_and_worst_pf_120": int(
+            "all_four_and_worst_pf_130": int(
                 (
                     df[
                         "all_four_eras_profitable"
                     ]
                     & df[
-                        "worst_era_pf_120"
+                        "worst_era_pf_130"
                     ]
                 ).sum()
             ),
@@ -1762,7 +1568,7 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD FEATURE COMBINATIONS COMPLETE"
+            "USD/CAD WINNER NEIGHBOURHOOD COMPLETE"
         )
         print("=" * 76)
         print(
@@ -1786,6 +1592,19 @@ def run_research():
                     ]
                     & df[
                         "profit_factor_150"
+                    ]
+                ).sum()
+            ),
+        )
+        print(
+            "All-four + worst-era PF >= 1.30:",
+            int(
+                (
+                    df[
+                        "all_four_eras_profitable"
+                    ]
+                    & df[
+                        "worst_era_pf_130"
                     ]
                 ).sum()
             ),
@@ -1815,11 +1634,9 @@ def run_research():
 
 @app.route("/")
 def home():
-    tests = combination_tests()
-
     return jsonify({
         "service": (
-            "USDCAD Short Controlled Feature Combination Test"
+            "USDCAD Short Winner Neighbourhood Stability"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1827,7 +1644,7 @@ def home():
         "timing_filters": (
             "NONE - all hours and weekdays"
         ),
-        "structural_baselines": {
+        "grid": {
             "body_ratios": (
                 BODY_RATIOS
             ),
@@ -1840,14 +1657,6 @@ def home():
             "slow_emas": (
                 SLOW_EMAS
             ),
-            "reward_risks": (
-                REWARD_RISKS
-            ),
-        },
-        "feature_values": {
-            "fast_emas": (
-                FAST_EMAS
-            ),
             "momentum_lookback_h": (
                 MOMENTUM_LOOKBACK
             ),
@@ -1857,20 +1666,13 @@ def home():
             "min_range_atr": (
                 MIN_RANGE_ATR_VALUES
             ),
+            "reward_risks": (
+                REWARD_RISKS
+            ),
+            "total_combinations": (
+                TOTAL_COMBINATIONS
+            ),
         },
-        "combination_modes": sorted(
-            list(
-                set(
-                    test[
-                        "mode"
-                    ]
-                    for test in tests
-                )
-            )
-        ),
-        "tests_per_baseline": (
-            len(tests)
-        ),
         "download": (
             "/download"
         ),
@@ -1895,7 +1697,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "USD/CAD feature-combination CSV "
+                "USD/CAD neighbourhood CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1915,7 +1717,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdcad-short-controlled-feature-combinations"
+            "usdcad-short-winner-neighbourhood"
         ),
         daemon=True,
     )
