@@ -10,25 +10,38 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/CAD SHORT - TIGHT EDGE REFINEMENT
+# USD/CAD SHORT - FEATURE DISCOVERY
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
 # Purpose:
-#   Check whether the narrow robust area from the broad sweep
-#   hides a stronger plateau between the coarse grid points
-#   before moving to feature substitution.
+#   Starting from the tight structural region that survived the
+#   edge-refinement pass, test additional filters one family at
+#   a time to see whether USD/CAD short has a genuinely stronger
+#   and more robust edge.
 #
-# Grid:
-#   Body:       1.40 / 1.45 / 1.50 / 1.55 / 1.60
-#   Structure:  45 / 50 / 55 / 60 / 65 / 70 / 75 / 80 / 85
-#   Distance:   .050 / .075 / .100 / .125 / .150 ATR
-#   Daily EMA:  250 / 275 / 300 / 325 / 350
-#   RR:         3.00 / 3.25 / 3.50 / 3.75 / 4.00
+# Baseline structural region:
+#   bearish engulfing
+#   body ratio >= 1.55 or 1.60
+#   structure lookback = 75 / 80 / 85
+#   distance from prior high <= 0.10 ATR
+#   previous completed daily close < slow EMA
+#   slow EMA = 300 / 325
+#   RR = 3.25 / 3.50
 #
-# Total combinations = 5,625
+# Feature families tested independently:
+#   1) strong bearish close
+#   2) upper-wick rejection
+#   3) minimum signal range / ATR
+#   4) daily fast/slow EMA alignment
+#   5) daily slow-EMA slope / ATR
+#   6) daily ATR regime vs 50-day ATR average
+#   7) prior upward momentum over N H1 bars
 #
-# NO timing / weekday optimisation.
+# One feature family is activated at a time.
+# This avoids blindly stacking filters and overfitting.
+#
+# NO timing / weekday optimisation in this run.
 #
 # Exact backtest conventions:
 #   OANDA midpoint H1
@@ -81,67 +94,127 @@ RESEARCH_TO = (
     )
 )
 
-H1_WARMUP_DAYS = 200
-DAILY_WARMUP_DAYS = 2600
+H1_WARMUP_DAYS = 220
+DAILY_WARMUP_DAYS = 3000
 
-OUTPUT_FILE = "usdcad_short_tight_edge_refinement.csv"
+OUTPUT_FILE = "usdcad_short_feature_discovery.csv"
 
 
 # ============================================================
-# TIGHT GRID
+# STRUCTURAL BASELINES
 # ============================================================
 
 BODY_RATIOS = [
-    1.40,
-    1.45,
-    1.50,
     1.55,
     1.60,
 ]
 
 STRUCTURE_LOOKBACKS = [
-    45,
-    50,
-    55,
-    60,
-    65,
-    70,
     75,
     80,
     85,
 ]
 
 MAX_DISTANCE_ATR_VALUES = [
-    0.050,
-    0.075,
-    0.100,
-    0.125,
-    0.150,
+    0.10,
 ]
 
 SLOW_EMAS = [
-    250,
-    275,
     300,
     325,
-    350,
 ]
 
 REWARD_RISKS = [
-    3.00,
     3.25,
     3.50,
-    3.75,
-    4.00,
 ]
 
-TOTAL_COMBINATIONS = (
-    len(BODY_RATIOS)
-    * len(STRUCTURE_LOOKBACKS)
-    * len(MAX_DISTANCE_ATR_VALUES)
-    * len(SLOW_EMAS)
-    * len(REWARD_RISKS)
-)
+
+# ============================================================
+# FEATURE FAMILIES
+# ============================================================
+
+# Strong bearish close:
+# close location inside candle range, where 0 = low and 1 = high.
+# Short prefers close near low.
+STRONG_CLOSE_THRESHOLDS = [
+    0.20,
+    0.25,
+    0.30,
+    0.35,
+]
+
+# Upper wick / body
+UPPER_WICK_MIN_RATIOS = [
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+]
+
+# Signal range / ATR14
+MIN_RANGE_ATR_VALUES = [
+    0.80,
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+]
+
+# Fast EMA must be below slow EMA
+FAST_EMAS = [
+    20,
+    30,
+    40,
+    50,
+    75,
+    100,
+    150,
+    200,
+]
+
+# Slow EMA slope:
+# (EMA today - EMA N days ago) / daily ATR14
+SLOPE_LOOKBACK_DAYS = [
+    3,
+    5,
+    10,
+]
+
+MAX_SLOW_EMA_SLOPES = [
+    -0.02,
+    -0.05,
+    -0.08,
+    -0.10,
+    -0.15,
+]
+
+# Daily ATR14 / 50-day average of ATR14
+MIN_DAILY_ATR_RATIOS = [
+    0.70,
+    0.80,
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+]
+
+# Prior H1 upward momentum:
+# signal close must be above close N bars ago by at least X ATR.
+MOMENTUM_LOOKBACKS = [
+    3,
+    6,
+    12,
+    24,
+]
+
+MIN_UP_MOMENTUM_ATR = [
+    0.25,
+    0.50,
+    0.75,
+    1.00,
+]
 
 
 # ============================================================
@@ -179,12 +252,11 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDCAD Short Tight Edge Refinement",
+    "service": "USDCAD Short Feature Discovery",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "total_combinations": TOTAL_COMBINATIONS,
-    "completed_combinations": 0,
+    "completed_tests": 0,
     "rows_saved": 0,
     "output_file": None,
 }
@@ -235,7 +307,6 @@ def parse_candle(raw):
         return None
 
     mid = raw.get("mid")
-
     if not mid:
         return None
 
@@ -276,7 +347,6 @@ def fetch_range(
 
     for raw in data.get("candles", []):
         candle = parse_candle(raw)
-
         if candle is not None:
             candles.append(candle)
 
@@ -339,28 +409,15 @@ def ema_series(values, length):
     if len(values) < length:
         return result
 
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
+    initial = sum(values[:length]) / length
     result[length - 1] = initial
 
-    multiplier = (
-        2.0 / (length + 1.0)
-    )
-
+    multiplier = 2.0 / (length + 1.0)
     previous = initial
 
-    for index in range(
-        length,
-        len(values),
-    ):
+    for index in range(length, len(values)):
         current = (
-            (
-                values[index]
-                - previous
-            )
+            (values[index] - previous)
             * multiplier
             + previous
         )
@@ -376,26 +433,14 @@ def true_ranges(candles):
 
     for index, candle in enumerate(candles):
         if index == 0:
-            tr = (
-                candle["high"]
-                - candle["low"]
-            )
-
+            tr = candle["high"] - candle["low"]
         else:
-            previous_close = (
-                candles[index - 1]["close"]
-            )
+            previous_close = candles[index - 1]["close"]
 
             tr = max(
                 candle["high"] - candle["low"],
-                abs(
-                    candle["high"]
-                    - previous_close
-                ),
-                abs(
-                    candle["low"]
-                    - previous_close
-                ),
+                abs(candle["high"] - previous_close),
+                abs(candle["low"] - previous_close),
             )
 
         result.append(tr)
@@ -409,23 +454,13 @@ def rma_series(values, length):
     if len(values) < length:
         return result
 
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
+    initial = sum(values[:length]) / length
     result[length - 1] = initial
     previous = initial
 
-    for index in range(
-        length,
-        len(values),
-    ):
+    for index in range(length, len(values)):
         current = (
-            (
-                previous
-                * (length - 1)
-            )
+            previous * (length - 1)
             + values[index]
         ) / length
 
@@ -442,15 +477,29 @@ def atr_series(candles, length=14):
     )
 
 
+def sma_series(values, length):
+    result = [None] * len(values)
+
+    if len(values) < length:
+        return result
+
+    rolling = sum(values[:length])
+    result[length - 1] = rolling / length
+
+    for index in range(length, len(values)):
+        rolling += values[index]
+        rolling -= values[index - length]
+        result[index] = rolling / length
+
+    return result
+
+
 # ============================================================
-# DAILY ALIGNMENT
+# DAILY ALIGNMENT / DAILY FEATURES
 # ============================================================
 
 def current_daily_start(timestamp_utc):
-    ny_time = (
-        timestamp_utc
-        .astimezone(NY_TZ)
-    )
+    ny_time = timestamp_utc.astimezone(NY_TZ)
 
     candidate = ny_time.replace(
         hour=DAILY_ALIGNMENT_HOUR,
@@ -462,9 +511,7 @@ def current_daily_start(timestamp_utc):
     if ny_time < candidate:
         candidate -= timedelta(days=1)
 
-    return candidate.astimezone(
-        timezone.utc
-    )
+    return candidate.astimezone(timezone.utc)
 
 
 def build_daily_state(daily):
@@ -473,20 +520,45 @@ def build_daily_state(daily):
         for candle in daily
     ]
 
-    return {
+    daily_atr = atr_series(
+        daily,
+        14,
+    )
+
+    daily_atr_avg_50 = sma_series(
+        [
+            value if value is not None else 0.0
+            for value in daily_atr
+        ],
+        50,
+    )
+
+    ema_lengths = sorted(
+        set(
+            SLOW_EMAS
+            + FAST_EMAS
+        )
+    )
+
+    ema_map = {
         length: ema_series(
             closes,
             length,
         )
-        for length
-        in SLOW_EMAS
+        for length in ema_lengths
+    }
+
+    return {
+        "emas": ema_map,
+        "atr14": daily_atr,
+        "atr14_avg50": daily_atr_avg_50,
     }
 
 
 def build_h1_daily_lookup(
     h1,
     daily,
-    daily_ema_map,
+    daily_state,
 ):
     lookup = [None] * len(h1)
     daily_index = -1
@@ -506,25 +578,30 @@ def build_h1_daily_lookup(
         if daily_index < 0:
             continue
 
-        lookup[h1_index] = {
-            "close": daily[
-                daily_index
-            ]["close"],
+        item = {
+            "daily_index": daily_index,
+            "close": daily[daily_index]["close"],
+            "atr14": daily_state[
+                "atr14"
+            ][daily_index],
+            "atr14_avg50": daily_state[
+                "atr14_avg50"
+            ][daily_index],
             "emas": {
                 length:
-                daily_ema_map[
-                    length
-                ][daily_index]
-                for length
-                in SLOW_EMAS
+                daily_state["emas"][length][daily_index]
+                for length in daily_state["emas"]
             },
+            "ema_series": daily_state["emas"],
         }
+
+        lookup[h1_index] = item
 
     return lookup
 
 
 # ============================================================
-# SIGNAL FEATURE MATRIX
+# SIGNAL MATRIX
 # ============================================================
 
 def build_candidates(
@@ -535,7 +612,8 @@ def build_candidates(
     candidates = []
 
     max_lookback = max(
-        STRUCTURE_LOOKBACKS
+        max(STRUCTURE_LOOKBACKS),
+        max(MOMENTUM_LOOKBACKS),
     )
 
     for index in range(
@@ -571,21 +649,23 @@ def build_candidates(
             - signal["open"]
         )
 
+        candle_range = (
+            signal["high"]
+            - signal["low"]
+        )
+
         if (
             previous_body <= 0
             or current_body <= 0
+            or candle_range <= 0
         ):
             continue
 
         bearish_engulfing = (
-            previous["close"]
-            > previous["open"]
-            and signal["close"]
-            < signal["open"]
-            and signal["open"]
-            >= previous["close"]
-            and signal["close"]
-            <= previous["open"]
+            previous["close"] > previous["open"]
+            and signal["close"] < signal["open"]
+            and signal["open"] >= previous["close"]
+            and signal["close"] <= previous["open"]
         )
 
         if not bearish_engulfing:
@@ -608,16 +688,56 @@ def build_candidates(
                 - signal["high"]
             ) / atr
 
+        close_location = (
+            signal["close"]
+            - signal["low"]
+        ) / candle_range
+
+        upper_wick = (
+            signal["high"]
+            - max(
+                signal["open"],
+                signal["close"],
+            )
+        )
+
+        upper_wick_ratio = (
+            upper_wick
+            / current_body
+        )
+
+        range_atr = (
+            candle_range
+            / atr
+        )
+
+        momentum = {}
+
+        for lookback in MOMENTUM_LOOKBACKS:
+            momentum[
+                lookback
+            ] = (
+                signal["close"]
+                - h1[
+                    index - lookback
+                ]["close"]
+            ) / atr
+
         candidates.append({
             "index": index,
             "time": signal["time"],
             "body_ratio": (
-                current_body
-                / previous_body
+                current_body / previous_body
             ),
             "structure_distances": (
                 structure_distances
             ),
+            "close_location": close_location,
+            "upper_wick_ratio": (
+                upper_wick_ratio
+            ),
+            "range_atr": range_atr,
+            "momentum": momentum,
             "daily": daily,
         })
 
@@ -625,20 +745,17 @@ def build_candidates(
 
 
 # ============================================================
-# FILTER
+# BASELINE FILTER
 # ============================================================
 
-def candidate_allowed(
+def baseline_allowed(
     candidate,
     body_ratio,
     structure_lookback,
     max_distance_atr,
     slow_ema,
 ):
-    if (
-        candidate["body_ratio"]
-        < body_ratio
-    ):
+    if candidate["body_ratio"] < body_ratio:
         return False
 
     if (
@@ -651,22 +768,166 @@ def candidate_allowed(
 
     daily = candidate["daily"]
 
-    ema = daily[
+    slow = daily[
         "emas"
     ].get(
         slow_ema
     )
 
-    if ema is None:
+    if slow is None:
         return False
 
     if not (
-        daily["close"]
-        < ema
+        daily["close"] < slow
     ):
         return False
 
     return True
+
+
+# ============================================================
+# FEATURE FILTER
+# ============================================================
+
+def feature_allowed(
+    candidate,
+    feature_family,
+    feature_value,
+    slow_ema,
+):
+    daily = candidate["daily"]
+
+    if feature_family == "BASELINE":
+        return True
+
+    if feature_family == "STRONG_CLOSE":
+        return (
+            candidate["close_location"]
+            <= feature_value
+        )
+
+    if feature_family == "UPPER_WICK":
+        return (
+            candidate["upper_wick_ratio"]
+            >= feature_value
+        )
+
+    if feature_family == "MIN_RANGE_ATR":
+        return (
+            candidate["range_atr"]
+            >= feature_value
+        )
+
+    if feature_family == "FAST_EMA_ALIGNMENT":
+        fast_ema = int(feature_value)
+
+        fast = daily[
+            "emas"
+        ].get(
+            fast_ema
+        )
+
+        slow = daily[
+            "emas"
+        ].get(
+            slow_ema
+        )
+
+        if (
+            fast is None
+            or slow is None
+        ):
+            return False
+
+        return fast < slow
+
+    if feature_family == "SLOW_EMA_SLOPE":
+        slope_days, max_slope = feature_value
+
+        daily_index = daily[
+            "daily_index"
+        ]
+
+        prior_index = (
+            daily_index
+            - slope_days
+        )
+
+        if prior_index < 0:
+            return False
+
+        ema_series_values = daily[
+            "ema_series"
+        ][slow_ema]
+
+        current_ema = (
+            ema_series_values[
+                daily_index
+            ]
+        )
+
+        prior_ema = (
+            ema_series_values[
+                prior_index
+            ]
+        )
+
+        daily_atr = daily[
+            "atr14"
+        ]
+
+        if (
+            current_ema is None
+            or prior_ema is None
+            or daily_atr is None
+            or daily_atr <= 0
+        ):
+            return False
+
+        slope = (
+            current_ema
+            - prior_ema
+        ) / daily_atr
+
+        return slope <= max_slope
+
+    if feature_family == "DAILY_ATR_REGIME":
+        minimum_ratio = feature_value
+
+        atr = daily[
+            "atr14"
+        ]
+
+        avg = daily[
+            "atr14_avg50"
+        ]
+
+        if (
+            atr is None
+            or avg is None
+            or avg <= 0
+        ):
+            return False
+
+        return (
+            atr / avg
+            >= minimum_ratio
+        )
+
+    if feature_family == "UP_MOMENTUM":
+        lookback, minimum_atr = feature_value
+
+        return (
+            candidate[
+                "momentum"
+            ][lookback]
+            >= minimum_atr
+        )
+
+    raise RuntimeError(
+        f"Unknown feature family: "
+        f"{feature_family}"
+    )
 
 
 # ============================================================
@@ -691,7 +952,9 @@ def calculate_trade_exit(
             cache_key
         ]
 
-    signal = h1[signal_index]
+    signal = h1[
+        signal_index
+    ]
 
     reference_entry = (
         signal["close"]
@@ -858,7 +1121,9 @@ def simulate(
             still_open = True
             break
 
-        trades.append(trade)
+        trades.append(
+            trade
+        )
 
         position_exit_index = (
             trade["exit_index"]
@@ -899,7 +1164,9 @@ def stats_for_trades(
         ):
             continue
 
-        filtered.append(trade)
+        filtered.append(
+            trade
+        )
 
     if not filtered:
         return {
@@ -931,9 +1198,17 @@ def stats_for_trades(
         if result < 0
     ]
 
-    gross_profit = sum(winners)
-    gross_loss = abs(sum(losers))
-    total_r = sum(results)
+    gross_profit = sum(
+        winners
+    )
+
+    gross_loss = abs(
+        sum(losers)
+    )
+
+    total_r = sum(
+        results
+    )
 
     if gross_loss > 0:
         profit_factor = (
@@ -968,10 +1243,12 @@ def stats_for_trades(
 
         if result < 0:
             current_streak += 1
+
             longest_streak = max(
                 longest_streak,
                 current_streak,
             )
+
         else:
             current_streak = 0
 
@@ -1013,11 +1290,10 @@ def stats_for_trades(
 # ============================================================
 
 def make_result_row(
-    body_ratio,
-    structure_lookback,
-    max_distance_atr,
-    slow_ema,
-    reward_risk,
+    baseline,
+    feature_family,
+    feature_label,
+    feature_value_serialized,
     eligible,
     trades,
     ignored,
@@ -1029,15 +1305,40 @@ def make_result_row(
     )
 
     row = {
-        "body_ratio": body_ratio,
+        "body_ratio": (
+            baseline[
+                "body_ratio"
+            ]
+        ),
         "structure_lookback": (
-            structure_lookback
+            baseline[
+                "structure_lookback"
+            ]
         ),
         "max_distance_atr": (
-            max_distance_atr
+            baseline[
+                "max_distance_atr"
+            ]
         ),
-        "slow_daily_ema": slow_ema,
-        "reward_risk": reward_risk,
+        "slow_daily_ema": (
+            baseline[
+                "slow_ema"
+            ]
+        ),
+        "reward_risk": (
+            baseline[
+                "reward_risk"
+            ]
+        ),
+        "feature_family": (
+            feature_family
+        ),
+        "feature_label": (
+            feature_label
+        ),
+        "feature_value": (
+            feature_value_serialized
+        ),
         "raw_signals": len(
             eligible
         ),
@@ -1047,38 +1348,41 @@ def make_result_row(
         "still_open_at_end": (
             still_open
         ),
-        "trades": full["trades"],
+        "trades": full[
+            "trades"
+        ],
         "trades_per_year": round(
             full["trades"]
             / years,
             2,
         ),
-        "winners": full["winners"],
-        "losers": full["losers"],
-        "win_rate": (
-            full["win_rate"]
-        ),
-        "profit_factor": (
-            full["profit_factor"]
-        ),
-        "total_r": (
-            full["total_r"]
-        ),
-        "expectancy_r": (
-            full["expectancy_r"]
-        ),
-        "max_drawdown_r": (
-            full["max_drawdown_r"]
-        ),
-        "longest_loss_streak": (
-            full[
-                "longest_loss_streak"
-            ]
-        ),
+        "winners": full[
+            "winners"
+        ],
+        "losers": full[
+            "losers"
+        ],
+        "win_rate": full[
+            "win_rate"
+        ],
+        "profit_factor": full[
+            "profit_factor"
+        ],
+        "total_r": full[
+            "total_r"
+        ],
+        "expectancy_r": full[
+            "expectancy_r"
+        ],
+        "max_drawdown_r": full[
+            "max_drawdown_r"
+        ],
+        "longest_loss_streak": full[
+            "longest_loss_streak"
+        ],
     }
 
     profitable_eras = 0
-    eras_with_5_plus = 0
     profitable_eras_with_5_plus = 0
     minimum_era_pf_5_plus = None
     minimum_era_expectancy_5_plus = None
@@ -1096,7 +1400,9 @@ def make_result_row(
 
         row[
             f"{era_name}_trades"
-        ] = era["trades"]
+        ] = era[
+            "trades"
+        ]
 
         row[
             f"{era_name}_pf"
@@ -1116,30 +1422,36 @@ def make_result_row(
             "expectancy_r"
         ]
 
-        if era["total_r"] > 0:
+        if era[
+            "total_r"
+        ] > 0:
             profitable_eras += 1
 
-        if era["trades"] >= 5:
-            eras_with_5_plus += 1
-
-            if era["total_r"] > 0:
+        if era[
+            "trades"
+        ] >= 5:
+            if era[
+                "total_r"
+            ] > 0:
                 profitable_eras_with_5_plus += 1
+
+            pf = era[
+                "profit_factor"
+            ]
+
+            expectancy = era[
+                "expectancy_r"
+            ]
 
             if (
                 minimum_era_pf_5_plus
                 is None
             ):
-                minimum_era_pf_5_plus = (
-                    era[
-                        "profit_factor"
-                    ]
-                )
+                minimum_era_pf_5_plus = pf
             else:
                 minimum_era_pf_5_plus = min(
                     minimum_era_pf_5_plus,
-                    era[
-                        "profit_factor"
-                    ],
+                    pf,
                 )
 
             if (
@@ -1147,25 +1459,17 @@ def make_result_row(
                 is None
             ):
                 minimum_era_expectancy_5_plus = (
-                    era[
-                        "expectancy_r"
-                    ]
+                    expectancy
                 )
             else:
                 minimum_era_expectancy_5_plus = min(
                     minimum_era_expectancy_5_plus,
-                    era[
-                        "expectancy_r"
-                    ],
+                    expectancy,
                 )
 
     row[
         "profitable_eras"
     ] = profitable_eras
-
-    row[
-        "eras_with_5_plus_trades"
-    ] = eras_with_5_plus
 
     row[
         "profitable_eras_with_5_plus_trades"
@@ -1183,6 +1487,116 @@ def make_result_row(
 
 
 # ============================================================
+# TEST DEFINITIONS
+# ============================================================
+
+def feature_tests():
+    tests = [
+        (
+            "BASELINE",
+            "baseline",
+            None,
+            "none",
+        ),
+    ]
+
+    for value in STRONG_CLOSE_THRESHOLDS:
+        tests.append(
+            (
+                "STRONG_CLOSE",
+                f"close_location_le_{value:.3f}",
+                value,
+                f"{value:.3f}",
+            )
+        )
+
+    for value in UPPER_WICK_MIN_RATIOS:
+        tests.append(
+            (
+                "UPPER_WICK",
+                f"upper_wick_body_ge_{value:.2f}",
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    for value in MIN_RANGE_ATR_VALUES:
+        tests.append(
+            (
+                "MIN_RANGE_ATR",
+                f"range_atr_ge_{value:.2f}",
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    for fast_ema in FAST_EMAS:
+        tests.append(
+            (
+                "FAST_EMA_ALIGNMENT",
+                f"ema{fast_ema}_below_slow",
+                fast_ema,
+                str(fast_ema),
+            )
+        )
+
+    for lookback in SLOPE_LOOKBACK_DAYS:
+        for threshold in MAX_SLOW_EMA_SLOPES:
+            tests.append(
+                (
+                    "SLOW_EMA_SLOPE",
+                    (
+                        f"slow_ema_{lookback}d_slope_"
+                        f"le_{threshold:.2f}_atr"
+                    ),
+                    (
+                        lookback,
+                        threshold,
+                    ),
+                    (
+                        f"{lookback},"
+                        f"{threshold:.2f}"
+                    ),
+                )
+            )
+
+    for value in MIN_DAILY_ATR_RATIOS:
+        tests.append(
+            (
+                "DAILY_ATR_REGIME",
+                (
+                    f"daily_atr14_ge_"
+                    f"{value:.2f}x_atr50avg"
+                ),
+                value,
+                f"{value:.2f}",
+            )
+        )
+
+    for lookback in MOMENTUM_LOOKBACKS:
+        for minimum_atr in MIN_UP_MOMENTUM_ATR:
+            tests.append(
+                (
+                    "UP_MOMENTUM",
+                    (
+                        f"up_momentum_{lookback}h_"
+                        f"ge_{minimum_atr:.2f}_atr"
+                    ),
+                    (
+                        lookback,
+                        minimum_atr,
+                    ),
+                    (
+                        f"{lookback},"
+                        f"{minimum_atr:.2f}"
+                    ),
+                )
+            )
+
+    return tests
+
+
+# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1193,15 +1607,14 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "USD/CAD SHORT - TIGHT EDGE REFINEMENT"
+            "USD/CAD SHORT - FEATURE DISCOVERY"
         )
         print("=" * 76)
         print(
-            "Total combinations:",
-            TOTAL_COMBINATIONS,
+            "One feature family at a time"
         )
         print(
-            "NO TIMING / WEEKDAY FILTERS"
+            "NO timing / weekday filters"
         )
         print()
 
@@ -1245,7 +1658,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building indicators and signal matrix"
+                "Building USD/CAD feature matrix"
             ),
         })
 
@@ -1254,7 +1667,7 @@ def run_research():
             14,
         )
 
-        daily_ema_map = (
+        daily_state = (
             build_daily_state(
                 daily
             )
@@ -1264,7 +1677,7 @@ def run_research():
             build_h1_daily_lookup(
                 h1,
                 daily,
-                daily_ema_map,
+                daily_state,
             )
         )
 
@@ -1292,81 +1705,138 @@ def run_research():
             * 60
         )
 
-        STATUS.update({
-            "state": "running",
-            "message": (
-                "Running USD/CAD tight edge sweep"
-            ),
-        })
+        baselines = []
 
-        rows = []
-
-        combinations = itertools.product(
-            BODY_RATIOS,
-            STRUCTURE_LOOKBACKS,
-            MAX_DISTANCE_ATR_VALUES,
-            SLOW_EMAS,
-            REWARD_RISKS,
-        )
-
-        for number, (
+        for (
             body_ratio,
             structure_lookback,
             max_distance_atr,
             slow_ema,
             reward_risk,
-        ) in enumerate(
-            combinations,
-            start=1,
+        ) in itertools.product(
+            BODY_RATIOS,
+            STRUCTURE_LOOKBACKS,
+            MAX_DISTANCE_ATR_VALUES,
+            SLOW_EMAS,
+            REWARD_RISKS,
         ):
-            eligible = [
+            baselines.append({
+                "body_ratio": body_ratio,
+                "structure_lookback": (
+                    structure_lookback
+                ),
+                "max_distance_atr": (
+                    max_distance_atr
+                ),
+                "slow_ema": slow_ema,
+                "reward_risk": reward_risk,
+            })
+
+        tests = feature_tests()
+
+        total_tests = (
+            len(baselines)
+            * len(tests)
+        )
+
+        STATUS[
+            "total_tests"
+        ] = total_tests
+
+        STATUS.update({
+            "state": "running",
+            "message": (
+                "Running USD/CAD feature discovery"
+            ),
+        })
+
+        rows = []
+        test_number = 0
+
+        for baseline in baselines:
+            baseline_candidates = [
                 candidate
                 for candidate in candidates
-                if candidate_allowed(
+                if baseline_allowed(
                     candidate,
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    slow_ema,
+                    baseline[
+                        "body_ratio"
+                    ],
+                    baseline[
+                        "structure_lookback"
+                    ],
+                    baseline[
+                        "max_distance_atr"
+                    ],
+                    baseline[
+                        "slow_ema"
+                    ],
                 )
             ]
 
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
-                h1,
-                eligible,
-                reward_risk,
-            )
+            for (
+                feature_family,
+                feature_label,
+                feature_value,
+                feature_value_serialized,
+            ) in tests:
+                eligible = [
+                    candidate
+                    for candidate
+                    in baseline_candidates
+                    if feature_allowed(
+                        candidate,
+                        feature_family,
+                        feature_value,
+                        baseline[
+                            "slow_ema"
+                        ],
+                    )
+                ]
 
-            rows.append(
-                make_result_row(
-                    body_ratio,
-                    structure_lookback,
-                    max_distance_atr,
-                    slow_ema,
-                    reward_risk,
-                    eligible,
+                (
                     trades,
                     ignored,
                     still_open,
-                    years,
+                ) = simulate(
+                    h1,
+                    eligible,
+                    baseline[
+                        "reward_risk"
+                    ],
                 )
-            )
 
-            STATUS[
-                "completed_combinations"
-            ] = number
-
-            if number % 250 == 0:
-                print(
-                    f"Progress: "
-                    f"{number}/"
-                    f"{TOTAL_COMBINATIONS}",
-                    flush=True,
+                rows.append(
+                    make_result_row(
+                        baseline,
+                        feature_family,
+                        feature_label,
+                        feature_value_serialized,
+                        eligible,
+                        trades,
+                        ignored,
+                        still_open,
+                        years,
+                    )
                 )
+
+                test_number += 1
+
+                STATUS[
+                    "completed_tests"
+                ] = test_number
+
+                if (
+                    test_number
+                    % 250
+                    == 0
+                ):
+                    print(
+                        f"Progress: "
+                        f"{test_number}/"
+                        f"{total_tests}",
+                        flush=True,
+                    )
 
         df = pd.DataFrame(
             rows
@@ -1374,19 +1844,19 @@ def run_research():
 
         if df.empty:
             raise RuntimeError(
-                "No USD/CAD tight refinement rows generated"
+                "No USD/CAD feature rows generated"
             )
+
+        df[
+            "adequate_60"
+        ] = (
+            df["trades"] >= 60
+        )
 
         df[
             "adequate_80"
         ] = (
             df["trades"] >= 80
-        )
-
-        df[
-            "adequate_100"
-        ] = (
-            df["trades"] >= 100
         )
 
         df[
@@ -1399,21 +1869,21 @@ def run_research():
         )
 
         df[
-            "worst_era_pf_110"
-        ] = (
-            df[
-                "minimum_era_pf_5_plus"
-            ].fillna(0)
-            >= 1.10
-        )
-
-        df[
             "worst_era_pf_120"
         ] = (
             df[
                 "minimum_era_pf_5_plus"
             ].fillna(0)
             >= 1.20
+        )
+
+        df[
+            "worst_era_pf_130"
+        ] = (
+            df[
+                "minimum_era_pf_5_plus"
+            ].fillna(0)
+            >= 1.30
         )
 
         df[
@@ -1430,8 +1900,8 @@ def run_research():
         df = df.sort_values(
             by=[
                 "all_four_eras_profitable",
-                "adequate_80",
-                "worst_era_pf_110",
+                "adequate_60",
+                "worst_era_pf_120",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "annual_r_linear",
@@ -1456,27 +1926,17 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD tight edge refinement "
+                "USD/CAD feature discovery "
                 "completed successfully"
             ),
-            "completed_combinations": (
-                TOTAL_COMBINATIONS
+            "completed_tests": (
+                total_tests
             ),
             "rows_saved": len(df),
             "all_four_eras_profitable": int(
                 df[
                     "all_four_eras_profitable"
                 ].sum()
-            ),
-            "all_four_and_worst_pf_110": int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "worst_era_pf_110"
-                    ]
-                ).sum()
             ),
             "all_four_and_worst_pf_120": int(
                 (
@@ -1488,13 +1948,23 @@ def run_research():
                     ]
                 ).sum()
             ),
+            "all_four_and_worst_pf_130": int(
+                (
+                    df[
+                        "all_four_eras_profitable"
+                    ]
+                    & df[
+                        "worst_era_pf_130"
+                    ]
+                ).sum()
+            ),
             "output_file": OUTPUT_FILE,
         })
 
         print()
         print("=" * 76)
         print(
-            "USD/CAD TIGHT EDGE REFINEMENT COMPLETE"
+            "USD/CAD FEATURE DISCOVERY COMPLETE"
         )
         print("=" * 76)
         print(
@@ -1507,6 +1977,19 @@ def run_research():
                 df[
                     "all_four_eras_profitable"
                 ].sum()
+            ),
+        )
+        print(
+            "All-four + worst PF >= 1.20:",
+            int(
+                (
+                    df[
+                        "all_four_eras_profitable"
+                    ]
+                    & df[
+                        "worst_era_pf_120"
+                    ]
+                ).sum()
             ),
         )
         print(
@@ -1536,7 +2019,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDCAD Short Tight Edge Refinement"
+            "USDCAD Short Feature Discovery"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1544,7 +2027,7 @@ def home():
         "timing_filters": (
             "NONE - all hours and weekdays"
         ),
-        "grid": {
+        "structural_baselines": {
             "body_ratios": BODY_RATIOS,
             "structure_lookbacks": (
                 STRUCTURE_LOOKBACKS
@@ -1556,10 +2039,17 @@ def home():
             "reward_risks": (
                 REWARD_RISKS
             ),
-            "total_combinations": (
-                TOTAL_COMBINATIONS
-            ),
         },
+        "feature_families": [
+            "BASELINE",
+            "STRONG_CLOSE",
+            "UPPER_WICK",
+            "MIN_RANGE_ATR",
+            "FAST_EMA_ALIGNMENT",
+            "SLOW_EMA_SLOPE",
+            "DAILY_ATR_REGIME",
+            "UP_MOMENTUM",
+        ],
         "download": "/download",
         "trading_enabled": False,
         "orders_supported": False,
@@ -1582,7 +2072,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "USD/CAD tight refinement CSV "
+                "USD/CAD feature discovery CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1602,7 +2092,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdcad-short-tight-edge-refinement"
+            "usdcad-short-feature-discovery"
         ),
         daemon=True,
     )
