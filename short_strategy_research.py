@@ -10,38 +10,29 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/JPY SHORT - FINAL TIMING STABILITY CHECK
+# USD/CAD SHORT - BROAD STRUCTURAL DISCOVERY
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Frozen structural core:
-#   Bearish engulfing
-#   Body >= 1.45
-#   Structure lookback = 90 H1 bars
-#   Signal high within 0.50 ATR14 of prior 90-bar high
-#   Previous completed daily close < EMA90
-#   RR = 2.50
-#   NO strong-close filter
-#   NO upper-wick filter
-#   ALL weekdays
+# Fresh discovery pass for USD/CAD short.
+# We are not forcing the EUR/USD, GBP/USD or USD/JPY short
+# structures onto USD/CAD.
 #
-# Candidate excluded NY hours from prior diagnostic:
-#   01, 02, 05, 06, 10, 11
+# Signal:
+#   Previous candle bullish
+#   Current candle bearish
+#   Current body engulfs previous body
 #
-# This script tests:
-#   1. Baseline: no hour exclusions
-#   2. Full six-hour exclusion
-#   3. Leave-one-back-in variants
-#   4. Individual bad-hour exclusions
-#   5. Natural pairs: 01+02, 05+06, 10+11
-#   6. All combinations of those natural pairs
-#   7. All combinations of the six candidate hours
-#      containing at least 2 exclusions
+# Broad variables:
+#   body ratio
+#   recent-high structure lookback
+#   distance from recent high in ATR
+#   reward:risk
+#   previous completed daily close below slow EMA
 #
-# This lets us find the simplest timing rule that retains most
-# of the robustness of the full six-hour exclusion.
+# NO timing / weekday optimisation in this run.
 #
-# Exact execution conventions retained:
+# Exact backtest conventions:
 #   OANDA midpoint H1
 #   Daily alignment = 17:00 America/New_York
 #   Previous completed daily candle only
@@ -65,8 +56,8 @@ app = Flask(__name__)
 OANDA_TOKEN = os.getenv("OANDA_TOKEN")
 OANDA_URL = "https://api-fxtrade.oanda.com"
 
-INSTRUMENT = "USD_JPY"
-TICK_SIZE = 0.001
+INSTRUMENT = "USD_CAD"
+TICK_SIZE = 0.00001
 
 NY_TZ = ZoneInfo("America/New_York")
 
@@ -92,42 +83,79 @@ RESEARCH_TO = (
     )
 )
 
-H1_WARMUP_DAYS = 220
+H1_WARMUP_DAYS = 180
 DAILY_WARMUP_DAYS = 2600
 
-OUTPUT_FILE = "usdjpy_short_final_timing_stability.csv"
-HOUR_ERAS_FILE = "usdjpy_short_bad_hours_by_era.csv"
+OUTPUT_FILE = "usdcad_short_broad_structural_discovery.csv"
 
 
 # ============================================================
-# FROZEN CORE
+# BROAD GRID
 # ============================================================
 
-BODY_RATIO = 1.45
-STRUCTURE_LOOKBACK = 90
-MAX_DISTANCE_ATR = 0.50
-SLOW_DAILY_EMA = 90
-REWARD_RISK = 2.50
-
-
-# ============================================================
-# TIMING CANDIDATES
-# ============================================================
-
-CANDIDATE_BAD_HOURS = [
-    1,
-    2,
-    5,
-    6,
-    10,
-    11,
+BODY_RATIOS = [
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+    1.30,
+    1.40,
+    1.50,
 ]
 
-NATURAL_PAIRS = {
-    "PAIR_01_02": {1, 2},
-    "PAIR_05_06": {5, 6},
-    "PAIR_10_11": {10, 11},
-}
+STRUCTURE_LOOKBACKS = [
+    20,
+    30,
+    40,
+    50,
+    60,
+    70,
+    80,
+]
+
+MAX_DISTANCE_ATR_VALUES = [
+    0.05,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.30,
+    0.40,
+]
+
+REWARD_RISKS = [
+    1.50,
+    1.75,
+    2.00,
+    2.25,
+    2.50,
+    2.75,
+    3.00,
+    3.50,
+    4.00,
+]
+
+SLOW_EMAS = [
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    200,
+    250,
+    300,
+    350,
+    400,
+]
+
+TOTAL_COMBINATIONS = (
+    len(BODY_RATIOS)
+    * len(STRUCTURE_LOOKBACKS)
+    * len(MAX_DISTANCE_ATR_VALUES)
+    * len(REWARD_RISKS)
+    * len(SLOW_EMAS)
+)
 
 
 # ============================================================
@@ -165,14 +193,14 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "USDJPY Short Final Timing Stability",
+    "service": "USDCAD Short Broad Structural Discovery",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "candidate_bad_hours": CANDIDATE_BAD_HOURS,
-    "completed_scenarios": 0,
+    "total_combinations": TOTAL_COMBINATIONS,
+    "completed_combinations": 0,
+    "rows_saved": 0,
     "output_file": None,
-    "hour_eras_file": None,
 }
 
 
@@ -298,19 +326,12 @@ def fetch_chunked_history(
         )
 
         for candle in chunk:
-            candles_by_time[
-                candle["time"]
-            ] = candle
+            candles_by_time[candle["time"]] = candle
 
         cursor = chunk_end
 
-    candles = list(
-        candles_by_time.values()
-    )
-
-    candles.sort(
-        key=lambda item: item["time"]
-    )
+    candles = list(candles_by_time.values())
+    candles.sort(key=lambda item: item["time"])
 
     return candles
 
@@ -325,28 +346,15 @@ def ema_series(values, length):
     if len(values) < length:
         return result
 
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
+    initial = sum(values[:length]) / length
     result[length - 1] = initial
 
-    multiplier = (
-        2.0 / (length + 1.0)
-    )
-
+    multiplier = 2.0 / (length + 1.0)
     previous = initial
 
-    for index in range(
-        length,
-        len(values),
-    ):
+    for index in range(length, len(values)):
         current = (
-            (
-                values[index]
-                - previous
-            )
+            (values[index] - previous)
             * multiplier
             + previous
         )
@@ -362,26 +370,15 @@ def true_ranges(candles):
 
     for index, candle in enumerate(candles):
         if index == 0:
-            tr = (
-                candle["high"]
-                - candle["low"]
-            )
+            tr = candle["high"] - candle["low"]
 
         else:
-            previous_close = (
-                candles[index - 1]["close"]
-            )
+            previous_close = candles[index - 1]["close"]
 
             tr = max(
                 candle["high"] - candle["low"],
-                abs(
-                    candle["high"]
-                    - previous_close
-                ),
-                abs(
-                    candle["low"]
-                    - previous_close
-                ),
+                abs(candle["high"] - previous_close),
+                abs(candle["low"] - previous_close),
             )
 
         result.append(tr)
@@ -395,23 +392,14 @@ def rma_series(values, length):
     if len(values) < length:
         return result
 
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
+    initial = sum(values[:length]) / length
     result[length - 1] = initial
+
     previous = initial
 
-    for index in range(
-        length,
-        len(values),
-    ):
+    for index in range(length, len(values)):
         current = (
-            (
-                previous
-                * (length - 1)
-            )
+            previous * (length - 1)
             + values[index]
         ) / length
 
@@ -433,10 +421,7 @@ def atr_series(candles, length=14):
 # ============================================================
 
 def current_daily_start(timestamp_utc):
-    ny_time = (
-        timestamp_utc
-        .astimezone(NY_TZ)
-    )
+    ny_time = timestamp_utc.astimezone(NY_TZ)
 
     candidate = ny_time.replace(
         hour=DAILY_ALIGNMENT_HOUR,
@@ -448,25 +433,26 @@ def current_daily_start(timestamp_utc):
     if ny_time < candidate:
         candidate -= timedelta(days=1)
 
-    return candidate.astimezone(
-        timezone.utc
-    )
+    return candidate.astimezone(timezone.utc)
 
 
-def build_h1_daily_lookup(
-    h1,
-    daily,
-):
+def build_daily_state(daily):
     closes = [
         candle["close"]
         for candle in daily
     ]
 
-    ema90 = ema_series(
-        closes,
-        SLOW_DAILY_EMA,
-    )
+    return {
+        length: ema_series(closes, length)
+        for length in SLOW_EMAS
+    }
 
+
+def build_h1_daily_lookup(
+    h1,
+    daily,
+    daily_ema_map,
+):
     lookup = [None] * len(h1)
     daily_index = -1
 
@@ -486,19 +472,19 @@ def build_h1_daily_lookup(
             continue
 
         lookup[h1_index] = {
-            "close": daily[
-                daily_index
-            ]["close"],
-            "ema90": ema90[
-                daily_index
-            ],
+            "close": daily[daily_index]["close"],
+            "emas": {
+                length:
+                daily_ema_map[length][daily_index]
+                for length in SLOW_EMAS
+            },
         }
 
     return lookup
 
 
 # ============================================================
-# SIGNALS
+# SIGNAL MATRIX
 # ============================================================
 
 def build_candidates(
@@ -508,10 +494,9 @@ def build_candidates(
 ):
     candidates = []
 
-    for index in range(
-        STRUCTURE_LOOKBACK,
-        len(h1),
-    ):
+    max_lookback = max(STRUCTURE_LOOKBACKS)
+
+    for index in range(max_lookback, len(h1)):
         signal = h1[index]
 
         if signal["time"] < RESEARCH_FROM:
@@ -528,7 +513,6 @@ def build_candidates(
             atr is None
             or atr <= 0
             or daily is None
-            or daily["ema90"] is None
         ):
             continue
 
@@ -549,65 +533,80 @@ def build_candidates(
             continue
 
         bearish_engulfing = (
-            previous["close"]
-            > previous["open"]
-            and signal["close"]
-            < signal["open"]
-            and signal["open"]
-            >= previous["close"]
-            and signal["close"]
-            <= previous["open"]
+            previous["close"] > previous["open"]
+            and signal["close"] < signal["open"]
+            and signal["open"] >= previous["close"]
+            and signal["close"] <= previous["open"]
         )
 
         if not bearish_engulfing:
             continue
 
-        if (
-            current_body
-            / previous_body
-            < BODY_RATIO
-        ):
-            continue
+        structure_distances = {}
 
-        previous_highest = max(
-            candle["high"]
-            for candle in h1[
-                index - STRUCTURE_LOOKBACK:index
-            ]
-        )
+        for lookback in STRUCTURE_LOOKBACKS:
+            previous_highest = max(
+                candle["high"]
+                for candle in h1[
+                    index - lookback:index
+                ]
+            )
 
-        distance_atr = (
-            previous_highest
-            - signal["high"]
-        ) / atr
-
-        if (
-            distance_atr
-            > MAX_DISTANCE_ATR
-        ):
-            continue
-
-        if not (
-            daily["close"]
-            < daily["ema90"]
-        ):
-            continue
-
-        ny_time = signal[
-            "time"
-        ].astimezone(
-            NY_TZ
-        )
+            structure_distances[lookback] = (
+                previous_highest
+                - signal["high"]
+            ) / atr
 
         candidates.append({
             "index": index,
             "time": signal["time"],
-            "ny_hour": ny_time.hour,
-            "ny_weekday": ny_time.weekday(),
-            "ny_weekday_name": ny_time.strftime("%A"),
+            "body_ratio": (
+                current_body / previous_body
+            ),
+            "structure_distances": (
+                structure_distances
+            ),
+            "daily": daily,
         })
 
     return candidates
+
+
+# ============================================================
+# FILTER
+# ============================================================
+
+def candidate_allowed(
+    candidate,
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    slow_ema,
+):
+    if candidate["body_ratio"] < body_ratio:
+        return False
+
+    if (
+        candidate[
+            "structure_distances"
+        ][structure_lookback]
+        > max_distance_atr
+    ):
+        return False
+
+    daily = candidate["daily"]
+
+    ema = daily["emas"].get(slow_ema)
+
+    if ema is None:
+        return False
+
+    if not (
+        daily["close"] < ema
+    ):
+        return False
+
+    return True
 
 
 # ============================================================
@@ -620,19 +619,19 @@ EXIT_CACHE = {}
 def calculate_trade_exit(
     h1,
     signal_index,
+    reward_risk,
 ):
-    if signal_index in EXIT_CACHE:
-        return EXIT_CACHE[
-            signal_index
-        ]
-
-    signal = h1[
-        signal_index
-    ]
-
-    reference_entry = (
-        signal["close"]
+    cache_key = (
+        signal_index,
+        reward_risk,
     )
+
+    if cache_key in EXIT_CACHE:
+        return EXIT_CACHE[cache_key]
+
+    signal = h1[signal_index]
+
+    reference_entry = signal["close"]
 
     backtest_entry = (
         reference_entry
@@ -646,10 +645,7 @@ def calculate_trade_exit(
         * TICK_SIZE
     )
 
-    reference_risk = (
-        stop
-        - reference_entry
-    )
+    reference_risk = stop - reference_entry
 
     if reference_risk <= 0:
         raise RuntimeError(
@@ -659,13 +655,10 @@ def calculate_trade_exit(
     target = (
         reference_entry
         - reference_risk
-        * REWARD_RISK
+        * reward_risk
     )
 
-    actual_risk = (
-        stop
-        - backtest_entry
-    )
+    actual_risk = stop - backtest_entry
 
     if actual_risk <= 0:
         raise RuntimeError(
@@ -681,20 +674,10 @@ def calculate_trade_exit(
         if candle["time"] >= RESEARCH_TO:
             break
 
-        stop_hit = (
-            candle["high"]
-            >= stop
-        )
+        stop_hit = candle["high"] >= stop
+        target_hit = candle["low"] <= target
 
-        target_hit = (
-            candle["low"]
-            <= target
-        )
-
-        if not (
-            stop_hit
-            or target_hit
-        ):
+        if not (stop_hit or target_hit):
             continue
 
         if stop_hit and target_hit:
@@ -708,13 +691,9 @@ def calculate_trade_exit(
                 - candle["low"]
             )
 
-            if (
-                distance_to_high
-                < distance_to_low
-            ):
+            if distance_to_high < distance_to_low:
                 exit_price = stop
                 exit_reason = "STOP"
-
             else:
                 exit_price = target
                 exit_reason = "TARGET"
@@ -740,10 +719,7 @@ def calculate_trade_exit(
             ) / actual_risk,
         }
 
-        EXIT_CACHE[
-            signal_index
-        ] = result
-
+        EXIT_CACHE[cache_key] = result
         return result
 
     result = {
@@ -756,78 +732,41 @@ def calculate_trade_exit(
         "result_r": None,
     }
 
-    EXIT_CACHE[
-        signal_index
-    ] = result
-
+    EXIT_CACHE[cache_key] = result
     return result
 
 
 def simulate(
     h1,
     candidates,
-    excluded_hours=None,
+    reward_risk,
 ):
-    excluded_hours = set(
-        excluded_hours or []
-    )
-
-    filtered = [
-        candidate
-        for candidate in candidates
-        if candidate[
-            "ny_hour"
-        ] not in excluded_hours
-    ]
-
     trades = []
     position_exit_index = -1
     ignored = 0
     still_open = False
 
-    for candidate in filtered:
-        signal_index = (
-            candidate["index"]
-        )
+    for candidate in candidates:
+        signal_index = candidate["index"]
 
-        if (
-            signal_index
-            < position_exit_index
-        ):
+        if signal_index < position_exit_index:
             ignored += 1
             continue
 
         trade = calculate_trade_exit(
             h1,
             signal_index,
-        ).copy()
+            reward_risk,
+        )
 
-        trade[
-            "ny_hour"
-        ] = candidate[
-            "ny_hour"
-        ]
-
-        if (
-            trade["status"]
-            == "OPEN"
-        ):
+        if trade["status"] == "OPEN":
             still_open = True
             break
 
-        trades.append(
-            trade
-        )
+        trades.append(trade)
+        position_exit_index = trade["exit_index"]
 
-        position_exit_index = (
-            trade["exit_index"]
-        )
-
-    return (
-        trades,
-        ignored,
-        still_open,
-    )
+    return trades, ignored, still_open
 
 
 # ============================================================
@@ -842,9 +781,7 @@ def stats_for_trades(
     filtered = []
 
     for trade in trades:
-        signal_time = (
-            trade["signal_time"]
-        )
+        signal_time = trade["signal_time"]
 
         if (
             start is not None
@@ -858,9 +795,7 @@ def stats_for_trades(
         ):
             continue
 
-        filtered.append(
-            trade
-        )
+        filtered.append(trade)
 
     if not filtered:
         return {
@@ -892,22 +827,13 @@ def stats_for_trades(
         if result < 0
     ]
 
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(losers)
-    )
-
-    total_r = sum(
-        results
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
+    total_r = sum(results)
 
     if gross_loss > 0:
         profit_factor = (
-            gross_profit
-            / gross_loss
+            gross_profit / gross_loss
         )
 
     elif gross_profit > 0:
@@ -924,12 +850,7 @@ def stats_for_trades(
 
     for result in results:
         equity += result
-
-        peak = max(
-            peak,
-            equity,
-        )
-
+        peak = max(peak, equity)
         max_drawdown = min(
             max_drawdown,
             equity - peak,
@@ -977,171 +898,54 @@ def stats_for_trades(
 
 
 # ============================================================
-# ERA / HOUR DIAGNOSTIC
+# RESULT ROW
 # ============================================================
 
-def build_hour_era_table(
-    baseline_trades,
-):
-    rows = []
-
-    for hour in CANDIDATE_BAD_HOURS:
-        hour_trades = [
-            trade
-            for trade in baseline_trades
-            if trade[
-                "ny_hour"
-            ] == hour
-        ]
-
-        full = stats_for_trades(
-            hour_trades
-        )
-
-        row = {
-            "ny_hour": hour,
-            "full_trades": full[
-                "trades"
-            ],
-            "full_pf": full[
-                "profit_factor"
-            ],
-            "full_r": full[
-                "total_r"
-            ],
-            "full_expectancy": full[
-                "expectancy_r"
-            ],
-        }
-
-        positive_eras = 0
-        negative_eras = 0
-
-        for (
-            era_name,
-            era_start,
-            era_end,
-        ) in ERAS:
-            era = stats_for_trades(
-                hour_trades,
-                era_start,
-                era_end,
-            )
-
-            row[
-                f"{era_name}_trades"
-            ] = era[
-                "trades"
-            ]
-
-            row[
-                f"{era_name}_pf"
-            ] = era[
-                "profit_factor"
-            ]
-
-            row[
-                f"{era_name}_r"
-            ] = era[
-                "total_r"
-            ]
-
-            if era["trades"] > 0:
-                if era["total_r"] > 0:
-                    positive_eras += 1
-                elif era["total_r"] < 0:
-                    negative_eras += 1
-
-        row[
-            "positive_eras"
-        ] = positive_eras
-
-        row[
-            "negative_eras"
-        ] = negative_eras
-
-        rows.append(
-            row
-        )
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-# ============================================================
-# SCENARIO OUTPUT
-# ============================================================
-
-def scenario_row(
-    name,
-    scenario_type,
-    excluded_hours,
+def make_result_row(
+    body_ratio,
+    structure_lookback,
+    max_distance_atr,
+    reward_risk,
+    slow_ema,
+    eligible,
     trades,
     ignored,
     still_open,
     years,
 ):
-    full = stats_for_trades(
-        trades
-    )
+    full = stats_for_trades(trades)
 
     row = {
-        "scenario": name,
-        "scenario_type": (
-            scenario_type
-        ),
-        "excluded_hours": ",".join(
-            str(value)
-            for value in sorted(
-                excluded_hours
-            )
-        ),
-        "excluded_hour_count": len(
-            excluded_hours
-        ),
-        "trades": full[
-            "trades"
-        ],
+        "body_ratio": body_ratio,
+        "structure_lookback": structure_lookback,
+        "max_distance_atr": max_distance_atr,
+        "reward_risk": reward_risk,
+        "slow_daily_ema": slow_ema,
+        "raw_signals": len(eligible),
+        "ignored_due_to_open_trade": ignored,
+        "still_open_at_end": still_open,
+        "trades": full["trades"],
         "trades_per_year": round(
-            full["trades"]
-            / years,
+            full["trades"] / years,
             2,
         ),
-        "winners": full[
-            "winners"
-        ],
-        "losers": full[
-            "losers"
-        ],
-        "win_rate": full[
-            "win_rate"
-        ],
-        "profit_factor": full[
-            "profit_factor"
-        ],
-        "total_r": full[
-            "total_r"
-        ],
-        "expectancy_r": full[
-            "expectancy_r"
-        ],
-        "max_drawdown_r": full[
-            "max_drawdown_r"
-        ],
-        "longest_loss_streak": full[
-            "longest_loss_streak"
-        ],
-        "ignored_due_to_open_trade": (
-            ignored
-        ),
-        "still_open_at_end": (
-            still_open
+        "winners": full["winners"],
+        "losers": full["losers"],
+        "win_rate": full["win_rate"],
+        "profit_factor": full["profit_factor"],
+        "total_r": full["total_r"],
+        "expectancy_r": full["expectancy_r"],
+        "max_drawdown_r": full["max_drawdown_r"],
+        "longest_loss_streak": (
+            full["longest_loss_streak"]
         ),
     }
 
     profitable_eras = 0
-    min_era_pf = None
+    eras_with_5_plus = 0
+    profitable_eras_with_5_plus = 0
+    minimum_era_pf_5_plus = None
+    minimum_era_expectancy_5_plus = None
 
     for (
         era_name,
@@ -1154,203 +958,58 @@ def scenario_row(
             era_end,
         )
 
-        row[
-            f"{era_name}_trades"
-        ] = era[
-            "trades"
-        ]
-
-        row[
-            f"{era_name}_pf"
-        ] = era[
-            "profit_factor"
-        ]
-
-        row[
-            f"{era_name}_r"
-        ] = era[
-            "total_r"
-        ]
-
+        row[f"{era_name}_trades"] = era["trades"]
+        row[f"{era_name}_pf"] = era["profit_factor"]
+        row[f"{era_name}_r"] = era["total_r"]
         row[
             f"{era_name}_expectancy"
-        ] = era[
-            "expectancy_r"
-        ]
+        ] = era["expectancy_r"]
 
-        if (
-            era["trades"] >= 5
-            and era["total_r"] > 0
-        ):
+        if era["total_r"] > 0:
             profitable_eras += 1
 
         if era["trades"] >= 5:
-            if min_era_pf is None:
-                min_era_pf = era[
-                    "profit_factor"
-                ]
+            eras_with_5_plus += 1
+
+            if era["total_r"] > 0:
+                profitable_eras_with_5_plus += 1
+
+            if minimum_era_pf_5_plus is None:
+                minimum_era_pf_5_plus = (
+                    era["profit_factor"]
+                )
             else:
-                min_era_pf = min(
-                    min_era_pf,
-                    era[
-                        "profit_factor"
-                    ],
+                minimum_era_pf_5_plus = min(
+                    minimum_era_pf_5_plus,
+                    era["profit_factor"],
                 )
 
+            if (
+                minimum_era_expectancy_5_plus
+                is None
+            ):
+                minimum_era_expectancy_5_plus = (
+                    era["expectancy_r"]
+                )
+            else:
+                minimum_era_expectancy_5_plus = min(
+                    minimum_era_expectancy_5_plus,
+                    era["expectancy_r"],
+                )
+
+    row["profitable_eras"] = profitable_eras
+    row["eras_with_5_plus_trades"] = eras_with_5_plus
     row[
         "profitable_eras_with_5_plus_trades"
-    ] = profitable_eras
-
+    ] = profitable_eras_with_5_plus
     row[
         "minimum_era_pf_5_plus"
-    ] = min_era_pf
-
+    ] = minimum_era_pf_5_plus
     row[
-        "all_four_eras_profitable"
-    ] = (
-        profitable_eras >= 4
-    )
+        "minimum_era_expectancy_5_plus"
+    ] = minimum_era_expectancy_5_plus
 
     return row
-
-
-# ============================================================
-# SCENARIO GENERATION
-# ============================================================
-
-def generate_scenarios():
-    scenarios = {}
-
-    def add(
-        name,
-        scenario_type,
-        excluded,
-    ):
-        key = tuple(
-            sorted(
-                excluded
-            )
-        )
-
-        if key not in scenarios:
-            scenarios[
-                key
-            ] = {
-                "name": name,
-                "type": scenario_type,
-                "excluded": set(
-                    excluded
-                ),
-            }
-
-    # Baseline.
-    add(
-        "BASELINE_ALL_HOURS",
-        "BASELINE",
-        set(),
-    )
-
-    # Full six-hour rule.
-    all_bad = set(
-        CANDIDATE_BAD_HOURS
-    )
-
-    add(
-        "EXCLUDE_ALL_01_02_05_06_10_11",
-        "FULL_SIX",
-        all_bad,
-    )
-
-    # Individual exclusions.
-    for hour in CANDIDATE_BAD_HOURS:
-        add(
-            f"EXCLUDE_{hour:02d}",
-            "SINGLE_HOUR",
-            {hour},
-        )
-
-    # Leave one hour back in from full six.
-    for hour in CANDIDATE_BAD_HOURS:
-        excluded = (
-            all_bad
-            - {hour}
-        )
-
-        add(
-            f"FULL_SIX_LEAVE_{hour:02d}_BACK_IN",
-            "LEAVE_ONE_BACK_IN",
-            excluded,
-        )
-
-    # Natural pairs.
-    for pair_name, pair_hours in (
-        NATURAL_PAIRS.items()
-    ):
-        add(
-            f"EXCLUDE_{pair_name}",
-            "NATURAL_PAIR",
-            pair_hours,
-        )
-
-    # Combinations of natural pairs.
-    pair_items = list(
-        NATURAL_PAIRS.items()
-    )
-
-    for pair_count in range(
-        2,
-        len(pair_items) + 1,
-    ):
-        for combo in itertools.combinations(
-            pair_items,
-            pair_count,
-        ):
-            names = [
-                item[0]
-                for item in combo
-            ]
-
-            excluded = set()
-
-            for _, hours in combo:
-                excluded |= hours
-
-            add(
-                "EXCLUDE_"
-                + "__".join(
-                    names
-                ),
-                "PAIR_COMBINATION",
-                excluded,
-            )
-
-    # Exhaustive combinations of candidate hours,
-    # at least 2 exclusions.
-    for count in range(
-        2,
-        len(CANDIDATE_BAD_HOURS) + 1,
-    ):
-        for combo in itertools.combinations(
-            CANDIDATE_BAD_HOURS,
-            count,
-        ):
-            excluded = set(
-                combo
-            )
-
-            add(
-                "EXCLUDE_"
-                + "_".join(
-                    f"{hour:02d}"
-                    for hour in combo
-                ),
-                "EXHAUSTIVE_BAD_HOUR_COMBO",
-                excluded,
-            )
-
-    return list(
-        scenarios.values()
-    )
 
 
 # ============================================================
@@ -1362,21 +1021,24 @@ def run_research():
 
     try:
         print()
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "USD/JPY SHORT - FINAL TIMING STABILITY CHECK"
+            "USD/CAD SHORT - BROAD STRUCTURAL DISCOVERY"
         )
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "Candidate bad hours:",
-            CANDIDATE_BAD_HOURS,
+            "Total combinations:",
+            TOTAL_COMBINATIONS,
+        )
+        print(
+            "NO TIMING / WEEKDAY FILTERS"
         )
         print()
 
         STATUS.update({
             "state": "fetching_data",
             "message": (
-                "Fetching USD/JPY OANDA history"
+                "Fetching USD/CAD OANDA history"
             ),
         })
 
@@ -1384,9 +1046,7 @@ def run_research():
             INSTRUMENT,
             "H1",
             RESEARCH_FROM
-            - timedelta(
-                days=H1_WARMUP_DAYS
-            ),
+            - timedelta(days=H1_WARMUP_DAYS),
             RESEARCH_TO,
         )
 
@@ -1394,127 +1054,106 @@ def run_research():
             INSTRUMENT,
             "D",
             RESEARCH_FROM
-            - timedelta(
-                days=DAILY_WARMUP_DAYS
-            ),
+            - timedelta(days=DAILY_WARMUP_DAYS),
             RESEARCH_TO,
         )
 
         if not h1:
             raise RuntimeError(
-                "No USD/JPY H1 candles returned"
+                "No USD/CAD H1 candles returned"
             )
 
         if not daily:
             raise RuntimeError(
-                "No USD/JPY daily candles returned"
+                "No USD/CAD daily candles returned"
             )
 
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building frozen-core signal stream"
+                "Building indicators and signal matrix"
             ),
         })
 
-        h1_atr = atr_series(
+        h1_atr = atr_series(h1, 14)
+        daily_ema_map = build_daily_state(daily)
+
+        daily_lookup = build_h1_daily_lookup(
             h1,
-            14,
+            daily,
+            daily_ema_map,
         )
 
-        daily_lookup = (
-            build_h1_daily_lookup(
-                h1,
-                daily,
-            )
-        )
-
-        candidates = (
-            build_candidates(
-                h1,
-                h1_atr,
-                daily_lookup,
-            )
+        candidates = build_candidates(
+            h1,
+            h1_atr,
+            daily_lookup,
         )
 
         STATUS[
-            "raw_frozen_core_signals"
-        ] = len(
-            candidates
-        )
+            "base_bearish_engulfings"
+        ] = len(candidates)
 
         years = (
             RESEARCH_TO
             - RESEARCH_FROM
         ).total_seconds() / (
-            365.2425
-            * 24
-            * 60
-            * 60
+            365.2425 * 24 * 60 * 60
         )
 
         STATUS.update({
             "state": "running",
             "message": (
-                "Running final timing stability scenarios"
+                "Running broad USD/CAD short sweep"
             ),
         })
 
-        # Baseline first for per-hour era breakdown.
-        (
-            baseline_trades,
-            baseline_ignored,
-            baseline_open,
-        ) = simulate(
-            h1,
-            candidates,
-            excluded_hours=set(),
-        )
-
-        hour_era_df = (
-            build_hour_era_table(
-                baseline_trades
-            )
-        )
-
-        hour_era_df.to_csv(
-            HOUR_ERAS_FILE,
-            index=False,
-        )
-
-        scenarios = (
-            generate_scenarios()
-        )
-
         rows = []
 
-        for number, scenario in enumerate(
-            scenarios,
+        combinations = itertools.product(
+            BODY_RATIOS,
+            STRUCTURE_LOOKBACKS,
+            MAX_DISTANCE_ATR_VALUES,
+            REWARD_RISKS,
+            SLOW_EMAS,
+        )
+
+        for number, (
+            body_ratio,
+            structure_lookback,
+            max_distance_atr,
+            reward_risk,
+            slow_ema,
+        ) in enumerate(
+            combinations,
             start=1,
         ):
-            (
-                trades,
-                ignored,
-                still_open,
-            ) = simulate(
+            eligible = [
+                candidate
+                for candidate in candidates
+                if candidate_allowed(
+                    candidate,
+                    body_ratio,
+                    structure_lookback,
+                    max_distance_atr,
+                    slow_ema,
+                )
+            ]
+
+            trades, ignored, still_open = simulate(
                 h1,
-                candidates,
-                excluded_hours=scenario[
-                    "excluded"
-                ],
+                eligible,
+                reward_risk,
             )
 
             rows.append(
-                scenario_row(
-                    scenario[
-                        "name"
-                    ],
-                    scenario[
-                        "type"
-                    ],
-                    scenario[
-                        "excluded"
-                    ],
+                make_result_row(
+                    body_ratio,
+                    structure_lookback,
+                    max_distance_atr,
+                    reward_risk,
+                    slow_ema,
+                    eligible,
                     trades,
                     ignored,
                     still_open,
@@ -1523,132 +1162,53 @@ def run_research():
             )
 
             STATUS[
-                "completed_scenarios"
+                "completed_combinations"
             ] = number
 
-        df = pd.DataFrame(
-            rows
-        )
+            if number % 500 == 0:
+                print(
+                    f"Progress: "
+                    f"{number}/{TOTAL_COMBINATIONS}",
+                    flush=True,
+                )
 
-        # Baseline comparisons.
-        baseline = df[
-            df[
-                "excluded_hour_count"
-            ] == 0
-        ].iloc[0]
+        df = pd.DataFrame(rows)
 
-        full_six = df[
-            df[
-                "excluded_hours"
-            ] == "1,2,5,6,10,11"
-        ].iloc[0]
-
-        baseline_pf = float(
-            baseline[
-                "profit_factor"
-            ]
-        )
-
-        baseline_tpy = float(
-            baseline[
-                "trades_per_year"
-            ]
-        )
-
-        full_six_pf = float(
-            full_six[
-                "profit_factor"
-            ]
-        )
-
-        full_six_tpy = float(
-            full_six[
-                "trades_per_year"
-            ]
-        )
-
-        df[
-            "pf_change_vs_baseline"
-        ] = (
-            df[
-                "profit_factor"
-            ]
-            - baseline_pf
-        ).round(
-            3
-        )
-
-        df[
-            "tpy_change_vs_baseline"
-        ] = (
-            df[
-                "trades_per_year"
-            ]
-            - baseline_tpy
-        ).round(
-            2
-        )
-
-        df[
-            "pf_change_vs_full_six"
-        ] = (
-            df[
-                "profit_factor"
-            ]
-            - full_six_pf
-        ).round(
-            3
-        )
-
-        df[
-            "tpy_change_vs_full_six"
-        ] = (
-            df[
-                "trades_per_year"
-            ]
-            - full_six_tpy
-        ).round(
-            2
-        )
-
-        # Main target:
-        # keep all eras positive, preserve at least 6 trades/yr,
-        # PF >= 1.50, worst-era PF >= 1.10.
-        df[
-            "strong_candidate"
-        ] = (
-            df[
-                "all_four_eras_profitable"
-            ]
-            & (
-                df[
-                    "trades_per_year"
-                ] >= 6.0
+        if df.empty:
+            raise RuntimeError(
+                "No USD/CAD short results generated"
             )
-            & (
-                df[
-                    "profit_factor"
-                ] >= 1.50
-            )
-            & (
-                df[
-                    "minimum_era_pf_5_plus"
-                ].fillna(0)
-                >= 1.10
-            )
+
+        df["adequate_80"] = (
+            df["trades"] >= 80
         )
 
-        # Simplicity preference:
-        # among robust rules, prefer fewer excluded hours.
+        df["adequate_100"] = (
+            df["trades"] >= 100
+        )
+
+        df[
+            "all_four_eras_profitable"
+        ] = (
+            df[
+                "profitable_eras_with_5_plus_trades"
+            ]
+            >= 4
+        )
+
+        df["annual_r_linear"] = (
+            df["expectancy_r"]
+            * df["trades_per_year"]
+        )
+
         df = df.sort_values(
             by=[
-                "strong_candidate",
                 "all_four_eras_profitable",
+                "adequate_100",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
+                "annual_r_linear",
                 "trades_per_year",
-                "excluded_hour_count",
-                "total_r",
             ],
             ascending=[
                 False,
@@ -1656,7 +1216,6 @@ def run_research():
                 False,
                 False,
                 False,
-                True,
                 False,
             ],
         )
@@ -1669,55 +1228,42 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/JPY final timing stability check completed"
+                "USD/CAD broad short discovery "
+                "completed successfully"
             ),
-            "completed_scenarios": len(
-                df
+            "completed_combinations": (
+                TOTAL_COMBINATIONS
             ),
-            "strong_candidate_rows": int(
+            "rows_saved": len(df),
+            "all_four_eras_profitable": int(
                 df[
-                    "strong_candidate"
+                    "all_four_eras_profitable"
                 ].sum()
             ),
-            "output_file": (
-                OUTPUT_FILE
-            ),
-            "hour_eras_file": (
-                HOUR_ERAS_FILE
-            ),
-            "full_six_pf": (
-                full_six_pf
-            ),
-            "full_six_trades_per_year": (
-                full_six_tpy
-            ),
+            "output_file": OUTPUT_FILE,
         })
 
         print()
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "USD/JPY FINAL TIMING STABILITY COMPLETE"
+            "USD/CAD SHORT DISCOVERY COMPLETE"
         )
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "Scenarios:",
+            "Rows:",
             len(df),
         )
         print(
-            "Strong candidates:",
+            "All-four-era profitable rows:",
             int(
                 df[
-                    "strong_candidate"
+                    "all_four_eras_profitable"
                 ].sum()
             ),
         )
         print(
             "Saved:",
             OUTPUT_FILE,
-        )
-        print(
-            "Hour-by-era file:",
-            HOUR_ERAS_FILE,
         )
         print()
 
@@ -1742,45 +1288,23 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USDJPY Short Final Timing Stability"
+            "USDCAD Short Broad Structural Discovery"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
-        "frozen_core": {
-            "minimum_body_ratio": (
-                BODY_RATIO
-            ),
-            "structure_lookback": (
-                STRUCTURE_LOOKBACK
-            ),
-            "maximum_distance_atr": (
-                MAX_DISTANCE_ATR
-            ),
-            "previous_daily_close_below_ema": (
-                SLOW_DAILY_EMA
-            ),
-            "reward_risk": (
-                REWARD_RISK
-            ),
-            "strong_close_filter": False,
-            "upper_wick_filter": False,
-            "weekdays": "ALL",
-        },
-        "candidate_bad_hours": (
-            CANDIDATE_BAD_HOURS
+        "timing_filters": (
+            "NONE - all hours and weekdays"
         ),
-        "natural_pairs": {
-            key: sorted(
-                value
-            )
-            for key, value
-            in NATURAL_PAIRS.items()
+        "grid": {
+            "body_ratios": BODY_RATIOS,
+            "structure_lookbacks": STRUCTURE_LOOKBACKS,
+            "max_distance_atr": MAX_DISTANCE_ATR_VALUES,
+            "reward_risks": REWARD_RISKS,
+            "slow_emas": SLOW_EMAS,
+            "total_combinations": TOTAL_COMBINATIONS,
         },
-        "downloads": {
-            "scenarios": "/download",
-            "hour_eras": "/download-hour-eras",
-        },
+        "download": "/download",
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
@@ -1789,40 +1313,24 @@ def home():
 
 @app.route("/status")
 def status():
-    return jsonify(
-        STATUS
-    )
+    return jsonify(STATUS)
 
 
 @app.route("/download")
 def download():
-    if not os.path.exists(
-        OUTPUT_FILE
-    ):
+    if not os.path.exists(OUTPUT_FILE):
         return jsonify({
             "status": "not_ready",
+            "message": (
+                "USD/CAD short discovery CSV "
+                "is not ready yet"
+            ),
         }), 404
 
     return send_file(
         OUTPUT_FILE,
         as_attachment=True,
         download_name=OUTPUT_FILE,
-    )
-
-
-@app.route("/download-hour-eras")
-def download_hour_eras():
-    if not os.path.exists(
-        HOUR_ERAS_FILE
-    ):
-        return jsonify({
-            "status": "not_ready",
-        }), 404
-
-    return send_file(
-        HOUR_ERAS_FILE,
-        as_attachment=True,
-        download_name=HOUR_ERAS_FILE,
     )
 
 
@@ -1834,7 +1342,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdjpy-short-final-timing-stability"
+            "usdcad-short-broad-structural-discovery"
         ),
         daemon=True,
     )
