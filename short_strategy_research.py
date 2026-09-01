@@ -5,68 +5,46 @@ import pandas as pd
 
 from flask import Flask, jsonify, send_file
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# EUR/GBP SHORT - ROBUSTNESS / PLATEAU SWEEP
+# EUR/GBP SHORT - FEATURE DISCOVERY
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
-# Working candidate entering this stage:
+# Fixed viable core entering this stage:
 #
 #   bearish engulfing
-#   body ratio >= 1.00
-#   structure lookback = 120 H1 bars
-#   signal high within 0.10 ATR14 of prior high
+#   minimum body ratio >= 1.00
+#   structure lookback = 90 H1 bars
+#   signal high within 0.075 ATR14 of previous 90-bar highest high
 #   signal range >= 1.10 ATR14
-#   close location <= 0.20
+#   bearish close location <= 0.20
 #   RR = 3.00
 #   stop = signal high + 10 ticks
 #   adverse short slippage = 5 ticks
+#   pyramiding = 0
 #
-# Working-candidate result from previous scan:
-#   118 trades
-#   4.85 trades/year
-#   PF 1.480
-#   +37.42R
-#   expectancy +0.317R
-#   max DD -9.15R
-#   worst-era PF 1.109
-#   all four eras profitable
+# Goal:
+#   Test additional feature families ONE AT A TIME around this
+#   already-viable core, mirroring the successful USD/CAD process.
 #
-# Purpose:
-#   Test whether this sits on a broad stable plateau.
-#   This is NOT a broad search for new filters.
+# Feature families:
+#   1) Daily close below EMA
+#   2) Upward momentum over 12h / 24h / 48h
+#   3) Maximum stop size / ATR14
+#   4) Minimum signal body size / ATR14
+#   5) Minimum upper wick / body
+#   6) ATR14 relative to 50-bar ATR mean
+#   7) H1 close relative to EMA20 / EMA50
+#   8) H1 EMA20 slope over 6 / 12 / 24 bars
+#   9) Time since prior 90-bar high
 #
-# Sweep:
-#   structure lookback:
-#       90, 120, 150
-#
-#   max structure distance:
-#       0.075, 0.10, 0.125, 0.15 ATR14
-#
-#   minimum signal range:
-#       1.00, 1.10, 1.20, 1.30 ATR14
-#
-#   maximum close location:
-#       0.15, 0.20, 0.25
-#
-#   RR:
-#       2.50, 2.75, 3.00, 3.25, 3.50
-#
-# Total = 3 * 4 * 4 * 3 * 5 = 720 tests
-#
-# No:
-#   - daily regime
-#   - EMA alignment
-#   - momentum
-#   - weekday filter
-#   - timing/hour filter
-#   - stop-size filter
-#   - body-ratio optimisation
-#
-# Output:
-#   eurgbp_short_robustness_plateau_sweep.csv
+# IMPORTANT:
+#   - No feature combinations yet.
+#   - The fixed core remains identical for every test.
+#   - Baseline control row included.
 # ============================================================
 
 
@@ -85,42 +63,14 @@ TICK_SIZE = 0.00001
 
 STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
+REWARD_RISK = 3.00
 
-BODY_RATIO = 1.00
+MIN_BODY_RATIO = 1.00
 
-STRUCTURE_LOOKBACKS = [
-    90,
-    120,
-    150,
-]
-
-MAX_DISTANCE_ATR_VALUES = [
-    0.075,
-    0.10,
-    0.125,
-    0.15,
-]
-
-MIN_RANGE_ATR_VALUES = [
-    1.00,
-    1.10,
-    1.20,
-    1.30,
-]
-
-MAX_CLOSE_LOCATION_VALUES = [
-    0.15,
-    0.20,
-    0.25,
-]
-
-RR_VALUES = [
-    2.50,
-    2.75,
-    3.00,
-    3.25,
-    3.50,
-]
+STRUCTURE_LOOKBACK = 90
+MAX_DISTANCE_ATR = 0.075
+MIN_RANGE_ATR = 1.10
+MAX_CLOSE_LOCATION = 0.20
 
 H1_CHUNK_DAYS = 180
 
@@ -138,9 +88,67 @@ RESEARCH_TO = (
     )
 )
 
-H1_WARMUP_DAYS = 550
+H1_WARMUP_DAYS = 600
+DAILY_WARMUP_DAYS = 3500
 
-OUTPUT_FILE = "eurgbp_short_robustness_plateau_sweep.csv"
+NY_TZ = ZoneInfo("America/New_York")
+DAILY_ALIGNMENT_HOUR = 17
+DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
+
+OUTPUT_FILE = "eurgbp_short_feature_discovery.csv"
+
+
+# ============================================================
+# FEATURE SWEEP VALUES
+# ============================================================
+
+DAILY_EMA_LENGTHS = [
+    50, 70, 100, 150, 200, 250, 300, 400
+]
+
+MOMENTUM_LOOKBACKS = [
+    12, 24, 48
+]
+
+MIN_UP_MOMENTUM_ATR_THRESHOLDS = [
+    -0.50, -0.25, 0.00, 0.25, 0.50,
+    0.75, 1.00, 1.25, 1.50
+]
+
+MAX_STOP_SIZE_ATR_THRESHOLDS = [
+    0.90, 1.00, 1.10, 1.20, 1.30,
+    1.40, 1.50, 1.60, 1.80, 2.00, 2.50
+]
+
+MIN_BODY_ATR_THRESHOLDS = [
+    0.40, 0.50, 0.60, 0.70, 0.80,
+    0.90, 1.00, 1.10, 1.25, 1.50
+]
+
+MIN_UPPER_WICK_BODY_THRESHOLDS = [
+    0.00, 0.10, 0.20, 0.30, 0.40,
+    0.50, 0.75
+]
+
+ATR_RATIO_THRESHOLDS = [
+    0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30
+]
+
+H1_EMA_LENGTHS = [
+    20, 50
+]
+
+EMA20_SLOPE_LOOKBACKS = [
+    6, 12, 24
+]
+
+EMA20_SLOPE_THRESHOLDS_ATR = [
+    -0.50, -0.25, 0.00, 0.10, 0.20, 0.30, 0.50
+]
+
+MAX_BARS_SINCE_PRIOR_HIGH = [
+    1, 2, 3, 5, 8, 12, 18, 24, 36, 48, 72, 89
+]
 
 
 # ============================================================
@@ -175,23 +183,14 @@ ERAS = [
 # STATUS
 # ============================================================
 
-TOTAL_TESTS = (
-    len(STRUCTURE_LOOKBACKS)
-    * len(MAX_DISTANCE_ATR_VALUES)
-    * len(MIN_RANGE_ATR_VALUES)
-    * len(MAX_CLOSE_LOCATION_VALUES)
-    * len(RR_VALUES)
-)
-
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EURGBP Short Robustness Plateau Sweep",
+    "service": "EURGBP Short Feature Discovery",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "total_tests": TOTAL_TESTS,
-    "completed_tests": 0,
+    "reward_risk": REWARD_RISK,
     "rows_saved": 0,
     "output_file": None,
 }
@@ -270,6 +269,8 @@ def fetch_range(
         "to": iso_utc(end),
         "smooth": "false",
         "includeFirst": "true",
+        "dailyAlignment": DAILY_ALIGNMENT_HOUR,
+        "alignmentTimezone": DAILY_ALIGNMENT_TIMEZONE,
     }
 
     data = oanda_get(
@@ -338,6 +339,46 @@ def fetch_chunked_history(
 # INDICATORS
 # ============================================================
 
+def ema_series(values, length):
+    result = [None] * len(values)
+
+    if len(values) < length:
+        return result
+
+    initial = (
+        sum(values[:length])
+        / length
+    )
+
+    result[
+        length - 1
+    ] = initial
+
+    multiplier = (
+        2.0 / (length + 1.0)
+    )
+
+    previous = initial
+
+    for index in range(
+        length,
+        len(values),
+    ):
+        current = (
+            (
+                values[index]
+                - previous
+            )
+            * multiplier
+            + previous
+        )
+
+        result[index] = current
+        previous = current
+
+    return result
+
+
 def true_ranges(candles):
     result = []
 
@@ -370,7 +411,9 @@ def true_ranges(candles):
                 ),
             )
 
-        result.append(tr)
+        result.append(
+            tr
+        )
 
     return result
 
@@ -424,18 +467,158 @@ def atr_series(
     )
 
 
+def rolling_mean(values, length):
+    result = [None] * len(values)
+
+    running_sum = 0.0
+    queue = []
+
+    for index, value in enumerate(
+        values
+    ):
+        if value is None:
+            queue.append(None)
+        else:
+            queue.append(value)
+            running_sum += value
+
+        if len(queue) > length:
+            removed = queue.pop(0)
+            if removed is not None:
+                running_sum -= removed
+
+        if (
+            len(queue) == length
+            and all(
+                item is not None
+                for item in queue
+            )
+        ):
+            result[index] = (
+                running_sum
+                / length
+            )
+
+    return result
+
+
 # ============================================================
-# RAW CANDIDATES + FEATURES
+# DAILY LOOKUP
+# ============================================================
+
+def current_daily_start(
+    timestamp_utc
+):
+    ny_time = (
+        timestamp_utc.astimezone(
+            NY_TZ
+        )
+    )
+
+    candidate = ny_time.replace(
+        hour=DAILY_ALIGNMENT_HOUR,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+    if ny_time < candidate:
+        candidate -= timedelta(
+            days=1
+        )
+
+    return candidate.astimezone(
+        timezone.utc
+    )
+
+
+def build_daily_rows(
+    daily
+):
+    closes = [
+        candle["close"]
+        for candle in daily
+    ]
+
+    ema_map = {
+        length: ema_series(
+            closes,
+            length,
+        )
+        for length in DAILY_EMA_LENGTHS
+    }
+
+    rows = []
+
+    for index, candle in enumerate(
+        daily
+    ):
+        rows.append({
+            "time": candle["time"],
+            "close": candle["close"],
+            "emas": {
+                length:
+                    ema_map[length][index]
+                for length
+                in DAILY_EMA_LENGTHS
+            },
+        })
+
+    return rows
+
+
+def build_h1_daily_lookup(
+    h1,
+    daily_rows,
+):
+    lookup = [None] * len(h1)
+    daily_index = -1
+
+    for h1_index, candle in enumerate(
+        h1
+    ):
+        session_start = (
+            current_daily_start(
+                candle["time"]
+            )
+        )
+
+        while (
+            daily_index + 1
+            < len(daily_rows)
+            and daily_rows[
+                daily_index + 1
+            ]["time"] < session_start
+        ):
+            daily_index += 1
+
+        if daily_index < 0:
+            continue
+
+        lookup[h1_index] = (
+            daily_rows[daily_index]
+        )
+
+    return lookup
+
+
+# ============================================================
+# CANDIDATE FEATURES
 # ============================================================
 
 def build_candidates(
     h1,
     h1_atr,
+    atr_mean_50,
+    h1_ema_map,
+    daily_lookup,
 ):
     candidates = []
 
     max_lookback = max(
-        STRUCTURE_LOOKBACKS
+        STRUCTURE_LOOKBACK,
+        max(MOMENTUM_LOOKBACKS),
+        max(EMA20_SLOPE_LOOKBACKS),
     )
 
     for index in range(
@@ -500,47 +683,216 @@ def build_candidates(
             / previous_body
         )
 
-        if body_ratio < BODY_RATIO:
+        if body_ratio < MIN_BODY_RATIO:
             continue
-
-        range_atr = (
-            candle_range
-            / atr
-        )
 
         close_location = (
             signal["close"]
             - signal["low"]
         ) / candle_range
 
-        structure = {}
+        range_atr = (
+            candle_range
+            / atr
+        )
+
+        previous_slice = h1[
+            index - STRUCTURE_LOOKBACK:
+            index
+        ]
+
+        previous_highest = max(
+            candle["high"]
+            for candle
+            in previous_slice
+        )
+
+        structure_distance_atr = (
+            previous_highest
+            - signal["high"]
+        ) / atr
+
+        # Fixed viable core.
+        if (
+            structure_distance_atr
+            > MAX_DISTANCE_ATR
+        ):
+            continue
+
+        if range_atr < MIN_RANGE_ATR:
+            continue
+
+        if (
+            close_location
+            > MAX_CLOSE_LOCATION
+        ):
+            continue
+
+        stop = (
+            signal["high"]
+            + STOP_BUFFER_TICKS
+            * TICK_SIZE
+        )
+
+        stop_size_atr = (
+            stop
+            - signal["close"]
+        ) / atr
+
+        body_atr = (
+            current_body
+            / atr
+        )
+
+        upper_wick = max(
+            0.0,
+            signal["high"]
+            - max(
+                signal["open"],
+                signal["close"],
+            )
+        )
+
+        upper_wick_body = (
+            upper_wick
+            / current_body
+        )
+
+        momentum = {}
 
         for lookback in (
-            STRUCTURE_LOOKBACKS
+            MOMENTUM_LOOKBACKS
         ):
-            previous_highest = max(
-                candle["high"]
-                for candle in h1[
-                    index - lookback:
-                    index
-                ]
-            )
-
-            structure[
+            momentum[
                 lookback
             ] = (
-                previous_highest
-                - signal["high"]
+                signal["close"]
+                - h1[
+                    index - lookback
+                ]["close"]
             ) / atr
+
+        atr_ratio_50 = None
+
+        if (
+            atr_mean_50[index]
+            is not None
+            and atr_mean_50[index] > 0
+        ):
+            atr_ratio_50 = (
+                atr
+                / atr_mean_50[index]
+            )
+
+        ema20 = h1_ema_map[
+            20
+        ][index]
+
+        ema50 = h1_ema_map[
+            50
+        ][index]
+
+        close_vs_ema20_atr = None
+        close_vs_ema50_atr = None
+
+        if ema20 is not None:
+            close_vs_ema20_atr = (
+                signal["close"]
+                - ema20
+            ) / atr
+
+        if ema50 is not None:
+            close_vs_ema50_atr = (
+                signal["close"]
+                - ema50
+            ) / atr
+
+        ema20_slopes = {}
+
+        for lookback in (
+            EMA20_SLOPE_LOOKBACKS
+        ):
+            past_ema = h1_ema_map[
+                20
+            ][
+                index - lookback
+            ]
+
+            if (
+                ema20 is None
+                or past_ema is None
+            ):
+                ema20_slopes[
+                    lookback
+                ] = None
+
+            else:
+                ema20_slopes[
+                    lookback
+                ] = (
+                    ema20
+                    - past_ema
+                ) / atr
+
+        prior_high_index = None
+
+        for offset in range(
+            1,
+            STRUCTURE_LOOKBACK + 1,
+        ):
+            candidate_index = (
+                index - offset
+            )
+
+            if (
+                abs(
+                    h1[
+                        candidate_index
+                    ]["high"]
+                    - previous_highest
+                )
+                <= 1e-12
+            ):
+                prior_high_index = (
+                    candidate_index
+                )
+                break
+
+        bars_since_prior_high = None
+
+        if prior_high_index is not None:
+            bars_since_prior_high = (
+                index
+                - prior_high_index
+            )
 
         candidates.append({
             "index": index,
             "time": signal["time"],
-            "range_atr": range_atr,
-            "close_location": (
-                close_location
+            "daily": daily_lookup[index],
+            "momentum": momentum,
+            "stop_size_atr": (
+                stop_size_atr
             ),
-            "structure": structure,
+            "body_atr": body_atr,
+            "upper_wick_body": (
+                upper_wick_body
+            ),
+            "atr_ratio_50": (
+                atr_ratio_50
+            ),
+            "close_vs_ema20_atr": (
+                close_vs_ema20_atr
+            ),
+            "close_vs_ema50_atr": (
+                close_vs_ema50_atr
+            ),
+            "ema20_slopes": (
+                ema20_slopes
+            ),
+            "bars_since_prior_high": (
+                bars_since_prior_high
+            ),
         })
 
     return candidates
@@ -556,16 +908,10 @@ EXIT_CACHE = {}
 def calculate_trade_exit(
     h1,
     signal_index,
-    reward_risk,
 ):
-    cache_key = (
-        signal_index,
-        reward_risk,
-    )
-
-    if cache_key in EXIT_CACHE:
+    if signal_index in EXIT_CACHE:
         return EXIT_CACHE[
-            cache_key
+            signal_index
         ]
 
     signal = h1[
@@ -601,7 +947,7 @@ def calculate_trade_exit(
     target = (
         reference_entry
         - reference_risk
-        * reward_risk
+        * REWARD_RISK
     )
 
     actual_risk = (
@@ -682,7 +1028,7 @@ def calculate_trade_exit(
         }
 
         EXIT_CACHE[
-            cache_key
+            signal_index
         ] = result
 
         return result
@@ -698,7 +1044,7 @@ def calculate_trade_exit(
     }
 
     EXIT_CACHE[
-        cache_key
+        signal_index
     ] = result
 
     return result
@@ -707,7 +1053,6 @@ def calculate_trade_exit(
 def simulate(
     h1,
     eligible,
-    reward_risk,
 ):
     trades = []
     position_exit_index = -1
@@ -719,9 +1064,6 @@ def simulate(
             candidate["index"]
         )
 
-        # Same convention used in the other short research:
-        # a signal on the same H1 bar where the previous position
-        # exits is allowed.
         if (
             signal_index
             < position_exit_index
@@ -732,7 +1074,6 @@ def simulate(
         trade = calculate_trade_exit(
             h1,
             signal_index,
-            reward_risk,
         )
 
         if trade[
@@ -907,12 +1248,13 @@ def stats_for_trades(
 # ============================================================
 
 def make_result_row(
-    lookback,
-    max_distance_atr,
-    min_range_atr,
-    max_close_location,
-    reward_risk,
-    raw_candidates,
+    family,
+    test_label,
+    parameter_1_name,
+    parameter_1_value,
+    parameter_2_name,
+    parameter_2_value,
+    base_candidates,
     eligible,
     trades,
     ignored,
@@ -924,25 +1266,24 @@ def make_result_row(
     )
 
     row = {
-        "structure_lookback": lookback,
-        "max_distance_atr": max_distance_atr,
-        "min_range_atr": min_range_atr,
-        "max_close_location": (
-            max_close_location
-        ),
-        "reward_risk": reward_risk,
-        "raw_signals": len(
-            raw_candidates
+        "family": family,
+        "test_label": test_label,
+        "parameter_1_name": parameter_1_name,
+        "parameter_1_value": parameter_1_value,
+        "parameter_2_name": parameter_2_name,
+        "parameter_2_value": parameter_2_value,
+        "base_signals": len(
+            base_candidates
         ),
         "eligible_signals": len(
             eligible
         ),
-        "signal_retention_pct": round(
+        "retention_vs_base_pct": round(
             len(eligible)
-            / len(raw_candidates)
+            / len(base_candidates)
             * 100.0,
             2,
-        ) if raw_candidates else 0.0,
+        ) if base_candidates else 0.0,
         "ignored_due_to_open_trade": (
             ignored
         ),
@@ -1072,43 +1413,6 @@ def make_result_row(
     )
 
     row[
-        "worst_era_pf_105"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.05
-    )
-
-    row[
-        "worst_era_pf_110"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.10
-    )
-
-    row[
-        "worst_era_pf_115"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.15
-    )
-
-    row[
-        "pf_130"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.30
-    )
-
-    row[
-        "pf_140"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.40
-    )
-
-    row[
         "annual_r_linear"
     ] = round(
         full["expectancy_r"]
@@ -1123,6 +1427,59 @@ def make_result_row(
 
 
 # ============================================================
+# RUN ONE TEST
+# ============================================================
+
+def run_test(
+    rows,
+    h1,
+    years,
+    base_candidates,
+    family,
+    test_label,
+    predicate,
+    parameter_1_name=None,
+    parameter_1_value=None,
+    parameter_2_name=None,
+    parameter_2_value=None,
+):
+    eligible = [
+        candidate
+        for candidate
+        in base_candidates
+        if predicate(
+            candidate
+        )
+    ]
+
+    (
+        trades,
+        ignored,
+        still_open,
+    ) = simulate(
+        h1,
+        eligible,
+    )
+
+    rows.append(
+        make_result_row(
+            family,
+            test_label,
+            parameter_1_name,
+            parameter_1_value,
+            parameter_2_name,
+            parameter_2_value,
+            base_candidates,
+            eligible,
+            trades,
+            ignored,
+            still_open,
+            years,
+        )
+    )
+
+
+# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1133,18 +1490,15 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "EUR/GBP SHORT - ROBUSTNESS / PLATEAU SWEEP"
+            "EUR/GBP SHORT - FEATURE DISCOVERY"
         )
         print("=" * 76)
-        print(
-            f"Total tests: {TOTAL_TESTS}"
-        )
         print()
 
         STATUS.update({
             "state": "fetching_data",
             "message": (
-                "Fetching EUR/GBP OANDA H1 history"
+                "Fetching EUR/GBP H1 and daily history"
             ),
         })
 
@@ -1158,15 +1512,30 @@ def run_research():
             RESEARCH_TO,
         )
 
+        daily = fetch_chunked_history(
+            INSTRUMENT,
+            "D",
+            RESEARCH_FROM
+            - timedelta(
+                days=DAILY_WARMUP_DAYS
+            ),
+            RESEARCH_TO,
+        )
+
         if not h1:
             raise RuntimeError(
                 "No EUR/GBP H1 candles returned"
             )
 
+        if not daily:
+            raise RuntimeError(
+                "No EUR/GBP daily candles returned"
+            )
+
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building ATR14 and candidate features"
+                "Building indicators and fixed-core candidates"
             ),
         })
 
@@ -1175,17 +1544,51 @@ def run_research():
             14,
         )
 
-        raw_candidates = (
+        atr_mean_50 = rolling_mean(
+            h1_atr,
+            50,
+        )
+
+        h1_closes = [
+            candle["close"]
+            for candle in h1
+        ]
+
+        h1_ema_map = {
+            length: ema_series(
+                h1_closes,
+                length,
+            )
+            for length in H1_EMA_LENGTHS
+        }
+
+        daily_rows = (
+            build_daily_rows(
+                daily
+            )
+        )
+
+        daily_lookup = (
+            build_h1_daily_lookup(
+                h1,
+                daily_rows,
+            )
+        )
+
+        base_candidates = (
             build_candidates(
                 h1,
                 h1_atr,
+                atr_mean_50,
+                h1_ema_map,
+                daily_lookup,
             )
         )
 
         STATUS[
-            "raw_bearish_engulfing_signals"
+            "fixed_core_signals"
         ] = len(
-            raw_candidates
+            base_candidates
         )
 
         years = (
@@ -1198,87 +1601,352 @@ def run_research():
             * 60
         )
 
+        rows = []
+
         STATUS.update({
             "state": "running",
             "message": (
-                "Running robustness plateau sweep"
+                "Running EUR/GBP feature discovery"
             ),
         })
 
-        rows = []
-        completed = 0
+        # ----------------------------------------------------
+        # BASELINE CONTROL
+        # ----------------------------------------------------
 
-        for lookback in STRUCTURE_LOOKBACKS:
-            for max_distance_atr in (
-                MAX_DISTANCE_ATR_VALUES
-            ):
-                for min_range_atr in (
-                    MIN_RANGE_ATR_VALUES
-                ):
-                    for max_close_location in (
-                        MAX_CLOSE_LOCATION_VALUES
-                    ):
-                        eligible = [
-                            candidate
-                            for candidate
-                            in raw_candidates
-                            if (
-                                candidate[
-                                    "structure"
-                                ][lookback]
-                                <= max_distance_atr
-                                and candidate[
-                                    "range_atr"
-                                ] >= min_range_atr
-                                and candidate[
-                                    "close_location"
-                                ] <= max_close_location
-                            )
+        run_test(
+            rows,
+            h1,
+            years,
+            base_candidates,
+            "BASELINE",
+            "fixed_core_only",
+            lambda candidate: True,
+        )
+
+        # ----------------------------------------------------
+        # DAILY CLOSE BELOW EMA
+        # ----------------------------------------------------
+
+        for length in DAILY_EMA_LENGTHS:
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "DAILY_CLOSE_BELOW_EMA",
+                f"daily_close_below_ema_{length}",
+                lambda candidate,
+                length=length:
+                    (
+                        candidate[
+                            "daily"
+                        ] is not None
+                        and candidate[
+                            "daily"
+                        ][
+                            "emas"
+                        ][length]
+                        is not None
+                        and candidate[
+                            "daily"
+                        ][
+                            "close"
                         ]
+                        < candidate[
+                            "daily"
+                        ][
+                            "emas"
+                        ][length]
+                    ),
+                "slow_daily_ema",
+                length,
+            )
 
-                        for reward_risk in (
-                            RR_VALUES
-                        ):
-                            (
-                                trades,
-                                ignored,
-                                still_open,
-                            ) = simulate(
-                                h1,
-                                eligible,
-                                reward_risk,
-                            )
+        # ----------------------------------------------------
+        # UPWARD MOMENTUM
+        # ----------------------------------------------------
 
-                            rows.append(
-                                make_result_row(
-                                    lookback,
-                                    max_distance_atr,
-                                    min_range_atr,
-                                    max_close_location,
-                                    reward_risk,
-                                    raw_candidates,
-                                    eligible,
-                                    trades,
-                                    ignored,
-                                    still_open,
-                                    years,
-                                )
-                            )
+        for lookback in MOMENTUM_LOOKBACKS:
+            for threshold in (
+                MIN_UP_MOMENTUM_ATR_THRESHOLDS
+            ):
+                run_test(
+                    rows,
+                    h1,
+                    years,
+                    base_candidates,
+                    "UP_MOMENTUM",
+                    (
+                        f"up_momentum_{lookback}h_"
+                        f"gte_{threshold:.2f}"
+                    ),
+                    lambda candidate,
+                    lb=lookback,
+                    t=threshold:
+                        candidate[
+                            "momentum"
+                        ][lb] >= t,
+                    "momentum_lookback_h",
+                    lookback,
+                    "min_up_momentum_atr",
+                    threshold,
+                )
 
-                            completed += 1
+        # ----------------------------------------------------
+        # STOP SIZE
+        # ----------------------------------------------------
 
-                            STATUS[
-                                "completed_tests"
-                            ] = completed
+        for threshold in (
+            MAX_STOP_SIZE_ATR_THRESHOLDS
+        ):
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "MAX_STOP_SIZE_ATR",
+                f"stop_size_lte_{threshold:.2f}",
+                lambda candidate,
+                t=threshold:
+                    candidate[
+                        "stop_size_atr"
+                    ] <= t,
+                "max_stop_size_atr",
+                threshold,
+            )
 
-                            if (
-                                completed % 20 == 0
-                                or completed == TOTAL_TESTS
-                            ):
-                                print(
-                                    f"{completed}/{TOTAL_TESTS}",
-                                    flush=True,
-                                )
+        # ----------------------------------------------------
+        # BODY SIZE / ATR
+        # ----------------------------------------------------
+
+        for threshold in (
+            MIN_BODY_ATR_THRESHOLDS
+        ):
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "MIN_BODY_ATR",
+                f"body_atr_gte_{threshold:.2f}",
+                lambda candidate,
+                t=threshold:
+                    candidate[
+                        "body_atr"
+                    ] >= t,
+                "min_body_atr",
+                threshold,
+            )
+
+        # ----------------------------------------------------
+        # UPPER WICK / BODY
+        # ----------------------------------------------------
+
+        for threshold in (
+            MIN_UPPER_WICK_BODY_THRESHOLDS
+        ):
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "MIN_UPPER_WICK_BODY",
+                (
+                    f"upper_wick_body_gte_"
+                    f"{threshold:.2f}"
+                ),
+                lambda candidate,
+                t=threshold:
+                    candidate[
+                        "upper_wick_body"
+                    ] >= t,
+                "min_upper_wick_body",
+                threshold,
+            )
+
+        # ----------------------------------------------------
+        # ATR REGIME
+        # ----------------------------------------------------
+
+        for threshold in (
+            ATR_RATIO_THRESHOLDS
+        ):
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "MIN_ATR14_VS_ATR50_MEAN",
+                (
+                    f"atr14_vs_mean50_gte_"
+                    f"{threshold:.2f}"
+                ),
+                lambda candidate,
+                t=threshold:
+                    (
+                        candidate[
+                            "atr_ratio_50"
+                        ] is not None
+                        and candidate[
+                            "atr_ratio_50"
+                        ] >= t
+                    ),
+                "min_atr14_ratio_50",
+                threshold,
+            )
+
+        # ----------------------------------------------------
+        # H1 CLOSE VS EMA
+        # ----------------------------------------------------
+
+        run_test(
+            rows,
+            h1,
+            years,
+            base_candidates,
+            "H1_CLOSE_VS_EMA20",
+            "close_below_ema20",
+            lambda candidate:
+                (
+                    candidate[
+                        "close_vs_ema20_atr"
+                    ] is not None
+                    and candidate[
+                        "close_vs_ema20_atr"
+                    ] < 0
+                ),
+            "condition",
+            "close_below_ema20",
+        )
+
+        run_test(
+            rows,
+            h1,
+            years,
+            base_candidates,
+            "H1_CLOSE_VS_EMA20",
+            "close_above_ema20",
+            lambda candidate:
+                (
+                    candidate[
+                        "close_vs_ema20_atr"
+                    ] is not None
+                    and candidate[
+                        "close_vs_ema20_atr"
+                    ] > 0
+                ),
+            "condition",
+            "close_above_ema20",
+        )
+
+        run_test(
+            rows,
+            h1,
+            years,
+            base_candidates,
+            "H1_CLOSE_VS_EMA50",
+            "close_below_ema50",
+            lambda candidate:
+                (
+                    candidate[
+                        "close_vs_ema50_atr"
+                    ] is not None
+                    and candidate[
+                        "close_vs_ema50_atr"
+                    ] < 0
+                ),
+            "condition",
+            "close_below_ema50",
+        )
+
+        run_test(
+            rows,
+            h1,
+            years,
+            base_candidates,
+            "H1_CLOSE_VS_EMA50",
+            "close_above_ema50",
+            lambda candidate:
+                (
+                    candidate[
+                        "close_vs_ema50_atr"
+                    ] is not None
+                    and candidate[
+                        "close_vs_ema50_atr"
+                    ] > 0
+                ),
+            "condition",
+            "close_above_ema50",
+        )
+
+        # ----------------------------------------------------
+        # EMA20 SLOPE
+        # ----------------------------------------------------
+
+        for lookback in (
+            EMA20_SLOPE_LOOKBACKS
+        ):
+            for threshold in (
+                EMA20_SLOPE_THRESHOLDS_ATR
+            ):
+                run_test(
+                    rows,
+                    h1,
+                    years,
+                    base_candidates,
+                    "EMA20_SLOPE",
+                    (
+                        f"ema20_slope_{lookback}h_"
+                        f"gte_{threshold:.2f}_atr"
+                    ),
+                    lambda candidate,
+                    lb=lookback,
+                    t=threshold:
+                        (
+                            candidate[
+                                "ema20_slopes"
+                            ][lb] is not None
+                            and candidate[
+                                "ema20_slopes"
+                            ][lb] >= t
+                        ),
+                    "slope_lookback_h",
+                    lookback,
+                    "min_slope_atr",
+                    threshold,
+                )
+
+        # ----------------------------------------------------
+        # TIME SINCE PRIOR 90-BAR HIGH
+        # ----------------------------------------------------
+
+        for threshold in (
+            MAX_BARS_SINCE_PRIOR_HIGH
+        ):
+            run_test(
+                rows,
+                h1,
+                years,
+                base_candidates,
+                "MAX_BARS_SINCE_PRIOR_HIGH",
+                (
+                    f"bars_since_prior_high_lte_"
+                    f"{threshold}"
+                ),
+                lambda candidate,
+                t=threshold:
+                    (
+                        candidate[
+                            "bars_since_prior_high"
+                        ] is not None
+                        and candidate[
+                            "bars_since_prior_high"
+                        ] <= t
+                    ),
+                "max_bars_since_prior_high",
+                threshold,
+            )
 
         df = pd.DataFrame(
             rows
@@ -1289,16 +1957,49 @@ def run_research():
                 "No result rows generated"
             )
 
+        df[
+            "pf_150"
+        ] = (
+            df[
+                "profit_factor"
+            ] >= 1.50
+        )
+
+        df[
+            "pf_160"
+        ] = (
+            df[
+                "profit_factor"
+            ] >= 1.60
+        )
+
+        df[
+            "worst_era_pf_110"
+        ] = (
+            df[
+                "minimum_era_pf_5_plus"
+            ].fillna(0)
+            >= 1.10
+        )
+
+        df[
+            "worst_era_pf_120"
+        ] = (
+            df[
+                "minimum_era_pf_5_plus"
+            ].fillna(0)
+            >= 1.20
+        )
+
         df = df.sort_values(
             by=[
                 "all_four_eras_profitable",
                 "adequate_90_trades",
                 "frequency_4py",
-                "worst_era_pf_115",
+                "worst_era_pf_120",
                 "worst_era_pf_110",
-                "worst_era_pf_105",
-                "pf_140",
-                "pf_130",
+                "pf_160",
+                "pf_150",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "expectancy_r",
@@ -1306,7 +2007,6 @@ def run_research():
                 "trades",
             ],
             ascending=[
-                False,
                 False,
                 False,
                 False,
@@ -1330,30 +2030,19 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "EUR/GBP robustness plateau sweep "
+                "EUR/GBP feature discovery "
                 "completed successfully"
             ),
-            "completed_tests": TOTAL_TESTS,
             "rows_saved": len(
                 df
             ),
-            "raw_bearish_engulfing_signals": (
-                len(raw_candidates)
+            "fixed_core_signals": (
+                len(base_candidates)
             ),
             "all_four_eras_profitable_count": int(
                 df[
                     "all_four_eras_profitable"
                 ].sum()
-            ),
-            "adequate_90_and_four_eras_count": int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "adequate_90_trades"
-                    ]
-                ).sum()
             ),
             "output_file": (
                 OUTPUT_FILE
@@ -1363,32 +2052,23 @@ def run_research():
         print()
         print("=" * 76)
         print(
-            "EUR/GBP ROBUSTNESS SWEEP COMPLETE"
+            "EUR/GBP FEATURE DISCOVERY COMPLETE"
         )
         print("=" * 76)
+        print(
+            "Fixed-core signals:",
+            len(base_candidates),
+        )
         print(
             "Rows:",
             len(df),
         )
         print(
-            "All-four-era profitable:",
+            "All-four-era profitable rows:",
             int(
                 df[
                     "all_four_eras_profitable"
                 ].sum()
-            ),
-        )
-        print(
-            "All-four-era + >=90 trades:",
-            int(
-                (
-                    df[
-                        "all_four_eras_profitable"
-                    ]
-                    & df[
-                        "adequate_90_trades"
-                    ]
-                ).sum()
             ),
         )
         print(
@@ -1418,7 +2098,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "EURGBP Short Robustness Plateau Sweep"
+            "EURGBP Short Feature Discovery"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1426,24 +2106,31 @@ def home():
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
-        "matrix": {
-            "structure_lookbacks": (
-                STRUCTURE_LOOKBACKS
+        "fixed_core": {
+            "minimum_body_ratio": MIN_BODY_RATIO,
+            "structure_lookback": STRUCTURE_LOOKBACK,
+            "max_distance_atr": MAX_DISTANCE_ATR,
+            "min_range_atr": MIN_RANGE_ATR,
+            "max_close_location": MAX_CLOSE_LOCATION,
+            "reward_risk": REWARD_RISK,
+            "stop_buffer_ticks": STOP_BUFFER_TICKS,
+            "backtest_slippage_ticks": (
+                BACKTEST_SLIPPAGE_TICKS
             ),
-            "max_distance_atr_values": (
-                MAX_DISTANCE_ATR_VALUES
-            ),
-            "min_range_atr_values": (
-                MIN_RANGE_ATR_VALUES
-            ),
-            "max_close_location_values": (
-                MAX_CLOSE_LOCATION_VALUES
-            ),
-            "reward_risk_values": (
-                RR_VALUES
-            ),
-            "total_tests": TOTAL_TESTS,
         },
+        "families": [
+            "BASELINE",
+            "DAILY_CLOSE_BELOW_EMA",
+            "UP_MOMENTUM",
+            "MAX_STOP_SIZE_ATR",
+            "MIN_BODY_ATR",
+            "MIN_UPPER_WICK_BODY",
+            "MIN_ATR14_VS_ATR50_MEAN",
+            "H1_CLOSE_VS_EMA20",
+            "H1_CLOSE_VS_EMA50",
+            "EMA20_SLOPE",
+            "MAX_BARS_SINCE_PRIOR_HIGH",
+        ],
         "download": "/download",
     })
 
@@ -1463,7 +2150,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "EUR/GBP robustness CSV "
+                "EUR/GBP feature-discovery CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1483,7 +2170,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "eurgbp-short-robustness-plateau"
+            "eurgbp-short-feature-discovery"
         ),
         daemon=True,
     )
