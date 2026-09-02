@@ -9,118 +9,105 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# EUR/GBP SHORT - TIMING x FREQUENCY RECOVERY MATRIX
+# EUR/GBP SHORT - POST-NY09 ROBUSTNESS NEIGHBOURHOOD
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
 # Purpose:
-#   Take the strongest toxic timing finding (NY hour 09)
-#   and test whether frequency can be recovered by relaxing
-#   ONE existing filter at a time.
+#   Tight robustness test around the two improved EUR/GBP
+#   candidates found after excluding NY hour 09 and recovering
+#   frequency.
 #
-# Also includes NY hour 11 as a SECONDARY timing comparison
-# for the ROBUST branch only.
+# Timing:
+#   EXCLUDE signal candles opening in NY hour 09.
 #
-# IMPORTANT:
-#   - Timing exclusion is applied first.
-#   - Only ONE strategy filter is relaxed at a time.
-#   - No multi-parameter stacking in this stage.
-#   - RR remains fixed at 3.00.
+# RR:
+#   Fixed at 3.00.
 #
-# Shared frozen execution:
-#   OANDA EUR_GBP
-#   H1
-#   bearish engulfing
-#   body ratio >= 1.00
-#   stop = signal high + 10 ticks
-#   adverse short slippage = 5 ticks
-#   pyramiding = 0
+# Shared execution:
+#   - OANDA EUR_GBP
+#   - H1 midpoint candles
+#   - bearish engulfing
+#   - body ratio >= 1.00
+#   - stop = signal high + 10 ticks
+#   - adverse short slippage = 5 ticks
+#   - pyramiding = 0
+#   - same-bar target/stop tie:
+#       compare open->high vs open->low
+#       high closer = stop first
 #
-# Shared frozen geometry baseline:
+# ============================================================
+# BRANCH A — ROBUST / STRUCTURE-RELAXED
+#
+# Current centre:
 #   structure lookback = 90
-#   max distance = 0.075 ATR14
-#   min range = 1.10 ATR14
-#   max close location = 0.20
-#
-# ROBUST branch baseline:
+#   distance <= 0.15 ATR14
+#   range >= 1.10 ATR14
+#   close location <= 0.20
 #   12h upward momentum >= 0.25 ATR14
 #   48h upward momentum >= 0.50 ATR14
 #   stop size <= 2.50 ATR14
+#   exclude NY09
 #
-# HIGH_PF branch baseline:
+# Sweep:
+#   structure lookback:
+#       80, 90, 100
+#
+#   distance:
+#       0.10, 0.125, 0.15, 0.175, 0.20
+#
+#   range:
+#       1.05, 1.10, 1.15
+#
+#   close location:
+#       0.175, 0.20, 0.225
+#
+#   12h momentum:
+#       0.20, 0.25, 0.30
+#
+#   48h momentum:
+#       0.40, 0.50, 0.60
+#
+# Stop cap fixed:
+#       <= 2.50 ATR14
+#
+# ============================================================
+# BRANCH B — HIGH-PF / RANGE-RELAXED
+#
+# Current centre:
+#   structure lookback = 90
+#   distance <= 0.075 ATR14
+#   range >= 0.95 ATR14
+#   close location <= 0.20
 #   48h upward momentum >= 1.00 ATR14
 #   upper wick/body >= 0.10
 #   ATR14 / 50-bar ATR14 mean >= 0.80
+#   exclude NY09
 #
-# TIMING PROFILES:
-#   ROBUST:
-#       exclude NY09
-#       exclude NY11
+# Sweep:
+#   structure lookback:
+#       80, 90, 100
 #
-#   HIGH_PF:
-#       exclude NY09
+#   distance:
+#       0.05, 0.075, 0.10
 #
-# RELAXATIONS TESTED ONE AT A TIME
+#   range:
+#       0.90, 0.95, 1.00, 1.05
 #
-# Shared:
-#   max distance:
-#       0.075 baseline
-#       0.10
-#       0.125
-#       0.15
-#
-#   min range:
-#       1.10 baseline
-#       1.05
-#       1.00
-#       0.95
-#
-#   max close location:
-#       0.20 baseline
-#       0.225
-#       0.25
-#       0.275
-#
-# ROBUST only:
-#   12h momentum:
-#       0.25 baseline
-#       0.20
-#       0.15
-#       0.10
+#   close location:
+#       0.175, 0.20, 0.225
 #
 #   48h momentum:
-#       0.50 baseline
-#       0.40
-#       0.30
-#       0.20
-#
-#   stop cap:
-#       2.50 baseline
-#       2.75
-#       3.00
-#       None
-#
-# HIGH_PF only:
-#   48h momentum:
-#       1.00 baseline
-#       0.90
-#       0.80
-#       0.70
+#       0.90, 1.00, 1.10
 #
 #   upper wick/body:
-#       0.10 baseline
-#       0.075
-#       0.05
-#       None
+#       0.05, 0.10, 0.15
 #
-#   ATR regime:
-#       0.80 baseline
-#       0.75
-#       0.70
-#       None
+# ATR regime fixed:
+#       ATR14 / mean ATR14(50) >= 0.80
 #
 # Output:
-#   eurgbp_short_timing_frequency_recovery_matrix.csv
+#   eurgbp_short_post_ny09_robustness_neighbourhood.csv
 # ============================================================
 
 
@@ -140,15 +127,10 @@ TICK_SIZE = 0.00001
 STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
 REWARD_RISK = 3.00
-
 MIN_BODY_RATIO = 1.00
-STRUCTURE_LOOKBACK = 90
-
-BASE_MAX_DISTANCE_ATR = 0.075
-BASE_MIN_RANGE_ATR = 1.10
-BASE_MAX_CLOSE_LOCATION = 0.20
 
 NY_TZ = ZoneInfo("America/New_York")
+EXCLUDED_NY_HOURS = {9}
 
 H1_CHUNK_DAYS = 180
 
@@ -169,225 +151,97 @@ RESEARCH_TO = (
 H1_WARMUP_DAYS = 700
 
 OUTPUT_FILE = (
-    "eurgbp_short_timing_frequency_recovery_matrix.csv"
+    "eurgbp_short_post_ny09_robustness_neighbourhood.csv"
 )
 
 
 # ============================================================
-# BASE BRANCHES
+# BRANCH A GRID
 # ============================================================
 
-BRANCHES = {
-    "ROBUST": {
-        "branch": "ROBUST",
-        "min_momentum_12": 0.25,
-        "min_momentum_48": 0.50,
-        "min_upper_wick_body": None,
-        "max_stop_size_atr": 2.50,
-        "min_atr_ratio_50": None,
-    },
-    "HIGH_PF": {
-        "branch": "HIGH_PF",
-        "min_momentum_12": None,
-        "min_momentum_48": 1.00,
-        "min_upper_wick_body": 0.10,
-        "max_stop_size_atr": None,
-        "min_atr_ratio_50": 0.80,
-    },
-}
-
-
-# ============================================================
-# TIMING PROFILES
-# ============================================================
-
-TIMING_PROFILES = [
-    {
-        "branch": "ROBUST",
-        "timing_label": "exclude_ny09",
-        "excluded_hours": {9},
-    },
-    {
-        "branch": "ROBUST",
-        "timing_label": "exclude_ny11",
-        "excluded_hours": {11},
-    },
-    {
-        "branch": "HIGH_PF",
-        "timing_label": "exclude_ny09",
-        "excluded_hours": {9},
-    },
+ROBUST_STRUCTURE_LOOKBACKS = [
+    80,
+    90,
+    100,
 ]
 
+ROBUST_MAX_DISTANCE_VALUES = [
+    0.10,
+    0.125,
+    0.15,
+    0.175,
+    0.20,
+]
+
+ROBUST_MIN_RANGE_VALUES = [
+    1.05,
+    1.10,
+    1.15,
+]
+
+ROBUST_MAX_CLOSE_VALUES = [
+    0.175,
+    0.20,
+    0.225,
+]
+
+ROBUST_MOM12_VALUES = [
+    0.20,
+    0.25,
+    0.30,
+]
+
+ROBUST_MOM48_VALUES = [
+    0.40,
+    0.50,
+    0.60,
+]
+
+ROBUST_MAX_STOP_SIZE_ATR = 2.50
+
 
 # ============================================================
-# RELAXATION PROFILES
+# BRANCH B GRID
 # ============================================================
 
-def make_shared_relaxations():
-    rows = [
-        {
-            "relax_family": "BASELINE",
-            "relax_label": "baseline_after_timing",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        }
-    ]
+HIGH_PF_STRUCTURE_LOOKBACKS = [
+    80,
+    90,
+    100,
+]
 
-    for value in [0.10, 0.125, 0.15]:
-        rows.append({
-            "relax_family": "STRUCTURE_DISTANCE",
-            "relax_label": f"max_distance_{value}",
-            "max_distance_atr": value,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
+HIGH_PF_MAX_DISTANCE_VALUES = [
+    0.05,
+    0.075,
+    0.10,
+]
 
-    for value in [1.05, 1.00, 0.95]:
-        rows.append({
-            "relax_family": "RANGE",
-            "relax_label": f"min_range_{value}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": value,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
+HIGH_PF_MIN_RANGE_VALUES = [
+    0.90,
+    0.95,
+    1.00,
+    1.05,
+]
 
-    for value in [0.225, 0.25, 0.275]:
-        rows.append({
-            "relax_family": "CLOSE_LOCATION",
-            "relax_label": f"max_close_{value}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": value,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
+HIGH_PF_MAX_CLOSE_VALUES = [
+    0.175,
+    0.20,
+    0.225,
+]
 
-    return rows
+HIGH_PF_MOM48_VALUES = [
+    0.90,
+    1.00,
+    1.10,
+]
 
+HIGH_PF_UPPER_WICK_VALUES = [
+    0.05,
+    0.10,
+    0.15,
+]
 
-def make_robust_relaxations():
-    rows = make_shared_relaxations()
-
-    for value in [0.20, 0.15, 0.10]:
-        rows.append({
-            "relax_family": "MOMENTUM_12H",
-            "relax_label": f"min_mom12_{value}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": value,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
-
-    for value in [0.40, 0.30, 0.20]:
-        rows.append({
-            "relax_family": "MOMENTUM_48H",
-            "relax_label": f"min_mom48_{value}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": value,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
-
-    for value in [2.75, 3.00, None]:
-        label = "none" if value is None else str(value)
-        rows.append({
-            "relax_family": "STOP_CAP",
-            "relax_label": f"max_stop_{label}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": value,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
-
-    return rows
-
-
-def make_high_pf_relaxations():
-    rows = make_shared_relaxations()
-
-    for value in [0.90, 0.80, 0.70]:
-        rows.append({
-            "relax_family": "MOMENTUM_48H",
-            "relax_label": f"min_mom48_{value}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": value,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": None,
-        })
-
-    for value in [0.075, 0.05, None]:
-        label = "none" if value is None else str(value)
-        rows.append({
-            "relax_family": "UPPER_WICK",
-            "relax_label": f"min_upper_wick_{label}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": value,
-            "min_atr_ratio_50": None,
-        })
-
-    for value in [0.75, 0.70, None]:
-        label = "none" if value is None else str(value)
-        rows.append({
-            "relax_family": "ATR_REGIME",
-            "relax_label": f"min_atr_ratio_{label}",
-            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
-            "min_range_atr": BASE_MIN_RANGE_ATR,
-            "max_close_location": BASE_MAX_CLOSE_LOCATION,
-            "min_momentum_12": None,
-            "min_momentum_48": None,
-            "max_stop_size_atr": None,
-            "min_upper_wick_body": None,
-            "min_atr_ratio_50": value,
-        })
-
-    return rows
-
-
-RELAXATIONS = {
-    "ROBUST": make_robust_relaxations(),
-    "HIGH_PF": make_high_pf_relaxations(),
-}
+HIGH_PF_MIN_ATR_RATIO_50 = 0.80
 
 
 # ============================================================
@@ -422,21 +276,37 @@ ERAS = [
 # STATUS
 # ============================================================
 
-TOTAL_TESTS = sum(
-    len(RELAXATIONS[
-        profile["branch"]
-    ])
-    for profile in TIMING_PROFILES
+ROBUST_TESTS = (
+    len(ROBUST_STRUCTURE_LOOKBACKS)
+    * len(ROBUST_MAX_DISTANCE_VALUES)
+    * len(ROBUST_MIN_RANGE_VALUES)
+    * len(ROBUST_MAX_CLOSE_VALUES)
+    * len(ROBUST_MOM12_VALUES)
+    * len(ROBUST_MOM48_VALUES)
 )
+
+HIGH_PF_TESTS = (
+    len(HIGH_PF_STRUCTURE_LOOKBACKS)
+    * len(HIGH_PF_MAX_DISTANCE_VALUES)
+    * len(HIGH_PF_MIN_RANGE_VALUES)
+    * len(HIGH_PF_MAX_CLOSE_VALUES)
+    * len(HIGH_PF_MOM48_VALUES)
+    * len(HIGH_PF_UPPER_WICK_VALUES)
+)
+
+TOTAL_TESTS = ROBUST_TESTS + HIGH_PF_TESTS
 
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EURGBP Short Timing Frequency Recovery",
+    "service": "EURGBP Short Post-NY09 Robustness Neighbourhood",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
     "reward_risk": REWARD_RISK,
+    "excluded_ny_hours": sorted(EXCLUDED_NY_HOURS),
+    "robust_tests": ROBUST_TESTS,
+    "high_pf_tests": HIGH_PF_TESTS,
     "total_tests": TOTAL_TESTS,
     "completed_tests": 0,
     "rows_saved": 0,
@@ -666,9 +536,7 @@ def atr_series(
     length=14,
 ):
     return rma_series(
-        true_ranges(
-            candles
-        ),
+        true_ranges(candles),
         length,
     )
 
@@ -703,7 +571,7 @@ def rolling_mean_optional(
 
 
 # ============================================================
-# RAW BEARISH ENGULFING FEATURES
+# RAW SIGNAL FEATURES
 # ============================================================
 
 def build_raw_candidates(
@@ -713,10 +581,26 @@ def build_raw_candidates(
 ):
     candidates = []
 
+    max_structure = max(
+        max(
+            ROBUST_STRUCTURE_LOOKBACKS
+        ),
+        max(
+            HIGH_PF_STRUCTURE_LOOKBACKS
+        ),
+    )
+
     max_lookback = max(
-        STRUCTURE_LOOKBACK,
+        max_structure,
         48,
         50,
+    )
+
+    all_structure_lookbacks = sorted(
+        set(
+            ROBUST_STRUCTURE_LOOKBACKS
+            + HIGH_PF_STRUCTURE_LOOKBACKS
+        )
     )
 
     for index in range(
@@ -792,19 +676,6 @@ def build_raw_candidates(
         ):
             continue
 
-        previous_highest = max(
-            candle["high"]
-            for candle in h1[
-                index - STRUCTURE_LOOKBACK:
-                index
-            ]
-        )
-
-        structure_distance_atr = (
-            previous_highest
-            - signal["high"]
-        ) / atr
-
         range_atr = (
             candle_range
             / atr
@@ -866,6 +737,26 @@ def build_raw_candidates(
                 / atr_mean_50[index]
             )
 
+        structure_distances = {}
+
+        for lookback in (
+            all_structure_lookbacks
+        ):
+            previous_highest = max(
+                candle["high"]
+                for candle in h1[
+                    index - lookback:
+                    index
+                ]
+            )
+
+            structure_distances[
+                lookback
+            ] = (
+                previous_highest
+                - signal["high"]
+            ) / atr
+
         ny_time = (
             signal["time"]
             .astimezone(NY_TZ)
@@ -875,9 +766,6 @@ def build_raw_candidates(
             "index": index,
             "time": signal["time"],
             "ny_hour": ny_time.hour,
-            "structure_distance_atr": (
-                structure_distance_atr
-            ),
             "range_atr": range_atr,
             "close_location": close_location,
             "momentum_12": momentum_12,
@@ -885,212 +773,139 @@ def build_raw_candidates(
             "upper_wick_body": upper_wick_body,
             "stop_size_atr": stop_size_atr,
             "atr_ratio_50": atr_ratio_50,
+            "structure": structure_distances,
         })
 
     return candidates
 
 
 # ============================================================
-# EFFECTIVE PARAMETER RESOLUTION
+# FILTERS
 # ============================================================
 
-def effective_parameters(
-    branch,
-    relaxation,
-):
-    params = {
-        "max_distance_atr": (
-            relaxation[
-                "max_distance_atr"
-            ]
-        ),
-        "min_range_atr": (
-            relaxation[
-                "min_range_atr"
-            ]
-        ),
-        "max_close_location": (
-            relaxation[
-                "max_close_location"
-            ]
-        ),
-        "min_momentum_12": (
-            branch[
-                "min_momentum_12"
-            ]
-        ),
-        "min_momentum_48": (
-            branch[
-                "min_momentum_48"
-            ]
-        ),
-        "max_stop_size_atr": (
-            branch[
-                "max_stop_size_atr"
-            ]
-        ),
-        "min_upper_wick_body": (
-            branch[
-                "min_upper_wick_body"
-            ]
-        ),
-        "min_atr_ratio_50": (
-            branch[
-                "min_atr_ratio_50"
-            ]
-        ),
-    }
-
-    family = relaxation[
-        "relax_family"
-    ]
-
-    if (
-        family
-        == "MOMENTUM_12H"
-    ):
-        params[
-            "min_momentum_12"
-        ] = relaxation[
-            "min_momentum_12"
-        ]
-
-    elif (
-        family
-        == "MOMENTUM_48H"
-    ):
-        params[
-            "min_momentum_48"
-        ] = relaxation[
-            "min_momentum_48"
-        ]
-
-    elif (
-        family
-        == "STOP_CAP"
-    ):
-        params[
-            "max_stop_size_atr"
-        ] = relaxation[
-            "max_stop_size_atr"
-        ]
-
-    elif (
-        family
-        == "UPPER_WICK"
-    ):
-        params[
-            "min_upper_wick_body"
-        ] = relaxation[
-            "min_upper_wick_body"
-        ]
-
-    elif (
-        family
-        == "ATR_REGIME"
-    ):
-        params[
-            "min_atr_ratio_50"
-        ] = relaxation[
-            "min_atr_ratio_50"
-        ]
-
-    return params
-
-
-def passes_parameters(
+def passes_robust(
     candidate,
-    params,
+    structure_lookback,
+    max_distance_atr,
+    min_range_atr,
+    max_close_location,
+    min_momentum_12,
+    min_momentum_48,
 ):
     if (
         candidate[
-            "structure_distance_atr"
-        ] > params[
-            "max_distance_atr"
-        ]
+            "ny_hour"
+        ] in EXCLUDED_NY_HOURS
+    ):
+        return False
+
+    if (
+        candidate[
+            "structure"
+        ][structure_lookback]
+        > max_distance_atr
     ):
         return False
 
     if (
         candidate[
             "range_atr"
-        ] < params[
-            "min_range_atr"
-        ]
+        ] < min_range_atr
     ):
         return False
 
     if (
         candidate[
             "close_location"
-        ] > params[
-            "max_close_location"
-        ]
+        ] > max_close_location
     ):
         return False
 
-    value = params[
-        "min_momentum_12"
-    ]
-
     if (
-        value is not None
-        and candidate[
+        candidate[
             "momentum_12"
-        ] < value
+        ] < min_momentum_12
     ):
         return False
 
-    value = params[
-        "min_momentum_48"
-    ]
-
     if (
-        value is not None
-        and candidate[
+        candidate[
             "momentum_48"
-        ] < value
+        ] < min_momentum_48
     ):
         return False
 
-    value = params[
-        "max_stop_size_atr"
-    ]
-
     if (
-        value is not None
-        and candidate[
+        candidate[
             "stop_size_atr"
-        ] > value
+        ] > ROBUST_MAX_STOP_SIZE_ATR
     ):
         return False
 
-    value = params[
-        "min_upper_wick_body"
-    ]
+    return True
+
+
+def passes_high_pf(
+    candidate,
+    structure_lookback,
+    max_distance_atr,
+    min_range_atr,
+    max_close_location,
+    min_momentum_48,
+    min_upper_wick_body,
+):
+    if (
+        candidate[
+            "ny_hour"
+        ] in EXCLUDED_NY_HOURS
+    ):
+        return False
 
     if (
-        value is not None
-        and candidate[
-            "upper_wick_body"
-        ] < value
+        candidate[
+            "structure"
+        ][structure_lookback]
+        > max_distance_atr
     ):
         return False
 
-    value = params[
-        "min_atr_ratio_50"
-    ]
+    if (
+        candidate[
+            "range_atr"
+        ] < min_range_atr
+    ):
+        return False
 
-    if value is not None:
-        if (
-            candidate[
-                "atr_ratio_50"
-            ] is None
-            or candidate[
-                "atr_ratio_50"
-            ] < value
-        ):
-            return False
+    if (
+        candidate[
+            "close_location"
+        ] > max_close_location
+    ):
+        return False
+
+    if (
+        candidate[
+            "momentum_48"
+        ] < min_momentum_48
+    ):
+        return False
+
+    if (
+        candidate[
+            "upper_wick_body"
+        ] < min_upper_wick_body
+    ):
+        return False
+
+    if (
+        candidate[
+            "atr_ratio_50"
+        ] is None
+        or candidate[
+            "atr_ratio_50"
+        ] < HIGH_PF_MIN_ATR_RATIO_50
+    ):
+        return False
 
     return True
 
@@ -1136,7 +951,10 @@ def calculate_trade_exit(
         - reference_entry
     )
 
-    if reference_risk <= 0:
+    if (
+        reference_risk
+        <= 0
+    ):
         raise RuntimeError(
             "Invalid short reference risk"
         )
@@ -1152,7 +970,10 @@ def calculate_trade_exit(
         - backtest_entry
     )
 
-    if actual_risk <= 0:
+    if (
+        actual_risk
+        <= 0
+    ):
         raise RuntimeError(
             "Invalid short actual risk"
         )
@@ -1164,19 +985,22 @@ def calculate_trade_exit(
         candle = h1[index]
 
         if (
-            candle["time"]
-            >= RESEARCH_TO
+            candle[
+                "time"
+            ] >= RESEARCH_TO
         ):
             break
 
         stop_hit = (
-            candle["high"]
-            >= stop
+            candle[
+                "high"
+            ] >= stop
         )
 
         target_hit = (
-            candle["low"]
-            <= target
+            candle[
+                "low"
+            ] <= target
         )
 
         if not (
@@ -1190,13 +1014,21 @@ def calculate_trade_exit(
             and target_hit
         ):
             distance_to_high = abs(
-                candle["high"]
-                - candle["open"]
+                candle[
+                    "high"
+                ]
+                - candle[
+                    "open"
+                ]
             )
 
             distance_to_low = abs(
-                candle["open"]
-                - candle["low"]
+                candle[
+                    "open"
+                ]
+                - candle[
+                    "low"
+                ]
             )
 
             if (
@@ -1220,9 +1052,13 @@ def calculate_trade_exit(
         result = {
             "status": "CLOSED",
             "signal_index": signal_index,
-            "signal_time": signal["time"],
+            "signal_time": signal[
+                "time"
+            ],
             "exit_index": index,
-            "exit_time": candle["time"],
+            "exit_time": candle[
+                "time"
+            ],
             "exit_reason": exit_reason,
             "result_r": (
                 backtest_entry
@@ -1239,7 +1075,9 @@ def calculate_trade_exit(
     result = {
         "status": "OPEN",
         "signal_index": signal_index,
-        "signal_time": signal["time"],
+        "signal_time": signal[
+            "time"
+        ],
         "exit_index": None,
         "exit_time": None,
         "exit_reason": None,
@@ -1262,7 +1100,9 @@ def simulate(
     ignored = 0
     still_open = False
 
-    for candidate in eligible:
+    for candidate in (
+        eligible
+    ):
         signal_index = (
             candidate[
                 "index"
@@ -1270,7 +1110,8 @@ def simulate(
         )
 
         # Locked convention:
-        # signal on exact candle where previous trade exits is allowed.
+        # a signal on the exact H1 candle where
+        # the previous position exits is allowed.
         if (
             signal_index
             < position_exit_index
@@ -1476,11 +1317,10 @@ def stats_for_trades(
 # RESULT ROW
 # ============================================================
 
-def build_result_row(
-    branch,
-    timing_profile,
-    relaxation,
-    params,
+def make_result_row(
+    branch_name,
+    parameters,
+    raw_candidates,
     eligible,
     trades,
     ignored,
@@ -1492,105 +1332,85 @@ def build_result_row(
     )
 
     row = {
-        "branch": (
-            branch[
-                "branch"
-            ]
-        ),
-
-        "timing_label": (
-            timing_profile[
-                "timing_label"
-            ]
-        ),
-
-        "excluded_ny_hours": ",".join(
-            f"{hour:02d}"
-            for hour in sorted(
-                timing_profile[
-                    "excluded_hours"
-                ]
-            )
-        ),
-
-        "relax_family": (
-            relaxation[
-                "relax_family"
-            ]
-        ),
-
-        "relax_label": (
-            relaxation[
-                "relax_label"
-            ]
-        ),
-
-        "reward_risk": (
-            REWARD_RISK
-        ),
+        "branch": branch_name,
+        "reward_risk": REWARD_RISK,
+        "excluded_ny_hours": "09",
+        "min_body_ratio": MIN_BODY_RATIO,
 
         "structure_lookback": (
-            STRUCTURE_LOOKBACK
+            parameters[
+                "structure_lookback"
+            ]
         ),
-
         "max_distance_atr": (
-            params[
+            parameters[
                 "max_distance_atr"
             ]
         ),
-
         "min_range_atr": (
-            params[
+            parameters[
                 "min_range_atr"
             ]
         ),
-
         "max_close_location": (
-            params[
+            parameters[
                 "max_close_location"
             ]
         ),
-
         "min_momentum_12h_atr": (
-            params[
+            parameters.get(
                 "min_momentum_12"
-            ]
+            )
         ),
-
         "min_momentum_48h_atr": (
-            params[
+            parameters.get(
                 "min_momentum_48"
-            ]
+            )
         ),
-
         "max_stop_size_atr": (
-            params[
+            parameters.get(
                 "max_stop_size_atr"
-            ]
+            )
         ),
-
         "min_upper_wick_body": (
-            params[
+            parameters.get(
                 "min_upper_wick_body"
-            ]
+            )
         ),
-
         "min_atr_ratio_50": (
-            params[
+            parameters.get(
                 "min_atr_ratio_50"
-            ]
+            )
         ),
 
+        "raw_signals": (
+            len(
+                raw_candidates
+            )
+        ),
         "eligible_signals": (
             len(
                 eligible
             )
         ),
+        "signal_retention_pct": round(
+            (
+                len(
+                    eligible
+                )
+                / len(
+                    raw_candidates
+                )
+                * 100.0
+            )
+            if raw_candidates
+            else 0.0,
+            2,
+        ),
 
         "ignored_due_to_open_trade": (
             ignored
         ),
-
         "still_open_at_end": (
             still_open
         ),
@@ -1600,7 +1420,6 @@ def build_result_row(
                 "trades"
             ]
         ),
-
         "trades_per_year": round(
             full[
                 "trades"
@@ -1608,49 +1427,41 @@ def build_result_row(
             / years,
             2,
         ),
-
         "winners": (
             full[
                 "winners"
             ]
         ),
-
         "losers": (
             full[
                 "losers"
             ]
         ),
-
         "win_rate": (
             full[
                 "win_rate"
             ]
         ),
-
         "profit_factor": (
             full[
                 "profit_factor"
             ]
         ),
-
         "total_r": (
             full[
                 "total_r"
             ]
         ),
-
         "expectancy_r": (
             full[
                 "expectancy_r"
             ]
         ),
-
         "max_drawdown_r": (
             full[
                 "max_drawdown_r"
             ]
         ),
-
         "longest_loss_streak": (
             full[
                 "longest_loss_streak"
@@ -1819,6 +1630,13 @@ def build_result_row(
     )
 
     row[
+        "worst_era_pf_150"
+    ] = (
+        minimum_era_pf is not None
+        and minimum_era_pf >= 1.50
+    )
+
+    row[
         "pf_160"
     ] = (
         full[
@@ -1861,86 +1679,6 @@ def build_result_row(
 
 
 # ============================================================
-# BASELINE DELTAS
-# ============================================================
-
-def add_timing_baseline_deltas(
-    df,
-):
-    df = df.copy()
-
-    metrics = [
-        "trades",
-        "trades_per_year",
-        "profit_factor",
-        "total_r",
-        "expectancy_r",
-        "max_drawdown_r",
-        "minimum_era_pf_5_plus",
-        "2024_present_pf",
-        "annual_r_linear",
-    ]
-
-    group_cols = [
-        "branch",
-        "timing_label",
-    ]
-
-    for (
-        branch_name,
-        timing_label,
-    ), group in df.groupby(
-        group_cols
-    ):
-        baseline = group[
-            group[
-                "relax_family"
-            ] == "BASELINE"
-        ]
-
-        if len(
-            baseline
-        ) != 1:
-            raise RuntimeError(
-                f"Expected one timing baseline for "
-                f"{branch_name}/{timing_label}"
-            )
-
-        baseline_row = (
-            baseline.iloc[0]
-        )
-
-        mask = (
-            (
-                df[
-                    "branch"
-                ] == branch_name
-            )
-            & (
-                df[
-                    "timing_label"
-                ] == timing_label
-            )
-        )
-
-        for metric in metrics:
-            df.loc[
-                mask,
-                f"delta_{metric}_vs_timing_baseline"
-            ] = (
-                df.loc[
-                    mask,
-                    metric
-                ]
-                - baseline_row[
-                    metric
-                ]
-            )
-
-    return df
-
-
-# ============================================================
 # RESEARCH
 # ============================================================
 
@@ -1949,13 +1687,19 @@ def run_research():
 
     try:
         print()
-        print("=" * 84)
+        print("=" * 86)
         print(
-            "EUR/GBP SHORT - TIMING x FREQUENCY RECOVERY MATRIX"
+            "EUR/GBP SHORT - POST-NY09 ROBUSTNESS NEIGHBOURHOOD"
         )
-        print("=" * 84)
+        print("=" * 86)
         print(
-            f"Total tests: {TOTAL_TESTS}"
+            f"ROBUST tests: {ROBUST_TESTS}"
+        )
+        print(
+            f"HIGH_PF tests: {HIGH_PF_TESTS}"
+        )
+        print(
+            f"TOTAL tests: {TOTAL_TESTS}"
         )
         print()
 
@@ -2027,100 +1771,211 @@ def run_research():
         STATUS.update({
             "state": "running",
             "message": (
-                "Running timing x frequency-recovery matrix"
+                "Running post-NY09 robustness neighbourhood"
             ),
         })
 
         rows = []
         completed = 0
 
-        for timing_profile in (
-            TIMING_PROFILES
+        # ====================================================
+        # ROBUST BRANCH
+        # ====================================================
+
+        for structure_lookback in (
+            ROBUST_STRUCTURE_LOOKBACKS
         ):
-            branch_name = (
-                timing_profile[
-                    "branch"
-                ]
-            )
-
-            branch = (
-                BRANCHES[
-                    branch_name
-                ]
-            )
-
-            print()
-            print(
-                f"{branch_name} | "
-                f"{timing_profile['timing_label']}",
-                flush=True,
-            )
-
-            for relaxation in (
-                RELAXATIONS[
-                    branch_name
-                ]
+            for max_distance_atr in (
+                ROBUST_MAX_DISTANCE_VALUES
             ):
-                params = (
-                    effective_parameters(
-                        branch,
-                        relaxation,
-                    )
-                )
+                for min_range_atr in (
+                    ROBUST_MIN_RANGE_VALUES
+                ):
+                    for max_close_location in (
+                        ROBUST_MAX_CLOSE_VALUES
+                    ):
+                        for min_momentum_12 in (
+                            ROBUST_MOM12_VALUES
+                        ):
+                            for min_momentum_48 in (
+                                ROBUST_MOM48_VALUES
+                            ):
+                                eligible = [
+                                    candidate
+                                    for candidate
+                                    in raw_candidates
+                                    if passes_robust(
+                                        candidate,
+                                        structure_lookback,
+                                        max_distance_atr,
+                                        min_range_atr,
+                                        max_close_location,
+                                        min_momentum_12,
+                                        min_momentum_48,
+                                    )
+                                ]
 
-                eligible = [
-                    candidate
-                    for candidate
-                    in raw_candidates
-                    if (
-                        candidate[
-                            "ny_hour"
-                        ] not in timing_profile[
-                            "excluded_hours"
-                        ]
-                        and passes_parameters(
-                            candidate,
-                            params,
-                        )
-                    )
-                ]
+                                (
+                                    trades,
+                                    ignored,
+                                    still_open,
+                                ) = simulate(
+                                    h1,
+                                    eligible,
+                                )
 
-                (
-                    trades,
-                    ignored,
-                    still_open,
-                ) = simulate(
-                    h1,
-                    eligible,
-                )
+                                params = {
+                                    "structure_lookback": (
+                                        structure_lookback
+                                    ),
+                                    "max_distance_atr": (
+                                        max_distance_atr
+                                    ),
+                                    "min_range_atr": (
+                                        min_range_atr
+                                    ),
+                                    "max_close_location": (
+                                        max_close_location
+                                    ),
+                                    "min_momentum_12": (
+                                        min_momentum_12
+                                    ),
+                                    "min_momentum_48": (
+                                        min_momentum_48
+                                    ),
+                                    "max_stop_size_atr": (
+                                        ROBUST_MAX_STOP_SIZE_ATR
+                                    ),
+                                    "min_upper_wick_body": None,
+                                    "min_atr_ratio_50": None,
+                                }
 
-                rows.append(
-                    build_result_row(
-                        branch,
-                        timing_profile,
-                        relaxation,
-                        params,
-                        eligible,
-                        trades,
-                        ignored,
-                        still_open,
-                        years,
-                    )
-                )
+                                rows.append(
+                                    make_result_row(
+                                        "ROBUST",
+                                        params,
+                                        raw_candidates,
+                                        eligible,
+                                        trades,
+                                        ignored,
+                                        still_open,
+                                        years,
+                                    )
+                                )
 
-                completed += 1
+                                completed += 1
 
-                STATUS[
-                    "completed_tests"
-                ] = completed
+                                STATUS[
+                                    "completed_tests"
+                                ] = completed
 
-                print(
-                    f"{completed}/{TOTAL_TESTS} | "
-                    f"{branch_name} | "
-                    f"{timing_profile['timing_label']} | "
-                    f"{relaxation['relax_label']}",
-                    flush=True,
-                )
+                                if (
+                                    completed % 100 == 0
+                                ):
+                                    print(
+                                        f"{completed}/{TOTAL_TESTS}",
+                                        flush=True,
+                                    )
+
+        # ====================================================
+        # HIGH-PF BRANCH
+        # ====================================================
+
+        for structure_lookback in (
+            HIGH_PF_STRUCTURE_LOOKBACKS
+        ):
+            for max_distance_atr in (
+                HIGH_PF_MAX_DISTANCE_VALUES
+            ):
+                for min_range_atr in (
+                    HIGH_PF_MIN_RANGE_VALUES
+                ):
+                    for max_close_location in (
+                        HIGH_PF_MAX_CLOSE_VALUES
+                    ):
+                        for min_momentum_48 in (
+                            HIGH_PF_MOM48_VALUES
+                        ):
+                            for min_upper_wick_body in (
+                                HIGH_PF_UPPER_WICK_VALUES
+                            ):
+                                eligible = [
+                                    candidate
+                                    for candidate
+                                    in raw_candidates
+                                    if passes_high_pf(
+                                        candidate,
+                                        structure_lookback,
+                                        max_distance_atr,
+                                        min_range_atr,
+                                        max_close_location,
+                                        min_momentum_48,
+                                        min_upper_wick_body,
+                                    )
+                                ]
+
+                                (
+                                    trades,
+                                    ignored,
+                                    still_open,
+                                ) = simulate(
+                                    h1,
+                                    eligible,
+                                )
+
+                                params = {
+                                    "structure_lookback": (
+                                        structure_lookback
+                                    ),
+                                    "max_distance_atr": (
+                                        max_distance_atr
+                                    ),
+                                    "min_range_atr": (
+                                        min_range_atr
+                                    ),
+                                    "max_close_location": (
+                                        max_close_location
+                                    ),
+                                    "min_momentum_12": None,
+                                    "min_momentum_48": (
+                                        min_momentum_48
+                                    ),
+                                    "max_stop_size_atr": None,
+                                    "min_upper_wick_body": (
+                                        min_upper_wick_body
+                                    ),
+                                    "min_atr_ratio_50": (
+                                        HIGH_PF_MIN_ATR_RATIO_50
+                                    ),
+                                }
+
+                                rows.append(
+                                    make_result_row(
+                                        "HIGH_PF",
+                                        params,
+                                        raw_candidates,
+                                        eligible,
+                                        trades,
+                                        ignored,
+                                        still_open,
+                                        years,
+                                    )
+                                )
+
+                                completed += 1
+
+                                STATUS[
+                                    "completed_tests"
+                                ] = completed
+
+                                if (
+                                    completed % 100 == 0
+                                    or completed == TOTAL_TESTS
+                                ):
+                                    print(
+                                        f"{completed}/{TOTAL_TESTS}",
+                                        flush=True,
+                                    )
 
         df = pd.DataFrame(
             rows
@@ -2131,30 +1986,20 @@ def run_research():
                 "No result rows generated"
             )
 
-        df = add_timing_baseline_deltas(
-            df
-        )
-
-        df[
-            "is_timing_baseline"
-        ] = (
-            df[
-                "relax_family"
-            ] == "BASELINE"
-        )
-
         df = df.sort_values(
             by=[
                 "branch",
-                "timing_label",
-                "is_timing_baseline",
                 "all_four_eras_profitable",
                 "adequate_100_trades",
                 "frequency_4py",
+                "worst_era_pf_150",
                 "worst_era_pf_140",
                 "worst_era_pf_130",
                 "worst_era_pf_120",
                 "minimum_era_pf_5_plus",
+                "pf_200",
+                "pf_180",
+                "pf_160",
                 "profit_factor",
                 "expectancy_r",
                 "annual_r_linear",
@@ -2162,7 +2007,9 @@ def run_research():
             ],
             ascending=[
                 True,
-                True,
+                False,
+                False,
+                False,
                 False,
                 False,
                 False,
@@ -2183,15 +2030,57 @@ def run_research():
             index=False,
         )
 
+        robust_df = df[
+            df[
+                "branch"
+            ] == "ROBUST"
+        ]
+
+        high_pf_df = df[
+            df[
+                "branch"
+            ] == "HIGH_PF"
+        ]
+
         STATUS.update({
             "state": "complete",
             "message": (
-                "EUR/GBP timing frequency-recovery matrix "
+                "EUR/GBP post-NY09 robustness neighbourhood "
                 "completed successfully"
             ),
             "completed_tests": TOTAL_TESTS,
             "rows_saved": len(
                 df
+            ),
+            "robust_all_four_eras_count": int(
+                robust_df[
+                    "all_four_eras_profitable"
+                ].sum()
+            ),
+            "high_pf_all_four_eras_count": int(
+                high_pf_df[
+                    "all_four_eras_profitable"
+                ].sum()
+            ),
+            "robust_100trades_worstpf140_count": int(
+                (
+                    robust_df[
+                        "adequate_100_trades"
+                    ]
+                    & robust_df[
+                        "worst_era_pf_140"
+                    ]
+                ).sum()
+            ),
+            "highpf_100trades_pf180_count": int(
+                (
+                    high_pf_df[
+                        "adequate_100_trades"
+                    ]
+                    & high_pf_df[
+                        "pf_180"
+                    ]
+                ).sum()
             ),
             "output_file": (
                 OUTPUT_FILE
@@ -2199,11 +2088,11 @@ def run_research():
         })
 
         print()
-        print("=" * 84)
+        print("=" * 86)
         print(
-            "EUR/GBP TIMING x FREQUENCY RECOVERY COMPLETE"
+            "EUR/GBP POST-NY09 ROBUSTNESS NEIGHBOURHOOD COMPLETE"
         )
-        print("=" * 84)
+        print("=" * 86)
         print(
             "Rows:",
             len(
@@ -2215,25 +2104,31 @@ def run_research():
             OUTPUT_FILE,
         )
 
-        for (
-            branch_name,
-            timing_label,
-        ), group in df.groupby(
-            [
-                "branch",
-                "timing_label",
+        for branch_name in [
+            "ROBUST",
+            "HIGH_PF",
+        ]:
+            subset = df[
+                df[
+                    "branch"
+                ] == branch_name
             ]
-        ):
+
             print()
             print(
-                f"--- {branch_name} | {timing_label} ---"
+                f"--- {branch_name} TOP 15 ---"
             )
 
             print(
-                group[
+                subset[
                     [
-                        "relax_family",
-                        "relax_label",
+                        "structure_lookback",
+                        "max_distance_atr",
+                        "min_range_atr",
+                        "max_close_location",
+                        "min_momentum_12h_atr",
+                        "min_momentum_48h_atr",
+                        "min_upper_wick_body",
                         "trades",
                         "trades_per_year",
                         "profit_factor",
@@ -2242,8 +2137,6 @@ def run_research():
                         "max_drawdown_r",
                         "minimum_era_pf_5_plus",
                         "2024_present_pf",
-                        "delta_trades_vs_timing_baseline",
-                        "delta_profit_factor_vs_timing_baseline",
                     ]
                 ].head(
                     15
@@ -2276,62 +2169,80 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "EURGBP Short Timing Frequency Recovery"
+            "EURGBP Short Post-NY09 Robustness Neighbourhood"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
         "reward_risk": REWARD_RISK,
-        "timezone": "America/New_York",
+        "excluded_ny_hours": sorted(
+            EXCLUDED_NY_HOURS
+        ),
+        "timezone": (
+            "America/New_York"
+        ),
         "timing_basis": (
             "signal candle open time"
         ),
+
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
 
-        "shared_baseline": {
-            "minimum_body_ratio": (
-                MIN_BODY_RATIO
-            ),
-            "structure_lookback": (
-                STRUCTURE_LOOKBACK
+        "robust_grid": {
+            "structure_lookbacks": (
+                ROBUST_STRUCTURE_LOOKBACKS
             ),
             "max_distance_atr": (
-                BASE_MAX_DISTANCE_ATR
+                ROBUST_MAX_DISTANCE_VALUES
             ),
             "min_range_atr": (
-                BASE_MIN_RANGE_ATR
+                ROBUST_MIN_RANGE_VALUES
             ),
             "max_close_location": (
-                BASE_MAX_CLOSE_LOCATION
+                ROBUST_MAX_CLOSE_VALUES
             ),
-            "stop_buffer_ticks": (
-                STOP_BUFFER_TICKS
+            "momentum_12h": (
+                ROBUST_MOM12_VALUES
             ),
-            "backtest_slippage_ticks": (
-                BACKTEST_SLIPPAGE_TICKS
+            "momentum_48h": (
+                ROBUST_MOM48_VALUES
+            ),
+            "max_stop_size_atr": (
+                ROBUST_MAX_STOP_SIZE_ATR
             ),
         },
 
-        "branches": (
-            BRANCHES
-        ),
-
-        "timing_profiles": (
-            TIMING_PROFILES
-        ),
-
-        "relaxation_counts": {
-            branch_name: len(
-                profiles
-            )
-            for (
-                branch_name,
-                profiles
-            ) in RELAXATIONS.items()
+        "high_pf_grid": {
+            "structure_lookbacks": (
+                HIGH_PF_STRUCTURE_LOOKBACKS
+            ),
+            "max_distance_atr": (
+                HIGH_PF_MAX_DISTANCE_VALUES
+            ),
+            "min_range_atr": (
+                HIGH_PF_MIN_RANGE_VALUES
+            ),
+            "max_close_location": (
+                HIGH_PF_MAX_CLOSE_VALUES
+            ),
+            "momentum_48h": (
+                HIGH_PF_MOM48_VALUES
+            ),
+            "upper_wick_body": (
+                HIGH_PF_UPPER_WICK_VALUES
+            ),
+            "min_atr_ratio_50": (
+                HIGH_PF_MIN_ATR_RATIO_50
+            ),
         },
 
+        "robust_tests": (
+            ROBUST_TESTS
+        ),
+        "high_pf_tests": (
+            HIGH_PF_TESTS
+        ),
         "total_tests": (
             TOTAL_TESTS
         ),
@@ -2357,7 +2268,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "EUR/GBP timing frequency-recovery CSV "
+                "EUR/GBP post-NY09 robustness CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -2377,7 +2288,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "eurgbp-short-timing-frequency-recovery"
+            "eurgbp-short-post-ny09-robustness-neighbourhood"
         ),
         daemon=True,
     )
