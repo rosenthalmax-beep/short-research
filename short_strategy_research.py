@@ -6145,12 +6145,14 @@ def portfolio_simulate_shorts(
             momentum_lookback
         )
 
-    for item in config.get(
+    momentum_requirements = config.get(
         "momentum_requirements",
-        []
-    ):
+        {}
+    )
+
+    for lookback_bars in momentum_requirements.keys():
         required_lookbacks.append(
-            int(item["lookback_bars"])
+            int(lookback_bars)
         )
 
     if config.get(
