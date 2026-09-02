@@ -6028,8 +6028,8 @@ def live_check():
 # RESEARCH ONLY — NO ORDERS, NO WEBHOOK SUBMISSIONS
 # ==================================================
 
-PORTFOLIO_BACKTEST_FILE = "full_strategy_two_year_backtest.csv"
-PORTFOLIO_SUMMARY_FILE = "full_strategy_two_year_summary.csv"
+PORTFOLIO_BACKTEST_FILE = "full_strategy_five_year_backtest.csv"
+PORTFOLIO_SUMMARY_FILE = "full_strategy_five_year_summary.csv"
 PORTFOLIO_BACKTEST_LOCK = threading.Lock()
 PORTFOLIO_BACKTEST_CACHE = None
 
@@ -6847,8 +6847,8 @@ def portfolio_stats_for_subset(
     }
 
 
-def run_full_two_year_portfolio_backtest():
-    # Exact two-year window ending at the most recent completed UTC hour.
+def run_full_five_year_portfolio_backtest():
+    # Exact five-year window ending at the most recent completed UTC hour.
     end = utc_now().replace(
         minute=0,
         second=0,
@@ -6857,13 +6857,13 @@ def run_full_two_year_portfolio_backtest():
 
     try:
         start = end.replace(
-            year=end.year - 2
+            year=end.year - 5
         )
     except ValueError:
         start = end.replace(
             month=2,
             day=28,
-            year=end.year - 2
+            year=end.year - 5
         )
 
     trades, strategy_summaries = (
@@ -7167,7 +7167,7 @@ def run_full_two_year_portfolio_backtest():
                 2,
             ),
         },
-        "first_12_months": {
+        "first_30_months": {
             "trades": first_year[
                 "trades"
             ],
@@ -7184,7 +7184,7 @@ def run_full_two_year_portfolio_backtest():
                 2,
             ),
         },
-        "second_12_months": {
+        "second_30_months": {
             "trades": second_year[
                 "trades"
             ],
@@ -7209,10 +7209,10 @@ def run_full_two_year_portfolio_backtest():
             "NAV, which may include unrealised P/L on overlapping positions."
         ),
         "trade_log_download": (
-            "/download-full-strategy-two-year"
+            "/download-full-strategy-five-year"
         ),
         "summary_download": (
-            "/download-full-strategy-two-year-summary"
+            "/download-full-strategy-five-year-summary"
         ),
     }
 
@@ -7233,20 +7233,20 @@ def run_portfolio_backtest_background():
         PORTFOLIO_STATUS.update({
             "state": "running",
             "message": (
-                "Running full 10-strategy two-year backtest"
+                "Running full 10-strategy five-year backtest"
             ),
             "orders_submitted": False,
         })
 
         with PORTFOLIO_BACKTEST_LOCK:
             PORTFOLIO_BACKTEST_CACHE = (
-                run_full_two_year_portfolio_backtest()
+                run_full_five_year_portfolio_backtest()
             )
 
         PORTFOLIO_STATUS.update({
             "state": "complete",
             "message": (
-                "Full 10-strategy two-year backtest complete"
+                "Full 10-strategy five-year backtest complete"
             ),
             "orders_submitted": False,
             "result": PORTFOLIO_BACKTEST_CACHE,
@@ -7267,7 +7267,7 @@ def run_portfolio_backtest_background():
 
 
 @app.route(
-    "/full-strategy-two-year"
+    "/full-strategy-five-year"
 )
 def full_strategy_two_year():
     return jsonify(
@@ -7285,7 +7285,7 @@ def portfolio_status():
 
 
 @app.route(
-    "/download-full-strategy-two-year"
+    "/download-full-strategy-five-year"
 )
 def download_full_strategy_two_year():
     if not os.path.exists(
@@ -7294,7 +7294,7 @@ def download_full_strategy_two_year():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "Run /full-strategy-two-year first"
+                "Run /full-strategy-five-year first"
             ),
         }), 404
 
@@ -7308,7 +7308,7 @@ def download_full_strategy_two_year():
 
 
 @app.route(
-    "/download-full-strategy-two-year-summary"
+    "/download-full-strategy-five-year-summary"
 )
 def download_full_strategy_two_year_summary():
     if not os.path.exists(
@@ -7317,7 +7317,7 @@ def download_full_strategy_two_year_summary():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "Run /full-strategy-two-year first"
+                "Run /full-strategy-five-year first"
             ),
         }), 404
 
@@ -7346,7 +7346,7 @@ def download_full_strategy_two_year_summary():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_portfolio_backtest_background,
-        name="full-10-strategy-two-year-backtest",
+        name="full-10-strategy-five-year-backtest",
         daemon=True,
     )
 
