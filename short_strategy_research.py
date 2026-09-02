@@ -9,54 +9,118 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# EUR/GBP SHORT - DUAL-BRANCH HOUR QUALITY DIAGNOSTIC
+# EUR/GBP SHORT - TIMING x FREQUENCY RECOVERY MATRIX
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
 # Purpose:
-#   Diagnose the quality of EVERY New York signal hour for BOTH
-#   frozen EUR/GBP short branches before deciding which hours,
-#   if any, deserve exclusion.
+#   Take the strongest toxic timing finding (NY hour 09)
+#   and test whether frequency can be recovered by relaxing
+#   ONE existing filter at a time.
 #
-# For each branch + NY hour:
-#   A) Stats of trades whose signal candle opened in that hour
-#   B) Era-by-era stats for those hour-specific trades
-#   C) Full-strategy stats if that single hour is excluded
-#   D) Deltas versus untouched branch baseline
+# Also includes NY hour 11 as a SECONDARY timing comparison
+# for the ROBUST branch only.
 #
-# This is NOT an optimisation pass.
-# It is a diagnostic table for selecting only hours that:
-#   - have a meaningful sample,
-#   - show consistently poor behaviour,
-#   - and ideally hurt more than one era.
+# IMPORTANT:
+#   - Timing exclusion is applied first.
+#   - Only ONE strategy filter is relaxed at a time.
+#   - No multi-parameter stacking in this stage.
+#   - RR remains fixed at 3.00.
 #
-# Shared frozen geometry:
+# Shared frozen execution:
+#   OANDA EUR_GBP
+#   H1
 #   bearish engulfing
 #   body ratio >= 1.00
-#   structure lookback = 90
-#   distance <= 0.075 ATR14
-#   range >= 1.10 ATR14
-#   close location <= 0.20
-#   RR = 3.00
 #   stop = signal high + 10 ticks
 #   adverse short slippage = 5 ticks
 #   pyramiding = 0
 #
-# ROBUST branch:
+# Shared frozen geometry baseline:
+#   structure lookback = 90
+#   max distance = 0.075 ATR14
+#   min range = 1.10 ATR14
+#   max close location = 0.20
+#
+# ROBUST branch baseline:
 #   12h upward momentum >= 0.25 ATR14
 #   48h upward momentum >= 0.50 ATR14
 #   stop size <= 2.50 ATR14
 #
-# HIGH_PF branch:
+# HIGH_PF branch baseline:
 #   48h upward momentum >= 1.00 ATR14
 #   upper wick/body >= 0.10
 #   ATR14 / 50-bar ATR14 mean >= 0.80
 #
-# Timing convention:
-#   signal candle OPEN time converted to America/New_York.
+# TIMING PROFILES:
+#   ROBUST:
+#       exclude NY09
+#       exclude NY11
+#
+#   HIGH_PF:
+#       exclude NY09
+#
+# RELAXATIONS TESTED ONE AT A TIME
+#
+# Shared:
+#   max distance:
+#       0.075 baseline
+#       0.10
+#       0.125
+#       0.15
+#
+#   min range:
+#       1.10 baseline
+#       1.05
+#       1.00
+#       0.95
+#
+#   max close location:
+#       0.20 baseline
+#       0.225
+#       0.25
+#       0.275
+#
+# ROBUST only:
+#   12h momentum:
+#       0.25 baseline
+#       0.20
+#       0.15
+#       0.10
+#
+#   48h momentum:
+#       0.50 baseline
+#       0.40
+#       0.30
+#       0.20
+#
+#   stop cap:
+#       2.50 baseline
+#       2.75
+#       3.00
+#       None
+#
+# HIGH_PF only:
+#   48h momentum:
+#       1.00 baseline
+#       0.90
+#       0.80
+#       0.70
+#
+#   upper wick/body:
+#       0.10 baseline
+#       0.075
+#       0.05
+#       None
+#
+#   ATR regime:
+#       0.80 baseline
+#       0.75
+#       0.70
+#       None
 #
 # Output:
-#   eurgbp_short_dual_branch_hour_quality.csv
+#   eurgbp_short_timing_frequency_recovery_matrix.csv
 # ============================================================
 
 
@@ -78,11 +142,11 @@ BACKTEST_SLIPPAGE_TICKS = 5
 REWARD_RISK = 3.00
 
 MIN_BODY_RATIO = 1.00
-
 STRUCTURE_LOOKBACK = 90
-MAX_DISTANCE_ATR = 0.075
-MIN_RANGE_ATR = 1.10
-MAX_CLOSE_LOCATION = 0.20
+
+BASE_MAX_DISTANCE_ATR = 0.075
+BASE_MIN_RANGE_ATR = 1.10
+BASE_MAX_CLOSE_LOCATION = 0.20
 
 NY_TZ = ZoneInfo("America/New_York")
 
@@ -104,15 +168,17 @@ RESEARCH_TO = (
 
 H1_WARMUP_DAYS = 700
 
-OUTPUT_FILE = "eurgbp_short_dual_branch_hour_quality.csv"
+OUTPUT_FILE = (
+    "eurgbp_short_timing_frequency_recovery_matrix.csv"
+)
 
 
 # ============================================================
-# BRANCHES
+# BASE BRANCHES
 # ============================================================
 
-BRANCHES = [
-    {
+BRANCHES = {
+    "ROBUST": {
         "branch": "ROBUST",
         "min_momentum_12": 0.25,
         "min_momentum_48": 0.50,
@@ -120,7 +186,7 @@ BRANCHES = [
         "max_stop_size_atr": 2.50,
         "min_atr_ratio_50": None,
     },
-    {
+    "HIGH_PF": {
         "branch": "HIGH_PF",
         "min_momentum_12": None,
         "min_momentum_48": 1.00,
@@ -128,7 +194,200 @@ BRANCHES = [
         "max_stop_size_atr": None,
         "min_atr_ratio_50": 0.80,
     },
+}
+
+
+# ============================================================
+# TIMING PROFILES
+# ============================================================
+
+TIMING_PROFILES = [
+    {
+        "branch": "ROBUST",
+        "timing_label": "exclude_ny09",
+        "excluded_hours": {9},
+    },
+    {
+        "branch": "ROBUST",
+        "timing_label": "exclude_ny11",
+        "excluded_hours": {11},
+    },
+    {
+        "branch": "HIGH_PF",
+        "timing_label": "exclude_ny09",
+        "excluded_hours": {9},
+    },
 ]
+
+
+# ============================================================
+# RELAXATION PROFILES
+# ============================================================
+
+def make_shared_relaxations():
+    rows = [
+        {
+            "relax_family": "BASELINE",
+            "relax_label": "baseline_after_timing",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        }
+    ]
+
+    for value in [0.10, 0.125, 0.15]:
+        rows.append({
+            "relax_family": "STRUCTURE_DISTANCE",
+            "relax_label": f"max_distance_{value}",
+            "max_distance_atr": value,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [1.05, 1.00, 0.95]:
+        rows.append({
+            "relax_family": "RANGE",
+            "relax_label": f"min_range_{value}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": value,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [0.225, 0.25, 0.275]:
+        rows.append({
+            "relax_family": "CLOSE_LOCATION",
+            "relax_label": f"max_close_{value}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": value,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    return rows
+
+
+def make_robust_relaxations():
+    rows = make_shared_relaxations()
+
+    for value in [0.20, 0.15, 0.10]:
+        rows.append({
+            "relax_family": "MOMENTUM_12H",
+            "relax_label": f"min_mom12_{value}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": value,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [0.40, 0.30, 0.20]:
+        rows.append({
+            "relax_family": "MOMENTUM_48H",
+            "relax_label": f"min_mom48_{value}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": value,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [2.75, 3.00, None]:
+        label = "none" if value is None else str(value)
+        rows.append({
+            "relax_family": "STOP_CAP",
+            "relax_label": f"max_stop_{label}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": value,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    return rows
+
+
+def make_high_pf_relaxations():
+    rows = make_shared_relaxations()
+
+    for value in [0.90, 0.80, 0.70]:
+        rows.append({
+            "relax_family": "MOMENTUM_48H",
+            "relax_label": f"min_mom48_{value}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": value,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [0.075, 0.05, None]:
+        label = "none" if value is None else str(value)
+        rows.append({
+            "relax_family": "UPPER_WICK",
+            "relax_label": f"min_upper_wick_{label}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": value,
+            "min_atr_ratio_50": None,
+        })
+
+    for value in [0.75, 0.70, None]:
+        label = "none" if value is None else str(value)
+        rows.append({
+            "relax_family": "ATR_REGIME",
+            "relax_label": f"min_atr_ratio_{label}",
+            "max_distance_atr": BASE_MAX_DISTANCE_ATR,
+            "min_range_atr": BASE_MIN_RANGE_ATR,
+            "max_close_location": BASE_MAX_CLOSE_LOCATION,
+            "min_momentum_12": None,
+            "min_momentum_48": None,
+            "max_stop_size_atr": None,
+            "min_upper_wick_body": None,
+            "min_atr_ratio_50": value,
+        })
+
+    return rows
+
+
+RELAXATIONS = {
+    "ROBUST": make_robust_relaxations(),
+    "HIGH_PF": make_high_pf_relaxations(),
+}
 
 
 # ============================================================
@@ -163,18 +422,21 @@ ERAS = [
 # STATUS
 # ============================================================
 
-TOTAL_TESTS = len(BRANCHES) * 24
+TOTAL_TESTS = sum(
+    len(RELAXATIONS[
+        profile["branch"]
+    ])
+    for profile in TIMING_PROFILES
+)
 
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EURGBP Short Dual-Branch Hour Quality",
+    "service": "EURGBP Short Timing Frequency Recovery",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
     "reward_risk": REWARD_RISK,
-    "branches": len(BRANCHES),
-    "hours_per_branch": 24,
     "total_tests": TOTAL_TESTS,
     "completed_tests": 0,
     "rows_saved": 0,
@@ -359,7 +621,10 @@ def true_ranges(candles):
     return result
 
 
-def rma_series(values, length):
+def rma_series(
+    values,
+    length,
+):
     result = [None] * len(values)
 
     if len(values) < length:
@@ -383,7 +648,9 @@ def rma_series(values, length):
         current = (
             (
                 previous
-                * (length - 1)
+                * (
+                    length - 1
+                )
             )
             + values[index]
         ) / length
@@ -399,7 +666,9 @@ def atr_series(
     length=14,
 ):
     return rma_series(
-        true_ranges(candles),
+        true_ranges(
+            candles
+        ),
         length,
     )
 
@@ -434,10 +703,10 @@ def rolling_mean_optional(
 
 
 # ============================================================
-# CANDIDATES
+# RAW BEARISH ENGULFING FEATURES
 # ============================================================
 
-def build_candidates(
+def build_raw_candidates(
     h1,
     h1_atr,
     atr_mean_50,
@@ -517,28 +786,9 @@ def build_candidates(
             / previous_body
         )
 
-        if body_ratio < MIN_BODY_RATIO:
-            continue
-
-        range_atr = (
-            candle_range
-            / atr
-        )
-
         if (
-            range_atr
-            < MIN_RANGE_ATR
-        ):
-            continue
-
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / candle_range
-
-        if (
-            close_location
-            > MAX_CLOSE_LOCATION
+            body_ratio
+            < MIN_BODY_RATIO
         ):
             continue
 
@@ -555,11 +805,15 @@ def build_candidates(
             - signal["high"]
         ) / atr
 
-        if (
-            structure_distance_atr
-            > MAX_DISTANCE_ATR
-        ):
-            continue
+        range_atr = (
+            candle_range
+            / atr
+        )
+
+        close_location = (
+            signal["close"]
+            - signal["low"]
+        ) / candle_range
 
         momentum_12 = (
             signal["close"]
@@ -621,6 +875,11 @@ def build_candidates(
             "index": index,
             "time": signal["time"],
             "ny_hour": ny_time.hour,
+            "structure_distance_atr": (
+                structure_distance_atr
+            ),
+            "range_atr": range_atr,
+            "close_location": close_location,
             "momentum_12": momentum_12,
             "momentum_48": momentum_48,
             "upper_wick_body": upper_wick_body,
@@ -631,11 +890,146 @@ def build_candidates(
     return candidates
 
 
-def passes_branch(
-    candidate,
+# ============================================================
+# EFFECTIVE PARAMETER RESOLUTION
+# ============================================================
+
+def effective_parameters(
     branch,
+    relaxation,
 ):
-    value = branch[
+    params = {
+        "max_distance_atr": (
+            relaxation[
+                "max_distance_atr"
+            ]
+        ),
+        "min_range_atr": (
+            relaxation[
+                "min_range_atr"
+            ]
+        ),
+        "max_close_location": (
+            relaxation[
+                "max_close_location"
+            ]
+        ),
+        "min_momentum_12": (
+            branch[
+                "min_momentum_12"
+            ]
+        ),
+        "min_momentum_48": (
+            branch[
+                "min_momentum_48"
+            ]
+        ),
+        "max_stop_size_atr": (
+            branch[
+                "max_stop_size_atr"
+            ]
+        ),
+        "min_upper_wick_body": (
+            branch[
+                "min_upper_wick_body"
+            ]
+        ),
+        "min_atr_ratio_50": (
+            branch[
+                "min_atr_ratio_50"
+            ]
+        ),
+    }
+
+    family = relaxation[
+        "relax_family"
+    ]
+
+    if (
+        family
+        == "MOMENTUM_12H"
+    ):
+        params[
+            "min_momentum_12"
+        ] = relaxation[
+            "min_momentum_12"
+        ]
+
+    elif (
+        family
+        == "MOMENTUM_48H"
+    ):
+        params[
+            "min_momentum_48"
+        ] = relaxation[
+            "min_momentum_48"
+        ]
+
+    elif (
+        family
+        == "STOP_CAP"
+    ):
+        params[
+            "max_stop_size_atr"
+        ] = relaxation[
+            "max_stop_size_atr"
+        ]
+
+    elif (
+        family
+        == "UPPER_WICK"
+    ):
+        params[
+            "min_upper_wick_body"
+        ] = relaxation[
+            "min_upper_wick_body"
+        ]
+
+    elif (
+        family
+        == "ATR_REGIME"
+    ):
+        params[
+            "min_atr_ratio_50"
+        ] = relaxation[
+            "min_atr_ratio_50"
+        ]
+
+    return params
+
+
+def passes_parameters(
+    candidate,
+    params,
+):
+    if (
+        candidate[
+            "structure_distance_atr"
+        ] > params[
+            "max_distance_atr"
+        ]
+    ):
+        return False
+
+    if (
+        candidate[
+            "range_atr"
+        ] < params[
+            "min_range_atr"
+        ]
+    ):
+        return False
+
+    if (
+        candidate[
+            "close_location"
+        ] > params[
+            "max_close_location"
+        ]
+    ):
+        return False
+
+    value = params[
         "min_momentum_12"
     ]
 
@@ -647,7 +1041,7 @@ def passes_branch(
     ):
         return False
 
-    value = branch[
+    value = params[
         "min_momentum_48"
     ]
 
@@ -659,19 +1053,7 @@ def passes_branch(
     ):
         return False
 
-    value = branch[
-        "min_upper_wick_body"
-    ]
-
-    if (
-        value is not None
-        and candidate[
-            "upper_wick_body"
-        ] < value
-    ):
-        return False
-
-    value = branch[
+    value = params[
         "max_stop_size_atr"
     ]
 
@@ -683,7 +1065,19 @@ def passes_branch(
     ):
         return False
 
-    value = branch[
+    value = params[
+        "min_upper_wick_body"
+    ]
+
+    if (
+        value is not None
+        and candidate[
+            "upper_wick_body"
+        ] < value
+    ):
+        return False
+
+    value = params[
         "min_atr_ratio_50"
     ]
 
@@ -861,16 +1255,14 @@ def calculate_trade_exit(
 
 def simulate(
     h1,
-    eligible_candidates,
+    eligible,
 ):
     trades = []
     position_exit_index = -1
     ignored = 0
     still_open = False
 
-    for candidate in (
-        eligible_candidates
-    ):
+    for candidate in eligible:
         signal_index = (
             candidate[
                 "index"
@@ -878,7 +1270,7 @@ def simulate(
         )
 
         # Locked convention:
-        # signal on exact exit candle is allowed.
+        # signal on exact candle where previous trade exits is allowed.
         if (
             signal_index
             < position_exit_index
@@ -898,16 +1290,6 @@ def simulate(
         ):
             still_open = True
             break
-
-        trade = dict(
-            trade
-        )
-
-        trade[
-            "ny_hour"
-        ] = candidate[
-            "ny_hour"
-        ]
 
         trades.append(
             trade
@@ -1090,14 +1472,195 @@ def stats_for_trades(
     }
 
 
-def add_era_stats(
-    row,
-    prefix,
+# ============================================================
+# RESULT ROW
+# ============================================================
+
+def build_result_row(
+    branch,
+    timing_profile,
+    relaxation,
+    params,
+    eligible,
     trades,
+    ignored,
+    still_open,
+    years,
 ):
-    positive_eras = 0
-    losing_eras = 0
-    era_count_with_trades = 0
+    full = stats_for_trades(
+        trades
+    )
+
+    row = {
+        "branch": (
+            branch[
+                "branch"
+            ]
+        ),
+
+        "timing_label": (
+            timing_profile[
+                "timing_label"
+            ]
+        ),
+
+        "excluded_ny_hours": ",".join(
+            f"{hour:02d}"
+            for hour in sorted(
+                timing_profile[
+                    "excluded_hours"
+                ]
+            )
+        ),
+
+        "relax_family": (
+            relaxation[
+                "relax_family"
+            ]
+        ),
+
+        "relax_label": (
+            relaxation[
+                "relax_label"
+            ]
+        ),
+
+        "reward_risk": (
+            REWARD_RISK
+        ),
+
+        "structure_lookback": (
+            STRUCTURE_LOOKBACK
+        ),
+
+        "max_distance_atr": (
+            params[
+                "max_distance_atr"
+            ]
+        ),
+
+        "min_range_atr": (
+            params[
+                "min_range_atr"
+            ]
+        ),
+
+        "max_close_location": (
+            params[
+                "max_close_location"
+            ]
+        ),
+
+        "min_momentum_12h_atr": (
+            params[
+                "min_momentum_12"
+            ]
+        ),
+
+        "min_momentum_48h_atr": (
+            params[
+                "min_momentum_48"
+            ]
+        ),
+
+        "max_stop_size_atr": (
+            params[
+                "max_stop_size_atr"
+            ]
+        ),
+
+        "min_upper_wick_body": (
+            params[
+                "min_upper_wick_body"
+            ]
+        ),
+
+        "min_atr_ratio_50": (
+            params[
+                "min_atr_ratio_50"
+            ]
+        ),
+
+        "eligible_signals": (
+            len(
+                eligible
+            )
+        ),
+
+        "ignored_due_to_open_trade": (
+            ignored
+        ),
+
+        "still_open_at_end": (
+            still_open
+        ),
+
+        "trades": (
+            full[
+                "trades"
+            ]
+        ),
+
+        "trades_per_year": round(
+            full[
+                "trades"
+            ]
+            / years,
+            2,
+        ),
+
+        "winners": (
+            full[
+                "winners"
+            ]
+        ),
+
+        "losers": (
+            full[
+                "losers"
+            ]
+        ),
+
+        "win_rate": (
+            full[
+                "win_rate"
+            ]
+        ),
+
+        "profit_factor": (
+            full[
+                "profit_factor"
+            ]
+        ),
+
+        "total_r": (
+            full[
+                "total_r"
+            ]
+        ),
+
+        "expectancy_r": (
+            full[
+                "expectancy_r"
+            ]
+        ),
+
+        "max_drawdown_r": (
+            full[
+                "max_drawdown_r"
+            ]
+        ),
+
+        "longest_loss_streak": (
+            full[
+                "longest_loss_streak"
+            ]
+        ),
+    }
+
+    profitable_eras = 0
+    minimum_era_pf = None
+    minimum_era_expectancy = None
 
     for (
         era_name,
@@ -1111,25 +1674,25 @@ def add_era_stats(
         )
 
         row[
-            f"{prefix}_{era_name}_trades"
+            f"{era_name}_trades"
         ] = era[
             "trades"
         ]
 
         row[
-            f"{prefix}_{era_name}_pf"
+            f"{era_name}_pf"
         ] = era[
             "profit_factor"
         ]
 
         row[
-            f"{prefix}_{era_name}_r"
+            f"{era_name}_r"
         ] = era[
             "total_r"
         ]
 
         row[
-            f"{prefix}_{era_name}_expectancy"
+            f"{era_name}_expectancy"
         ] = era[
             "expectancy_r"
         ]
@@ -1137,411 +1700,244 @@ def add_era_stats(
         if (
             era[
                 "trades"
-            ] > 0
+            ] >= 5
         ):
-            era_count_with_trades += 1
-
             if (
                 era[
                     "total_r"
                 ] > 0
             ):
-                positive_eras += 1
+                profitable_eras += 1
 
             if (
-                era[
-                    "total_r"
-                ] < 0
+                minimum_era_pf
+                is None
             ):
-                losing_eras += 1
+                minimum_era_pf = (
+                    era[
+                        "profit_factor"
+                    ]
+                )
+            else:
+                minimum_era_pf = min(
+                    minimum_era_pf,
+                    era[
+                        "profit_factor"
+                    ],
+                )
+
+            if (
+                minimum_era_expectancy
+                is None
+            ):
+                minimum_era_expectancy = (
+                    era[
+                        "expectancy_r"
+                    ]
+                )
+            else:
+                minimum_era_expectancy = min(
+                    minimum_era_expectancy,
+                    era[
+                        "expectancy_r"
+                    ],
+                )
 
     row[
-        f"{prefix}_eras_with_trades"
-    ] = era_count_with_trades
+        "profitable_eras_with_5_plus_trades"
+    ] = profitable_eras
 
     row[
-        f"{prefix}_positive_eras"
-    ] = positive_eras
+        "minimum_era_pf_5_plus"
+    ] = minimum_era_pf
 
     row[
-        f"{prefix}_losing_eras"
-    ] = losing_eras
+        "minimum_era_expectancy_5_plus"
+    ] = minimum_era_expectancy
 
-
-# ============================================================
-# DIAGNOSTIC ROW
-# ============================================================
-
-def build_hour_row(
-    branch,
-    hour,
-    baseline_trades,
-    excluded_trades,
-    years,
-):
-    hour_trades = [
-        trade
-        for trade in baseline_trades
-        if trade[
-            "ny_hour"
-        ] == hour
-    ]
-
-    hour_stats = stats_for_trades(
-        hour_trades
-    )
-
-    baseline_stats = stats_for_trades(
-        baseline_trades
-    )
-
-    excluded_stats = stats_for_trades(
-        excluded_trades
-    )
-
-    row = {
-        "branch": branch[
-            "branch"
-        ],
-        "ny_hour": hour,
-        "ny_hour_label": (
-            f"{hour:02d}:00-{hour:02d}:59"
-        ),
-
-        "reward_risk": REWARD_RISK,
-
-        "structure_lookback": (
-            STRUCTURE_LOOKBACK
-        ),
-        "max_distance_atr": (
-            MAX_DISTANCE_ATR
-        ),
-        "min_range_atr": (
-            MIN_RANGE_ATR
-        ),
-        "max_close_location": (
-            MAX_CLOSE_LOCATION
-        ),
-        "min_body_ratio": (
-            MIN_BODY_RATIO
-        ),
-
-        "min_momentum_12h_atr": (
-            branch[
-                "min_momentum_12"
-            ]
-        ),
-        "min_momentum_48h_atr": (
-            branch[
-                "min_momentum_48"
-            ]
-        ),
-        "min_upper_wick_body": (
-            branch[
-                "min_upper_wick_body"
-            ]
-        ),
-        "max_stop_size_atr": (
-            branch[
-                "max_stop_size_atr"
-            ]
-        ),
-        "min_atr_ratio_50": (
-            branch[
-                "min_atr_ratio_50"
-            ]
-        ),
-
-        # Baseline
-        "baseline_trades": (
-            baseline_stats[
-                "trades"
-            ]
-        ),
-        "baseline_trades_per_year": round(
-            baseline_stats[
-                "trades"
-            ]
-            / years,
-            2,
-        ),
-        "baseline_profit_factor": (
-            baseline_stats[
-                "profit_factor"
-            ]
-        ),
-        "baseline_total_r": (
-            baseline_stats[
-                "total_r"
-            ]
-        ),
-        "baseline_expectancy_r": (
-            baseline_stats[
-                "expectancy_r"
-            ]
-        ),
-        "baseline_max_drawdown_r": (
-            baseline_stats[
-                "max_drawdown_r"
-            ]
-        ),
-
-        # Hour-specific quality
-        "hour_trades": (
-            hour_stats[
-                "trades"
-            ]
-        ),
-        "hour_share_pct": round(
-            (
-                hour_stats[
-                    "trades"
-                ]
-                / baseline_stats[
-                    "trades"
-                ]
-                * 100.0
-            )
-            if baseline_stats[
-                "trades"
-            ] else 0.0,
-            2,
-        ),
-        "hour_winners": (
-            hour_stats[
-                "winners"
-            ]
-        ),
-        "hour_losers": (
-            hour_stats[
-                "losers"
-            ]
-        ),
-        "hour_win_rate": (
-            hour_stats[
-                "win_rate"
-            ]
-        ),
-        "hour_profit_factor": (
-            hour_stats[
-                "profit_factor"
-            ]
-        ),
-        "hour_total_r": (
-            hour_stats[
-                "total_r"
-            ]
-        ),
-        "hour_expectancy_r": (
-            hour_stats[
-                "expectancy_r"
-            ]
-        ),
-        "hour_max_drawdown_r": (
-            hour_stats[
-                "max_drawdown_r"
-            ]
-        ),
-        "hour_longest_loss_streak": (
-            hour_stats[
-                "longest_loss_streak"
-            ]
-        ),
-
-        # Strategy after excluding hour
-        "exclude_hour_trades": (
-            excluded_stats[
-                "trades"
-            ]
-        ),
-        "exclude_hour_trades_per_year": round(
-            excluded_stats[
-                "trades"
-            ]
-            / years,
-            2,
-        ),
-        "exclude_hour_profit_factor": (
-            excluded_stats[
-                "profit_factor"
-            ]
-        ),
-        "exclude_hour_total_r": (
-            excluded_stats[
-                "total_r"
-            ]
-        ),
-        "exclude_hour_expectancy_r": (
-            excluded_stats[
-                "expectancy_r"
-            ]
-        ),
-        "exclude_hour_max_drawdown_r": (
-            excluded_stats[
-                "max_drawdown_r"
-            ]
-        ),
-        "exclude_hour_longest_loss_streak": (
-            excluded_stats[
-                "longest_loss_streak"
-            ]
-        ),
-
-        # Direct deltas
-        "trades_removed_if_excluded": (
-            baseline_stats[
-                "trades"
-            ]
-            - excluded_stats[
-                "trades"
-            ]
-        ),
-        "delta_pf_if_excluded": round(
-            excluded_stats[
-                "profit_factor"
-            ]
-            - baseline_stats[
-                "profit_factor"
-            ],
-            3,
-        ),
-        "delta_total_r_if_excluded": round(
-            excluded_stats[
-                "total_r"
-            ]
-            - baseline_stats[
-                "total_r"
-            ],
-            2,
-        ),
-        "delta_expectancy_if_excluded": round(
-            excluded_stats[
-                "expectancy_r"
-            ]
-            - baseline_stats[
-                "expectancy_r"
-            ],
-            3,
-        ),
-        "delta_max_dd_if_excluded": round(
-            excluded_stats[
-                "max_drawdown_r"
-            ]
-            - baseline_stats[
-                "max_drawdown_r"
-            ],
-            2,
-        ),
-    }
-
-    add_era_stats(
-        row,
-        "hour",
-        hour_trades,
-    )
-
-    add_era_stats(
-        row,
-        "excluded_strategy",
-        excluded_trades,
-    )
-
-    # Simple diagnostic flags, not selection rules.
     row[
-        "hour_sample_ge_5"
+        "all_four_eras_profitable"
     ] = (
-        hour_stats[
-            "trades"
-        ] >= 5
+        profitable_eras >= 4
     )
 
     row[
-        "hour_sample_ge_8"
+        "adequate_90_trades"
     ] = (
-        hour_stats[
+        full[
             "trades"
-        ] >= 8
+        ] >= 90
     )
 
     row[
-        "hour_sample_ge_10"
+        "adequate_100_trades"
     ] = (
-        hour_stats[
+        full[
             "trades"
-        ] >= 10
+        ] >= 100
     )
 
     row[
-        "hour_negative_expectancy"
+        "frequency_4py"
     ] = (
-        hour_stats[
+        full[
             "trades"
-        ] > 0
-        and hour_stats[
-            "expectancy_r"
-        ] < 0
+        ]
+        / years
+        >= 4.0
     )
 
     row[
-        "hour_pf_below_1"
+        "frequency_45py"
     ] = (
-        hour_stats[
+        full[
             "trades"
-        ] > 0
-        and hour_stats[
+        ]
+        / years
+        >= 4.5
+    )
+
+    row[
+        "worst_era_pf_120"
+    ] = (
+        minimum_era_pf is not None
+        and minimum_era_pf >= 1.20
+    )
+
+    row[
+        "worst_era_pf_130"
+    ] = (
+        minimum_era_pf is not None
+        and minimum_era_pf >= 1.30
+    )
+
+    row[
+        "worst_era_pf_140"
+    ] = (
+        minimum_era_pf is not None
+        and minimum_era_pf >= 1.40
+    )
+
+    row[
+        "pf_160"
+    ] = (
+        full[
             "profit_factor"
-        ] < 1.0
+        ] >= 1.60
     )
 
     row[
-        "hour_loses_in_2plus_eras"
+        "pf_180"
     ] = (
-        row[
-            "hour_losing_eras"
-        ] >= 2
+        full[
+            "profit_factor"
+        ] >= 1.80
     )
 
     row[
-        "hour_loses_in_3plus_eras"
+        "pf_200"
     ] = (
-        row[
-            "hour_losing_eras"
-        ] >= 3
+        full[
+            "profit_factor"
+        ] >= 2.00
     )
 
     row[
-        "exclusion_improves_pf"
-    ] = (
-        row[
-            "delta_pf_if_excluded"
-        ] > 0
-    )
-
-    row[
-        "exclusion_improves_expectancy"
-    ] = (
-        row[
-            "delta_expectancy_if_excluded"
-        ] > 0
-    )
-
-    row[
-        "exclusion_improves_dd"
-    ] = (
-        row[
-            "delta_max_dd_if_excluded"
-        ] > 0
-    )
-
-    row[
-        "exclusion_keeps_4py"
-    ] = (
-        row[
-            "exclude_hour_trades_per_year"
-        ] >= 4.0
+        "annual_r_linear"
+    ] = round(
+        full[
+            "expectancy_r"
+        ]
+        * (
+            full[
+                "trades"
+            ]
+            / years
+        ),
+        3,
     )
 
     return row
+
+
+# ============================================================
+# BASELINE DELTAS
+# ============================================================
+
+def add_timing_baseline_deltas(
+    df,
+):
+    df = df.copy()
+
+    metrics = [
+        "trades",
+        "trades_per_year",
+        "profit_factor",
+        "total_r",
+        "expectancy_r",
+        "max_drawdown_r",
+        "minimum_era_pf_5_plus",
+        "2024_present_pf",
+        "annual_r_linear",
+    ]
+
+    group_cols = [
+        "branch",
+        "timing_label",
+    ]
+
+    for (
+        branch_name,
+        timing_label,
+    ), group in df.groupby(
+        group_cols
+    ):
+        baseline = group[
+            group[
+                "relax_family"
+            ] == "BASELINE"
+        ]
+
+        if len(
+            baseline
+        ) != 1:
+            raise RuntimeError(
+                f"Expected one timing baseline for "
+                f"{branch_name}/{timing_label}"
+            )
+
+        baseline_row = (
+            baseline.iloc[0]
+        )
+
+        mask = (
+            (
+                df[
+                    "branch"
+                ] == branch_name
+            )
+            & (
+                df[
+                    "timing_label"
+                ] == timing_label
+            )
+        )
+
+        for metric in metrics:
+            df.loc[
+                mask,
+                f"delta_{metric}_vs_timing_baseline"
+            ] = (
+                df.loc[
+                    mask,
+                    metric
+                ]
+                - baseline_row[
+                    metric
+                ]
+            )
+
+    return df
 
 
 # ============================================================
@@ -1553,11 +1949,11 @@ def run_research():
 
     try:
         print()
-        print("=" * 82)
+        print("=" * 84)
         print(
-            "EUR/GBP SHORT - DUAL-BRANCH HOUR QUALITY DIAGNOSTIC"
+            "EUR/GBP SHORT - TIMING x FREQUENCY RECOVERY MATRIX"
         )
-        print("=" * 82)
+        print("=" * 84)
         print(
             f"Total tests: {TOTAL_TESTS}"
         )
@@ -1588,7 +1984,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building ATR14 and frozen branch candidates"
+                "Building ATR14 and raw bearish-engulfing features"
             ),
         })
 
@@ -1604,8 +2000,8 @@ def run_research():
             )
         )
 
-        base_candidates = (
-            build_candidates(
+        raw_candidates = (
+            build_raw_candidates(
                 h1,
                 h1_atr,
                 atr_mean_50,
@@ -1613,9 +2009,9 @@ def run_research():
         )
 
         STATUS[
-            "shared_geometry_signals"
+            "raw_bearish_engulfing_signals"
         ] = len(
-            base_candidates
+            raw_candidates
         )
 
         years = (
@@ -1628,84 +2024,88 @@ def run_research():
             * 60
         )
 
-        rows = []
-        completed = 0
-
         STATUS.update({
             "state": "running",
             "message": (
-                "Profiling NY hour quality for both branches"
+                "Running timing x frequency-recovery matrix"
             ),
         })
 
-        for branch in BRANCHES:
-            frozen_candidates = [
-                candidate
-                for candidate
-                in base_candidates
-                if passes_branch(
-                    candidate,
-                    branch,
-                )
-            ]
+        rows = []
+        completed = 0
 
-            baseline_trades, baseline_ignored, baseline_open = simulate(
-                h1,
-                frozen_candidates,
+        for timing_profile in (
+            TIMING_PROFILES
+        ):
+            branch_name = (
+                timing_profile[
+                    "branch"
+                ]
             )
 
-            STATUS[
-                f"{branch['branch'].lower()}_signals"
-            ] = len(
-                frozen_candidates
-            )
-
-            STATUS[
-                f"{branch['branch'].lower()}_baseline_trades"
-            ] = len(
-                baseline_trades
+            branch = (
+                BRANCHES[
+                    branch_name
+                ]
             )
 
             print()
             print(
-                f"{branch['branch']} baseline trades: "
-                f"{len(baseline_trades)}",
+                f"{branch_name} | "
+                f"{timing_profile['timing_label']}",
                 flush=True,
             )
 
-            for hour in range(24):
-                excluded_candidates = [
+            for relaxation in (
+                RELAXATIONS[
+                    branch_name
+                ]
+            ):
+                params = (
+                    effective_parameters(
+                        branch,
+                        relaxation,
+                    )
+                )
+
+                eligible = [
                     candidate
                     for candidate
-                    in frozen_candidates
-                    if candidate[
-                        "ny_hour"
-                    ] != hour
+                    in raw_candidates
+                    if (
+                        candidate[
+                            "ny_hour"
+                        ] not in timing_profile[
+                            "excluded_hours"
+                        ]
+                        and passes_parameters(
+                            candidate,
+                            params,
+                        )
+                    )
                 ]
 
-                excluded_trades, _, _ = simulate(
+                (
+                    trades,
+                    ignored,
+                    still_open,
+                ) = simulate(
                     h1,
-                    excluded_candidates,
+                    eligible,
                 )
-
-                row = build_hour_row(
-                    branch,
-                    hour,
-                    baseline_trades,
-                    excluded_trades,
-                    years,
-                )
-
-                row[
-                    "baseline_ignored_due_to_open_trade"
-                ] = baseline_ignored
-
-                row[
-                    "baseline_still_open_at_end"
-                ] = baseline_open
 
                 rows.append(
-                    row
+                    build_result_row(
+                        branch,
+                        timing_profile,
+                        relaxation,
+                        params,
+                        eligible,
+                        trades,
+                        ignored,
+                        still_open,
+                        years,
+                    )
                 )
 
                 completed += 1
@@ -1716,8 +2116,9 @@ def run_research():
 
                 print(
                     f"{completed}/{TOTAL_TESTS} | "
-                    f"{branch['branch']} | "
-                    f"NY {hour:02d}",
+                    f"{branch_name} | "
+                    f"{timing_profile['timing_label']} | "
+                    f"{relaxation['relax_label']}",
                     flush=True,
                 )
 
@@ -1730,34 +2131,47 @@ def run_research():
                 "No result rows generated"
             )
 
-        # Diagnostic sort:
-        # larger samples first, then worse hour expectancy/PF,
-        # then larger benefit from exclusion.
+        df = add_timing_baseline_deltas(
+            df
+        )
+
+        df[
+            "is_timing_baseline"
+        ] = (
+            df[
+                "relax_family"
+            ] == "BASELINE"
+        )
+
         df = df.sort_values(
             by=[
                 "branch",
-                "hour_sample_ge_10",
-                "hour_sample_ge_8",
-                "hour_sample_ge_5",
-                "hour_loses_in_3plus_eras",
-                "hour_loses_in_2plus_eras",
-                "hour_negative_expectancy",
-                "hour_expectancy_r",
-                "hour_profit_factor",
-                "delta_pf_if_excluded",
-                "delta_expectancy_if_excluded",
-                "hour_trades",
+                "timing_label",
+                "is_timing_baseline",
+                "all_four_eras_profitable",
+                "adequate_100_trades",
+                "frequency_4py",
+                "worst_era_pf_140",
+                "worst_era_pf_130",
+                "worst_era_pf_120",
+                "minimum_era_pf_5_plus",
+                "profit_factor",
+                "expectancy_r",
+                "annual_r_linear",
+                "trades",
             ],
             ascending=[
                 True,
-                False,
-                False,
-                False,
-                False,
-                False,
-                False,
                 True,
-                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
                 False,
                 False,
                 False,
@@ -1772,7 +2186,7 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "EUR/GBP hour-quality diagnostic "
+                "EUR/GBP timing frequency-recovery matrix "
                 "completed successfully"
             ),
             "completed_tests": TOTAL_TESTS,
@@ -1785,76 +2199,55 @@ def run_research():
         })
 
         print()
-        print("=" * 82)
+        print("=" * 84)
         print(
-            "EUR/GBP HOUR QUALITY DIAGNOSTIC COMPLETE"
+            "EUR/GBP TIMING x FREQUENCY RECOVERY COMPLETE"
         )
-        print("=" * 82)
+        print("=" * 84)
         print(
             "Rows:",
-            len(df),
+            len(
+                df
+            ),
         )
         print(
             "Saved:",
             OUTPUT_FILE,
         )
 
-        for branch_name in [
-            "ROBUST",
-            "HIGH_PF",
-        ]:
-            subset = df[
-                df[
-                    "branch"
-                ] == branch_name
-            ].copy()
-
+        for (
+            branch_name,
+            timing_label,
+        ), group in df.groupby(
+            [
+                "branch",
+                "timing_label",
+            ]
+        ):
             print()
             print(
-                f"--- {branch_name}: MOST INTERESTING HOURS ---"
-            )
-
-            interesting = subset[
-                subset[
-                    "hour_trades"
-                ] >= 5
-            ].copy()
-
-            interesting = interesting.sort_values(
-                by=[
-                    "hour_loses_in_3plus_eras",
-                    "hour_loses_in_2plus_eras",
-                    "hour_expectancy_r",
-                    "hour_profit_factor",
-                    "hour_trades",
-                ],
-                ascending=[
-                    False,
-                    False,
-                    True,
-                    True,
-                    False,
-                ],
+                f"--- {branch_name} | {timing_label} ---"
             )
 
             print(
-                interesting[
+                group[
                     [
-                        "ny_hour",
-                        "hour_trades",
-                        "hour_win_rate",
-                        "hour_profit_factor",
-                        "hour_total_r",
-                        "hour_expectancy_r",
-                        "hour_losing_eras",
-                        "exclude_hour_trades",
-                        "exclude_hour_trades_per_year",
-                        "exclude_hour_profit_factor",
-                        "exclude_hour_expectancy_r",
-                        "delta_pf_if_excluded",
-                        "delta_expectancy_if_excluded",
+                        "relax_family",
+                        "relax_label",
+                        "trades",
+                        "trades_per_year",
+                        "profit_factor",
+                        "total_r",
+                        "expectancy_r",
+                        "max_drawdown_r",
+                        "minimum_era_pf_5_plus",
+                        "2024_present_pf",
+                        "delta_trades_vs_timing_baseline",
+                        "delta_profit_factor_vs_timing_baseline",
                     ]
-                ].head(12).to_string(
+                ].head(
+                    15
+                ).to_string(
                     index=False
                 ),
                 flush=True,
@@ -1863,7 +2256,9 @@ def run_research():
     except Exception as error:
         STATUS.update({
             "state": "error",
-            "message": str(error),
+            "message": str(
+                error
+            ),
         })
 
         print(
@@ -1881,7 +2276,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "EURGBP Short Dual-Branch Hour Quality"
+            "EURGBP Short Timing Frequency Recovery"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -1895,20 +2290,55 @@ def home():
         "orders_supported": False,
         "executor_connected": False,
 
-        "shared_geometry": {
-            "minimum_body_ratio": MIN_BODY_RATIO,
-            "structure_lookback": STRUCTURE_LOOKBACK,
-            "max_distance_atr": MAX_DISTANCE_ATR,
-            "min_range_atr": MIN_RANGE_ATR,
-            "max_close_location": MAX_CLOSE_LOCATION,
-            "stop_buffer_ticks": STOP_BUFFER_TICKS,
-            "backtest_slippage_ticks": BACKTEST_SLIPPAGE_TICKS,
+        "shared_baseline": {
+            "minimum_body_ratio": (
+                MIN_BODY_RATIO
+            ),
+            "structure_lookback": (
+                STRUCTURE_LOOKBACK
+            ),
+            "max_distance_atr": (
+                BASE_MAX_DISTANCE_ATR
+            ),
+            "min_range_atr": (
+                BASE_MIN_RANGE_ATR
+            ),
+            "max_close_location": (
+                BASE_MAX_CLOSE_LOCATION
+            ),
+            "stop_buffer_ticks": (
+                STOP_BUFFER_TICKS
+            ),
+            "backtest_slippage_ticks": (
+                BACKTEST_SLIPPAGE_TICKS
+            ),
         },
 
-        "branches": BRANCHES,
-        "hours": list(range(24)),
-        "total_tests": TOTAL_TESTS,
-        "download": "/download",
+        "branches": (
+            BRANCHES
+        ),
+
+        "timing_profiles": (
+            TIMING_PROFILES
+        ),
+
+        "relaxation_counts": {
+            branch_name: len(
+                profiles
+            )
+            for (
+                branch_name,
+                profiles
+            ) in RELAXATIONS.items()
+        },
+
+        "total_tests": (
+            TOTAL_TESTS
+        ),
+
+        "download": (
+            "/download"
+        ),
     })
 
 
@@ -1927,7 +2357,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "EUR/GBP hour-quality CSV "
+                "EUR/GBP timing frequency-recovery CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -1947,7 +2377,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "eurgbp-short-dual-branch-hour-quality"
+            "eurgbp-short-timing-frequency-recovery"
         ),
         daemon=True,
     )
