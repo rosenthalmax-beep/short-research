@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7217,31 +7217,69 @@ def run_full_two_year_portfolio_backtest():
     return result
 
 
-@app.route(
-    "/full-strategy-two-year"
-)
-def full_strategy_two_year():
+PORTFOLIO_STATUS = {
+    "state": "not_started",
+    "message": "Backtest has not started",
+    "orders_submitted": False,
+}
+
+
+def run_portfolio_backtest_background():
     global PORTFOLIO_BACKTEST_CACHE
 
     try:
+        PORTFOLIO_STATUS.update({
+            "state": "running",
+            "message": (
+                "Running full 10-strategy two-year backtest"
+            ),
+            "orders_submitted": False,
+        })
+
         with PORTFOLIO_BACKTEST_LOCK:
             PORTFOLIO_BACKTEST_CACHE = (
                 run_full_two_year_portfolio_backtest()
             )
 
-        return jsonify(
-            PORTFOLIO_BACKTEST_CACHE
-        )
+        PORTFOLIO_STATUS.update({
+            "state": "complete",
+            "message": (
+                "Full 10-strategy two-year backtest complete"
+            ),
+            "orders_submitted": False,
+            "result": PORTFOLIO_BACKTEST_CACHE,
+        })
 
     except Exception as error:
-        return jsonify({
-            "status": "error",
-            "mode": "READ_ONLY",
+        PORTFOLIO_STATUS.update({
+            "state": "error",
+            "message": str(error),
             "orders_submitted": False,
-            "message": str(
-                error
-            ),
-        }), 500
+        })
+
+        print(
+            "PORTFOLIO BACKTEST ERROR:",
+            error,
+            flush=True,
+        )
+
+
+@app.route(
+    "/full-strategy-two-year"
+)
+def full_strategy_two_year():
+    return jsonify(
+        PORTFOLIO_STATUS
+    )
+
+
+@app.route(
+    "/status"
+)
+def portfolio_status():
+    return jsonify(
+        PORTFOLIO_STATUS
+    )
 
 
 @app.route(
@@ -7304,16 +7342,23 @@ def download_full_strategy_two_year_summary():
 # ==================================================
 
 if __name__ == "__main__":
+    research_thread = threading.Thread(
+        target=run_portfolio_backtest_background,
+        name="full-10-strategy-two-year-backtest",
+        daemon=True,
+    )
+
+    research_thread.start()
 
     port = int(
         os.getenv(
             "PORT",
-            5000
+            5000,
         )
     )
 
     app.run(
         host="0.0.0.0",
         port=port,
-        debug=False
+        debug=False,
     )
