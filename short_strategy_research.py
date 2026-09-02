@@ -8,64 +8,47 @@ from datetime import datetime, timezone, timedelta
 
 
 # ============================================================
-# EUR/GBP SHORT - DUAL-BRANCH FREQUENCY RECOVERY
-# + SECONDARY REGIME REFINEMENT
+# EUR/GBP SHORT - DUAL-BRANCH RR SWEEP
 #
 # RESEARCH ONLY — NEVER SUBMITS ORDERS.
 #
 # Purpose:
-#   Continue BOTH surviving EUR/GBP short branches:
+#   Freeze the two surviving EUR/GBP short branches and test
+#   only reward:risk.
 #
-#   A) ROBUST BRANCH
-#      12h upward momentum >= 0.25 ATR14
-#      48h upward momentum >= 0.50 ATR14
-#      stop size <= 2.50 ATR14
-#      no wick filter
+# Shared execution:
+#   - OANDA EUR_GBP
+#   - H1
+#   - bearish engulfing
+#   - minimum body ratio >= 1.00
+#   - stop = signal high + 10 ticks
+#   - adverse short slippage = 5 ticks
+#   - pyramiding = 0
 #
-#   B) HIGH-PF BRANCH
-#      48h upward momentum >= 1.00 ATR14
-#      upper wick/body >= 0.10
-#      no 12h momentum filter
-#      no stop cap
+# FROZEN ROBUST BRANCH:
+#   structure lookback = 90
+#   distance <= 0.075 ATR14
+#   signal range >= 1.10 ATR14
+#   close location <= 0.20
+#   12h upward momentum >= 0.25 ATR14
+#   48h upward momentum >= 0.50 ATR14
+#   stop size <= 2.50 ATR14
 #
-# Shared core:
-#   bearish engulfing
-#   body ratio >= 1.00
-#   RR = 3.00
-#   stop = signal high + 10 ticks
-#   adverse short slippage = 5 ticks
-#   pyramiding = 0
+# FROZEN HIGH-PF BRANCH:
+#   structure lookback = 90
+#   distance <= 0.075 ATR14
+#   signal range >= 1.10 ATR14
+#   close location <= 0.20
+#   48h upward momentum >= 1.00 ATR14
+#   upper wick/body >= 0.10
+#   ATR14 / 50-bar ATR14 mean >= 0.80
 #
-# Frequency-recovery geometry:
-#   structure lookback: 80, 90, 100
-#   max distance ATR:   0.075, 0.10, 0.125
-#   min range ATR:      1.00, 1.05, 1.10
-#   max close location: 0.20, 0.225, 0.25
-#
-# Secondary modifier profiles:
-#   NONE
-#   ATR14 / mean(ATR14, 50) >= 0.80
-#   ATR14 / mean(ATR14, 50) >= 0.90
-#   ATR14 / mean(ATR14, 50) >= 1.00
-#   EMA20 12h slope >= 0.00 ATR
-#   EMA20 12h slope >= 0.10 ATR
-#   EMA20 12h slope >= 0.20 ATR
-#   prior structure high within 72 bars
-#   prior structure high within 48 bars
-#   prior structure high within 36 bars
-#
-# IMPORTANT:
-#   Only ONE secondary modifier is applied at a time.
-#   We are not stacking ATR regime + EMA slope + high recency.
-#
-# Total:
-#   3*3*3*3 = 81 geometry sets
-#   10 modifier profiles
-#   2 branches
-#   = 1,620 tests
+# RR sweep:
+#   2.25, 2.50, 2.75, 3.00,
+#   3.25, 3.50, 3.75, 4.00
 #
 # Output:
-#   eurgbp_short_dual_branch_frequency_recovery.csv
+#   eurgbp_short_dual_branch_rr_sweep.csv
 # ============================================================
 
 
@@ -84,32 +67,23 @@ TICK_SIZE = 0.00001
 
 STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
-REWARD_RISK = 3.00
 
 MIN_BODY_RATIO = 1.00
 
-STRUCTURE_LOOKBACKS = [
-    80,
-    90,
-    100,
-]
+STRUCTURE_LOOKBACK = 90
+MAX_DISTANCE_ATR = 0.075
+MIN_RANGE_ATR = 1.10
+MAX_CLOSE_LOCATION = 0.20
 
-MAX_DISTANCE_ATR_VALUES = [
-    0.075,
-    0.10,
-    0.125,
-]
-
-MIN_RANGE_ATR_VALUES = [
-    1.00,
-    1.05,
-    1.10,
-]
-
-MAX_CLOSE_LOCATION_VALUES = [
-    0.20,
-    0.225,
-    0.25,
+RR_VALUES = [
+    2.25,
+    2.50,
+    2.75,
+    3.00,
+    3.25,
+    3.50,
+    3.75,
+    4.00,
 ]
 
 H1_CHUNK_DAYS = 180
@@ -130,11 +104,11 @@ RESEARCH_TO = (
 
 H1_WARMUP_DAYS = 700
 
-OUTPUT_FILE = "eurgbp_short_dual_branch_frequency_recovery.csv"
+OUTPUT_FILE = "eurgbp_short_dual_branch_rr_sweep.csv"
 
 
 # ============================================================
-# BRANCH DEFINITIONS
+# BRANCHES
 # ============================================================
 
 BRANCHES = [
@@ -144,6 +118,7 @@ BRANCHES = [
         "min_momentum_48": 0.50,
         "min_upper_wick_body": None,
         "max_stop_size_atr": 2.50,
+        "min_atr_ratio_50": None,
     },
     {
         "branch": "HIGH_PF",
@@ -151,87 +126,7 @@ BRANCHES = [
         "min_momentum_48": 1.00,
         "min_upper_wick_body": 0.10,
         "max_stop_size_atr": None,
-    },
-]
-
-
-# ============================================================
-# SECONDARY MODIFIERS
-# ============================================================
-
-MODIFIERS = [
-    {
-        "modifier_family": "NONE",
-        "modifier_label": "none",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": None,
-    },
-
-    {
-        "modifier_family": "ATR_REGIME",
-        "modifier_label": "atr_ratio_gte_0.80",
         "min_atr_ratio_50": 0.80,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": None,
-    },
-    {
-        "modifier_family": "ATR_REGIME",
-        "modifier_label": "atr_ratio_gte_0.90",
-        "min_atr_ratio_50": 0.90,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": None,
-    },
-    {
-        "modifier_family": "ATR_REGIME",
-        "modifier_label": "atr_ratio_gte_1.00",
-        "min_atr_ratio_50": 1.00,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": None,
-    },
-
-    {
-        "modifier_family": "EMA20_SLOPE_12H",
-        "modifier_label": "ema20_slope12_gte_0.00",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": 0.00,
-        "max_bars_since_structure_high": None,
-    },
-    {
-        "modifier_family": "EMA20_SLOPE_12H",
-        "modifier_label": "ema20_slope12_gte_0.10",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": 0.10,
-        "max_bars_since_structure_high": None,
-    },
-    {
-        "modifier_family": "EMA20_SLOPE_12H",
-        "modifier_label": "ema20_slope12_gte_0.20",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": 0.20,
-        "max_bars_since_structure_high": None,
-    },
-
-    {
-        "modifier_family": "HIGH_RECENCY",
-        "modifier_label": "prior_high_within_72_bars",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": 72,
-    },
-    {
-        "modifier_family": "HIGH_RECENCY",
-        "modifier_label": "prior_high_within_48_bars",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": 48,
-    },
-    {
-        "modifier_family": "HIGH_RECENCY",
-        "modifier_label": "prior_high_within_36_bars",
-        "min_atr_ratio_50": None,
-        "min_ema20_slope_12h_atr": None,
-        "max_bars_since_structure_high": 36,
     },
 ]
 
@@ -268,30 +163,18 @@ ERAS = [
 # STATUS
 # ============================================================
 
-GEOMETRY_TESTS = (
-    len(STRUCTURE_LOOKBACKS)
-    * len(MAX_DISTANCE_ATR_VALUES)
-    * len(MIN_RANGE_ATR_VALUES)
-    * len(MAX_CLOSE_LOCATION_VALUES)
-)
-
 TOTAL_TESTS = (
-    GEOMETRY_TESTS
-    * len(MODIFIERS)
-    * len(BRANCHES)
+    len(BRANCHES)
+    * len(RR_VALUES)
 )
 
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EURGBP Short Dual-Branch Frequency Recovery",
+    "service": "EURGBP Short Dual-Branch RR Sweep",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "reward_risk": REWARD_RISK,
-    "geometry_tests_per_modifier": GEOMETRY_TESTS,
-    "modifier_profiles": len(MODIFIERS),
-    "branches": len(BRANCHES),
     "total_tests": TOTAL_TESTS,
     "completed_tests": 0,
     "rows_saved": 0,
@@ -440,46 +323,6 @@ def fetch_chunked_history(
 # INDICATORS
 # ============================================================
 
-def ema_series(values, length):
-    result = [None] * len(values)
-
-    if len(values) < length:
-        return result
-
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
-    result[
-        length - 1
-    ] = initial
-
-    multiplier = (
-        2.0 / (length + 1.0)
-    )
-
-    previous = initial
-
-    for index in range(
-        length,
-        len(values),
-    ):
-        current = (
-            (
-                values[index]
-                - previous
-            )
-            * multiplier
-            + previous
-        )
-
-        result[index] = current
-        previous = current
-
-    return result
-
-
 def true_ranges(candles):
     result = []
 
@@ -491,7 +334,6 @@ def true_ranges(candles):
                 candle["high"]
                 - candle["low"]
             )
-
         else:
             previous_close = (
                 candles[
@@ -600,25 +442,19 @@ def rolling_mean_optional(
 
 
 # ============================================================
-# RAW SIGNAL FEATURES
+# SIGNALS + FEATURES
 # ============================================================
 
 def build_candidates(
     h1,
     h1_atr,
     atr_mean_50,
-    ema20,
 ):
     candidates = []
 
-    max_structure = max(
-        STRUCTURE_LOOKBACKS
-    )
-
     max_lookback = max(
-        max_structure,
+        STRUCTURE_LOOKBACK,
         48,
-        12,
         50,
     )
 
@@ -634,8 +470,13 @@ def build_candidates(
         if signal["time"] >= RESEARCH_TO:
             break
 
-        previous = h1[index - 1]
-        atr = h1_atr[index]
+        previous = h1[
+            index - 1
+        ]
+
+        atr = h1_atr[
+            index
+        ]
 
         if (
             atr is None
@@ -692,10 +533,41 @@ def build_candidates(
             / atr
         )
 
+        if (
+            range_atr
+            < MIN_RANGE_ATR
+        ):
+            continue
+
         close_location = (
             signal["close"]
             - signal["low"]
         ) / candle_range
+
+        if (
+            close_location
+            > MAX_CLOSE_LOCATION
+        ):
+            continue
+
+        previous_highest = max(
+            candle["high"]
+            for candle in h1[
+                index - STRUCTURE_LOOKBACK:
+                index
+            ]
+        )
+
+        structure_distance_atr = (
+            previous_highest
+            - signal["high"]
+        ) / atr
+
+        if (
+            structure_distance_atr
+            > MAX_DISTANCE_ATR
+        ):
+            continue
 
         momentum_12 = (
             signal["close"]
@@ -748,88 +620,9 @@ def build_candidates(
                 / atr_mean_50[index]
             )
 
-        ema20_slope_12h_atr = None
-
-        if (
-            ema20[index] is not None
-            and ema20[
-                index - 12
-            ] is not None
-        ):
-            ema20_slope_12h_atr = (
-                ema20[index]
-                - ema20[
-                    index - 12
-                ]
-            ) / atr
-
-        structures = {}
-        bars_since_high = {}
-
-        for lookback in (
-            STRUCTURE_LOOKBACKS
-        ):
-            slice_start = (
-                index - lookback
-            )
-
-            previous_slice = h1[
-                slice_start:
-                index
-            ]
-
-            previous_highest = max(
-                candle["high"]
-                for candle
-                in previous_slice
-            )
-
-            structures[
-                lookback
-            ] = (
-                previous_highest
-                - signal["high"]
-            ) / atr
-
-            most_recent_offset = None
-
-            for offset in range(
-                1,
-                lookback + 1,
-            ):
-                candidate_index = (
-                    index - offset
-                )
-
-                if (
-                    abs(
-                        h1[
-                            candidate_index
-                        ]["high"]
-                        - previous_highest
-                    )
-                    <= 1e-12
-                ):
-                    most_recent_offset = (
-                        offset
-                    )
-                    break
-
-            bars_since_high[
-                lookback
-            ] = (
-                most_recent_offset
-            )
-
         candidates.append({
             "index": index,
             "time": signal["time"],
-            "range_atr": (
-                range_atr
-            ),
-            "close_location": (
-                close_location
-            ),
             "momentum_12": (
                 momentum_12
             ),
@@ -845,18 +638,89 @@ def build_candidates(
             "atr_ratio_50": (
                 atr_ratio_50
             ),
-            "ema20_slope_12h_atr": (
-                ema20_slope_12h_atr
-            ),
-            "structure": (
-                structures
-            ),
-            "bars_since_high": (
-                bars_since_high
-            ),
         })
 
     return candidates
+
+
+def passes_branch(
+    candidate,
+    branch,
+):
+    min_momentum_12 = (
+        branch[
+            "min_momentum_12"
+        ]
+    )
+
+    if (
+        min_momentum_12 is not None
+        and candidate[
+            "momentum_12"
+        ] < min_momentum_12
+    ):
+        return False
+
+    min_momentum_48 = (
+        branch[
+            "min_momentum_48"
+        ]
+    )
+
+    if (
+        min_momentum_48 is not None
+        and candidate[
+            "momentum_48"
+        ] < min_momentum_48
+    ):
+        return False
+
+    min_upper_wick = (
+        branch[
+            "min_upper_wick_body"
+        ]
+    )
+
+    if (
+        min_upper_wick is not None
+        and candidate[
+            "upper_wick_body"
+        ] < min_upper_wick
+    ):
+        return False
+
+    max_stop_size = (
+        branch[
+            "max_stop_size_atr"
+        ]
+    )
+
+    if (
+        max_stop_size is not None
+        and candidate[
+            "stop_size_atr"
+        ] > max_stop_size
+    ):
+        return False
+
+    min_atr_ratio = (
+        branch[
+            "min_atr_ratio_50"
+        ]
+    )
+
+    if min_atr_ratio is not None:
+        if (
+            candidate[
+                "atr_ratio_50"
+            ] is None
+            or candidate[
+                "atr_ratio_50"
+            ] < min_atr_ratio
+        ):
+            return False
+
+    return True
 
 
 # ============================================================
@@ -869,10 +733,16 @@ EXIT_CACHE = {}
 def calculate_trade_exit(
     h1,
     signal_index,
+    reward_risk,
 ):
-    if signal_index in EXIT_CACHE:
+    cache_key = (
+        signal_index,
+        reward_risk,
+    )
+
+    if cache_key in EXIT_CACHE:
         return EXIT_CACHE[
-            signal_index
+            cache_key
         ]
 
     signal = h1[
@@ -908,7 +778,7 @@ def calculate_trade_exit(
     target = (
         reference_entry
         - reference_risk
-        * REWARD_RISK
+        * reward_risk
     )
 
     actual_risk = (
@@ -925,9 +795,14 @@ def calculate_trade_exit(
         signal_index + 1,
         len(h1),
     ):
-        candle = h1[index]
+        candle = h1[
+            index
+        ]
 
-        if candle["time"] >= RESEARCH_TO:
+        if (
+            candle["time"]
+            >= RESEARCH_TO
+        ):
             break
 
         stop_hit = (
@@ -946,7 +821,10 @@ def calculate_trade_exit(
         ):
             continue
 
-        if stop_hit and target_hit:
+        if (
+            stop_hit
+            and target_hit
+        ):
             distance_to_high = abs(
                 candle["high"]
                 - candle["open"]
@@ -989,7 +867,7 @@ def calculate_trade_exit(
         }
 
         EXIT_CACHE[
-            signal_index
+            cache_key
         ] = result
 
         return result
@@ -1005,7 +883,7 @@ def calculate_trade_exit(
     }
 
     EXIT_CACHE[
-        signal_index
+        cache_key
     ] = result
 
     return result
@@ -1014,19 +892,24 @@ def calculate_trade_exit(
 def simulate(
     h1,
     eligible,
+    reward_risk,
 ):
     trades = []
     position_exit_index = -1
     ignored = 0
     still_open = False
 
-    for candidate in eligible:
+    for candidate in (
+        eligible
+    ):
         signal_index = (
-            candidate["index"]
+            candidate[
+                "index"
+            ]
         )
 
         # Locked convention:
-        # signal on exact exit candle is allowed.
+        # same-bar exit then signal is allowed.
         if (
             signal_index
             < position_exit_index
@@ -1037,11 +920,14 @@ def simulate(
         trade = calculate_trade_exit(
             h1,
             signal_index,
+            reward_risk,
         )
 
-        if trade[
-            "status"
-        ] == "OPEN":
+        if (
+            trade[
+                "status"
+            ] == "OPEN"
+        ):
             still_open = True
             break
 
@@ -1050,7 +936,9 @@ def simulate(
         )
 
         position_exit_index = (
-            trade["exit_index"]
+            trade[
+                "exit_index"
+            ]
         )
 
     return (
@@ -1073,7 +961,9 @@ def stats_for_trades(
 
     for trade in trades:
         signal_time = (
-            trade["signal_time"]
+            trade[
+                "signal_time"
+            ]
         )
 
         if (
@@ -1106,7 +996,9 @@ def stats_for_trades(
         }
 
     results = [
-        trade["result_r"]
+        trade[
+            "result_r"
+        ]
         for trade in filtered
     ]
 
@@ -1127,7 +1019,9 @@ def stats_for_trades(
     )
 
     gross_loss = abs(
-        sum(losers)
+        sum(
+            losers
+        )
     )
 
     total_r = sum(
@@ -1174,12 +1068,22 @@ def stats_for_trades(
             current_streak = 0
 
     return {
-        "trades": len(results),
-        "winners": len(winners),
-        "losers": len(losers),
+        "trades": len(
+            results
+        ),
+        "winners": len(
+            winners
+        ),
+        "losers": len(
+            losers
+        ),
         "win_rate": round(
-            len(winners)
-            / len(results)
+            len(
+                winners
+            )
+            / len(
+                results
+            )
             * 100.0,
             2,
         ),
@@ -1193,7 +1097,9 @@ def stats_for_trades(
         ),
         "expectancy_r": round(
             total_r
-            / len(results),
+            / len(
+                results
+            ),
             3,
         ),
         "max_drawdown_r": round(
@@ -1207,18 +1113,13 @@ def stats_for_trades(
 
 
 # ============================================================
-# RESULT ROW
+# ROW BUILDER
 # ============================================================
 
 def make_result_row(
     branch,
-    modifier,
-    lookback,
-    max_distance_atr,
-    min_range_atr,
-    max_close_location,
-    raw_candidates,
-    eligible,
+    reward_risk,
+    branch_candidates,
     trades,
     ignored,
     still_open,
@@ -1230,82 +1131,59 @@ def make_result_row(
 
     row = {
         "branch": (
-            branch["branch"]
+            branch[
+                "branch"
+            ]
+        ),
+        "reward_risk": (
+            reward_risk
         ),
 
         "structure_lookback": (
-            lookback
+            STRUCTURE_LOOKBACK
         ),
         "max_distance_atr": (
-            max_distance_atr
+            MAX_DISTANCE_ATR
         ),
         "min_range_atr": (
-            min_range_atr
+            MIN_RANGE_ATR
         ),
         "max_close_location": (
-            max_close_location
+            MAX_CLOSE_LOCATION
+        ),
+        "min_body_ratio": (
+            MIN_BODY_RATIO
         ),
 
-        "branch_min_momentum_12h_atr": (
+        "min_momentum_12h_atr": (
             branch[
                 "min_momentum_12"
             ]
         ),
-        "branch_min_momentum_48h_atr": (
+        "min_momentum_48h_atr": (
             branch[
                 "min_momentum_48"
             ]
         ),
-        "branch_min_upper_wick_body": (
+        "min_upper_wick_body": (
             branch[
                 "min_upper_wick_body"
             ]
         ),
-        "branch_max_stop_size_atr": (
+        "max_stop_size_atr": (
             branch[
                 "max_stop_size_atr"
             ]
         ),
-
-        "modifier_family": (
-            modifier[
-                "modifier_family"
-            ]
-        ),
-        "modifier_label": (
-            modifier[
-                "modifier_label"
-            ]
-        ),
-        "modifier_min_atr_ratio_50": (
-            modifier[
+        "min_atr_ratio_50": (
+            branch[
                 "min_atr_ratio_50"
             ]
         ),
-        "modifier_min_ema20_slope_12h_atr": (
-            modifier[
-                "min_ema20_slope_12h_atr"
-            ]
-        ),
-        "modifier_max_bars_since_structure_high": (
-            modifier[
-                "max_bars_since_structure_high"
-            ]
-        ),
 
-        "raw_signals": len(
-            raw_candidates
-        ),
         "eligible_signals": len(
-            eligible
+            branch_candidates
         ),
-        "signal_retention_pct": round(
-            len(eligible)
-            / len(raw_candidates)
-            * 100.0,
-            2,
-        ) if raw_candidates else 0.0,
-
         "ignored_due_to_open_trade": (
             ignored
         ),
@@ -1387,12 +1265,16 @@ def make_result_row(
             "expectancy_r"
         ]
 
-        if era[
-            "trades"
-        ] >= 5:
-            if era[
-                "total_r"
-            ] > 0:
+        if (
+            era[
+                "trades"
+            ] >= 5
+        ):
+            if (
+                era[
+                    "total_r"
+                ] > 0
+            ):
                 profitable_eras_with_5_plus += 1
 
             pf = era[
@@ -1427,15 +1309,21 @@ def make_result_row(
 
     row[
         "profitable_eras_with_5_plus_trades"
-    ] = profitable_eras_with_5_plus
+    ] = (
+        profitable_eras_with_5_plus
+    )
 
     row[
         "minimum_era_pf_5_plus"
-    ] = minimum_era_pf_5_plus
+    ] = (
+        minimum_era_pf_5_plus
+    )
 
     row[
         "minimum_era_expectancy_5_plus"
-    ] = minimum_era_expectancy_5_plus
+    ] = (
+        minimum_era_expectancy_5_plus
+    )
 
     row[
         "all_four_eras_profitable"
@@ -1447,37 +1335,19 @@ def make_result_row(
     row[
         "adequate_90_trades"
     ] = (
-        full["trades"] >= 90
-    )
-
-    row[
-        "adequate_100_trades"
-    ] = (
-        full["trades"] >= 100
+        full[
+            "trades"
+        ] >= 90
     )
 
     row[
         "frequency_4py"
     ] = (
-        full["trades"]
+        full[
+            "trades"
+        ]
         / years
         >= 4.0
-    )
-
-    row[
-        "frequency_45py"
-    ] = (
-        full["trades"]
-        / years
-        >= 4.5
-    )
-
-    row[
-        "frequency_5py"
-    ] = (
-        full["trades"]
-        / years
-        >= 5.0
     )
 
     row[
@@ -1502,46 +1372,6 @@ def make_result_row(
     )
 
     row[
-        "pf_150"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.50
-    )
-
-    row[
-        "pf_160"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.60
-    )
-
-    row[
-        "pf_170"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.70
-    )
-
-    row[
-        "pf_180"
-    ] = (
-        full[
-            "profit_factor"
-        ] >= 1.80
-    )
-
-    row[
-        "dd_better_than_8r"
-    ] = (
-        full[
-            "max_drawdown_r"
-        ] >= -8.0
-    )
-
-    row[
         "annual_r_linear"
     ] = round(
         full[
@@ -1550,132 +1380,13 @@ def make_result_row(
         * (
             full[
                 "trades"
-            ] / years
+            ]
+            / years
         ),
         3,
     )
 
     return row
-
-
-# ============================================================
-# ELIGIBILITY
-# ============================================================
-
-def passes_branch(
-    candidate,
-    branch,
-):
-    if (
-        branch[
-            "min_momentum_12"
-        ] is not None
-        and candidate[
-            "momentum_12"
-        ] < branch[
-            "min_momentum_12"
-        ]
-    ):
-        return False
-
-    if (
-        branch[
-            "min_momentum_48"
-        ] is not None
-        and candidate[
-            "momentum_48"
-        ] < branch[
-            "min_momentum_48"
-        ]
-    ):
-        return False
-
-    if (
-        branch[
-            "min_upper_wick_body"
-        ] is not None
-        and candidate[
-            "upper_wick_body"
-        ] < branch[
-            "min_upper_wick_body"
-        ]
-    ):
-        return False
-
-    if (
-        branch[
-            "max_stop_size_atr"
-        ] is not None
-        and candidate[
-            "stop_size_atr"
-        ] > branch[
-            "max_stop_size_atr"
-        ]
-    ):
-        return False
-
-    return True
-
-
-def passes_modifier(
-    candidate,
-    modifier,
-    lookback,
-):
-    min_atr_ratio = (
-        modifier[
-            "min_atr_ratio_50"
-        ]
-    )
-
-    if min_atr_ratio is not None:
-        if (
-            candidate[
-                "atr_ratio_50"
-            ] is None
-            or candidate[
-                "atr_ratio_50"
-            ] < min_atr_ratio
-        ):
-            return False
-
-    min_slope = (
-        modifier[
-            "min_ema20_slope_12h_atr"
-        ]
-    )
-
-    if min_slope is not None:
-        if (
-            candidate[
-                "ema20_slope_12h_atr"
-            ] is None
-            or candidate[
-                "ema20_slope_12h_atr"
-            ] < min_slope
-        ):
-            return False
-
-    max_bars = (
-        modifier[
-            "max_bars_since_structure_high"
-        ]
-    )
-
-    if max_bars is not None:
-        bars_since = (
-            candidate[
-                "bars_since_high"
-            ][lookback]
-        )
-
-        if (
-            bars_since is None
-            or bars_since > max_bars
-        ):
-            return False
-
-    return True
 
 
 # ============================================================
@@ -1687,20 +1398,11 @@ def run_research():
 
     try:
         print()
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "EUR/GBP SHORT - DUAL-BRANCH FREQUENCY RECOVERY"
+            "EUR/GBP SHORT - DUAL-BRANCH RR SWEEP"
         )
-        print("=" * 78)
-        print(
-            f"Geometry sets: {GEOMETRY_TESTS}"
-        )
-        print(
-            f"Modifiers: {len(MODIFIERS)}"
-        )
-        print(
-            f"Branches: {len(BRANCHES)}"
-        )
+        print("=" * 76)
         print(
             f"Total tests: {TOTAL_TESTS}"
         )
@@ -1731,7 +1433,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building ATR14, EMA20 and candidate features"
+                "Building ATR14 and frozen branch candidates"
             ),
         })
 
@@ -1747,31 +1449,18 @@ def run_research():
             )
         )
 
-        closes = [
-            candle[
-                "close"
-            ]
-            for candle in h1
-        ]
-
-        ema20 = ema_series(
-            closes,
-            20,
-        )
-
-        raw_candidates = (
+        base_candidates = (
             build_candidates(
                 h1,
                 h1_atr,
                 atr_mean_50,
-                ema20,
             )
         )
 
         STATUS[
-            "raw_bearish_engulfing_signals"
+            "shared_geometry_signals"
         ] = len(
-            raw_candidates
+            base_candidates
         )
 
         years = (
@@ -1784,119 +1473,83 @@ def run_research():
             * 60
         )
 
-        STATUS.update({
-            "state": "running",
-            "message": (
-                "Running dual-branch frequency-recovery scan"
-            ),
-        })
-
         rows = []
         completed = 0
 
-        for branch in BRANCHES:
-            print(
-                f"Starting branch: {branch['branch']}",
-                flush=True,
-            )
+        STATUS.update({
+            "state": "running",
+            "message": (
+                "Running dual-branch RR sweep"
+            ),
+        })
 
+        for branch in (
+            BRANCHES
+        ):
             branch_candidates = [
                 candidate
                 for candidate
-                in raw_candidates
+                in base_candidates
                 if passes_branch(
                     candidate,
                     branch,
                 )
             ]
 
-            for lookback in (
-                STRUCTURE_LOOKBACKS
+            STATUS[
+                f"{branch['branch'].lower()}_eligible_signals"
+            ] = len(
+                branch_candidates
+            )
+
+            print(
+                branch[
+                    "branch"
+                ],
+                "eligible signals:",
+                len(
+                    branch_candidates
+                ),
+                flush=True,
+            )
+
+            for reward_risk in (
+                RR_VALUES
             ):
-                for max_distance_atr in (
-                    MAX_DISTANCE_ATR_VALUES
-                ):
-                    for min_range_atr in (
-                        MIN_RANGE_ATR_VALUES
-                    ):
-                        for max_close_location in (
-                            MAX_CLOSE_LOCATION_VALUES
-                        ):
+                (
+                    trades,
+                    ignored,
+                    still_open,
+                ) = simulate(
+                    h1,
+                    branch_candidates,
+                    reward_risk,
+                )
 
-                            geometry_candidates = [
-                                candidate
-                                for candidate
-                                in branch_candidates
-                                if (
-                                    candidate[
-                                        "structure"
-                                    ][lookback]
-                                    <= max_distance_atr
-                                    and candidate[
-                                        "range_atr"
-                                    ]
-                                    >= min_range_atr
-                                    and candidate[
-                                        "close_location"
-                                    ]
-                                    <= max_close_location
-                                )
-                            ]
+                rows.append(
+                    make_result_row(
+                        branch,
+                        reward_risk,
+                        branch_candidates,
+                        trades,
+                        ignored,
+                        still_open,
+                        years,
+                    )
+                )
 
-                            for modifier in (
-                                MODIFIERS
-                            ):
-                                eligible = [
-                                    candidate
-                                    for candidate
-                                    in geometry_candidates
-                                    if passes_modifier(
-                                        candidate,
-                                        modifier,
-                                        lookback,
-                                    )
-                                ]
+                completed += 1
 
-                                (
-                                    trades,
-                                    ignored,
-                                    still_open,
-                                ) = simulate(
-                                    h1,
-                                    eligible,
-                                )
+                STATUS[
+                    "completed_tests"
+                ] = completed
 
-                                rows.append(
-                                    make_result_row(
-                                        branch,
-                                        modifier,
-                                        lookback,
-                                        max_distance_atr,
-                                        min_range_atr,
-                                        max_close_location,
-                                        raw_candidates,
-                                        eligible,
-                                        trades,
-                                        ignored,
-                                        still_open,
-                                        years,
-                                    )
-                                )
-
-                                completed += 1
-
-                                STATUS[
-                                    "completed_tests"
-                                ] = completed
-
-                                if (
-                                    completed % 100 == 0
-                                    or completed == TOTAL_TESTS
-                                ):
-                                    print(
-                                        f"{completed}/{TOTAL_TESTS}",
-                                        flush=True,
-                                    )
+                print(
+                    f"{completed}/{TOTAL_TESTS} | "
+                    f"{branch['branch']} | "
+                    f"RR={reward_risk:.2f}",
+                    flush=True,
+                )
 
         df = pd.DataFrame(
             rows
@@ -1909,31 +1562,21 @@ def run_research():
 
         df = df.sort_values(
             by=[
+                "branch",
                 "all_four_eras_profitable",
-                "adequate_100_trades",
-                "frequency_45py",
+                "adequate_90_trades",
                 "frequency_4py",
                 "worst_era_pf_140",
                 "worst_era_pf_130",
                 "worst_era_pf_120",
-                "dd_better_than_8r",
-                "pf_180",
-                "pf_170",
-                "pf_160",
-                "pf_150",
                 "minimum_era_pf_5_plus",
                 "profit_factor",
                 "expectancy_r",
                 "annual_r_linear",
-                "trades",
+                "total_r",
             ],
             ascending=[
-                False,
-                False,
-                False,
-                False,
-                False,
-                False,
+                True,
                 False,
                 False,
                 False,
@@ -1953,66 +1596,15 @@ def run_research():
             index=False,
         )
 
-        robust_df = df[
-            df[
-                "branch"
-            ] == "ROBUST"
-        ]
-
-        high_pf_df = df[
-            df[
-                "branch"
-            ] == "HIGH_PF"
-        ]
-
         STATUS.update({
             "state": "complete",
             "message": (
-                "EUR/GBP dual-branch frequency recovery "
+                "EUR/GBP dual-branch RR sweep "
                 "completed successfully"
             ),
             "completed_tests": TOTAL_TESTS,
             "rows_saved": len(
                 df
-            ),
-            "raw_bearish_engulfing_signals": (
-                len(raw_candidates)
-            ),
-            "robust_all_four_eras_count": int(
-                robust_df[
-                    "all_four_eras_profitable"
-                ].sum()
-            ),
-            "high_pf_all_four_eras_count": int(
-                high_pf_df[
-                    "all_four_eras_profitable"
-                ].sum()
-            ),
-            "robust_100_trades_pf150_count": int(
-                (
-                    robust_df[
-                        "adequate_100_trades"
-                    ]
-                    & robust_df[
-                        "pf_150"
-                    ]
-                    & robust_df[
-                        "all_four_eras_profitable"
-                    ]
-                ).sum()
-            ),
-            "high_pf_100_trades_pf170_count": int(
-                (
-                    high_pf_df[
-                        "adequate_100_trades"
-                    ]
-                    & high_pf_df[
-                        "pf_170"
-                    ]
-                    & high_pf_df[
-                        "all_four_eras_profitable"
-                    ]
-                ).sum()
             ),
             "output_file": (
                 OUTPUT_FILE
@@ -2020,36 +1612,55 @@ def run_research():
         })
 
         print()
-        print("=" * 78)
+        print("=" * 76)
         print(
-            "EUR/GBP DUAL-BRANCH FREQUENCY RECOVERY COMPLETE"
+            "EUR/GBP DUAL-BRANCH RR SWEEP COMPLETE"
         )
-        print("=" * 78)
+        print("=" * 76)
         print(
             "Rows:",
             len(df),
-        )
-        print(
-            "Robust all-four-era rows:",
-            int(
-                robust_df[
-                    "all_four_eras_profitable"
-                ].sum()
-            ),
-        )
-        print(
-            "High-PF all-four-era rows:",
-            int(
-                high_pf_df[
-                    "all_four_eras_profitable"
-                ].sum()
-            ),
         )
         print(
             "Saved:",
             OUTPUT_FILE,
         )
         print()
+
+        for branch_name in [
+            "ROBUST",
+            "HIGH_PF",
+        ]:
+            subset = df[
+                df[
+                    "branch"
+                ] == branch_name
+            ]
+
+            print()
+            print(
+                f"--- {branch_name} ---"
+            )
+
+            print(
+                subset[
+                    [
+                        "reward_risk",
+                        "trades",
+                        "trades_per_year",
+                        "win_rate",
+                        "profit_factor",
+                        "total_r",
+                        "expectancy_r",
+                        "max_drawdown_r",
+                        "minimum_era_pf_5_plus",
+                        "all_four_eras_profitable",
+                    ]
+                ].to_string(
+                    index=False
+                ),
+                flush=True,
+            )
 
     except Exception as error:
         STATUS.update({
@@ -2072,36 +1683,41 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "EURGBP Short Dual-Branch Frequency Recovery"
+            "EURGBP Short Dual-Branch RR Sweep"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
-        "reward_risk": REWARD_RISK,
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
 
-        "branches": BRANCHES,
-
-        "geometry": {
-            "structure_lookbacks": (
-                STRUCTURE_LOOKBACKS
+        "shared_geometry": {
+            "minimum_body_ratio": (
+                MIN_BODY_RATIO
             ),
-            "max_distance_atr_values": (
-                MAX_DISTANCE_ATR_VALUES
+            "structure_lookback": (
+                STRUCTURE_LOOKBACK
             ),
-            "min_range_atr_values": (
-                MIN_RANGE_ATR_VALUES
+            "max_distance_atr": (
+                MAX_DISTANCE_ATR
             ),
-            "max_close_location_values": (
-                MAX_CLOSE_LOCATION_VALUES
+            "min_range_atr": (
+                MIN_RANGE_ATR
+            ),
+            "max_close_location": (
+                MAX_CLOSE_LOCATION
+            ),
+            "stop_buffer_ticks": (
+                STOP_BUFFER_TICKS
+            ),
+            "backtest_slippage_ticks": (
+                BACKTEST_SLIPPAGE_TICKS
             ),
         },
 
-        "modifiers": MODIFIERS,
-
-        "total_tests": TOTAL_TESTS,
+        "branches": BRANCHES,
+        "rr_values": RR_VALUES,
         "download": "/download",
     })
 
@@ -2121,7 +1737,7 @@ def download():
         return jsonify({
             "status": "not_ready",
             "message": (
-                "EUR/GBP dual-branch CSV "
+                "EUR/GBP dual-branch RR CSV "
                 "is not ready yet"
             ),
         }), 404
@@ -2141,7 +1757,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "eurgbp-short-dual-branch-frequency-recovery"
+            "eurgbp-short-dual-branch-rr-sweep"
         ),
         daemon=True,
     )
