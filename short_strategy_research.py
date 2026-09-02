@@ -5,111 +5,33 @@ import pandas as pd
 
 from flask import Flask, jsonify, send_file
 from datetime import datetime, timezone, timedelta
-
-
-# ============================================================
-# EUR/GBP SHORT - DUAL-BRANCH RR SWEEP
-#
-# RESEARCH ONLY — NEVER SUBMITS ORDERS.
-#
-# Purpose:
-#   Freeze the two surviving EUR/GBP short branches and test
-#   only reward:risk.
-#
-# Shared execution:
-#   - OANDA EUR_GBP
-#   - H1
-#   - bearish engulfing
-#   - minimum body ratio >= 1.00
-#   - stop = signal high + 10 ticks
-#   - adverse short slippage = 5 ticks
-#   - pyramiding = 0
-#
-# FROZEN ROBUST BRANCH:
-#   structure lookback = 90
-#   distance <= 0.075 ATR14
-#   signal range >= 1.10 ATR14
-#   close location <= 0.20
-#   12h upward momentum >= 0.25 ATR14
-#   48h upward momentum >= 0.50 ATR14
-#   stop size <= 2.50 ATR14
-#
-# FROZEN HIGH-PF BRANCH:
-#   structure lookback = 90
-#   distance <= 0.075 ATR14
-#   signal range >= 1.10 ATR14
-#   close location <= 0.20
-#   48h upward momentum >= 1.00 ATR14
-#   upper wick/body >= 0.10
-#   ATR14 / 50-bar ATR14 mean >= 0.80
-#
-# RR sweep:
-#   2.25, 2.50, 2.75, 3.00,
-#   3.25, 3.50, 3.75, 4.00
-#
-# Output:
-#   eurgbp_short_dual_branch_rr_sweep.csv
-# ============================================================
-
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
-
-
-# ============================================================
-# CONFIG
-# ============================================================
 
 OANDA_TOKEN = os.getenv("OANDA_TOKEN")
 OANDA_URL = "https://api-fxtrade.oanda.com"
 
 INSTRUMENT = "EUR_GBP"
 TICK_SIZE = 0.00001
-
 STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
+REWARD_RISK = 3.00
 
 MIN_BODY_RATIO = 1.00
-
 STRUCTURE_LOOKBACK = 90
 MAX_DISTANCE_ATR = 0.075
 MIN_RANGE_ATR = 1.10
 MAX_CLOSE_LOCATION = 0.20
 
-RR_VALUES = [
-    2.25,
-    2.50,
-    2.75,
-    3.00,
-    3.25,
-    3.50,
-    3.75,
-    4.00,
-]
-
+NY_TZ = ZoneInfo("America/New_York")
 H1_CHUNK_DAYS = 180
 
-RESEARCH_FROM = datetime(
-    2002, 5, 6, 20, 0,
-    tzinfo=timezone.utc,
-)
-
-RESEARCH_TO = (
-    datetime.now(timezone.utc)
-    .replace(
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-)
-
+RESEARCH_FROM = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
+RESEARCH_TO = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 H1_WARMUP_DAYS = 700
 
-OUTPUT_FILE = "eurgbp_short_dual_branch_rr_sweep.csv"
-
-
-# ============================================================
-# BRANCHES
-# ============================================================
+OUTPUT_FILE = "eurgbp_short_dual_branch_light_timing.csv"
 
 BRANCHES = [
     {
@@ -130,51 +52,57 @@ BRANCHES = [
     },
 ]
 
+TIMING_TESTS = [{
+    "timing_type": "BASELINE",
+    "timing_label": "baseline",
+    "excluded_hours": set(),
+    "excluded_weekdays": set(),
+}]
 
-# ============================================================
-# ERAS
-# ============================================================
+for hour in range(24):
+    TIMING_TESTS.append({
+        "timing_type": "EXCLUDE_NY_HOUR",
+        "timing_label": f"exclude_ny_hour_{hour:02d}",
+        "excluded_hours": {hour},
+        "excluded_weekdays": set(),
+    })
+
+weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+for weekday, weekday_name in enumerate(weekday_names):
+    TIMING_TESTS.append({
+        "timing_type": "EXCLUDE_WEEKDAY",
+        "timing_label": f"exclude_{weekday_name.lower()}",
+        "excluded_hours": set(),
+        "excluded_weekdays": {weekday},
+    })
+
+for hour in range(24):
+    next_hour = (hour + 1) % 24
+    TIMING_TESTS.append({
+        "timing_type": "EXCLUDE_2H_NY",
+        "timing_label": f"exclude_ny_{hour:02d}_{next_hour:02d}",
+        "excluded_hours": {hour, next_hour},
+        "excluded_weekdays": set(),
+    })
 
 ERAS = [
-    (
-        "2002_2009",
-        datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc),
-        datetime(2010, 1, 1, 0, 0, tzinfo=timezone.utc),
-    ),
-    (
-        "2010_2017",
-        datetime(2010, 1, 1, 0, 0, tzinfo=timezone.utc),
-        datetime(2018, 1, 1, 0, 0, tzinfo=timezone.utc),
-    ),
-    (
-        "2018_2023",
-        datetime(2018, 1, 1, 0, 0, tzinfo=timezone.utc),
-        datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-    ),
-    (
-        "2024_present",
-        datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-        None,
-    ),
+    ("2002_2009", datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc), datetime(2010, 1, 1, tzinfo=timezone.utc)),
+    ("2010_2017", datetime(2010, 1, 1, tzinfo=timezone.utc), datetime(2018, 1, 1, tzinfo=timezone.utc)),
+    ("2018_2023", datetime(2018, 1, 1, tzinfo=timezone.utc), datetime(2024, 1, 1, tzinfo=timezone.utc)),
+    ("2024_present", datetime(2024, 1, 1, tzinfo=timezone.utc), None),
 ]
 
-
-# ============================================================
-# STATUS
-# ============================================================
-
-TOTAL_TESTS = (
-    len(BRANCHES)
-    * len(RR_VALUES)
-)
+TOTAL_TESTS = len(BRANCHES) * len(TIMING_TESTS)
 
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EURGBP Short Dual-Branch RR Sweep",
+    "service": "EURGBP Short Dual-Branch Light Timing",
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
+    "reward_risk": REWARD_RISK,
+    "timing_tests_per_branch": len(TIMING_TESTS),
     "total_tests": TOTAL_TESTS,
     "completed_tests": 0,
     "rows_saved": 0,
@@ -182,59 +110,29 @@ STATUS = {
 }
 
 
-# ============================================================
-# OANDA
-# ============================================================
-
 def headers():
     if not OANDA_TOKEN:
-        raise RuntimeError(
-            "OANDA_TOKEN is not configured"
-        )
-
-    return {
-        "Authorization": f"Bearer {OANDA_TOKEN}"
-    }
+        raise RuntimeError("OANDA_TOKEN is not configured")
+    return {"Authorization": f"Bearer {OANDA_TOKEN}"}
 
 
 def iso_utc(dt):
-    return (
-        dt.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def oanda_get(path, params):
-    response = requests.get(
-        OANDA_URL + path,
-        headers=headers(),
-        params=params,
-        timeout=30,
-    )
-
-    if not response.ok:
-        raise RuntimeError(
-            f"OANDA {response.status_code}: "
-            f"{response.text[:500]}"
-        )
-
-    return response.json()
+    r = requests.get(OANDA_URL + path, headers=headers(), params=params, timeout=30)
+    if not r.ok:
+        raise RuntimeError(f"OANDA {r.status_code}: {r.text[:500]}")
+    return r.json()
 
 
 def parse_candle(raw):
-    if not raw.get("complete", False):
+    if not raw.get("complete", False) or not raw.get("mid"):
         return None
-
-    mid = raw.get("mid")
-
-    if not mid:
-        return None
-
+    mid = raw["mid"]
     return {
-        "time": datetime.fromisoformat(
-            raw["time"].replace("Z", "+00:00")
-        ),
+        "time": datetime.fromisoformat(raw["time"].replace("Z", "+00:00")),
         "open": float(mid["o"]),
         "high": float(mid["h"]),
         "low": float(mid["l"]),
@@ -242,613 +140,238 @@ def parse_candle(raw):
     }
 
 
-def fetch_range(
-    instrument,
-    granularity,
-    start,
-    end,
-):
-    params = {
-        "price": "M",
-        "granularity": granularity,
-        "from": iso_utc(start),
-        "to": iso_utc(end),
-        "smooth": "false",
-        "includeFirst": "true",
-    }
-
+def fetch_range(instrument, granularity, start, end):
     data = oanda_get(
         f"/v3/instruments/{instrument}/candles",
-        params,
+        {
+            "price": "M",
+            "granularity": granularity,
+            "from": iso_utc(start),
+            "to": iso_utc(end),
+            "smooth": "false",
+            "includeFirst": "true",
+        },
     )
-
-    candles = []
-
+    out = []
     for raw in data.get("candles", []):
-        candle = parse_candle(raw)
-
-        if candle is not None:
-            candles.append(candle)
-
-    return candles
+        c = parse_candle(raw)
+        if c is not None:
+            out.append(c)
+    return out
 
 
-def fetch_chunked_history(
-    instrument,
-    granularity,
-    start,
-    end,
-):
-    candles_by_time = {}
+def fetch_chunked_history(instrument, granularity, start, end):
+    by_time = {}
     cursor = start
-
     while cursor < end:
-        chunk_end = min(
-            cursor + timedelta(days=H1_CHUNK_DAYS),
-            end,
-        )
-
-        print(
-            f"Fetching {granularity}: "
-            f"{cursor.date()} -> {chunk_end.date()}",
-            flush=True,
-        )
-
-        chunk = fetch_range(
-            instrument,
-            granularity,
-            cursor,
-            chunk_end,
-        )
-
-        for candle in chunk:
-            candles_by_time[
-                candle["time"]
-            ] = candle
-
+        chunk_end = min(cursor + timedelta(days=H1_CHUNK_DAYS), end)
+        print(f"Fetching {granularity}: {cursor.date()} -> {chunk_end.date()}", flush=True)
+        for candle in fetch_range(instrument, granularity, cursor, chunk_end):
+            by_time[candle["time"]] = candle
         cursor = chunk_end
-
-    candles = list(
-        candles_by_time.values()
-    )
-
-    candles.sort(
-        key=lambda item: item["time"]
-    )
-
+    candles = list(by_time.values())
+    candles.sort(key=lambda x: x["time"])
     return candles
 
-
-# ============================================================
-# INDICATORS
-# ============================================================
 
 def true_ranges(candles):
-    result = []
-
-    for index, candle in enumerate(
-        candles
-    ):
-        if index == 0:
-            tr = (
-                candle["high"]
-                - candle["low"]
-            )
+    out = []
+    for i, c in enumerate(candles):
+        if i == 0:
+            tr = c["high"] - c["low"]
         else:
-            previous_close = (
-                candles[
-                    index - 1
-                ]["close"]
-            )
-
-            tr = max(
-                candle["high"]
-                - candle["low"],
-                abs(
-                    candle["high"]
-                    - previous_close
-                ),
-                abs(
-                    candle["low"]
-                    - previous_close
-                ),
-            )
-
-        result.append(
-            tr
-        )
-
-    return result
+            pc = candles[i - 1]["close"]
+            tr = max(c["high"] - c["low"], abs(c["high"] - pc), abs(c["low"] - pc))
+        out.append(tr)
+    return out
 
 
 def rma_series(values, length):
-    result = [None] * len(values)
-
+    out = [None] * len(values)
     if len(values) < length:
-        return result
-
-    initial = (
-        sum(values[:length])
-        / length
-    )
-
-    result[
-        length - 1
-    ] = initial
-
-    previous = initial
-
-    for index in range(
-        length,
-        len(values),
-    ):
-        current = (
-            (
-                previous
-                * (
-                    length - 1
-                )
-            )
-            + values[index]
-        ) / length
-
-        result[index] = current
-        previous = current
-
-    return result
+        return out
+    initial = sum(values[:length]) / length
+    out[length - 1] = initial
+    prev = initial
+    for i in range(length, len(values)):
+        cur = (prev * (length - 1) + values[i]) / length
+        out[i] = cur
+        prev = cur
+    return out
 
 
-def atr_series(
-    candles,
-    length=14,
-):
-    return rma_series(
-        true_ranges(
-            candles
-        ),
-        length,
-    )
+def atr_series(candles, length=14):
+    return rma_series(true_ranges(candles), length)
 
 
-def rolling_mean_optional(
-    values,
-    length,
-):
-    result = [None] * len(values)
-
-    for index in range(
-        len(values)
-    ):
-        if index < length - 1:
+def rolling_mean_optional(values, length):
+    out = [None] * len(values)
+    for i in range(length - 1, len(values)):
+        window = values[i - length + 1:i + 1]
+        if any(v is None for v in window):
             continue
-
-        window = values[
-            index - length + 1:
-            index + 1
-        ]
-
-        if any(
-            value is None
-            for value in window
-        ):
-            continue
-
-        result[index] = (
-            sum(window)
-            / length
-        )
-
-    return result
+        out[i] = sum(window) / length
+    return out
 
 
-# ============================================================
-# SIGNALS + FEATURES
-# ============================================================
+def build_candidates(h1, h1_atr, atr_mean_50):
+    out = []
+    max_lookback = max(STRUCTURE_LOOKBACK, 48, 50)
 
-def build_candidates(
-    h1,
-    h1_atr,
-    atr_mean_50,
-):
-    candidates = []
-
-    max_lookback = max(
-        STRUCTURE_LOOKBACK,
-        48,
-        50,
-    )
-
-    for index in range(
-        max_lookback,
-        len(h1),
-    ):
-        signal = h1[index]
+    for i in range(max_lookback, len(h1)):
+        signal = h1[i]
 
         if signal["time"] < RESEARCH_FROM:
             continue
-
         if signal["time"] >= RESEARCH_TO:
             break
 
-        previous = h1[
-            index - 1
-        ]
+        prev = h1[i - 1]
+        atr = h1_atr[i]
 
-        atr = h1_atr[
-            index
-        ]
-
-        if (
-            atr is None
-            or atr <= 0
-        ):
+        if atr is None or atr <= 0:
             continue
 
-        previous_body = abs(
-            previous["close"]
-            - previous["open"]
-        )
+        prev_body = abs(prev["close"] - prev["open"])
+        body = abs(signal["close"] - signal["open"])
+        candle_range = signal["high"] - signal["low"]
 
-        current_body = abs(
-            signal["close"]
-            - signal["open"]
-        )
-
-        candle_range = (
-            signal["high"]
-            - signal["low"]
-        )
-
-        if (
-            previous_body <= 0
-            or current_body <= 0
-            or candle_range <= 0
-        ):
+        if prev_body <= 0 or body <= 0 or candle_range <= 0:
             continue
 
         bearish_engulfing = (
-            previous["close"]
-            > previous["open"]
-            and signal["close"]
-            < signal["open"]
-            and signal["open"]
-            >= previous["close"]
-            and signal["close"]
-            <= previous["open"]
+            prev["close"] > prev["open"]
+            and signal["close"] < signal["open"]
+            and signal["open"] >= prev["close"]
+            and signal["close"] <= prev["open"]
         )
-
         if not bearish_engulfing:
             continue
 
-        body_ratio = (
-            current_body
-            / previous_body
-        )
-
-        if body_ratio < MIN_BODY_RATIO:
+        if body / prev_body < MIN_BODY_RATIO:
             continue
 
-        range_atr = (
-            candle_range
-            / atr
-        )
-
-        if (
-            range_atr
-            < MIN_RANGE_ATR
-        ):
+        range_atr = candle_range / atr
+        if range_atr < MIN_RANGE_ATR:
             continue
 
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / candle_range
-
-        if (
-            close_location
-            > MAX_CLOSE_LOCATION
-        ):
+        close_location = (signal["close"] - signal["low"]) / candle_range
+        if close_location > MAX_CLOSE_LOCATION:
             continue
 
-        previous_highest = max(
-            candle["high"]
-            for candle in h1[
-                index - STRUCTURE_LOOKBACK:
-                index
-            ]
-        )
-
-        structure_distance_atr = (
-            previous_highest
-            - signal["high"]
-        ) / atr
-
-        if (
-            structure_distance_atr
-            > MAX_DISTANCE_ATR
-        ):
+        prev_highest = max(c["high"] for c in h1[i - STRUCTURE_LOOKBACK:i])
+        structure_distance = (prev_highest - signal["high"]) / atr
+        if structure_distance > MAX_DISTANCE_ATR:
             continue
 
-        momentum_12 = (
-            signal["close"]
-            - h1[
-                index - 12
-            ]["close"]
-        ) / atr
+        momentum_12 = (signal["close"] - h1[i - 12]["close"]) / atr
+        momentum_48 = (signal["close"] - h1[i - 48]["close"]) / atr
 
-        momentum_48 = (
-            signal["close"]
-            - h1[
-                index - 48
-            ]["close"]
-        ) / atr
+        upper_wick = max(0.0, signal["high"] - max(signal["open"], signal["close"]))
+        upper_wick_body = upper_wick / body
 
-        upper_wick = max(
-            0.0,
-            signal["high"]
-            - max(
-                signal["open"],
-                signal["close"],
-            )
-        )
-
-        upper_wick_body = (
-            upper_wick
-            / current_body
-        )
-
-        stop = (
-            signal["high"]
-            + STOP_BUFFER_TICKS
-            * TICK_SIZE
-        )
-
-        stop_size_atr = (
-            stop
-            - signal["close"]
-        ) / atr
+        stop = signal["high"] + STOP_BUFFER_TICKS * TICK_SIZE
+        stop_size_atr = (stop - signal["close"]) / atr
 
         atr_ratio_50 = None
+        if atr_mean_50[i] is not None and atr_mean_50[i] > 0:
+            atr_ratio_50 = atr / atr_mean_50[i]
 
-        if (
-            atr_mean_50[index]
-            is not None
-            and atr_mean_50[index] > 0
-        ):
-            atr_ratio_50 = (
-                atr
-                / atr_mean_50[index]
-            )
+        ny_time = signal["time"].astimezone(NY_TZ)
 
-        candidates.append({
-            "index": index,
+        out.append({
+            "index": i,
             "time": signal["time"],
-            "momentum_12": (
-                momentum_12
-            ),
-            "momentum_48": (
-                momentum_48
-            ),
-            "upper_wick_body": (
-                upper_wick_body
-            ),
-            "stop_size_atr": (
-                stop_size_atr
-            ),
-            "atr_ratio_50": (
-                atr_ratio_50
-            ),
+            "ny_hour": ny_time.hour,
+            "ny_weekday": ny_time.weekday(),
+            "momentum_12": momentum_12,
+            "momentum_48": momentum_48,
+            "upper_wick_body": upper_wick_body,
+            "stop_size_atr": stop_size_atr,
+            "atr_ratio_50": atr_ratio_50,
         })
 
-    return candidates
+    return out
 
 
-def passes_branch(
-    candidate,
-    branch,
-):
-    min_momentum_12 = (
-        branch[
-            "min_momentum_12"
-        ]
-    )
-
-    if (
-        min_momentum_12 is not None
-        and candidate[
-            "momentum_12"
-        ] < min_momentum_12
-    ):
+def passes_branch(c, branch):
+    v = branch["min_momentum_12"]
+    if v is not None and c["momentum_12"] < v:
         return False
 
-    min_momentum_48 = (
-        branch[
-            "min_momentum_48"
-        ]
-    )
-
-    if (
-        min_momentum_48 is not None
-        and candidate[
-            "momentum_48"
-        ] < min_momentum_48
-    ):
+    v = branch["min_momentum_48"]
+    if v is not None and c["momentum_48"] < v:
         return False
 
-    min_upper_wick = (
-        branch[
-            "min_upper_wick_body"
-        ]
-    )
-
-    if (
-        min_upper_wick is not None
-        and candidate[
-            "upper_wick_body"
-        ] < min_upper_wick
-    ):
+    v = branch["min_upper_wick_body"]
+    if v is not None and c["upper_wick_body"] < v:
         return False
 
-    max_stop_size = (
-        branch[
-            "max_stop_size_atr"
-        ]
-    )
-
-    if (
-        max_stop_size is not None
-        and candidate[
-            "stop_size_atr"
-        ] > max_stop_size
-    ):
+    v = branch["max_stop_size_atr"]
+    if v is not None and c["stop_size_atr"] > v:
         return False
 
-    min_atr_ratio = (
-        branch[
-            "min_atr_ratio_50"
-        ]
-    )
-
-    if min_atr_ratio is not None:
-        if (
-            candidate[
-                "atr_ratio_50"
-            ] is None
-            or candidate[
-                "atr_ratio_50"
-            ] < min_atr_ratio
-        ):
-            return False
+    v = branch["min_atr_ratio_50"]
+    if v is not None and (c["atr_ratio_50"] is None or c["atr_ratio_50"] < v):
+        return False
 
     return True
 
 
-# ============================================================
-# EXIT SIMULATION
-# ============================================================
+def passes_timing(c, test):
+    if c["ny_hour"] in test["excluded_hours"]:
+        return False
+    if c["ny_weekday"] in test["excluded_weekdays"]:
+        return False
+    return True
+
 
 EXIT_CACHE = {}
 
 
-def calculate_trade_exit(
-    h1,
-    signal_index,
-    reward_risk,
-):
-    cache_key = (
-        signal_index,
-        reward_risk,
-    )
+def calculate_trade_exit(h1, signal_index):
+    if signal_index in EXIT_CACHE:
+        return EXIT_CACHE[signal_index]
 
-    if cache_key in EXIT_CACHE:
-        return EXIT_CACHE[
-            cache_key
-        ]
-
-    signal = h1[
-        signal_index
-    ]
-
-    reference_entry = (
-        signal["close"]
-    )
-
-    backtest_entry = (
-        reference_entry
-        - BACKTEST_SLIPPAGE_TICKS
-        * TICK_SIZE
-    )
-
-    stop = (
-        signal["high"]
-        + STOP_BUFFER_TICKS
-        * TICK_SIZE
-    )
-
-    reference_risk = (
-        stop
-        - reference_entry
-    )
+    signal = h1[signal_index]
+    reference_entry = signal["close"]
+    backtest_entry = reference_entry - BACKTEST_SLIPPAGE_TICKS * TICK_SIZE
+    stop = signal["high"] + STOP_BUFFER_TICKS * TICK_SIZE
+    reference_risk = stop - reference_entry
 
     if reference_risk <= 0:
-        raise RuntimeError(
-            "Invalid short reference risk"
-        )
+        raise RuntimeError("Invalid short reference risk")
 
-    target = (
-        reference_entry
-        - reference_risk
-        * reward_risk
-    )
-
-    actual_risk = (
-        stop
-        - backtest_entry
-    )
+    target = reference_entry - reference_risk * REWARD_RISK
+    actual_risk = stop - backtest_entry
 
     if actual_risk <= 0:
-        raise RuntimeError(
-            "Invalid short actual risk"
-        )
+        raise RuntimeError("Invalid short actual risk")
 
-    for index in range(
-        signal_index + 1,
-        len(h1),
-    ):
-        candle = h1[
-            index
-        ]
-
-        if (
-            candle["time"]
-            >= RESEARCH_TO
-        ):
+    for i in range(signal_index + 1, len(h1)):
+        candle = h1[i]
+        if candle["time"] >= RESEARCH_TO:
             break
 
-        stop_hit = (
-            candle["high"]
-            >= stop
-        )
+        stop_hit = candle["high"] >= stop
+        target_hit = candle["low"] <= target
 
-        target_hit = (
-            candle["low"]
-            <= target
-        )
-
-        if not (
-            stop_hit
-            or target_hit
-        ):
+        if not (stop_hit or target_hit):
             continue
 
-        if (
-            stop_hit
-            and target_hit
-        ):
-            distance_to_high = abs(
-                candle["high"]
-                - candle["open"]
-            )
+        if stop_hit and target_hit:
+            distance_to_high = abs(candle["high"] - candle["open"])
+            distance_to_low = abs(candle["open"] - candle["low"])
 
-            distance_to_low = abs(
-                candle["open"]
-                - candle["low"]
-            )
-
-            if (
-                distance_to_high
-                < distance_to_low
-            ):
+            if distance_to_high < distance_to_low:
                 exit_price = stop
                 exit_reason = "STOP"
             else:
                 exit_price = target
                 exit_reason = "TARGET"
-
         elif stop_hit:
             exit_price = stop
             exit_reason = "STOP"
-
         else:
             exit_price = target
             exit_reason = "TARGET"
@@ -857,19 +380,12 @@ def calculate_trade_exit(
             "status": "CLOSED",
             "signal_index": signal_index,
             "signal_time": signal["time"],
-            "exit_index": index,
+            "exit_index": i,
             "exit_time": candle["time"],
             "exit_reason": exit_reason,
-            "result_r": (
-                backtest_entry
-                - exit_price
-            ) / actual_risk,
+            "result_r": (backtest_entry - exit_price) / actual_risk,
         }
-
-        EXIT_CACHE[
-            cache_key
-        ] = result
-
+        EXIT_CACHE[signal_index] = result
         return result
 
     result = {
@@ -881,106 +397,45 @@ def calculate_trade_exit(
         "exit_reason": None,
         "result_r": None,
     }
-
-    EXIT_CACHE[
-        cache_key
-    ] = result
-
+    EXIT_CACHE[signal_index] = result
     return result
 
 
-def simulate(
-    h1,
-    eligible,
-    reward_risk,
-):
+def simulate(h1, eligible):
     trades = []
     position_exit_index = -1
     ignored = 0
     still_open = False
 
-    for candidate in (
-        eligible
-    ):
-        signal_index = (
-            candidate[
-                "index"
-            ]
-        )
+    for c in eligible:
+        signal_index = c["index"]
 
-        # Locked convention:
-        # same-bar exit then signal is allowed.
-        if (
-            signal_index
-            < position_exit_index
-        ):
+        # Locked convention: signal on exact exit candle is allowed.
+        if signal_index < position_exit_index:
             ignored += 1
             continue
 
-        trade = calculate_trade_exit(
-            h1,
-            signal_index,
-            reward_risk,
-        )
+        trade = calculate_trade_exit(h1, signal_index)
 
-        if (
-            trade[
-                "status"
-            ] == "OPEN"
-        ):
+        if trade["status"] == "OPEN":
             still_open = True
             break
 
-        trades.append(
-            trade
-        )
+        trades.append(trade)
+        position_exit_index = trade["exit_index"]
 
-        position_exit_index = (
-            trade[
-                "exit_index"
-            ]
-        )
-
-    return (
-        trades,
-        ignored,
-        still_open,
-    )
+    return trades, ignored, still_open
 
 
-# ============================================================
-# STATS
-# ============================================================
-
-def stats_for_trades(
-    trades,
-    start=None,
-    end=None,
-):
+def stats_for_trades(trades, start=None, end=None):
     filtered = []
-
-    for trade in trades:
-        signal_time = (
-            trade[
-                "signal_time"
-            ]
-        )
-
-        if (
-            start is not None
-            and signal_time < start
-        ):
+    for t in trades:
+        signal_time = t["signal_time"]
+        if start is not None and signal_time < start:
             continue
-
-        if (
-            end is not None
-            and signal_time >= end
-        ):
+        if end is not None and signal_time >= end:
             continue
-
-        filtered.append(
-            trade
-        )
+        filtered.append(t)
 
     if not filtered:
         return {
@@ -995,542 +450,223 @@ def stats_for_trades(
             "longest_loss_streak": 0,
         }
 
-    results = [
-        trade[
-            "result_r"
-        ]
-        for trade in filtered
-    ]
+    results = [t["result_r"] for t in filtered]
+    winners = [r for r in results if r > 0]
+    losers = [r for r in results if r < 0]
 
-    winners = [
-        result
-        for result in results
-        if result > 0
-    ]
-
-    losers = [
-        result
-        for result in results
-        if result < 0
-    ]
-
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(
-            losers
-        )
-    )
-
-    total_r = sum(
-        results
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
+    total_r = sum(results)
 
     if gross_loss > 0:
-        profit_factor = (
-            gross_profit
-            / gross_loss
-        )
+        pf = gross_profit / gross_loss
     elif gross_profit > 0:
-        profit_factor = 999.0
+        pf = 999.0
     else:
-        profit_factor = 0.0
+        pf = 0.0
 
     equity = 0.0
     peak = 0.0
-    max_drawdown = 0.0
-    current_streak = 0
-    longest_streak = 0
+    max_dd = 0.0
+    current_loss_streak = 0
+    longest_loss_streak = 0
 
-    for result in results:
-        equity += result
+    for r in results:
+        equity += r
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity - peak)
 
-        peak = max(
-            peak,
-            equity,
-        )
-
-        max_drawdown = min(
-            max_drawdown,
-            equity - peak,
-        )
-
-        if result < 0:
-            current_streak += 1
-
-            longest_streak = max(
-                longest_streak,
-                current_streak,
-            )
+        if r < 0:
+            current_loss_streak += 1
+            longest_loss_streak = max(longest_loss_streak, current_loss_streak)
         else:
-            current_streak = 0
+            current_loss_streak = 0
 
     return {
-        "trades": len(
-            results
-        ),
-        "winners": len(
-            winners
-        ),
-        "losers": len(
-            losers
-        ),
-        "win_rate": round(
-            len(
-                winners
-            )
-            / len(
-                results
-            )
-            * 100.0,
-            2,
-        ),
-        "profit_factor": round(
-            profit_factor,
-            3,
-        ),
-        "total_r": round(
-            total_r,
-            2,
-        ),
-        "expectancy_r": round(
-            total_r
-            / len(
-                results
-            ),
-            3,
-        ),
-        "max_drawdown_r": round(
-            max_drawdown,
-            2,
-        ),
-        "longest_loss_streak": (
-            longest_streak
-        ),
+        "trades": len(results),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": round(len(winners) / len(results) * 100.0, 2),
+        "profit_factor": round(pf, 3),
+        "total_r": round(total_r, 2),
+        "expectancy_r": round(total_r / len(results), 3),
+        "max_drawdown_r": round(max_dd, 2),
+        "longest_loss_streak": longest_loss_streak,
     }
 
 
-# ============================================================
-# ROW BUILDER
-# ============================================================
-
-def make_result_row(
-    branch,
-    reward_risk,
-    branch_candidates,
-    trades,
-    ignored,
-    still_open,
-    years,
-):
-    full = stats_for_trades(
-        trades
-    )
+def make_result_row(branch, timing_test, frozen_candidates, eligible, trades, ignored, still_open, years):
+    full = stats_for_trades(trades)
 
     row = {
-        "branch": (
-            branch[
-                "branch"
-            ]
-        ),
-        "reward_risk": (
-            reward_risk
-        ),
-
-        "structure_lookback": (
-            STRUCTURE_LOOKBACK
-        ),
-        "max_distance_atr": (
-            MAX_DISTANCE_ATR
-        ),
-        "min_range_atr": (
-            MIN_RANGE_ATR
-        ),
-        "max_close_location": (
-            MAX_CLOSE_LOCATION
-        ),
-        "min_body_ratio": (
-            MIN_BODY_RATIO
-        ),
-
-        "min_momentum_12h_atr": (
-            branch[
-                "min_momentum_12"
-            ]
-        ),
-        "min_momentum_48h_atr": (
-            branch[
-                "min_momentum_48"
-            ]
-        ),
-        "min_upper_wick_body": (
-            branch[
-                "min_upper_wick_body"
-            ]
-        ),
-        "max_stop_size_atr": (
-            branch[
-                "max_stop_size_atr"
-            ]
-        ),
-        "min_atr_ratio_50": (
-            branch[
-                "min_atr_ratio_50"
-            ]
-        ),
-
-        "eligible_signals": len(
-            branch_candidates
-        ),
-        "ignored_due_to_open_trade": (
-            ignored
-        ),
-        "still_open_at_end": (
-            still_open
-        ),
-
-        "trades": full[
-            "trades"
-        ],
-        "trades_per_year": round(
-            full[
-                "trades"
-            ] / years,
-            2,
-        ),
-        "winners": full[
-            "winners"
-        ],
-        "losers": full[
-            "losers"
-        ],
-        "win_rate": full[
-            "win_rate"
-        ],
-        "profit_factor": full[
-            "profit_factor"
-        ],
-        "total_r": full[
-            "total_r"
-        ],
-        "expectancy_r": full[
-            "expectancy_r"
-        ],
-        "max_drawdown_r": full[
-            "max_drawdown_r"
-        ],
-        "longest_loss_streak": full[
-            "longest_loss_streak"
-        ],
+        "branch": branch["branch"],
+        "reward_risk": REWARD_RISK,
+        "structure_lookback": STRUCTURE_LOOKBACK,
+        "max_distance_atr": MAX_DISTANCE_ATR,
+        "min_range_atr": MIN_RANGE_ATR,
+        "max_close_location": MAX_CLOSE_LOCATION,
+        "min_body_ratio": MIN_BODY_RATIO,
+        "min_momentum_12h_atr": branch["min_momentum_12"],
+        "min_momentum_48h_atr": branch["min_momentum_48"],
+        "min_upper_wick_body": branch["min_upper_wick_body"],
+        "max_stop_size_atr": branch["max_stop_size_atr"],
+        "min_atr_ratio_50": branch["min_atr_ratio_50"],
+        "timing_type": timing_test["timing_type"],
+        "timing_label": timing_test["timing_label"],
+        "excluded_ny_hours": ",".join(f"{h:02d}" for h in sorted(timing_test["excluded_hours"])),
+        "excluded_weekdays": ",".join(str(d) for d in sorted(timing_test["excluded_weekdays"])),
+        "frozen_branch_signals": len(frozen_candidates),
+        "eligible_signals_after_timing": len(eligible),
+        "signals_removed_by_timing": len(frozen_candidates) - len(eligible),
+        "signal_retention_pct": round(len(eligible) / len(frozen_candidates) * 100.0, 2) if frozen_candidates else 0.0,
+        "ignored_due_to_open_trade": ignored,
+        "still_open_at_end": still_open,
+        "trades": full["trades"],
+        "trades_per_year": round(full["trades"] / years, 2),
+        "winners": full["winners"],
+        "losers": full["losers"],
+        "win_rate": full["win_rate"],
+        "profit_factor": full["profit_factor"],
+        "total_r": full["total_r"],
+        "expectancy_r": full["expectancy_r"],
+        "max_drawdown_r": full["max_drawdown_r"],
+        "longest_loss_streak": full["longest_loss_streak"],
     }
 
-    profitable_eras_with_5_plus = 0
-    minimum_era_pf_5_plus = None
-    minimum_era_expectancy_5_plus = None
+    profitable_eras = 0
+    minimum_era_pf = None
+    minimum_era_expectancy = None
 
-    for (
-        era_name,
-        era_start,
-        era_end,
-    ) in ERAS:
-        era = stats_for_trades(
-            trades,
-            era_start,
-            era_end,
-        )
+    for era_name, era_start, era_end in ERAS:
+        era = stats_for_trades(trades, era_start, era_end)
 
-        row[
-            f"{era_name}_trades"
-        ] = era[
-            "trades"
-        ]
+        row[f"{era_name}_trades"] = era["trades"]
+        row[f"{era_name}_pf"] = era["profit_factor"]
+        row[f"{era_name}_r"] = era["total_r"]
+        row[f"{era_name}_expectancy"] = era["expectancy_r"]
 
-        row[
-            f"{era_name}_pf"
-        ] = era[
-            "profit_factor"
-        ]
+        if era["trades"] >= 5:
+            if era["total_r"] > 0:
+                profitable_eras += 1
 
-        row[
-            f"{era_name}_r"
-        ] = era[
-            "total_r"
-        ]
+            minimum_era_pf = era["profit_factor"] if minimum_era_pf is None else min(minimum_era_pf, era["profit_factor"])
+            minimum_era_expectancy = era["expectancy_r"] if minimum_era_expectancy is None else min(minimum_era_expectancy, era["expectancy_r"])
 
-        row[
-            f"{era_name}_expectancy"
-        ] = era[
-            "expectancy_r"
-        ]
-
-        if (
-            era[
-                "trades"
-            ] >= 5
-        ):
-            if (
-                era[
-                    "total_r"
-                ] > 0
-            ):
-                profitable_eras_with_5_plus += 1
-
-            pf = era[
-                "profit_factor"
-            ]
-
-            expectancy = era[
-                "expectancy_r"
-            ]
-
-            if (
-                minimum_era_pf_5_plus
-                is None
-            ):
-                minimum_era_pf_5_plus = pf
-            else:
-                minimum_era_pf_5_plus = min(
-                    minimum_era_pf_5_plus,
-                    pf,
-                )
-
-            if (
-                minimum_era_expectancy_5_plus
-                is None
-            ):
-                minimum_era_expectancy_5_plus = expectancy
-            else:
-                minimum_era_expectancy_5_plus = min(
-                    minimum_era_expectancy_5_plus,
-                    expectancy,
-                )
-
-    row[
-        "profitable_eras_with_5_plus_trades"
-    ] = (
-        profitable_eras_with_5_plus
-    )
-
-    row[
-        "minimum_era_pf_5_plus"
-    ] = (
-        minimum_era_pf_5_plus
-    )
-
-    row[
-        "minimum_era_expectancy_5_plus"
-    ] = (
-        minimum_era_expectancy_5_plus
-    )
-
-    row[
-        "all_four_eras_profitable"
-    ] = (
-        profitable_eras_with_5_plus
-        >= 4
-    )
-
-    row[
-        "adequate_90_trades"
-    ] = (
-        full[
-            "trades"
-        ] >= 90
-    )
-
-    row[
-        "frequency_4py"
-    ] = (
-        full[
-            "trades"
-        ]
-        / years
-        >= 4.0
-    )
-
-    row[
-        "worst_era_pf_120"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.20
-    )
-
-    row[
-        "worst_era_pf_130"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.30
-    )
-
-    row[
-        "worst_era_pf_140"
-    ] = (
-        minimum_era_pf_5_plus is not None
-        and minimum_era_pf_5_plus >= 1.40
-    )
-
-    row[
-        "annual_r_linear"
-    ] = round(
-        full[
-            "expectancy_r"
-        ]
-        * (
-            full[
-                "trades"
-            ]
-            / years
-        ),
-        3,
-    )
+    row["profitable_eras_with_5_plus_trades"] = profitable_eras
+    row["minimum_era_pf_5_plus"] = minimum_era_pf
+    row["minimum_era_expectancy_5_plus"] = minimum_era_expectancy
+    row["all_four_eras_profitable"] = profitable_eras >= 4
+    row["adequate_90_trades"] = full["trades"] >= 90
+    row["frequency_4py"] = full["trades"] / years >= 4.0
+    row["worst_era_pf_120"] = minimum_era_pf is not None and minimum_era_pf >= 1.20
+    row["worst_era_pf_130"] = minimum_era_pf is not None and minimum_era_pf >= 1.30
+    row["worst_era_pf_140"] = minimum_era_pf is not None and minimum_era_pf >= 1.40
+    row["annual_r_linear"] = round(full["expectancy_r"] * (full["trades"] / years), 3)
 
     return row
 
 
-# ============================================================
-# RESEARCH
-# ============================================================
+def add_baseline_deltas(df):
+    df = df.copy()
+
+    delta_columns = [
+        "trades",
+        "winners",
+        "losers",
+        "profit_factor",
+        "total_r",
+        "expectancy_r",
+        "max_drawdown_r",
+        "minimum_era_pf_5_plus",
+        "2024_present_pf",
+        "annual_r_linear",
+    ]
+
+    for branch_name in ["ROBUST", "HIGH_PF"]:
+        mask = df["branch"] == branch_name
+        baseline = df[mask & (df["timing_type"] == "BASELINE")]
+
+        if len(baseline) != 1:
+            raise RuntimeError(f"Expected exactly one baseline for {branch_name}")
+
+        b = baseline.iloc[0]
+
+        for col in delta_columns:
+            df.loc[mask, f"delta_{col}_vs_baseline"] = df.loc[mask, col] - b[col]
+
+    return df
+
 
 def run_research():
     global STATUS
 
     try:
-        print()
-        print("=" * 76)
-        print(
-            "EUR/GBP SHORT - DUAL-BRANCH RR SWEEP"
-        )
-        print("=" * 76)
-        print(
-            f"Total tests: {TOTAL_TESTS}"
-        )
-        print()
+        print("=" * 78)
+        print("EUR/GBP SHORT - DUAL-BRANCH LIGHT TIMING")
+        print("=" * 78)
+        print(f"Timing tests per branch: {len(TIMING_TESTS)}")
+        print(f"Total tests: {TOTAL_TESTS}")
 
         STATUS.update({
             "state": "fetching_data",
-            "message": (
-                "Fetching EUR/GBP OANDA H1 history"
-            ),
+            "message": "Fetching EUR/GBP OANDA H1 history",
         })
 
         h1 = fetch_chunked_history(
             INSTRUMENT,
             "H1",
-            RESEARCH_FROM
-            - timedelta(
-                days=H1_WARMUP_DAYS
-            ),
+            RESEARCH_FROM - timedelta(days=H1_WARMUP_DAYS),
             RESEARCH_TO,
         )
 
         if not h1:
-            raise RuntimeError(
-                "No EUR/GBP H1 candles returned"
-            )
+            raise RuntimeError("No EUR/GBP H1 candles returned")
 
         STATUS.update({
             "state": "precomputing",
-            "message": (
-                "Building ATR14 and frozen branch candidates"
-            ),
+            "message": "Building ATR14 and frozen branch candidates",
         })
 
-        h1_atr = atr_series(
-            h1,
-            14,
-        )
+        h1_atr = atr_series(h1, 14)
+        atr_mean_50 = rolling_mean_optional(h1_atr, 50)
+        base_candidates = build_candidates(h1, h1_atr, atr_mean_50)
 
-        atr_mean_50 = (
-            rolling_mean_optional(
-                h1_atr,
-                50,
-            )
-        )
+        STATUS["shared_geometry_signals"] = len(base_candidates)
 
-        base_candidates = (
-            build_candidates(
-                h1,
-                h1_atr,
-                atr_mean_50,
-            )
-        )
-
-        STATUS[
-            "shared_geometry_signals"
-        ] = len(
-            base_candidates
-        )
-
-        years = (
-            RESEARCH_TO
-            - RESEARCH_FROM
-        ).total_seconds() / (
-            365.2425
-            * 24
-            * 60
-            * 60
-        )
+        years = (RESEARCH_TO - RESEARCH_FROM).total_seconds() / (365.2425 * 24 * 60 * 60)
 
         rows = []
         completed = 0
 
         STATUS.update({
             "state": "running",
-            "message": (
-                "Running dual-branch RR sweep"
-            ),
+            "message": "Running dual-branch light timing scan",
         })
 
-        for branch in (
-            BRANCHES
-        ):
-            branch_candidates = [
-                candidate
-                for candidate
-                in base_candidates
-                if passes_branch(
-                    candidate,
-                    branch,
-                )
+        for branch in BRANCHES:
+            frozen_candidates = [
+                c for c in base_candidates
+                if passes_branch(c, branch)
             ]
 
-            STATUS[
-                f"{branch['branch'].lower()}_eligible_signals"
-            ] = len(
-                branch_candidates
-            )
+            STATUS[f"{branch['branch'].lower()}_frozen_signals"] = len(frozen_candidates)
 
-            print(
-                branch[
-                    "branch"
-                ],
-                "eligible signals:",
-                len(
-                    branch_candidates
-                ),
-                flush=True,
-            )
+            print(f"{branch['branch']} frozen signals: {len(frozen_candidates)}", flush=True)
 
-            for reward_risk in (
-                RR_VALUES
-            ):
-                (
-                    trades,
-                    ignored,
-                    still_open,
-                ) = simulate(
-                    h1,
-                    branch_candidates,
-                    reward_risk,
-                )
+            for timing_test in TIMING_TESTS:
+                eligible = [
+                    c for c in frozen_candidates
+                    if passes_timing(c, timing_test)
+                ]
+
+                trades, ignored, still_open = simulate(h1, eligible)
 
                 rows.append(
                     make_result_row(
                         branch,
-                        reward_risk,
-                        branch_candidates,
+                        timing_test,
+                        frozen_candidates,
+                        eligible,
                         trades,
                         ignored,
                         still_open,
@@ -1539,30 +675,27 @@ def run_research():
                 )
 
                 completed += 1
-
-                STATUS[
-                    "completed_tests"
-                ] = completed
+                STATUS["completed_tests"] = completed
 
                 print(
                     f"{completed}/{TOTAL_TESTS} | "
                     f"{branch['branch']} | "
-                    f"RR={reward_risk:.2f}",
+                    f"{timing_test['timing_label']}",
                     flush=True,
                 )
 
-        df = pd.DataFrame(
-            rows
-        )
+        df = pd.DataFrame(rows)
 
         if df.empty:
-            raise RuntimeError(
-                "No result rows generated"
-            )
+            raise RuntimeError("No result rows generated")
+
+        df = add_baseline_deltas(df)
+        df["is_baseline"] = df["timing_type"] == "BASELINE"
 
         df = df.sort_values(
             by=[
                 "branch",
+                "is_baseline",
                 "all_four_eras_profitable",
                 "adequate_90_trades",
                 "frequency_4py",
@@ -1588,158 +721,74 @@ def run_research():
                 False,
                 False,
                 False,
+                False,
             ],
         )
 
-        df.to_csv(
-            OUTPUT_FILE,
-            index=False,
-        )
+        df.to_csv(OUTPUT_FILE, index=False)
 
         STATUS.update({
             "state": "complete",
-            "message": (
-                "EUR/GBP dual-branch RR sweep "
-                "completed successfully"
-            ),
+            "message": "EUR/GBP dual-branch light timing completed successfully",
             "completed_tests": TOTAL_TESTS,
-            "rows_saved": len(
-                df
-            ),
-            "output_file": (
-                OUTPUT_FILE
-            ),
+            "rows_saved": len(df),
+            "output_file": OUTPUT_FILE,
         })
 
-        print()
-        print("=" * 76)
-        print(
-            "EUR/GBP DUAL-BRANCH RR SWEEP COMPLETE"
-        )
-        print("=" * 76)
-        print(
-            "Rows:",
-            len(df),
-        )
-        print(
-            "Saved:",
-            OUTPUT_FILE,
-        )
-        print()
-
-        for branch_name in [
-            "ROBUST",
-            "HIGH_PF",
-        ]:
-            subset = df[
-                df[
-                    "branch"
-                ] == branch_name
-            ]
-
-            print()
-            print(
-                f"--- {branch_name} ---"
-            )
-
-            print(
-                subset[
-                    [
-                        "reward_risk",
-                        "trades",
-                        "trades_per_year",
-                        "win_rate",
-                        "profit_factor",
-                        "total_r",
-                        "expectancy_r",
-                        "max_drawdown_r",
-                        "minimum_era_pf_5_plus",
-                        "all_four_eras_profitable",
-                    ]
-                ].to_string(
-                    index=False
-                ),
-                flush=True,
-            )
+        print("=" * 78)
+        print("EUR/GBP DUAL-BRANCH LIGHT TIMING COMPLETE")
+        print("=" * 78)
+        print(f"Rows: {len(df)}")
+        print(f"Saved: {OUTPUT_FILE}")
 
     except Exception as error:
         STATUS.update({
             "state": "error",
             "message": str(error),
         })
+        print("ERROR:", error, flush=True)
 
-        print(
-            "ERROR:",
-            error,
-            flush=True,
-        )
-
-
-# ============================================================
-# ROUTES
-# ============================================================
 
 @app.route("/")
 def home():
     return jsonify({
-        "service": (
-            "EURGBP Short Dual-Branch RR Sweep"
-        ),
+        "service": "EURGBP Short Dual-Branch Light Timing",
         "status": STATUS,
         "instrument": INSTRUMENT,
         "direction": "SHORT",
+        "reward_risk": REWARD_RISK,
+        "timezone": "America/New_York",
+        "timing_basis": "signal candle open time",
         "trading_enabled": False,
         "orders_supported": False,
         "executor_connected": False,
-
         "shared_geometry": {
-            "minimum_body_ratio": (
-                MIN_BODY_RATIO
-            ),
-            "structure_lookback": (
-                STRUCTURE_LOOKBACK
-            ),
-            "max_distance_atr": (
-                MAX_DISTANCE_ATR
-            ),
-            "min_range_atr": (
-                MIN_RANGE_ATR
-            ),
-            "max_close_location": (
-                MAX_CLOSE_LOCATION
-            ),
-            "stop_buffer_ticks": (
-                STOP_BUFFER_TICKS
-            ),
-            "backtest_slippage_ticks": (
-                BACKTEST_SLIPPAGE_TICKS
-            ),
+            "minimum_body_ratio": MIN_BODY_RATIO,
+            "structure_lookback": STRUCTURE_LOOKBACK,
+            "max_distance_atr": MAX_DISTANCE_ATR,
+            "min_range_atr": MIN_RANGE_ATR,
+            "max_close_location": MAX_CLOSE_LOCATION,
+            "stop_buffer_ticks": STOP_BUFFER_TICKS,
+            "backtest_slippage_ticks": BACKTEST_SLIPPAGE_TICKS,
         },
-
         "branches": BRANCHES,
-        "rr_values": RR_VALUES,
+        "timing_tests_per_branch": len(TIMING_TESTS),
+        "total_tests": TOTAL_TESTS,
         "download": "/download",
     })
 
 
 @app.route("/status")
 def status():
-    return jsonify(
-        STATUS
-    )
+    return jsonify(STATUS)
 
 
 @app.route("/download")
 def download():
-    if not os.path.exists(
-        OUTPUT_FILE
-    ):
+    if not os.path.exists(OUTPUT_FILE):
         return jsonify({
             "status": "not_ready",
-            "message": (
-                "EUR/GBP dual-branch RR CSV "
-                "is not ready yet"
-            ),
+            "message": "EUR/GBP light timing CSV is not ready yet",
         }), 404
 
     return send_file(
@@ -1749,30 +798,13 @@ def download():
     )
 
 
-# ============================================================
-# START
-# ============================================================
-
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name=(
-            "eurgbp-short-dual-branch-rr-sweep"
-        ),
+        name="eurgbp-short-dual-branch-light-timing",
         daemon=True,
     )
-
     research_thread.start()
 
-    port = int(
-        os.getenv(
-            "PORT",
-            5000,
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-    )
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
