@@ -10,43 +10,73 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# GBP/USD LONG - TIGHT ROBUSTNESS SWEEP
+# GBP/USD LONG - R-RECOVERY SWEEP
 #
 # RESEARCH ONLY - NEVER SUBMITS ORDERS.
 #
 # PURPOSE
 # ------------------------------------------------------------
-# Tight sweep around the strongest simple branch found in the
-# core interaction matrix:
+# Starting from Candidate A:
+#
+#   structure lookback 45
+#   structure distance <= 0.15 ATR14
+#   body >= 1.20 ATR14
+#   body ratio >= 1.20
+#   strong close OFF
+#   exclude NY 14:00-18:59
+#   no daily EMA regime/alignment
+#   no range filter
+#   RR 4.25
+#
+# Goal:
+#   recover more TOTAL R / trade count without giving back
+#   too much robustness.
+#
+# Sweep:
 #
 #   structure lookback:
-#       35, 40, 45, 50, 55, 60
+#       40, 45, 50
 #
-#   structure distance / ATR:
-#       0.10, 0.125, 0.15, 0.175, 0.20
+#   structure distance:
+#       0.125, 0.15, 0.175, 0.20
 #
-#   minimum body / ATR:
-#       0.90, 1.00, 1.10, 1.20, 1.30
-#
-#   strong close:
-#       off, 0.60, 0.65, 0.70
+#   body ATR:
+#       1.00, 1.10, 1.20
 #
 #   body ratio:
-#       1.00, 1.20, 1.40
+#       1.00, 1.10, 1.20
+#
+#   range ATR:
+#       none, 0.90, 1.00
 #
 #   session:
 #       ALL
-#       exclude 14:00-18:59 America/New_York
+#       exclude NY 14:00-18:59
+#
+#   strong close:
+#       OFF only
 #
 # No daily EMA regime.
 # No daily EMA alignment.
-# No range filter.
 # No weekday exclusions.
 #
-# RR fixed at 4.25.
+# Total configs:
+#   3 * 4 * 3 * 3 * 3 * 2 = 648
 #
-# Total sweep:
-#   6 * 5 * 5 * 4 * 3 * 2 = 3,600 configs
+# ROBUSTNESS FLOORS (flagged, not hard-deleted):
+#
+#   PF >= 1.80
+#   minimum era PF >= 1.25
+#   worst rolling 3Y PF >= 0.95
+#   max DD >= -10R
+#   longest loss streak <= 10
+#
+# Rows are sorted by:
+#   passes_all_floors
+#   total R
+#   PF
+#   worst rolling 3Y PF
+#   expectancy
 #
 # ============================================================
 # LOCKED EXECUTION CONVENTIONS
@@ -129,7 +159,7 @@ H1_CHUNK_DAYS = 180
 H1_WARMUP_DAYS = 260
 
 OUTPUT_FILE = (
-    "gbpusd_long_tight_robustness_sweep.csv"
+    "gbpusd_long_r_recovery_sweep.csv"
 )
 
 
@@ -138,23 +168,23 @@ OUTPUT_FILE = (
 # ============================================================
 
 STRUCTURE_LOOKBACK_VALUES = [
-    35, 40, 45, 50, 55, 60,
+    40, 45, 50,
 ]
 
 STRUCTURE_DISTANCE_VALUES = [
-    0.10, 0.125, 0.15, 0.175, 0.20,
+    0.125, 0.15, 0.175, 0.20,
 ]
 
 BODY_ATR_VALUES = [
-    0.90, 1.00, 1.10, 1.20, 1.30,
-]
-
-STRONG_CLOSE_VALUES = [
-    None, 0.60, 0.65, 0.70,
+    1.00, 1.10, 1.20,
 ]
 
 BODY_RATIO_VALUES = [
-    1.00, 1.20, 1.40,
+    1.00, 1.10, 1.20,
+]
+
+RANGE_ATR_VALUES = [
+    None, 0.90, 1.00,
 ]
 
 SESSION_OPTIONS = [
@@ -167,13 +197,24 @@ CONFIGS = list(
         STRUCTURE_LOOKBACK_VALUES,
         STRUCTURE_DISTANCE_VALUES,
         BODY_ATR_VALUES,
-        STRONG_CLOSE_VALUES,
         BODY_RATIO_VALUES,
+        RANGE_ATR_VALUES,
         SESSION_OPTIONS,
     )
 )
 
 TOTAL_TESTS = len(CONFIGS)
+
+
+# ============================================================
+# ROBUSTNESS FLOORS
+# ============================================================
+
+MIN_PROFIT_FACTOR = 1.80
+MIN_ERA_PF = 1.25
+MIN_WORST_ROLLING_3Y_PF = 0.95
+MIN_MAX_DRAWDOWN_R = -10.0
+MAX_LOSS_STREAK = 10
 
 
 # ============================================================
@@ -226,7 +267,7 @@ STATUS = {
     "state": "not_started",
     "message": "Research has not started",
     "service": (
-        "GBP/USD Long Tight Robustness Sweep"
+        "GBP/USD Long R-Recovery Sweep"
     ),
     "instrument": INSTRUMENT,
     "tests": TOTAL_TESTS,
@@ -493,7 +534,7 @@ def atr_series(
 
 
 # ============================================================
-# PRECOMPUTE CANDIDATES
+# CANDIDATES
 # ============================================================
 
 MAX_STRUCTURE_LOOKBACK = max(
@@ -593,13 +634,13 @@ def build_candidates(
         ):
             continue
 
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / signal_range
-
         body_atr = (
             current_body
+            / current_atr
+        )
+
+        range_atr = (
+            signal_range
             / current_atr
         )
 
@@ -635,9 +676,8 @@ def build_candidates(
             "index": index,
             "time": signal["time"],
             "body_ratio": body_ratio,
-            "close_location":
-                close_location,
             "body_atr": body_atr,
+            "range_atr": range_atr,
             "structure_distances":
                 structure_distances,
             "ny_hour": ny.hour,
@@ -1105,8 +1145,8 @@ def make_result_row(
     structure_lookback,
     maximum_distance_atr,
     minimum_body_atr,
-    strong_close,
     body_ratio,
+    minimum_range_atr,
     session_name,
 ):
     full = stats_for_trades(
@@ -1121,10 +1161,10 @@ def make_result_row(
             maximum_distance_atr,
         "minimum_body_atr":
             minimum_body_atr,
-        "strong_close":
-            strong_close,
         "body_ratio":
             body_ratio,
+        "minimum_range_atr":
+            minimum_range_atr,
         "session":
             session_name,
         "eligible_signals":
@@ -1274,11 +1314,65 @@ def make_result_row(
             "expectancy_r"
         ]
 
-    row.update(
-        rolling_3y_worst(
-            trades
-        )
+    rolling = rolling_3y_worst(
+        trades
     )
+
+    row.update(rolling)
+
+    # Robustness-floor flags
+    row[
+        "pass_pf_floor"
+    ] = (
+        full["profit_factor"]
+        >= MIN_PROFIT_FACTOR
+    )
+
+    row[
+        "pass_era_pf_floor"
+    ] = (
+        minimum_era_pf is not None
+        and minimum_era_pf
+        >= MIN_ERA_PF
+    )
+
+    row[
+        "pass_rolling_pf_floor"
+    ] = (
+        rolling[
+            "worst_rolling_3y_pf"
+        ] is not None
+        and rolling[
+            "worst_rolling_3y_pf"
+        ] >= MIN_WORST_ROLLING_3Y_PF
+    )
+
+    row[
+        "pass_dd_floor"
+    ] = (
+        full["max_drawdown_r"]
+        >= MIN_MAX_DRAWDOWN_R
+    )
+
+    row[
+        "pass_loss_streak_floor"
+    ] = (
+        full[
+            "longest_loss_streak"
+        ] <= MAX_LOSS_STREAK
+    )
+
+    row[
+        "passes_all_floors"
+    ] = all([
+        row["pass_pf_floor"],
+        row["pass_era_pf_floor"],
+        row["pass_rolling_pf_floor"],
+        row["pass_dd_floor"],
+        row[
+            "pass_loss_streak_floor"
+        ],
+    ])
 
     return row
 
@@ -1313,7 +1407,7 @@ def run_research():
             "state":
                 "precomputing",
             "message":
-                "Precomputing GBP/USD sweep features",
+                "Precomputing GBP/USD R-recovery features",
         })
 
         atr = atr_series(h1)
@@ -1345,7 +1439,7 @@ def run_research():
             "state":
                 "running",
             "message":
-                f"Running {TOTAL_TESTS} tight sweep configs",
+                f"Running {TOTAL_TESTS} R-recovery configs",
             "completed_tests":
                 0,
         })
@@ -1358,8 +1452,8 @@ def run_research():
                 structure_lookback,
                 maximum_distance_atr,
                 minimum_body_atr,
-                strong_close,
                 body_ratio,
+                minimum_range_atr,
                 session_option,
             ) = config
 
@@ -1398,11 +1492,11 @@ def run_research():
                     continue
 
                 if (
-                    strong_close
+                    minimum_range_atr
                     is not None
                     and signal[
-                        "close_location"
-                    ] < strong_close
+                        "range_atr"
+                    ] < minimum_range_atr
                 ):
                     continue
 
@@ -1429,18 +1523,19 @@ def run_research():
                 eligible,
             )
 
-            strong_close_label = (
+            range_label = (
                 "OFF"
-                if strong_close is None
-                else f"{strong_close:.2f}"
+                if minimum_range_atr
+                is None
+                else f"{minimum_range_atr:.2f}"
             )
 
             label = (
                 f"S{structure_lookback}_"
                 f"D{maximum_distance_atr:.3f}_"
                 f"BODYATR{minimum_body_atr:.2f}_"
-                f"SC{strong_close_label}_"
                 f"BR{body_ratio:.2f}_"
+                f"RANGE{range_label}_"
                 f"{session_name}"
             )
 
@@ -1454,8 +1549,8 @@ def run_research():
                     structure_lookback,
                     maximum_distance_atr,
                     minimum_body_atr,
-                    strong_close,
                     body_ratio,
+                    minimum_range_atr,
                     session_name,
                 )
             )
@@ -1465,12 +1560,12 @@ def run_research():
             ] = test_number
 
             if (
-                test_number % 250 == 0
+                test_number % 100 == 0
                 or test_number
                 == TOTAL_TESTS
             ):
                 print(
-                    f"Sweep "
+                    f"R-recovery "
                     f"{test_number}/"
                     f"{TOTAL_TESTS}",
                     flush=True,
@@ -1480,10 +1575,10 @@ def run_research():
 
         df = df.sort_values(
             by=[
-                "profitable_eras",
-                "minimum_era_pf_5_plus",
-                "worst_rolling_3y_pf",
+                "passes_all_floors",
+                "total_r",
                 "profit_factor",
+                "worst_rolling_3y_pf",
                 "expectancy_r",
                 "trades",
             ],
@@ -1510,9 +1605,15 @@ def run_research():
             "state":
                 "complete",
             "message":
-                "GBP/USD tight robustness sweep complete",
+                "GBP/USD R-recovery sweep complete",
             "rows_saved":
                 len(df),
+            "passes_all_floors":
+                int(
+                    df[
+                        "passes_all_floors"
+                    ].sum()
+                ),
             "output_file":
                 OUTPUT_FILE,
         })
@@ -1520,11 +1621,15 @@ def run_research():
         print()
         print("=" * 95)
         print(
-            "GBP/USD LONG TIGHT ROBUSTNESS SWEEP COMPLETE"
+            "GBP/USD LONG R-RECOVERY SWEEP COMPLETE"
         )
         print("=" * 95)
         print(
             f"Rows saved: {len(df)}"
+        )
+        print(
+            "Rows passing every robustness floor: "
+            f"{int(df['passes_all_floors'].sum())}"
         )
         print(
             f"Output: {OUTPUT_FILE}"
@@ -1553,7 +1658,7 @@ def run_research():
 def home():
     return jsonify({
         "service":
-            "GBP/USD Long Tight Robustness Sweep",
+            "GBP/USD Long R-Recovery Sweep",
         "status":
             STATUS,
         "mode":
@@ -1562,6 +1667,18 @@ def home():
             False,
         "trading_enabled":
             False,
+        "robustness_floors": {
+            "minimum_profit_factor":
+                MIN_PROFIT_FACTOR,
+            "minimum_era_pf":
+                MIN_ERA_PF,
+            "minimum_worst_rolling_3y_pf":
+                MIN_WORST_ROLLING_3Y_PF,
+            "minimum_max_drawdown_r":
+                MIN_MAX_DRAWDOWN_R,
+            "maximum_loss_streak":
+                MAX_LOSS_STREAK,
+        },
         "download":
             "/download",
     })
@@ -1601,7 +1718,7 @@ if __name__ == "__main__":
     thread = threading.Thread(
         target=run_research,
         name=(
-            "gbpusd-long-tight-robustness-sweep"
+            "gbpusd-long-r-recovery-sweep"
         ),
         daemon=True,
     )
