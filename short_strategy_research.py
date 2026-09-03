@@ -10,47 +10,43 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# GBP/USD LONG - CORE INTERACTION MATRIX
+# GBP/USD LONG - TIGHT ROBUSTNESS SWEEP
 #
 # RESEARCH ONLY - NEVER SUBMITS ORDERS.
 #
 # PURPOSE
 # ------------------------------------------------------------
-# Based on single-factor discovery, the strongest standalone
-# clue is DEEPER STRUCTURE, especially around 50-80 bars.
-#
-# Core matrix:
+# Tight sweep around the strongest simple branch found in the
+# core interaction matrix:
 #
 #   structure lookback:
-#       40, 50, 60, 70, 80, 90
+#       35, 40, 45, 50, 55, 60
 #
 #   structure distance / ATR:
-#       0.00, 0.05, 0.10, 0.15, 0.20
+#       0.10, 0.125, 0.15, 0.175, 0.20
 #
 #   minimum body / ATR:
-#       none, 0.80, 1.00, 1.20
+#       0.90, 1.00, 1.10, 1.20, 1.30
 #
-#   minimum range / ATR:
-#       none, 1.10, 1.20, 1.30, 1.40
+#   strong close:
+#       off, 0.60, 0.65, 0.70
 #
-#   previous completed daily close regime:
-#       none, EMA50, EMA70, EMA100, EMA150
+#   body ratio:
+#       1.00, 1.20, 1.40
 #
-#   daily EMA alignment:
-#       none
-#       EMA20 > EMA70
-#       EMA30 > EMA70
-#       EMA50 > EMA70
+#   session:
+#       ALL
+#       exclude 14:00-18:59 America/New_York
 #
-# Total core:
-#   6 * 5 * 4 * 5 * 5 * 4 = 12,000
-#
-# Controlled sidecars then overlay:
-#   - strong close
-#   - body ratio
-#   - NY 14:00-18:59 exclusion
+# No daily EMA regime.
+# No daily EMA alignment.
+# No range filter.
+# No weekday exclusions.
 #
 # RR fixed at 4.25.
+#
+# Total sweep:
+#   6 * 5 * 5 * 4 * 3 * 2 = 3,600 configs
 #
 # ============================================================
 # LOCKED EXECUTION CONVENTIONS
@@ -62,8 +58,6 @@ from zoneinfo import ZoneInfo
 #   current bullish
 #   current open <= previous close
 #   current close >= previous open
-#
-# Raw minimum body ratio = 1.00.
 #
 # ATR14 = Wilder/RMA, SMA-seeded.
 # GBP/USD tick size = 0.00001.
@@ -80,7 +74,7 @@ from zoneinfo import ZoneInfo
 #
 # Pyramiding = 0.
 #
-# Same-bar tie:
+# Same-bar tie for LONG:
 #   compare open->high vs open->low
 #   high closer => target first
 #   else stop first.
@@ -89,11 +83,6 @@ from zoneinfo import ZoneInfo
 # Exact exit-candle signal allowed.
 #
 # Exits begin signal_index + 1.
-#
-# Daily:
-#   dailyAlignment = 17
-#   alignmentTimezone = America/New_York
-#   previous completed daily candle only.
 #
 # History:
 #   2002-05-06 20:00 UTC -> current completed UTC hour.
@@ -119,12 +108,8 @@ BACKTEST_SLIPPAGE_TICKS = 5
 REWARD_RISK = 4.25
 
 ATR_LENGTH = 14
-RAW_MINIMUM_BODY_RATIO = 1.00
 
 NY_TZ = ZoneInfo("America/New_York")
-
-DAILY_ALIGNMENT_HOUR = 17
-DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
 
 RESEARCH_FROM = datetime(
     2002, 5, 6, 20, 0,
@@ -141,137 +126,54 @@ RESEARCH_TO = (
 )
 
 H1_CHUNK_DAYS = 180
-D_CHUNK_DAYS = 1500
-
 H1_WARMUP_DAYS = 260
-D_WARMUP_DAYS = 2500
 
-OUTPUT_CORE = (
-    "gbpusd_long_core_interaction_matrix.csv"
-)
-
-OUTPUT_SIDECARS = (
-    "gbpusd_long_core_interaction_sidecars.csv"
+OUTPUT_FILE = (
+    "gbpusd_long_tight_robustness_sweep.csv"
 )
 
 
 # ============================================================
-# CORE GRID
+# GRID
 # ============================================================
 
 STRUCTURE_LOOKBACK_VALUES = [
-    40, 50, 60, 70, 80, 90,
+    35, 40, 45, 50, 55, 60,
 ]
 
 STRUCTURE_DISTANCE_VALUES = [
-    0.00, 0.05, 0.10, 0.15, 0.20,
+    0.10, 0.125, 0.15, 0.175, 0.20,
 ]
 
 BODY_ATR_VALUES = [
-    None, 0.80, 1.00, 1.20,
+    0.90, 1.00, 1.10, 1.20, 1.30,
 ]
 
-RANGE_ATR_VALUES = [
-    None, 1.10, 1.20, 1.30, 1.40,
+STRONG_CLOSE_VALUES = [
+    None, 0.60, 0.65, 0.70,
 ]
 
-DAILY_CLOSE_REGIMES = [
-    None, 50, 70, 100, 150,
+BODY_RATIO_VALUES = [
+    1.00, 1.20, 1.40,
 ]
 
-DAILY_ALIGNMENT_REGIMES = [
-    None,
-    (20, 70),
-    (30, 70),
-    (50, 70),
+SESSION_OPTIONS = [
+    ("ALL", False),
+    ("EXCL_NY_14_19", True),
 ]
 
-CORE_CONFIGS = list(
+CONFIGS = list(
     itertools.product(
         STRUCTURE_LOOKBACK_VALUES,
         STRUCTURE_DISTANCE_VALUES,
         BODY_ATR_VALUES,
-        RANGE_ATR_VALUES,
-        DAILY_CLOSE_REGIMES,
-        DAILY_ALIGNMENT_REGIMES,
+        STRONG_CLOSE_VALUES,
+        BODY_RATIO_VALUES,
+        SESSION_OPTIONS,
     )
 )
 
-TOTAL_CORE_TESTS = len(
-    CORE_CONFIGS
-)
-
-
-# ============================================================
-# CONTROLLED SIDECARS
-# ============================================================
-
-STRONG_CLOSE_VALUES = [
-    None, 0.60, 0.65, 0.70, 0.75,
-]
-
-BODY_RATIO_VALUES = [
-    1.00, 1.20, 1.40, 1.60,
-]
-
-SESSION_OPTIONS = [
-    (
-        "ALL",
-        False,
-    ),
-    (
-        "EXCL_NY_14_19",
-        True,
-    ),
-]
-
-ANCHORS = [
-    {
-        "name": "A",
-        "structure_lookback": 50,
-        "maximum_distance_atr": 0.05,
-        "minimum_body_atr": None,
-        "minimum_range_atr": None,
-        "daily_close_regime": None,
-        "alignment": None,
-    },
-    {
-        "name": "B",
-        "structure_lookback": 60,
-        "maximum_distance_atr": 0.05,
-        "minimum_body_atr": 0.80,
-        "minimum_range_atr": 1.10,
-        "daily_close_regime": None,
-        "alignment": None,
-    },
-    {
-        "name": "C",
-        "structure_lookback": 70,
-        "maximum_distance_atr": 0.10,
-        "minimum_body_atr": 1.00,
-        "minimum_range_atr": 1.20,
-        "daily_close_regime": 70,
-        "alignment": (50, 70),
-    },
-    {
-        "name": "D",
-        "structure_lookback": 80,
-        "maximum_distance_atr": 0.10,
-        "minimum_body_atr": 1.00,
-        "minimum_range_atr": 1.20,
-        "daily_close_regime": None,
-        "alignment": None,
-    },
-    {
-        "name": "E",
-        "structure_lookback": 80,
-        "maximum_distance_atr": 0.05,
-        "minimum_body_atr": 1.20,
-        "minimum_range_atr": 1.30,
-        "daily_close_regime": 100,
-        "alignment": (30, 70),
-    },
-]
+TOTAL_TESTS = len(CONFIGS)
 
 
 # ============================================================
@@ -324,10 +226,10 @@ STATUS = {
     "state": "not_started",
     "message": "Research has not started",
     "service": (
-        "GBP/USD Long Core Interaction Matrix"
+        "GBP/USD Long Tight Robustness Sweep"
     ),
     "instrument": INSTRUMENT,
-    "core_tests": TOTAL_CORE_TESTS,
+    "tests": TOTAL_TESTS,
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -413,26 +315,16 @@ def parse_candle(raw):
 
 
 def fetch_range(
-    granularity,
     start,
     end,
 ):
     params = {
         "price": "M",
-        "granularity":
-            granularity,
-        "from":
-            iso_utc(start),
-        "to":
-            iso_utc(end),
-        "smooth":
-            "false",
-        "includeFirst":
-            "true",
-        "dailyAlignment":
-            DAILY_ALIGNMENT_HOUR,
-        "alignmentTimezone":
-            DAILY_ALIGNMENT_TIMEZONE,
+        "granularity": "H1",
+        "from": iso_utc(start),
+        "to": iso_utc(end),
+        "smooth": "false",
+        "includeFirst": "true",
     }
 
     data = oanda_get(
@@ -447,9 +339,7 @@ def fetch_range(
         "candles",
         [],
     ):
-        candle = parse_candle(
-            raw
-        )
+        candle = parse_candle(raw)
 
         if candle is not None:
             candles.append(
@@ -460,10 +350,8 @@ def fetch_range(
 
 
 def fetch_chunked(
-    granularity,
     start,
     end,
-    chunk_days,
 ):
     by_time = {}
     cursor = start
@@ -472,20 +360,19 @@ def fetch_chunked(
         chunk_end = min(
             cursor
             + timedelta(
-                days=chunk_days
+                days=H1_CHUNK_DAYS
             ),
             end,
         )
 
         print(
-            f"Fetching {granularity}: "
+            f"Fetching H1: "
             f"{cursor.date()} "
             f"-> {chunk_end.date()}",
             flush=True,
         )
 
         chunk = fetch_range(
-            granularity,
             cursor,
             chunk_end,
         )
@@ -513,9 +400,7 @@ def fetch_chunked(
 # INDICATORS
 # ============================================================
 
-def true_ranges(
-    candles,
-):
+def true_ranges(candles):
     values = []
 
     for index, candle in enumerate(
@@ -526,6 +411,7 @@ def true_ranges(
                 candle["high"]
                 - candle["low"]
             )
+
         else:
             previous_close = (
                 candles[
@@ -546,9 +432,7 @@ def true_ranges(
                 ),
             )
 
-        values.append(
-            tr
-        )
+        values.append(tr)
 
     return values
 
@@ -599,181 +483,17 @@ def rma_series(
 
 def atr_series(
     candles,
-    length,
 ):
     return rma_series(
         true_ranges(
             candles
         ),
-        length,
+        ATR_LENGTH,
     )
-
-
-def ema_series(
-    values,
-    length,
-):
-    result = [
-        None
-    ] * len(values)
-
-    if len(values) < length:
-        return result
-
-    initial = (
-        sum(
-            values[:length]
-        )
-        / length
-    )
-
-    result[
-        length - 1
-    ] = initial
-
-    multiplier = (
-        2.0
-        / (
-            length + 1.0
-        )
-    )
-
-    previous = initial
-
-    for index in range(
-        length,
-        len(values),
-    ):
-        current = (
-            (
-                values[index]
-                - previous
-            )
-            * multiplier
-            + previous
-        )
-
-        result[index] = current
-        previous = current
-
-    return result
 
 
 # ============================================================
-# DAILY STATE
-# ============================================================
-
-def current_daily_start(
-    timestamp_utc
-):
-    ny_time = (
-        timestamp_utc
-        .astimezone(
-            NY_TZ
-        )
-    )
-
-    candidate = (
-        ny_time.replace(
-            hour=DAILY_ALIGNMENT_HOUR,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-    )
-
-    if ny_time < candidate:
-        candidate = (
-            candidate
-            - timedelta(
-                days=1
-            )
-        )
-
-    return candidate.astimezone(
-        timezone.utc
-    )
-
-
-def prepare_daily(
-    daily
-):
-    closes = [
-        candle["close"]
-        for candle
-        in daily
-    ]
-
-    ema_lengths = sorted(
-        set(
-            [
-                20, 30, 50, 70,
-                100, 150,
-            ]
-        )
-    )
-
-    ema_map = {
-        length:
-            ema_series(
-                closes,
-                length,
-            )
-        for length
-        in ema_lengths
-    }
-
-    rows = []
-
-    for index, candle in enumerate(
-        daily
-    ):
-        rows.append({
-            "time":
-                candle["time"],
-            "close":
-                candle["close"],
-            "emas": {
-                length:
-                    ema_map[
-                        length
-                    ][
-                        index
-                    ]
-                for length
-                in ema_lengths
-            },
-        })
-
-    return rows
-
-
-def previous_completed_daily(
-    signal_time,
-    daily_state,
-):
-    session_start = (
-        current_daily_start(
-            signal_time
-        )
-    )
-
-    selected = None
-
-    for row in daily_state:
-        if (
-            row["time"]
-            < session_start
-        ):
-            selected = row
-        else:
-            break
-
-    return selected
-
-
-# ============================================================
-# RAW CANDIDATES
+# PRECOMPUTE CANDIDATES
 # ============================================================
 
 MAX_STRUCTURE_LOOKBACK = max(
@@ -781,10 +501,9 @@ MAX_STRUCTURE_LOOKBACK = max(
 )
 
 
-def build_raw_candidates(
+def build_candidates(
     h1,
     atr,
-    daily_state,
 ):
     candidates = []
 
@@ -870,8 +589,7 @@ def build_raw_candidates(
         )
 
         if (
-            body_ratio
-            < RAW_MINIMUM_BODY_RATIO
+            body_ratio < 1.00
         ):
             continue
 
@@ -882,11 +600,6 @@ def build_raw_candidates(
 
         body_atr = (
             current_body
-            / current_atr
-        )
-
-        range_atr = (
-            signal_range
             / current_atr
         )
 
@@ -911,13 +624,6 @@ def build_raw_candidates(
                 - previous_lowest
             ) / current_atr
 
-        daily = (
-            previous_completed_daily(
-                signal["time"],
-                daily_state,
-            )
-        )
-
         ny = (
             signal["time"]
             .astimezone(
@@ -926,422 +632,18 @@ def build_raw_candidates(
         )
 
         candidates.append({
-            "index":
-                index,
-            "time":
-                signal["time"],
-            "body_ratio":
-                body_ratio,
+            "index": index,
+            "time": signal["time"],
+            "body_ratio": body_ratio,
             "close_location":
                 close_location,
-            "body_atr":
-                body_atr,
-            "range_atr":
-                range_atr,
+            "body_atr": body_atr,
             "structure_distances":
                 structure_distances,
-            "daily":
-                daily,
-            "ny_hour":
-                ny.hour,
-            "ny_weekday":
-                ny.weekday(),
+            "ny_hour": ny.hour,
         })
 
     return candidates
-
-
-# ============================================================
-# FILTERS
-# ============================================================
-
-def passes_core(
-    signal,
-    structure_lookback,
-    maximum_distance_atr,
-    minimum_body_atr,
-    minimum_range_atr,
-    daily_close_regime,
-    alignment,
-):
-    if (
-        signal[
-            "structure_distances"
-        ][
-            structure_lookback
-        ] > maximum_distance_atr
-    ):
-        return False
-
-    if (
-        minimum_body_atr
-        is not None
-        and signal[
-            "body_atr"
-        ] < minimum_body_atr
-    ):
-        return False
-
-    if (
-        minimum_range_atr
-        is not None
-        and signal[
-            "range_atr"
-        ] < minimum_range_atr
-    ):
-        return False
-
-    if (
-        daily_close_regime is None
-        and alignment is None
-    ):
-        return True
-
-    daily = signal[
-        "daily"
-    ]
-
-    if daily is None:
-        return False
-
-    if (
-        daily_close_regime
-        is not None
-    ):
-        ema = (
-            daily[
-                "emas"
-            ].get(
-                daily_close_regime
-            )
-        )
-
-        if (
-            ema is None
-            or not (
-                daily["close"]
-                > ema
-            )
-        ):
-            return False
-
-    if alignment is not None:
-        (
-            fast_length,
-            slow_length,
-        ) = alignment
-
-        fast = (
-            daily[
-                "emas"
-            ].get(
-                fast_length
-            )
-        )
-
-        slow = (
-            daily[
-                "emas"
-            ].get(
-                slow_length
-            )
-        )
-
-        if (
-            fast is None
-            or slow is None
-            or not (
-                fast > slow
-            )
-        ):
-            return False
-
-    return True
-
-
-def passes_current_control(
-    signal,
-):
-    if (
-        signal["body_ratio"]
-        < 1.40
-    ):
-        return False
-
-    if (
-        signal["close_location"]
-        < 0.65
-    ):
-        return False
-
-    if (
-        signal["body_atr"]
-        < 0.0
-    ):
-        return False
-
-    if (
-        signal["range_atr"]
-        < 0.90
-    ):
-        return False
-
-    # Current live uses lookback20, which is not in core grid.
-    # Recompute from available features is not possible here,
-    # so current control is handled separately below using
-    # direct H1 feature construction in a dedicated helper.
-    return True
-
-
-def passes_sidecar(
-    signal,
-    anchor,
-    strong_close,
-    body_ratio,
-    exclude_ny_14_19,
-):
-    if not passes_core(
-        signal,
-        anchor[
-            "structure_lookback"
-        ],
-        anchor[
-            "maximum_distance_atr"
-        ],
-        anchor[
-            "minimum_body_atr"
-        ],
-        anchor[
-            "minimum_range_atr"
-        ],
-        anchor[
-            "daily_close_regime"
-        ],
-        anchor[
-            "alignment"
-        ],
-    ):
-        return False
-
-    if (
-        strong_close is not None
-        and signal[
-            "close_location"
-        ] < strong_close
-    ):
-        return False
-
-    if (
-        signal[
-            "body_ratio"
-        ] < body_ratio
-    ):
-        return False
-
-    if (
-        exclude_ny_14_19
-        and signal[
-            "ny_hour"
-        ] >= 14
-        and signal[
-            "ny_hour"
-        ] < 19
-    ):
-        return False
-
-    return True
-
-
-# ============================================================
-# CURRENT LIVE FEATURE BUILD
-# ============================================================
-
-def build_current_live_signals(
-    h1,
-    atr,
-    daily_state,
-):
-    eligible = []
-
-    for index in range(
-        max(
-            ATR_LENGTH,
-            20,
-        ),
-        len(h1),
-    ):
-        signal = h1[index]
-
-        if (
-            signal["time"]
-            < RESEARCH_FROM
-        ):
-            continue
-
-        if (
-            signal["time"]
-            >= RESEARCH_TO
-        ):
-            break
-
-        previous = h1[
-            index - 1
-        ]
-
-        current_atr = atr[
-            index
-        ]
-
-        if (
-            current_atr is None
-            or current_atr <= 0
-        ):
-            continue
-
-        previous_body = abs(
-            previous["close"]
-            - previous["open"]
-        )
-
-        current_body = abs(
-            signal["close"]
-            - signal["open"]
-        )
-
-        signal_range = (
-            signal["high"]
-            - signal["low"]
-        )
-
-        if (
-            previous_body <= 0
-            or current_body <= 0
-            or signal_range <= 0
-        ):
-            continue
-
-        if not (
-            previous["close"]
-            < previous["open"]
-            and
-            signal["close"]
-            > signal["open"]
-            and
-            signal["open"]
-            <= previous["close"]
-            and
-            signal["close"]
-            >= previous["open"]
-        ):
-            continue
-
-        body_ratio = (
-            current_body
-            / previous_body
-        )
-
-        if (
-            body_ratio < 1.40
-        ):
-            continue
-
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / signal_range
-
-        if (
-            close_location < 0.65
-        ):
-            continue
-
-        range_atr = (
-            signal_range
-            / current_atr
-        )
-
-        if (
-            range_atr < 0.90
-        ):
-            continue
-
-        previous_lowest = min(
-            candle["low"]
-            for candle
-            in h1[
-                index - 20:
-                index
-            ]
-        )
-
-        structure_distance = (
-            signal["low"]
-            - previous_lowest
-        ) / current_atr
-
-        if (
-            structure_distance > 0.25
-        ):
-            continue
-
-        daily = (
-            previous_completed_daily(
-                signal["time"],
-                daily_state,
-            )
-        )
-
-        if daily is None:
-            continue
-
-        ema50 = (
-            daily[
-                "emas"
-            ].get(50)
-        )
-
-        ema70 = (
-            daily[
-                "emas"
-            ].get(70)
-        )
-
-        if (
-            ema50 is None
-            or ema70 is None
-        ):
-            continue
-
-        if not (
-            daily["close"]
-            > ema70
-        ):
-            continue
-
-        if not (
-            ema50 > ema70
-        ):
-            continue
-
-        ny = (
-            signal["time"]
-            .astimezone(
-                NY_TZ
-            )
-        )
-
-        if (
-            ny.hour >= 14
-            and ny.hour < 19
-        ):
-            continue
-
-        eligible.append({
-            "index": index,
-            "time": signal["time"],
-        })
-
-    return eligible
 
 
 # ============================================================
@@ -1530,20 +832,13 @@ def simulate_variant(
         if trade is None:
             break
 
-        trades.append(
-            trade
-        )
+        trades.append(trade)
 
         position_exit_index = (
-            trade[
-                "exit_index"
-            ]
+            trade["exit_index"]
         )
 
-    return (
-        trades,
-        ignored,
-    )
+    return trades, ignored
 
 
 # ============================================================
@@ -1558,9 +853,7 @@ def stats_for_trades(
     selected = []
 
     for trade in trades:
-        t = trade[
-            "signal_time"
-        ]
+        t = trade["signal_time"]
 
         if (
             start is not None
@@ -1574,9 +867,7 @@ def stats_for_trades(
         ):
             continue
 
-        selected.append(
-            trade
-        )
+        selected.append(trade)
 
     if not selected:
         return {
@@ -1598,40 +889,26 @@ def stats_for_trades(
     ]
 
     winners = [
-        r
-        for r in results
+        r for r in results
         if r > 0
     ]
 
     losers = [
-        r
-        for r in results
+        r for r in results
         if r < 0
     ]
 
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(
-            losers
-        )
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
 
     if gross_loss > 0:
-        pf = (
-            gross_profit
-            / gross_loss
-        )
+        pf = gross_profit / gross_loss
     elif gross_profit > 0:
         pf = 999.0
     else:
         pf = 0.0
 
-    total_r = sum(
-        results
-    )
+    total_r = sum(results)
 
     equity = 0.0
     peak = 0.0
@@ -1642,12 +919,7 @@ def stats_for_trades(
 
     for r in results:
         equity += r
-
-        peak = max(
-            peak,
-            equity,
-        )
-
+        peak = max(peak, equity)
         max_dd = min(
             max_dd,
             equity - peak,
@@ -1655,7 +927,6 @@ def stats_for_trades(
 
         if r < 0:
             current_streak += 1
-
             longest_streak = max(
                 longest_streak,
                 current_streak,
@@ -1664,40 +935,32 @@ def stats_for_trades(
             current_streak = 0
 
     return {
-        "trades":
-            len(results),
-        "winners":
-            len(winners),
-        "losers":
-            len(losers),
-        "win_rate":
-            round(
-                len(winners)
-                / len(results)
-                * 100.0,
-                2,
-            ),
-        "profit_factor":
-            round(
-                pf,
-                3,
-            ),
-        "total_r":
-            round(
-                total_r,
-                2,
-            ),
-        "expectancy_r":
-            round(
-                total_r
-                / len(results),
-                3,
-            ),
-        "max_drawdown_r":
-            round(
-                max_dd,
-                2,
-            ),
+        "trades": len(results),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": round(
+            len(winners)
+            / len(results)
+            * 100.0,
+            2,
+        ),
+        "profit_factor": round(
+            pf,
+            3,
+        ),
+        "total_r": round(
+            total_r,
+            2,
+        ),
+        "expectancy_r": round(
+            total_r
+            / len(results),
+            3,
+        ),
+        "max_drawdown_r": round(
+            max_dd,
+            2,
+        ),
         "longest_loss_streak":
             longest_streak,
     }
@@ -1709,17 +972,13 @@ def subtract_years_safe(
 ):
     try:
         return dt.replace(
-            year=
-                dt.year
-                - years
+            year=dt.year - years
         )
     except ValueError:
         return dt.replace(
             month=2,
             day=28,
-            year=
-                dt.year
-                - years,
+            year=dt.year - years,
         )
 
 
@@ -1838,23 +1097,36 @@ def rolling_3y_worst(
 
 
 def make_result_row(
-    row_type,
     label,
     eligible,
     trades,
     ignored,
     years,
-    parameters,
+    structure_lookback,
+    maximum_distance_atr,
+    minimum_body_atr,
+    strong_close,
+    body_ratio,
+    session_name,
 ):
     full = stats_for_trades(
         trades
     )
 
     row = {
-        "type":
-            row_type,
-        "label":
-            label,
+        "label": label,
+        "structure_lookback":
+            structure_lookback,
+        "maximum_distance_atr":
+            maximum_distance_atr,
+        "minimum_body_atr":
+            minimum_body_atr,
+        "strong_close":
+            strong_close,
+        "body_ratio":
+            body_ratio,
+        "session":
+            session_name,
         "eligible_signals":
             len(eligible),
         "ignored_due_to_open_trade":
@@ -1882,7 +1154,9 @@ def make_result_row(
         "max_drawdown_r":
             full["max_drawdown_r"],
         "longest_loss_streak":
-            full["longest_loss_streak"],
+            full[
+                "longest_loss_streak"
+            ],
         "annual_r_linear":
             round(
                 full["total_r"]
@@ -1890,10 +1164,6 @@ def make_result_row(
                 3,
             ),
     }
-
-    row.update(
-        parameters
-    )
 
     minimum_era_pf = None
     profitable_eras = 0
@@ -1922,7 +1192,9 @@ def make_result_row(
 
         row[
             f"{era_name}_pf"
-        ] = stats["profit_factor"]
+        ] = stats[
+            "profit_factor"
+        ]
 
         row[
             f"{era_name}_r"
@@ -1930,7 +1202,9 @@ def make_result_row(
 
         row[
             f"{era_name}_expectancy"
-        ] = stats["expectancy_r"]
+        ] = stats[
+            "expectancy_r"
+        ]
 
         if (
             stats["trades"]
@@ -1986,7 +1260,9 @@ def make_result_row(
 
         row[
             f"last_{years_back}y_pf"
-        ] = stats["profit_factor"]
+        ] = stats[
+            "profit_factor"
+        ]
 
         row[
             f"last_{years_back}y_r"
@@ -1994,7 +1270,9 @@ def make_result_row(
 
         row[
             f"last_{years_back}y_expectancy"
-        ] = stats["expectancy_r"]
+        ] = stats[
+            "expectancy_r"
+        ]
 
     row.update(
         rolling_3y_worst(
@@ -2019,13 +1297,11 @@ def run_research():
         })
 
         h1 = fetch_chunked(
-            "H1",
             RESEARCH_FROM
             - timedelta(
                 days=H1_WARMUP_DAYS
             ),
             RESEARCH_TO,
-            H1_CHUNK_DAYS,
         )
 
         if not h1:
@@ -2035,56 +1311,24 @@ def run_research():
 
         STATUS.update({
             "state":
-                "fetching_daily",
-            "message":
-                "Fetching GBP/USD daily history",
-        })
-
-        daily = fetch_chunked(
-            "D",
-            RESEARCH_FROM
-            - timedelta(
-                days=D_WARMUP_DAYS
-            ),
-            RESEARCH_TO,
-            D_CHUNK_DAYS,
-        )
-
-        if not daily:
-            raise RuntimeError(
-                "No daily candles returned"
-            )
-
-        STATUS.update({
-            "state":
                 "precomputing",
             "message":
-                "Precomputing GBP/USD features",
+                "Precomputing GBP/USD sweep features",
         })
 
-        atr = atr_series(
-            h1,
-            ATR_LENGTH,
-        )
+        atr = atr_series(h1)
 
-        daily_state = (
-            prepare_daily(
-                daily
-            )
-        )
-
-        raw_candidates = (
-            build_raw_candidates(
+        candidates = (
+            build_candidates(
                 h1,
                 atr,
-                daily_state,
             )
         )
 
         STATUS[
             "raw_candidates"
         ] = len(
-            raw_candidates
+            candidates
         )
 
         years = (
@@ -2095,104 +1339,87 @@ def run_research():
             * 86400
         )
 
-        core_rows = []
-        sidecar_rows = []
+        rows = []
 
-        # CURRENT LIVE REFERENCE
-        current_live = (
-            build_current_live_signals(
-                h1,
-                atr,
-                daily_state,
-            )
-        )
-
-        (
-            live_trades,
-            live_ignored,
-        ) = simulate_variant(
-            h1,
-            current_live,
-        )
-
-        reference_row = (
-            make_result_row(
-                "REFERENCE",
-                "CURRENT_LIVE_CONTROL",
-                current_live,
-                live_trades,
-                live_ignored,
-                years,
-                {
-                    "structure_lookback":
-                        20,
-                    "maximum_distance_atr":
-                        0.25,
-                    "minimum_body_atr":
-                        None,
-                    "minimum_range_atr":
-                        0.90,
-                    "daily_close_regime":
-                        70,
-                    "alignment_fast":
-                        50,
-                    "alignment_slow":
-                        70,
-                    "strong_close":
-                        0.65,
-                    "body_ratio":
-                        1.40,
-                    "session":
-                        "EXCL_NY_14_19",
-                },
-            )
-        )
-
-        core_rows.append(
-            reference_row
-        )
-
-        sidecar_rows.append(
-            reference_row.copy()
-        )
-
-        # CORE MATRIX
         STATUS.update({
             "state":
-                "running_core",
+                "running",
             "message":
-                f"Running {TOTAL_CORE_TESTS} core tests",
-            "completed_core_tests":
+                f"Running {TOTAL_TESTS} tight sweep configs",
+            "completed_tests":
                 0,
         })
 
         for test_number, config in enumerate(
-            CORE_CONFIGS,
+            CONFIGS,
             start=1,
         ):
             (
                 structure_lookback,
                 maximum_distance_atr,
                 minimum_body_atr,
-                minimum_range_atr,
-                daily_close_regime,
-                alignment,
+                strong_close,
+                body_ratio,
+                session_option,
             ) = config
 
-            eligible = [
-                signal
-                for signal
-                in raw_candidates
-                if passes_core(
-                    signal,
-                    structure_lookback,
-                    maximum_distance_atr,
-                    minimum_body_atr,
-                    minimum_range_atr,
-                    daily_close_regime,
-                    alignment,
+            (
+                session_name,
+                exclude_ny_14_19,
+            ) = session_option
+
+            eligible = []
+
+            for signal in candidates:
+                if (
+                    signal[
+                        "structure_distances"
+                    ][
+                        structure_lookback
+                    ]
+                    > maximum_distance_atr
+                ):
+                    continue
+
+                if (
+                    signal[
+                        "body_atr"
+                    ]
+                    < minimum_body_atr
+                ):
+                    continue
+
+                if (
+                    signal[
+                        "body_ratio"
+                    ]
+                    < body_ratio
+                ):
+                    continue
+
+                if (
+                    strong_close
+                    is not None
+                    and signal[
+                        "close_location"
+                    ] < strong_close
+                ):
+                    continue
+
+                if (
+                    exclude_ny_14_19
+                    and signal[
+                        "ny_hour"
+                    ] >= 14
+                    and signal[
+                        "ny_hour"
+                    ] < 19
+                ):
+                    continue
+
+                eligible.append(
+                    signal
                 )
-            ]
 
             (
                 trades,
@@ -2202,302 +1429,79 @@ def run_research():
                 eligible,
             )
 
-            fast = None
-            slow = None
+            strong_close_label = (
+                "OFF"
+                if strong_close is None
+                else f"{strong_close:.2f}"
+            )
 
-            if alignment is not None:
-                fast = alignment[0]
-                slow = alignment[1]
+            label = (
+                f"S{structure_lookback}_"
+                f"D{maximum_distance_atr:.3f}_"
+                f"BODYATR{minimum_body_atr:.2f}_"
+                f"SC{strong_close_label}_"
+                f"BR{body_ratio:.2f}_"
+                f"{session_name}"
+            )
 
-            core_rows.append(
+            rows.append(
                 make_result_row(
-                    "CORE",
-                    (
-                        f"S{structure_lookback}_"
-                        f"D{maximum_distance_atr:.2f}_"
-                        f"B{minimum_body_atr}_"
-                        f"R{minimum_range_atr}_"
-                        f"CLOSEEMA{daily_close_regime}_"
-                        f"ALIGN{fast}_{slow}"
-                    ),
+                    label,
                     eligible,
                     trades,
                     ignored,
                     years,
-                    {
-                        "structure_lookback":
-                            structure_lookback,
-                        "maximum_distance_atr":
-                            maximum_distance_atr,
-                        "minimum_body_atr":
-                            minimum_body_atr,
-                        "minimum_range_atr":
-                            minimum_range_atr,
-                        "daily_close_regime":
-                            daily_close_regime,
-                        "alignment_fast":
-                            fast,
-                        "alignment_slow":
-                            slow,
-                        "strong_close":
-                            None,
-                        "body_ratio":
-                            1.00,
-                        "session":
-                            "ALL",
-                    },
+                    structure_lookback,
+                    maximum_distance_atr,
+                    minimum_body_atr,
+                    strong_close,
+                    body_ratio,
+                    session_name,
                 )
             )
 
             STATUS[
-                "completed_core_tests"
+                "completed_tests"
             ] = test_number
 
             if (
-                test_number % 500 == 0
+                test_number % 250 == 0
                 or test_number
-                == TOTAL_CORE_TESTS
+                == TOTAL_TESTS
             ):
                 print(
-                    f"Core "
+                    f"Sweep "
                     f"{test_number}/"
-                    f"{TOTAL_CORE_TESTS}",
+                    f"{TOTAL_TESTS}",
                     flush=True,
                 )
 
-        # SIDECARS
-        sidecar_total = (
-            len(ANCHORS)
-            * len(STRONG_CLOSE_VALUES)
-            * len(BODY_RATIO_VALUES)
-            * len(SESSION_OPTIONS)
-        )
+        df = pd.DataFrame(rows)
 
-        STATUS.update({
-            "state":
-                "running_sidecars",
-            "message":
-                f"Running {sidecar_total} controlled sidecars",
-            "completed_sidecars":
-                0,
-        })
-
-        sidecar_count = 0
-
-        for anchor in ANCHORS:
-            for strong_close in (
-                STRONG_CLOSE_VALUES
-            ):
-                for body_ratio in (
-                    BODY_RATIO_VALUES
-                ):
-                    for (
-                        session_name,
-                        exclude_ny_14_19,
-                    ) in SESSION_OPTIONS:
-
-                        eligible = [
-                            signal
-                            for signal
-                            in raw_candidates
-                            if passes_sidecar(
-                                signal,
-                                anchor,
-                                strong_close,
-                                body_ratio,
-                                exclude_ny_14_19,
-                            )
-                        ]
-
-                        (
-                            trades,
-                            ignored,
-                        ) = simulate_variant(
-                            h1,
-                            eligible,
-                        )
-
-                        alignment = (
-                            anchor[
-                                "alignment"
-                            ]
-                        )
-
-                        fast = None
-                        slow = None
-
-                        if (
-                            alignment
-                            is not None
-                        ):
-                            fast = (
-                                alignment[0]
-                            )
-                            slow = (
-                                alignment[1]
-                            )
-
-                        sidecar_rows.append(
-                            make_result_row(
-                                "SIDECAR",
-                                (
-                                    f"{anchor['name']}_"
-                                    f"SC{strong_close}_"
-                                    f"BR{body_ratio}_"
-                                    f"{session_name}"
-                                ),
-                                eligible,
-                                trades,
-                                ignored,
-                                years,
-                                {
-                                    "anchor":
-                                        anchor[
-                                            "name"
-                                        ],
-                                    "structure_lookback":
-                                        anchor[
-                                            "structure_lookback"
-                                        ],
-                                    "maximum_distance_atr":
-                                        anchor[
-                                            "maximum_distance_atr"
-                                        ],
-                                    "minimum_body_atr":
-                                        anchor[
-                                            "minimum_body_atr"
-                                        ],
-                                    "minimum_range_atr":
-                                        anchor[
-                                            "minimum_range_atr"
-                                        ],
-                                    "daily_close_regime":
-                                        anchor[
-                                            "daily_close_regime"
-                                        ],
-                                    "alignment_fast":
-                                        fast,
-                                    "alignment_slow":
-                                        slow,
-                                    "strong_close":
-                                        strong_close,
-                                    "body_ratio":
-                                        body_ratio,
-                                    "session":
-                                        session_name,
-                                },
-                            )
-                        )
-
-                        sidecar_count += 1
-
-                        STATUS[
-                            "completed_sidecars"
-                        ] = sidecar_count
-
-        # SAVE
-        core_df = pd.DataFrame(
-            core_rows
-        )
-
-        reference = core_df[
-            core_df[
-                "type"
-            ] == "REFERENCE"
-        ]
-
-        research = (
-            core_df[
-                core_df[
-                    "type"
-                ] == "CORE"
-            ]
-            .copy()
-            .sort_values(
-                by=[
-                    "profitable_eras",
-                    "minimum_era_pf_5_plus",
-                    "worst_rolling_3y_pf",
-                    "profit_factor",
-                    "expectancy_r",
-                    "trades",
-                ],
-                ascending=[
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
-                ],
-            )
-        )
-
-        core_df = pd.concat(
-            [
-                reference,
-                research,
+        df = df.sort_values(
+            by=[
+                "profitable_eras",
+                "minimum_era_pf_5_plus",
+                "worst_rolling_3y_pf",
+                "profit_factor",
+                "expectancy_r",
+                "trades",
             ],
-            ignore_index=True,
-        )
-
-        sidecar_df = pd.DataFrame(
-            sidecar_rows
-        )
-
-        sidecar_reference = (
-            sidecar_df[
-                sidecar_df[
-                    "type"
-                ] == "REFERENCE"
-            ]
-        )
-
-        sidecar_research = (
-            sidecar_df[
-                sidecar_df[
-                    "type"
-                ] == "SIDECAR"
-            ]
-            .copy()
-            .sort_values(
-                by=[
-                    "profitable_eras",
-                    "minimum_era_pf_5_plus",
-                    "worst_rolling_3y_pf",
-                    "profit_factor",
-                    "expectancy_r",
-                    "trades",
-                ],
-                ascending=[
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
-                ],
-            )
-        )
-
-        sidecar_df = pd.concat(
-            [
-                sidecar_reference,
-                sidecar_research,
+            ascending=[
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
             ],
-            ignore_index=True,
+        ).reset_index(
+            drop=True
         )
 
-        core_df.to_csv(
+        df.to_csv(
             os.path.abspath(
-                OUTPUT_CORE
-            ),
-            index=False,
-        )
-
-        sidecar_df.to_csv(
-            os.path.abspath(
-                OUTPUT_SIDECARS
+                OUTPUT_FILE
             ),
             index=False,
         )
@@ -2506,32 +1510,24 @@ def run_research():
             "state":
                 "complete",
             "message":
-                "GBP/USD core interaction matrix complete",
-            "core_rows_saved":
-                len(core_df),
-            "sidecar_rows_saved":
-                len(sidecar_df),
-            "outputs": {
-                "core":
-                    OUTPUT_CORE,
-                "sidecars":
-                    OUTPUT_SIDECARS,
-            },
+                "GBP/USD tight robustness sweep complete",
+            "rows_saved":
+                len(df),
+            "output_file":
+                OUTPUT_FILE,
         })
 
         print()
         print("=" * 95)
         print(
-            "GBP/USD LONG CORE INTERACTION MATRIX COMPLETE"
+            "GBP/USD LONG TIGHT ROBUSTNESS SWEEP COMPLETE"
         )
         print("=" * 95)
         print(
-            f"Core rows: "
-            f"{len(core_df)}"
+            f"Rows saved: {len(df)}"
         )
         print(
-            f"Sidecar rows: "
-            f"{len(sidecar_df)}"
+            f"Output: {OUTPUT_FILE}"
         )
 
     except Exception as error:
@@ -2557,7 +1553,7 @@ def run_research():
 def home():
     return jsonify({
         "service":
-            "GBP/USD Long Core Interaction Matrix",
+            "GBP/USD Long Tight Robustness Sweep",
         "status":
             STATUS,
         "mode":
@@ -2566,12 +1562,8 @@ def home():
             False,
         "trading_enabled":
             False,
-        "downloads": {
-            "core":
-                "/download/core",
-            "sidecars":
-                "/download/sidecars",
-        },
+        "download":
+            "/download",
     })
 
 
@@ -2582,11 +1574,10 @@ def status():
     )
 
 
-def send_output(
-    filename,
-):
+@app.route("/download")
+def download():
     path = os.path.abspath(
-        filename
+        OUTPUT_FILE
     )
 
     if not os.path.exists(
@@ -2596,31 +1587,13 @@ def send_output(
             "status":
                 "not_ready",
             "message":
-                f"{filename} is not ready yet",
+                "CSV is not ready yet",
         }), 404
 
     return send_file(
         path,
         as_attachment=True,
-        download_name=filename,
-    )
-
-
-@app.route(
-    "/download/core"
-)
-def download_core():
-    return send_output(
-        OUTPUT_CORE
-    )
-
-
-@app.route(
-    "/download/sidecars"
-)
-def download_sidecars():
-    return send_output(
-        OUTPUT_SIDECARS
+        download_name=OUTPUT_FILE,
     )
 
 
@@ -2628,7 +1601,7 @@ if __name__ == "__main__":
     thread = threading.Thread(
         target=run_research,
         name=(
-            "gbpusd-long-core-interaction-matrix"
+            "gbpusd-long-tight-robustness-sweep"
         ),
         daemon=True,
     )
