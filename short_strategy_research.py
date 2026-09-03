@@ -9,33 +9,64 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# EUR/GBP LONG - CURRENT LIVE CONTROL BASELINE
+# EUR/GBP LONG - SINGLE FACTOR EDGE DISCOVERY
 #
 # RESEARCH ONLY - NEVER SUBMITS ORDERS.
 #
-# Exact current live EUR/GBP long:
+# PURPOSE
+# ------------------------------------------------------------
+# Start from a RAW bullish-engulfing baseline and test one
+# factor at a time.
 #
-# Bullish engulfing
-# minimum body ratio >= 1.00
-# strong close >= 0.75
-# structure lookback 20
-# distance <= 0.20 ATR14
-# previous completed daily close > EMA150
-# previous completed daily EMA20 > EMA150
-# London session 08:00-16:59
-# Thursday + Friday excluded
-# RR 3.00
-# stop buffer 10 ticks
-# adverse historical fill 5 ticks
-# pyramiding 0
+# Locked execution conventions:
+# - OANDA midpoint H1 candles
+# - bullish engulfing:
+#     previous candle bearish
+#     current candle bullish
+#     current open <= previous close
+#     current close >= previous open
+# - minimum body ratio baseline = 1.00
+# - ATR14 = Wilder/RMA, SMA-seeded
+# - tick size = 0.00001
+# - reference entry = signal close
+# - adverse long fill = signal close + 5 ticks
+# - stop = signal low - 10 ticks
+# - target = signal close + reference risk * 3.00
+# - actual R uses adverse fill
+# - pyramiding = 0
+# - same-bar target/stop tie:
+#     compare open->high vs open->low
+#     high closer => target first, else stop first
+# - signal on exact exit candle is allowed
+# - exits begin from the candle AFTER the signal candle
 #
-# OANDA midpoint H1.
-# Daily alignment 17:00 America/New_York.
-# Previous completed daily candle only.
+# Daily candles:
+# - OANDA dailyAlignment = 17
+# - alignmentTimezone = America/New_York
+# - previous completed daily candle only
 #
-# Research window:
-# 2002-05-06 20:00 UTC -> current completed UTC hour.
+# Research:
+# - 2002-05-06 20:00 UTC -> current completed UTC hour
 #
+# SINGLE-FACTOR FAMILIES
+# ------------------------------------------------------------
+# body ratio
+# close location
+# lower wick/body
+# upper wick/body
+# range/ATR
+# body/ATR
+# stop-size/ATR
+# structure lookback x distance
+# 6h / 12h / 24h / 48h momentum
+# previous completed daily close > EMA
+# daily EMA alignment
+# daily ATR14 / 50-day mean
+# single NY-hour exclusion
+# single London-hour exclusion
+# single weekday exclusion
+#
+# Current live control is also included as a reference row.
 # ============================================================
 
 
@@ -55,28 +86,12 @@ TICK_SIZE = 0.00001
 STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
 REWARD_RISK = 3.00
-
-MINIMUM_BODY_RATIO = 1.00
-MINIMUM_CLOSE_LOCATION = 0.75
+BASE_BODY_RATIO = 1.00
 
 ATR_LENGTH = 14
 
-STRUCTURE_LOOKBACK = 20
-MAXIMUM_DISTANCE_ATR = 0.20
-
-FAST_DAILY_EMA = 20
-SLOW_DAILY_EMA = 150
-
-SESSION_TZ = ZoneInfo("Europe/London")
-SESSION_START_HOUR = 8
-SESSION_END_HOUR = 17
-
-EXCLUDED_WEEKDAYS = {
-    3,  # Thursday
-    4,  # Friday
-}
-
 NY_TZ = ZoneInfo("America/New_York")
+LONDON_TZ = ZoneInfo("Europe/London")
 
 DAILY_ALIGNMENT_HOUR = 17
 DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
@@ -101,60 +116,33 @@ D_CHUNK_DAYS = 1500
 H1_WARMUP_DAYS = 200
 D_WARMUP_DAYS = 2500
 
-OUTPUT_SUMMARY = (
-    "eurgbp_long_current_control_summary.csv"
+OUTPUT_FILE = (
+    "eurgbp_long_single_factor_edges.csv"
 )
 
-OUTPUT_YEARLY = (
-    "eurgbp_long_current_control_yearly.csv"
-)
-
-OUTPUT_ROLLING = (
-    "eurgbp_long_current_control_rolling3y.csv"
-)
-
-OUTPUT_TRADES = (
-    "eurgbp_long_current_control_trades.csv"
-)
-
+# ============================================================
+# ERAS
+# ============================================================
 
 ERAS = [
     (
         "2002_2009",
         RESEARCH_FROM,
-        datetime(
-            2010, 1, 1,
-            tzinfo=timezone.utc,
-        ),
+        datetime(2010, 1, 1, tzinfo=timezone.utc),
     ),
     (
         "2010_2017",
-        datetime(
-            2010, 1, 1,
-            tzinfo=timezone.utc,
-        ),
-        datetime(
-            2018, 1, 1,
-            tzinfo=timezone.utc,
-        ),
+        datetime(2010, 1, 1, tzinfo=timezone.utc),
+        datetime(2018, 1, 1, tzinfo=timezone.utc),
     ),
     (
         "2018_2023",
-        datetime(
-            2018, 1, 1,
-            tzinfo=timezone.utc,
-        ),
-        datetime(
-            2024, 1, 1,
-            tzinfo=timezone.utc,
-        ),
+        datetime(2018, 1, 1, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, tzinfo=timezone.utc),
     ),
     (
         "2024_present",
-        datetime(
-            2024, 1, 1,
-            tzinfo=timezone.utc,
-        ),
+        datetime(2024, 1, 1, tzinfo=timezone.utc),
         None,
     ),
 ]
@@ -163,7 +151,7 @@ ERAS = [
 STATUS = {
     "state": "not_started",
     "message": "Research has not started",
-    "service": "EUR/GBP Long Current Live Control Baseline",
+    "service": "EUR/GBP Long Single-Factor Edge Discovery",
     "instrument": INSTRUMENT,
     "orders_supported": False,
     "trading_enabled": False,
@@ -181,9 +169,7 @@ def headers():
         )
 
     return {
-        "Authorization": (
-            f"Bearer {OANDA_TOKEN}"
-        )
+        "Authorization": f"Bearer {OANDA_TOKEN}"
     }
 
 
@@ -192,17 +178,11 @@ def iso_utc(dt):
         dt
         .astimezone(timezone.utc)
         .isoformat()
-        .replace(
-            "+00:00",
-            "Z",
-        )
+        .replace("+00:00", "Z")
     )
 
 
-def oanda_get(
-    path,
-    params,
-):
+def oanda_get(path, params):
     response = requests.get(
         OANDA_URL + path,
         headers=headers(),
@@ -220,10 +200,7 @@ def oanda_get(
 
 
 def parse_candle(raw):
-    if not raw.get(
-        "complete",
-        False,
-    ):
+    if not raw.get("complete", False):
         return None
 
     mid = raw.get("mid")
@@ -268,10 +245,7 @@ def fetch_range(
 
     candles = []
 
-    for raw in data.get(
-        "candles",
-        [],
-    ):
+    for raw in data.get("candles", []):
         candle = parse_candle(raw)
 
         if candle is not None:
@@ -292,9 +266,7 @@ def fetch_chunked(
     while cursor < end:
         chunk_end = min(
             cursor
-            + timedelta(
-                days=chunk_days
-            ),
+            + timedelta(days=chunk_days),
             end,
         )
 
@@ -317,12 +289,10 @@ def fetch_chunked(
 
         cursor = chunk_end
 
-    candles = list(
-        by_time.values()
-    )
+    candles = list(by_time.values())
 
     candles.sort(
-        key=lambda x: x["time"]
+        key=lambda item: item["time"]
     )
 
     return candles
@@ -333,11 +303,9 @@ def fetch_chunked(
 # ============================================================
 
 def true_ranges(candles):
-    result = []
+    values = []
 
-    for index, candle in enumerate(
-        candles
-    ):
+    for index, candle in enumerate(candles):
         if index == 0:
             tr = (
                 candle["high"]
@@ -363,26 +331,22 @@ def true_ranges(candles):
                 ),
             )
 
-        result.append(tr)
+        values.append(tr)
 
-    return result
+    return values
 
 
 def rma_series(
     values,
     length,
 ):
-    result = [
-        None
-    ] * len(values)
+    result = [None] * len(values)
 
     if len(values) < length:
         return result
 
     initial = (
-        sum(
-            values[:length]
-        )
+        sum(values[:length])
         / length
     )
 
@@ -426,17 +390,13 @@ def ema_series(
     values,
     length,
 ):
-    result = [
-        None
-    ] * len(values)
+    result = [None] * len(values)
 
     if len(values) < length:
         return result
 
     initial = (
-        sum(
-            values[:length]
-        )
+        sum(values[:length])
         / length
     )
 
@@ -472,6 +432,35 @@ def ema_series(
     return result
 
 
+def rolling_mean_optional(
+    values,
+    length,
+):
+    result = [None] * len(values)
+
+    for index in range(
+        length - 1,
+        len(values),
+    ):
+        window = values[
+            index - length + 1:
+            index + 1
+        ]
+
+        if any(
+            value is None
+            for value in window
+        ):
+            continue
+
+        result[index] = (
+            sum(window)
+            / length
+        )
+
+    return result
+
+
 # ============================================================
 # DAILY STATE
 # ============================================================
@@ -496,9 +485,7 @@ def current_daily_start(
     if ny_time < candidate:
         candidate = (
             candidate
-            - timedelta(
-                days=1
-            )
+            - timedelta(days=1)
         )
 
     return candidate.astimezone(
@@ -506,37 +493,77 @@ def current_daily_start(
     )
 
 
-def build_daily_state(
-    daily
-):
+def prepare_daily(daily):
     closes = [
         candle["close"]
         for candle in daily
     ]
 
-    fast = ema_series(
-        closes,
-        FAST_DAILY_EMA,
+    ema_lengths = [
+        20,
+        30,
+        40,
+        50,
+        70,
+        100,
+        125,
+        150,
+        175,
+        200,
+        250,
+        300,
+        400,
+    ]
+
+    ema_map = {
+        length: ema_series(
+            closes,
+            length,
+        )
+        for length in ema_lengths
+    }
+
+    daily_atr = atr_series(
+        daily,
+        14,
     )
 
-    slow = ema_series(
-        closes,
-        SLOW_DAILY_EMA,
+    daily_atr_mean50 = (
+        rolling_mean_optional(
+            daily_atr,
+            50,
+        )
     )
 
-    result = []
+    rows = []
 
-    for index, candle in enumerate(
-        daily
-    ):
-        result.append({
+    for index, candle in enumerate(daily):
+        atr_ratio_50 = None
+
+        if (
+            daily_atr[index] is not None
+            and daily_atr_mean50[index] is not None
+            and daily_atr_mean50[index] > 0
+        ):
+            atr_ratio_50 = (
+                daily_atr[index]
+                / daily_atr_mean50[index]
+            )
+
+        rows.append({
             "time": candle["time"],
             "close": candle["close"],
-            "fast_ema": fast[index],
-            "slow_ema": slow[index],
+            "emas": {
+                length: ema_map[
+                    length
+                ][index]
+                for length in ema_lengths
+            },
+            "atr14": daily_atr[index],
+            "atr_ratio_50": atr_ratio_50,
         })
 
-    return result
+    return rows
 
 
 def previous_completed_daily(
@@ -561,19 +588,30 @@ def previous_completed_daily(
 
 
 # ============================================================
-# SIGNALS
+# RAW CANDIDATES
 # ============================================================
 
-def build_signals(
+STRUCTURE_LOOKBACKS = [
+    10,
+    20,
+    30,
+    40,
+    60,
+    90,
+    120,
+]
+
+def build_raw_candidates(
     h1,
     atr,
     daily_state,
 ):
-    signals = []
+    candidates = []
 
     start_index = max(
         ATR_LENGTH,
-        STRUCTURE_LOOKBACK,
+        max(STRUCTURE_LOOKBACKS),
+        48,
     )
 
     for index in range(
@@ -641,111 +679,771 @@ def build_signals(
             / previous_body
         )
 
-        if (
-            body_ratio
-            < MINIMUM_BODY_RATIO
-        ):
+        if body_ratio < BASE_BODY_RATIO:
             continue
+
+        lower_wick = (
+            min(
+                signal["open"],
+                signal["close"],
+            )
+            - signal["low"]
+        )
+
+        upper_wick = (
+            signal["high"]
+            - max(
+                signal["open"],
+                signal["close"],
+            )
+        )
 
         close_location = (
             signal["close"]
             - signal["low"]
         ) / signal_range
 
-        if (
-            close_location
-            < MINIMUM_CLOSE_LOCATION
-        ):
-            continue
-
-        previous_lowest_low = min(
-            candle["low"]
-            for candle
-            in h1[
-                index - STRUCTURE_LOOKBACK:
-                index
-            ]
+        lower_wick_body = (
+            lower_wick
+            / current_body
         )
 
-        distance = (
+        upper_wick_body = (
+            upper_wick
+            / current_body
+        )
+
+        range_atr = (
+            signal_range
+            / current_atr
+        )
+
+        body_atr = (
+            current_body
+            / current_atr
+        )
+
+        stop = (
             signal["low"]
-            - previous_lowest_low
+            - STOP_BUFFER_TICKS
+            * TICK_SIZE
         )
 
-        if (
-            distance
-            > (
-                current_atr
-                * MAXIMUM_DISTANCE_ATR
+        stop_size_atr = (
+            signal["close"]
+            - stop
+        ) / current_atr
+
+        momentum = {}
+
+        for lookback in [
+            6,
+            12,
+            24,
+            48,
+        ]:
+            momentum[lookback] = (
+                signal["close"]
+                - h1[
+                    index - lookback
+                ]["close"]
+            ) / current_atr
+
+        structure_distances = {}
+
+        for lookback in STRUCTURE_LOOKBACKS:
+            previous_lowest = min(
+                candle["low"]
+                for candle
+                in h1[
+                    index - lookback:
+                    index
+                ]
             )
-        ):
-            continue
+
+            structure_distances[
+                lookback
+            ] = (
+                signal["low"]
+                - previous_lowest
+            ) / current_atr
 
         daily = previous_completed_daily(
             signal["time"],
             daily_state,
         )
 
-        if daily is None:
-            continue
+        ny = (
+            signal["time"]
+            .astimezone(NY_TZ)
+        )
+
+        london = (
+            signal["time"]
+            .astimezone(LONDON_TZ)
+        )
+
+        candidates.append({
+            "index": index,
+            "time": signal["time"],
+            "body_ratio": body_ratio,
+            "close_location": close_location,
+            "lower_wick_body": (
+                lower_wick_body
+            ),
+            "upper_wick_body": (
+                upper_wick_body
+            ),
+            "range_atr": range_atr,
+            "body_atr": body_atr,
+            "stop_size_atr": (
+                stop_size_atr
+            ),
+            "momentum": momentum,
+            "structure_distances": (
+                structure_distances
+            ),
+            "daily": daily,
+            "ny_hour": ny.hour,
+            "ny_weekday": ny.weekday(),
+            "london_hour": london.hour,
+            "london_weekday": (
+                london.weekday()
+            ),
+        })
+
+    return candidates
+
+
+# ============================================================
+# TEST DEFINITIONS
+# ============================================================
+
+TESTS = []
+
+# RAW baseline.
+TESTS.append({
+    "family": "RAW",
+    "variant": "BODY>=1.00",
+})
+
+# Current live exact control.
+TESTS.append({
+    "family": "CONTROL",
+    "variant": "CURRENT_LIVE",
+    "current_live": True,
+})
+
+# Body ratio.
+for value in [
+    1.00,
+    1.05,
+    1.10,
+    1.20,
+    1.30,
+    1.40,
+    1.50,
+    1.75,
+    2.00,
+]:
+    TESTS.append({
+        "family": "BODY_RATIO",
+        "variant": f">={value:.2f}",
+        "minimum_body_ratio": value,
+    })
+
+# Close location.
+for value in [
+    0.50,
+    0.55,
+    0.60,
+    0.65,
+    0.70,
+    0.75,
+    0.80,
+    0.85,
+    0.90,
+]:
+    TESTS.append({
+        "family": "CLOSE_LOCATION",
+        "variant": f">={value:.2f}",
+        "minimum_close_location": value,
+    })
+
+# Lower wick.
+for value in [
+    0.00,
+    0.05,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.30,
+    0.40,
+    0.50,
+    0.75,
+    1.00,
+]:
+    TESTS.append({
+        "family": "LOWER_WICK_BODY",
+        "variant": f">={value:.2f}",
+        "minimum_lower_wick_body": value,
+    })
+
+# Upper wick maximum.
+for value in [
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.75,
+    1.00,
+]:
+    TESTS.append({
+        "family": "UPPER_WICK_BODY",
+        "variant": f"<={value:.2f}",
+        "maximum_upper_wick_body": value,
+    })
+
+# Range/ATR.
+for value in [
+    0.50,
+    0.70,
+    0.90,
+    1.10,
+    1.30,
+    1.50,
+    1.75,
+    2.00,
+]:
+    TESTS.append({
+        "family": "RANGE_ATR",
+        "variant": f">={value:.2f}",
+        "minimum_range_atr": value,
+    })
+
+# Body/ATR.
+for value in [
+    0.25,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    1.00,
+    1.20,
+]:
+    TESTS.append({
+        "family": "BODY_ATR",
+        "variant": f">={value:.2f}",
+        "minimum_body_atr": value,
+    })
+
+# Stop size / ATR cap.
+for value in [
+    0.75,
+    1.00,
+    1.25,
+    1.50,
+    1.75,
+    2.00,
+    2.50,
+    3.00,
+]:
+    TESTS.append({
+        "family": "STOP_SIZE_ATR",
+        "variant": f"<={value:.2f}",
+        "maximum_stop_size_atr": value,
+    })
+
+# Structure.
+for lookback in STRUCTURE_LOOKBACKS:
+    for distance in [
+        0.05,
+        0.10,
+        0.15,
+        0.20,
+        0.25,
+        0.35,
+        0.50,
+        0.75,
+    ]:
+        TESTS.append({
+            "family": "STRUCTURE",
+            "variant": (
+                f"{lookback}_"
+                f"{distance:.2f}"
+            ),
+            "structure_lookback": (
+                lookback
+            ),
+            "maximum_distance_atr": (
+                distance
+            ),
+        })
+
+# Momentum.
+for lookback in [
+    6,
+    12,
+    24,
+    48,
+]:
+    for value in [
+        -1.00,
+        -0.50,
+        -0.25,
+        0.00,
+        0.25,
+        0.50,
+        0.75,
+        1.00,
+        1.50,
+    ]:
+        TESTS.append({
+            "family": (
+                f"MOMENTUM_{lookback}H"
+            ),
+            "variant": (
+                f">={value:.2f}"
+            ),
+            "momentum_lookback": (
+                lookback
+            ),
+            "minimum_momentum_atr": (
+                value
+            ),
+        })
+
+# Daily close > EMA.
+for length in [
+    20,
+    30,
+    40,
+    50,
+    70,
+    100,
+    125,
+    150,
+    175,
+    200,
+    250,
+    300,
+    400,
+]:
+    TESTS.append({
+        "family": "DAILY_CLOSE_ABOVE_EMA",
+        "variant": f"EMA{length}",
+        "daily_close_above_ema": length,
+    })
+
+# Daily EMA alignment.
+for fast, slow in [
+    (20, 50),
+    (20, 70),
+    (20, 100),
+    (20, 125),
+    (20, 150),
+    (30, 100),
+    (30, 150),
+    (40, 100),
+    (50, 100),
+    (50, 150),
+    (70, 150),
+    (100, 150),
+    (100, 200),
+]:
+    TESTS.append({
+        "family": "DAILY_EMA_ALIGNMENT",
+        "variant": (
+            f"EMA{fast}>EMA{slow}"
+        ),
+        "daily_fast_ema": fast,
+        "daily_slow_ema": slow,
+    })
+
+# Daily ATR regime.
+for value in [
+    0.70,
+    0.80,
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+]:
+    TESTS.append({
+        "family": "DAILY_ATR_RATIO",
+        "variant": f">={value:.2f}",
+        "minimum_daily_atr_ratio": value,
+    })
+
+# Exclude single NY hour.
+for hour in range(24):
+    TESTS.append({
+        "family": "NY_HOUR_EXCLUDE",
+        "variant": f"exclude_{hour:02d}",
+        "excluded_ny_hour": hour,
+    })
+
+# Exclude single London hour.
+for hour in range(24):
+    TESTS.append({
+        "family": "LONDON_HOUR_EXCLUDE",
+        "variant": f"exclude_{hour:02d}",
+        "excluded_london_hour": hour,
+    })
+
+# Exclude one weekday - London local weekday.
+for weekday, name in [
+    (0, "Mon"),
+    (1, "Tue"),
+    (2, "Wed"),
+    (3, "Thu"),
+    (4, "Fri"),
+]:
+    TESTS.append({
+        "family": "WEEKDAY_EXCLUDE",
+        "variant": f"exclude_{name}",
+        "excluded_weekday": weekday,
+    })
+
+
+# ============================================================
+# FILTERS
+# ============================================================
+
+def passes_test(
+    signal,
+    test,
+):
+    if test.get(
+        "current_live",
+        False,
+    ):
+        # Exact current live EUR/GBP long.
+        if (
+            signal[
+                "close_location"
+            ] < 0.75
+        ):
+            return False
 
         if (
-            daily["fast_ema"]
-            is None
-            or daily["slow_ema"]
-            is None
+            signal[
+                "structure_distances"
+            ][20] > 0.20
         ):
-            continue
+            return False
+
+        daily = signal[
+            "daily"
+        ]
+
+        if daily is None:
+            return False
+
+        ema20 = (
+            daily[
+                "emas"
+            ].get(20)
+        )
+
+        ema150 = (
+            daily[
+                "emas"
+            ].get(150)
+        )
+
+        if (
+            ema20 is None
+            or ema150 is None
+        ):
+            return False
 
         if not (
             daily["close"]
-            > daily["slow_ema"]
+            > ema150
         ):
-            continue
+            return False
 
         if not (
-            daily["fast_ema"]
-            > daily["slow_ema"]
+            ema20
+            > ema150
         ):
-            continue
-
-        local = (
-            signal["time"]
-            .astimezone(
-                SESSION_TZ
-            )
-        )
+            return False
 
         if not (
-            local.hour
-            >= SESSION_START_HOUR
-            and local.hour
-            < SESSION_END_HOUR
+            signal[
+                "london_hour"
+            ] >= 8
+            and signal[
+                "london_hour"
+            ] < 17
         ):
-            continue
+            return False
 
         if (
-            local.weekday()
-            in EXCLUDED_WEEKDAYS
+            signal[
+                "london_weekday"
+            ] in {
+                3,
+                4,
+            }
         ):
-            continue
+            return False
 
-        signals.append({
-            "index": index,
-            "time": signal["time"],
-        })
+        return True
 
-    return signals
+    minimum_body_ratio = test.get(
+        "minimum_body_ratio"
+    )
+
+    if (
+        minimum_body_ratio is not None
+        and signal[
+            "body_ratio"
+        ] < minimum_body_ratio
+    ):
+        return False
+
+    minimum_close = test.get(
+        "minimum_close_location"
+    )
+
+    if (
+        minimum_close is not None
+        and signal[
+            "close_location"
+        ] < minimum_close
+    ):
+        return False
+
+    minimum_lower_wick = test.get(
+        "minimum_lower_wick_body"
+    )
+
+    if (
+        minimum_lower_wick is not None
+        and signal[
+            "lower_wick_body"
+        ] < minimum_lower_wick
+    ):
+        return False
+
+    maximum_upper_wick = test.get(
+        "maximum_upper_wick_body"
+    )
+
+    if (
+        maximum_upper_wick is not None
+        and signal[
+            "upper_wick_body"
+        ] > maximum_upper_wick
+    ):
+        return False
+
+    minimum_range = test.get(
+        "minimum_range_atr"
+    )
+
+    if (
+        minimum_range is not None
+        and signal[
+            "range_atr"
+        ] < minimum_range
+    ):
+        return False
+
+    minimum_body_atr = test.get(
+        "minimum_body_atr"
+    )
+
+    if (
+        minimum_body_atr is not None
+        and signal[
+            "body_atr"
+        ] < minimum_body_atr
+    ):
+        return False
+
+    maximum_stop = test.get(
+        "maximum_stop_size_atr"
+    )
+
+    if (
+        maximum_stop is not None
+        and signal[
+            "stop_size_atr"
+        ] > maximum_stop
+    ):
+        return False
+
+    structure_lookback = test.get(
+        "structure_lookback"
+    )
+
+    if structure_lookback is not None:
+        if (
+            signal[
+                "structure_distances"
+            ][
+                structure_lookback
+            ]
+            > test[
+                "maximum_distance_atr"
+            ]
+        ):
+            return False
+
+    momentum_lookback = test.get(
+        "momentum_lookback"
+    )
+
+    if (
+        momentum_lookback is not None
+        and signal[
+            "momentum"
+        ][
+            momentum_lookback
+        ] < test[
+            "minimum_momentum_atr"
+        ]
+    ):
+        return False
+
+    daily_close_ema = test.get(
+        "daily_close_above_ema"
+    )
+
+    if daily_close_ema is not None:
+        daily = signal["daily"]
+
+        if daily is None:
+            return False
+
+        ema = daily[
+            "emas"
+        ].get(
+            daily_close_ema
+        )
+
+        if (
+            ema is None
+            or not (
+                daily[
+                    "close"
+                ] > ema
+            )
+        ):
+            return False
+
+    daily_fast = test.get(
+        "daily_fast_ema"
+    )
+
+    if daily_fast is not None:
+        daily = signal["daily"]
+
+        if daily is None:
+            return False
+
+        fast = daily[
+            "emas"
+        ].get(
+            daily_fast
+        )
+
+        slow = daily[
+            "emas"
+        ].get(
+            test[
+                "daily_slow_ema"
+            ]
+        )
+
+        if (
+            fast is None
+            or slow is None
+            or not (
+                fast > slow
+            )
+        ):
+            return False
+
+    minimum_daily_atr = test.get(
+        "minimum_daily_atr_ratio"
+    )
+
+    if minimum_daily_atr is not None:
+        daily = signal["daily"]
+
+        if (
+            daily is None
+            or daily[
+                "atr_ratio_50"
+            ] is None
+            or daily[
+                "atr_ratio_50"
+            ] < minimum_daily_atr
+        ):
+            return False
+
+    excluded_ny_hour = test.get(
+        "excluded_ny_hour"
+    )
+
+    if (
+        excluded_ny_hour is not None
+        and signal[
+            "ny_hour"
+        ] == excluded_ny_hour
+    ):
+        return False
+
+    excluded_london_hour = test.get(
+        "excluded_london_hour"
+    )
+
+    if (
+        excluded_london_hour is not None
+        and signal[
+            "london_hour"
+        ] == excluded_london_hour
+    ):
+        return False
+
+    excluded_weekday = test.get(
+        "excluded_weekday"
+    )
+
+    if (
+        excluded_weekday is not None
+        and signal[
+            "london_weekday"
+        ] == excluded_weekday
+    ):
+        return False
+
+    return True
 
 
 # ============================================================
-# SIMULATION
+# TRADE SIMULATION
 # ============================================================
 
-def trade_from_signal(
+EXIT_CACHE = {}
+
+
+def calculate_trade_exit(
     h1,
     signal_index,
 ):
+    if signal_index in EXIT_CACHE:
+        return EXIT_CACHE[
+            signal_index
+        ]
+
     signal = h1[
         signal_index
     ]
@@ -772,7 +1470,19 @@ def trade_from_signal(
     )
 
     if reference_risk <= 0:
-        return None
+        result = {
+            "signal_index": signal_index,
+            "signal_time": signal["time"],
+            "exit_index": None,
+            "exit_time": None,
+            "result_r": None,
+        }
+
+        EXIT_CACHE[
+            signal_index
+        ] = result
+
+        return result
 
     target = (
         reference_entry
@@ -786,7 +1496,19 @@ def trade_from_signal(
     )
 
     if actual_risk <= 0:
-        return None
+        result = {
+            "signal_index": signal_index,
+            "signal_time": signal["time"],
+            "exit_index": None,
+            "exit_time": None,
+            "result_r": None,
+        }
+
+        EXIT_CACHE[
+            signal_index
+        ] = result
+
+        return result
 
     for index in range(
         signal_index + 1,
@@ -841,38 +1563,51 @@ def trade_from_signal(
         else:
             exit_price = stop
 
-        result_r = (
-            exit_price
-            - backtest_entry
-        ) / actual_risk
-
-        return {
+        result = {
             "signal_index": signal_index,
             "signal_time": signal["time"],
             "exit_index": index,
             "exit_time": candle["time"],
-            "result_r": result_r,
+            "result_r": (
+                exit_price
+                - backtest_entry
+            ) / actual_risk,
         }
 
-    return None
+        EXIT_CACHE[
+            signal_index
+        ] = result
+
+        return result
+
+    result = {
+        "signal_index": signal_index,
+        "signal_time": signal["time"],
+        "exit_index": None,
+        "exit_time": None,
+        "result_r": None,
+    }
+
+    EXIT_CACHE[
+        signal_index
+    ] = result
+
+    return result
 
 
-def simulate(
+def simulate_variant(
     h1,
-    signals,
+    eligible,
 ):
     trades = []
     ignored = 0
     position_exit_index = -1
 
-    for signal in signals:
+    for signal in eligible:
         signal_index = (
             signal["index"]
         )
 
-        # Locked convention:
-        # signals before the exit candle are ignored;
-        # signal on the exact exit candle is allowed.
         if (
             signal_index
             < position_exit_index
@@ -880,12 +1615,15 @@ def simulate(
             ignored += 1
             continue
 
-        trade = trade_from_signal(
+        trade = calculate_trade_exit(
             h1,
             signal_index,
         )
 
-        if trade is None:
+        if (
+            trade["result_r"]
+            is None
+        ):
             break
 
         trades.append(trade)
@@ -946,12 +1684,14 @@ def stats_for_trades(
     ]
 
     winners = [
-        r for r in results
+        r
+        for r in results
         if r > 0
     ]
 
     losers = [
-        r for r in results
+        r
+        for r in results
         if r < 0
     ]
 
@@ -1049,6 +1789,279 @@ def subtract_years_safe(
         )
 
 
+def rolling_3y_worst(
+    trades
+):
+    rows = []
+
+    for start_year in range(
+        2002,
+        RESEARCH_TO.year - 1,
+    ):
+        start = max(
+            RESEARCH_FROM,
+            datetime(
+                start_year,
+                1,
+                1,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        end = min(
+            RESEARCH_TO,
+            datetime(
+                start_year + 3,
+                1,
+                1,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        if start >= end:
+            continue
+
+        stats = stats_for_trades(
+            trades,
+            start,
+            end,
+        )
+
+        if stats["trades"] >= 5:
+            rows.append({
+                "label": (
+                    f"{start_year}_"
+                    f"{start_year + 2}"
+                ),
+                "pf": stats[
+                    "profit_factor"
+                ],
+                "expectancy": stats[
+                    "expectancy_r"
+                ],
+                "total_r": stats[
+                    "total_r"
+                ],
+            })
+
+    if not rows:
+        return {
+            "worst_rolling_3y_pf": None,
+            "worst_rolling_3y_pf_label": None,
+            "worst_rolling_3y_expectancy": None,
+            "worst_rolling_3y_expectancy_label": None,
+            "worst_rolling_3y_total_r": None,
+            "worst_rolling_3y_total_r_label": None,
+        }
+
+    worst_pf = min(
+        rows,
+        key=lambda row: row["pf"],
+    )
+
+    worst_exp = min(
+        rows,
+        key=lambda row: row["expectancy"],
+    )
+
+    worst_total = min(
+        rows,
+        key=lambda row: row["total_r"],
+    )
+
+    return {
+        "worst_rolling_3y_pf": (
+            worst_pf["pf"]
+        ),
+        "worst_rolling_3y_pf_label": (
+            worst_pf["label"]
+        ),
+        "worst_rolling_3y_expectancy": (
+            worst_exp[
+                "expectancy"
+            ]
+        ),
+        "worst_rolling_3y_expectancy_label": (
+            worst_exp["label"]
+        ),
+        "worst_rolling_3y_total_r": (
+            worst_total[
+                "total_r"
+            ]
+        ),
+        "worst_rolling_3y_total_r_label": (
+            worst_total["label"]
+        ),
+    }
+
+
+def make_row(
+    test,
+    eligible,
+    trades,
+    ignored,
+    years,
+):
+    full = stats_for_trades(trades)
+
+    row = {
+        "family": test["family"],
+        "variant": test["variant"],
+        "eligible_signals": len(eligible),
+        "ignored_due_to_open_trade": ignored,
+        "trades": full["trades"],
+        "trades_per_year": round(
+            full["trades"]
+            / years,
+            2,
+        ),
+        "winners": full["winners"],
+        "losers": full["losers"],
+        "win_rate": full["win_rate"],
+        "profit_factor": (
+            full["profit_factor"]
+        ),
+        "total_r": full["total_r"],
+        "expectancy_r": (
+            full["expectancy_r"]
+        ),
+        "max_drawdown_r": (
+            full["max_drawdown_r"]
+        ),
+        "longest_loss_streak": (
+            full[
+                "longest_loss_streak"
+            ]
+        ),
+        "annual_r_linear": round(
+            full["total_r"]
+            / years,
+            3,
+        ),
+    }
+
+    for key, value in test.items():
+        if key in {
+            "family",
+            "variant",
+            "current_live",
+        }:
+            continue
+
+        row[key] = value
+
+    minimum_era_pf = None
+    profitable_eras = 0
+
+    for (
+        era_name,
+        era_start,
+        era_end,
+    ) in ERAS:
+        stats = stats_for_trades(
+            trades,
+            era_start,
+            (
+                RESEARCH_TO
+                if era_end is None
+                else min(
+                    era_end,
+                    RESEARCH_TO,
+                )
+            ),
+        )
+
+        row[
+            f"{era_name}_trades"
+        ] = stats["trades"]
+
+        row[
+            f"{era_name}_pf"
+        ] = stats[
+            "profit_factor"
+        ]
+
+        row[
+            f"{era_name}_r"
+        ] = stats["total_r"]
+
+        row[
+            f"{era_name}_expectancy"
+        ] = stats[
+            "expectancy_r"
+        ]
+
+        if stats["trades"] >= 5:
+            if minimum_era_pf is None:
+                minimum_era_pf = (
+                    stats[
+                        "profit_factor"
+                    ]
+                )
+            else:
+                minimum_era_pf = min(
+                    minimum_era_pf,
+                    stats[
+                        "profit_factor"
+                    ],
+                )
+
+            if stats["total_r"] > 0:
+                profitable_eras += 1
+
+    row[
+        "minimum_era_pf_5_plus"
+    ] = minimum_era_pf
+
+    row[
+        "profitable_eras"
+    ] = profitable_eras
+
+    for years_back in [
+        2,
+        5,
+        10,
+    ]:
+        start = subtract_years_safe(
+            RESEARCH_TO,
+            years_back,
+        )
+
+        stats = stats_for_trades(
+            trades,
+            start,
+            RESEARCH_TO,
+        )
+
+        row[
+            f"last_{years_back}y_trades"
+        ] = stats["trades"]
+
+        row[
+            f"last_{years_back}y_pf"
+        ] = stats[
+            "profit_factor"
+        ]
+
+        row[
+            f"last_{years_back}y_r"
+        ] = stats[
+            "total_r"
+        ]
+
+        row[
+            f"last_{years_back}y_expectancy"
+        ] = stats[
+            "expectancy_r"
+        ]
+
+    row.update(
+        rolling_3y_worst(trades)
+    )
+
+    return row
+
+
 # ============================================================
 # RUN
 # ============================================================
@@ -1100,9 +2113,9 @@ def run_research():
             )
 
         STATUS.update({
-            "state": "calculating",
+            "state": "precomputing",
             "message": (
-                "Running exact current live control"
+                "Precomputing EUR/GBP features"
             ),
         })
 
@@ -1111,24 +2124,14 @@ def run_research():
             ATR_LENGTH,
         )
 
-        daily_state = (
-            build_daily_state(
-                daily
-            )
+        daily_state = prepare_daily(
+            daily
         )
 
-        signals = build_signals(
+        raw_candidates = build_raw_candidates(
             h1,
             h1_atr,
             daily_state,
-        )
-
-        (
-            trades,
-            ignored,
-        ) = simulate(
-            h1,
-            signals,
         )
 
         years = (
@@ -1139,307 +2142,146 @@ def run_research():
             * 86400
         )
 
-        full = stats_for_trades(
-            trades
-        )
+        rows = []
 
-        summary = {
-            "instrument": INSTRUMENT,
-            "strategy": (
-                "CURRENT_LIVE_CONTROL"
+        STATUS.update({
+            "state": "running_tests",
+            "message": (
+                f"Running {len(TESTS)} "
+                f"single-factor tests"
             ),
-            "research_from": (
-                RESEARCH_FROM.isoformat()
+            "total_tests": len(TESTS),
+            "completed_tests": 0,
+            "raw_candidates": (
+                len(raw_candidates)
             ),
-            "research_to": (
-                RESEARCH_TO.isoformat()
-            ),
-            "eligible_signals": (
-                len(signals)
-            ),
-            "ignored_due_to_open_trade": (
-                ignored
-            ),
-            "trades_per_year": round(
-                full["trades"]
-                / years,
-                2,
-            ),
-            **full,
-            "annual_r_linear": round(
-                full["total_r"]
-                / years,
-                3,
-            ),
-        }
+        })
 
-        profitable_eras = 0
-        minimum_era_pf = None
-
-        for (
-            era_name,
-            era_start,
-            era_end,
-        ) in ERAS:
-            end = (
-                RESEARCH_TO
-                if era_end is None
-                else min(
-                    era_end,
-                    RESEARCH_TO,
+        for completed, test in enumerate(
+            TESTS,
+            start=1,
+        ):
+            eligible = [
+                signal
+                for signal
+                in raw_candidates
+                if passes_test(
+                    signal,
+                    test,
                 )
-            )
-
-            era = stats_for_trades(
-                trades,
-                era_start,
-                end,
-            )
-
-            summary[
-                f"{era_name}_trades"
-            ] = era["trades"]
-
-            summary[
-                f"{era_name}_pf"
-            ] = era[
-                "profit_factor"
             ]
 
-            summary[
-                f"{era_name}_r"
-            ] = era["total_r"]
-
-            summary[
-                f"{era_name}_expectancy"
-            ] = era[
-                "expectancy_r"
-            ]
-
-            if era["trades"] >= 5:
-                if minimum_era_pf is None:
-                    minimum_era_pf = (
-                        era[
-                            "profit_factor"
-                        ]
-                    )
-                else:
-                    minimum_era_pf = min(
-                        minimum_era_pf,
-                        era[
-                            "profit_factor"
-                        ],
-                    )
-
-                if era["total_r"] > 0:
-                    profitable_eras += 1
-
-        summary[
-            "minimum_era_pf_5_plus"
-        ] = minimum_era_pf
-
-        summary[
-            "profitable_eras"
-        ] = profitable_eras
-
-        for years_back in [
-            2,
-            5,
-            10,
-        ]:
-            start = subtract_years_safe(
-                RESEARCH_TO,
-                years_back,
-            )
-
-            recent = stats_for_trades(
+            (
                 trades,
-                start,
-                RESEARCH_TO,
+                ignored,
+            ) = simulate_variant(
+                h1,
+                eligible,
             )
 
-            summary[
-                f"last_{years_back}y_trades"
-            ] = recent["trades"]
-
-            summary[
-                f"last_{years_back}y_pf"
-            ] = recent[
-                "profit_factor"
-            ]
-
-            summary[
-                f"last_{years_back}y_r"
-            ] = recent["total_r"]
-
-            summary[
-                f"last_{years_back}y_expectancy"
-            ] = recent[
-                "expectancy_r"
-            ]
-
-        yearly_rows = []
-
-        for year in range(
-            RESEARCH_FROM.year,
-            RESEARCH_TO.year + 1,
-        ):
-            start = max(
-                RESEARCH_FROM,
-                datetime(
-                    year,
-                    1,
-                    1,
-                    tzinfo=timezone.utc,
-                ),
-            )
-
-            end = min(
-                RESEARCH_TO,
-                datetime(
-                    year + 1,
-                    1,
-                    1,
-                    tzinfo=timezone.utc,
-                ),
-            )
-
-            if start >= end:
-                continue
-
-            stats = stats_for_trades(
+            row = make_row(
+                test,
+                eligible,
                 trades,
-                start,
-                end,
+                ignored,
+                years,
             )
 
-            yearly_rows.append({
-                "year": year,
-                **stats,
-            })
+            rows.append(row)
 
-        rolling_rows = []
+            STATUS[
+                "completed_tests"
+            ] = completed
 
-        for start_year in range(
-            2002,
-            RESEARCH_TO.year - 1,
-        ):
-            start = max(
-                RESEARCH_FROM,
-                datetime(
-                    start_year,
-                    1,
-                    1,
-                    tzinfo=timezone.utc,
-                ),
+            if (
+                completed % 25 == 0
+                or completed
+                == len(TESTS)
+            ):
+                print(
+                    f"{completed}/{len(TESTS)}",
+                    flush=True,
+                )
+
+        df = pd.DataFrame(rows)
+
+        # Keep RAW and CONTROL first, then sort research rows
+        # by robustness first.
+        reference = df[
+            df["family"].isin(
+                [
+                    "RAW",
+                    "CONTROL",
+                ]
             )
+        ]
 
-            end = min(
-                RESEARCH_TO,
-                datetime(
-                    start_year + 3,
-                    1,
-                    1,
-                    tzinfo=timezone.utc,
-                ),
+        research = df[
+            ~df["family"].isin(
+                [
+                    "RAW",
+                    "CONTROL",
+                ]
             )
+        ].copy()
 
-            if start >= end:
-                continue
-
-            stats = stats_for_trades(
-                trades,
-                start,
-                end,
-            )
-
-            rolling_rows.append({
-                "window": (
-                    f"{start_year}_"
-                    f"{start_year + 2}"
-                ),
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                **stats,
-            })
-
-        trade_rows = []
-
-        for trade in trades:
-            trade_rows.append({
-                "signal_time": (
-                    trade[
-                        "signal_time"
-                    ].isoformat()
-                ),
-                "exit_time": (
-                    trade[
-                        "exit_time"
-                    ].isoformat()
-                ),
-                "result_r": round(
-                    trade[
-                        "result_r"
-                    ],
-                    6,
-                ),
-            })
-
-        pd.DataFrame(
-            [summary]
-        ).to_csv(
-            OUTPUT_SUMMARY,
-            index=False,
+        research = research.sort_values(
+            by=[
+                "profitable_eras",
+                "minimum_era_pf_5_plus",
+                "profit_factor",
+                "expectancy_r",
+                "trades",
+            ],
+            ascending=[
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
         )
 
-        pd.DataFrame(
-            yearly_rows
-        ).to_csv(
-            OUTPUT_YEARLY,
-            index=False,
+        df = pd.concat(
+            [
+                reference,
+                research,
+            ],
+            ignore_index=True,
         )
 
-        pd.DataFrame(
-            rolling_rows
-        ).to_csv(
-            OUTPUT_ROLLING,
-            index=False,
-        )
-
-        pd.DataFrame(
-            trade_rows
-        ).to_csv(
-            OUTPUT_TRADES,
+        df.to_csv(
+            OUTPUT_FILE,
             index=False,
         )
 
         STATUS.update({
             "state": "complete",
             "message": (
-                "EUR/GBP long current live control complete"
+                "EUR/GBP long single-factor "
+                "edge discovery complete"
             ),
-            "summary": summary,
-            "output_files": [
-                OUTPUT_SUMMARY,
-                OUTPUT_YEARLY,
-                OUTPUT_ROLLING,
-                OUTPUT_TRADES,
-            ],
+            "rows_saved": len(df),
+            "output_file": (
+                OUTPUT_FILE
+            ),
         })
 
         print()
-        print("=" * 80)
+        print("=" * 90)
         print(
-            "EUR/GBP LONG CURRENT LIVE CONTROL"
+            "EUR/GBP LONG SINGLE-FACTOR "
+            "EDGE DISCOVERY COMPLETE"
         )
-        print("=" * 80)
+        print("=" * 90)
         print(
-            pd.DataFrame(
-                [summary]
-            ).to_string(
-                index=False
-            ),
-            flush=True,
+            f"Tests: {len(TESTS)}"
+        )
+        print(
+            f"Rows saved: {len(df)}"
+        )
+        print(
+            f"Output: {OUTPUT_FILE}"
         )
 
     except Exception as error:
@@ -1463,81 +2305,39 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "EUR/GBP Long Current Live Control Baseline"
+            "EUR/GBP Long Single-Factor Edge Discovery"
         ),
         "status": STATUS,
+        "instrument": INSTRUMENT,
+        "direction": "LONG",
         "mode": "READ_ONLY_RESEARCH",
         "orders_supported": False,
         "trading_enabled": False,
-        "downloads": {
-            "summary": (
-                "/download/summary"
-            ),
-            "yearly": (
-                "/download/yearly"
-            ),
-            "rolling": (
-                "/download/rolling"
-            ),
-            "trades": (
-                "/download/trades"
-            ),
-        },
+        "download": "/download",
     })
 
 
 @app.route("/status")
 def status():
-    return jsonify(
-        STATUS
-    )
+    return jsonify(STATUS)
 
 
-def download_named(
-    filename
-):
+@app.route("/download")
+def download():
     if not os.path.exists(
-        filename
+        OUTPUT_FILE
     ):
         return jsonify({
             "status": "not_ready",
             "message": (
-                f"{filename} is not ready yet"
+                "CSV is not ready yet"
             ),
         }), 404
 
     return send_file(
-        filename,
+        OUTPUT_FILE,
         as_attachment=True,
-        download_name=filename,
-    )
-
-
-@app.route("/download/summary")
-def download_summary():
-    return download_named(
-        OUTPUT_SUMMARY
-    )
-
-
-@app.route("/download/yearly")
-def download_yearly():
-    return download_named(
-        OUTPUT_YEARLY
-    )
-
-
-@app.route("/download/rolling")
-def download_rolling():
-    return download_named(
-        OUTPUT_ROLLING
-    )
-
-
-@app.route("/download/trades")
-def download_trades():
-    return download_named(
-        OUTPUT_TRADES
+        download_name=OUTPUT_FILE,
     )
 
 
@@ -1545,7 +2345,7 @@ if __name__ == "__main__":
     thread = threading.Thread(
         target=run_research,
         name=(
-            "eurgbp-long-current-control"
+            "eurgbp-long-single-factor"
         ),
         daemon=True,
     )
