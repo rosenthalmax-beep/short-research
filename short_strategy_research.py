@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# USD/CAD LONG - REFINED ROBUSTNESS + CONDITIONAL EDGE SWEEP
+# USD/CAD LONG - CONTROLLED CONFIRMATION MATRIX
 #
 # RESEARCH ONLY - NEVER SUBMITS ORDERS.
 #
@@ -191,7 +191,7 @@ H1_WARMUP_DAYS = 200
 D_WARMUP_DAYS = 2500
 
 OUTPUT_FILE = (
-    "usdcad_long_refined_robustness_edges.csv"
+    "usdcad_long_controlled_confirmation_matrix.csv"
 )
 
 
@@ -247,83 +247,41 @@ ERAS = [
 
 STRUCTURE_LOOKBACKS = [
     40,
-    50,
     60,
-    70,
-    80,
 ]
 
-STRUCTURE_DISTANCES = [
-    0.025,
-    0.050,
-    0.075,
-    0.100,
-    0.150,
-    0.200,
-    0.250,
-]
-
-RANGE_ATR_VALUES = [
-    1.10,
-    1.20,
-    1.30,
-    1.40,
-    1.50,
-]
-
-LOWER_WICK_VALUES = [
-    0.10,
-    0.15,
-    0.20,
-    0.25,
-    0.30,
-]
-
-DAILY_ATR_RATIO_VALUES = [
-    0.80,
-    0.85,
-    0.90,
-    0.95,
-    1.00,
-]
-
-MATRIX_CONFIGS = list(
-    itertools.product(
-        STRUCTURE_LOOKBACKS,
-        STRUCTURE_DISTANCES,
-        RANGE_ATR_VALUES,
-        LOWER_WICK_VALUES,
-        DAILY_ATR_RATIO_VALUES,
-    )
-)
-
-TOTAL_MATRIX_TESTS = len(
-    MATRIX_CONFIGS
-)
-
-
-# ------------------------------------------------------------
-# CONDITIONAL EDGE SIDECAR
-#
-# These are deliberately ONE-FACTOR overlays on a handful of
-# robust anchor geometries. They are not all multiplied
-# together. Any edge that survives here can be tested in a
-# later controlled combination stage.
-# ------------------------------------------------------------
-
+# These are the robust core geometries identified in the
+# refined sweep. They are treated as fixed anchor candidates,
+# NOT re-optimised here.
 ANCHORS = [
+    {
+        "anchor": "S40_D025_R120_W20_V095",
+        "structure_lookback": 40,
+        "structure_distance_atr": 0.025,
+        "minimum_range_atr": 1.20,
+        "minimum_lower_wick_body": 0.20,
+        "minimum_daily_atr_ratio_50": 0.95,
+    },
+    {
+        "anchor": "S40_D050_R120_W20_V095",
+        "structure_lookback": 40,
+        "structure_distance_atr": 0.050,
+        "minimum_range_atr": 1.20,
+        "minimum_lower_wick_body": 0.20,
+        "minimum_daily_atr_ratio_50": 0.95,
+    },
+    {
+        "anchor": "S60_D025_R120_W20_V095",
+        "structure_lookback": 60,
+        "structure_distance_atr": 0.025,
+        "minimum_range_atr": 1.20,
+        "minimum_lower_wick_body": 0.20,
+        "minimum_daily_atr_ratio_50": 0.95,
+    },
     {
         "anchor": "S60_D050_R130_W20_V090",
         "structure_lookback": 60,
         "structure_distance_atr": 0.050,
-        "minimum_range_atr": 1.30,
-        "minimum_lower_wick_body": 0.20,
-        "minimum_daily_atr_ratio_50": 0.90,
-    },
-    {
-        "anchor": "S60_D075_R130_W20_V090",
-        "structure_lookback": 60,
-        "structure_distance_atr": 0.075,
         "minimum_range_atr": 1.30,
         "minimum_lower_wick_body": 0.20,
         "minimum_daily_atr_ratio_50": 0.90,
@@ -336,180 +294,84 @@ ANCHORS = [
         "minimum_lower_wick_body": 0.20,
         "minimum_daily_atr_ratio_50": 0.90,
     },
-    {
-        "anchor": "S60_D150_R130_W20_V090",
-        "structure_lookback": 60,
-        "structure_distance_atr": 0.150,
-        "minimum_range_atr": 1.30,
-        "minimum_lower_wick_body": 0.20,
-        "minimum_daily_atr_ratio_50": 0.90,
-    },
-    {
-        "anchor": "S40_D050_R130_W20_V090",
-        "structure_lookback": 40,
-        "structure_distance_atr": 0.050,
-        "minimum_range_atr": 1.30,
-        "minimum_lower_wick_body": 0.20,
-        "minimum_daily_atr_ratio_50": 0.90,
-    },
 ]
 
 
-EDGE_TESTS = [
-    {
-        "edge_family": "NONE",
-        "edge_variant": "ANCHOR_ONLY",
-    },
+DAILY_EMA_VALUES = [
+    None,
+    50,
+    75,
+    100,
+    125,
 ]
 
-for value in [
-    1.25,
-    1.50,
-    1.75,
-    2.00,
-    2.25,
-    2.50,
-    3.00,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "STOP_SIZE_ATR",
-        "edge_variant": f"<={value:.2f}",
-        "maximum_stop_size_atr": value,
-    })
-
-for value in [
-    0.55,
+BODY_ATR_VALUES = [
+    None,
+    0.50,
     0.60,
-    0.65,
     0.70,
-    0.75,
-    0.80,
-    0.85,
-    0.90,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "CLOSE_LOCATION",
-        "edge_variant": f">={value:.2f}",
-        "minimum_close_location": value,
-    })
+]
 
-# Mean-reversion / pullback context:
-# Require the signal to occur after flat-or-negative preceding
-# momentum. These complement the earlier minimum-up-momentum scan.
-for lookback in [
-    12,
-    24,
-    48,
-]:
-    for maximum in [
-        0.00,
-        -0.25,
-        -0.50,
-        -0.75,
-        -1.00,
-    ]:
-        EDGE_TESTS.append({
-            "edge_family": f"PULLBACK_MOMENTUM_{lookback}H",
-            "edge_variant": f"<={maximum:.2f}",
-            "momentum_lookback": lookback,
-            "maximum_momentum_atr": maximum,
-        })
-
-for value in [
-    0.40,
-    0.60,
-    0.80,
+BODY_RATIO_VALUES = [
     1.00,
-    1.20,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "BODY_ATR",
-        "edge_variant": f">={value:.2f}",
-        "minimum_body_atr": value,
-    })
-
-for value in [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "UPPER_WICK_BODY",
-        "edge_variant": f"<={value:.2f}",
-        "maximum_upper_wick_body": value,
-    })
-
-for value in [
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.75,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "PREVIOUS_BODY_ATR",
-        "edge_variant": f">={value:.2f}",
-        "minimum_previous_body_atr": value,
-    })
-
-for value in [
     1.05,
     1.10,
-    1.20,
-    1.30,
-    1.40,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "BODY_RATIO",
-        "edge_variant": f">={value:.2f}",
-        "minimum_body_ratio_overlay": value,
-    })
+    1.15,
+]
 
-for length in [
-    50,
-    100,
-    150,
-    200,
-    250,
-    300,
-]:
-    EDGE_TESTS.append({
-        "edge_family": "DAILY_CLOSE_ABOVE_EMA",
-        "edge_variant": f"EMA{length}",
-        "daily_close_above_ema": length,
-    })
-
-for hour in range(24):
-    EDGE_TESTS.append({
-        "edge_family": "NY_HOUR_EXCLUDE",
-        "edge_variant": f"exclude_{hour:02d}",
-        "excluded_ny_hour": hour,
-    })
-
-for weekday, name in [
-    (0, "Mon"),
-    (1, "Tue"),
-    (2, "Wed"),
-    (3, "Thu"),
-    (4, "Fri"),
-]:
-    EDGE_TESTS.append({
-        "edge_family": "WEEKDAY_EXCLUDE",
-        "edge_variant": f"exclude_{name}",
-        "excluded_weekday": weekday,
-    })
+# Timing is included only as a binary final overlay:
+# no exclusion vs exclude NY hour 01.
+NY_HOUR_01_OPTIONS = [
+    False,
+    True,
+]
 
 
-TOTAL_EDGE_TESTS = (
-    len(ANCHORS)
-    * len(EDGE_TESTS)
+CONFIRMATION_CONFIGS = []
+
+for anchor in ANCHORS:
+    for ema_length in DAILY_EMA_VALUES:
+        for minimum_body_atr in BODY_ATR_VALUES:
+            for minimum_body_ratio in BODY_RATIO_VALUES:
+                for exclude_ny_01 in NY_HOUR_01_OPTIONS:
+                    CONFIRMATION_CONFIGS.append({
+                        "anchor": anchor["anchor"],
+                        "structure_lookback": (
+                            anchor["structure_lookback"]
+                        ),
+                        "structure_distance_atr": (
+                            anchor["structure_distance_atr"]
+                        ),
+                        "minimum_range_atr": (
+                            anchor["minimum_range_atr"]
+                        ),
+                        "minimum_lower_wick_body": (
+                            anchor["minimum_lower_wick_body"]
+                        ),
+                        "minimum_daily_atr_ratio_50": (
+                            anchor["minimum_daily_atr_ratio_50"]
+                        ),
+                        "daily_close_above_ema": (
+                            ema_length
+                        ),
+                        "minimum_body_atr": (
+                            minimum_body_atr
+                        ),
+                        "minimum_body_ratio_overlay": (
+                            minimum_body_ratio
+                        ),
+                        "exclude_ny_01": (
+                            exclude_ny_01
+                        ),
+                    })
+
+
+TOTAL_CONFIRMATION_TESTS = len(
+    CONFIRMATION_CONFIGS
 )
 
 TOTAL_TESTS = (
-    TOTAL_MATRIX_TESTS
-    + TOTAL_EDGE_TESTS
+    TOTAL_CONFIRMATION_TESTS
     + 1
 )
 
@@ -518,13 +380,12 @@ STATUS = {
     "state": "not_started",
     "message": "Research has not started",
     "service": (
-        "USD/CAD Long Refined Robustness + Conditional Edge Sweep"
+        "USD/CAD Long Controlled Confirmation Matrix"
     ),
     "instrument": INSTRUMENT,
     "research_from": RESEARCH_FROM.isoformat(),
     "research_to": RESEARCH_TO.isoformat(),
-    "matrix_tests": TOTAL_MATRIX_TESTS,
-    "conditional_edge_tests": TOTAL_EDGE_TESTS,
+    "confirmation_tests": TOTAL_CONFIRMATION_TESTS,
     "total_tests_including_control": TOTAL_TESTS,
     "completed_tests": 0,
     "rows_saved": 0,
@@ -926,7 +787,9 @@ def prepare_daily(
 
     ema_lengths = [
         50,
+        75,
         100,
+        125,
         150,
         200,
         250,
@@ -1241,35 +1104,43 @@ def build_raw_candidates(
 # FILTERS
 # ============================================================
 
-def passes_matrix(
+def passes_confirmation(
     signal,
-    structure_lookback,
-    structure_distance,
-    minimum_range_atr,
-    minimum_lower_wick_body,
-    minimum_daily_atr_ratio,
+    config,
 ):
+    lookback = config[
+        "structure_lookback"
+    ]
+
     if (
         signal[
             "structure_distances"
         ][
-            structure_lookback
+            lookback
         ]
-        > structure_distance
+        > config[
+            "structure_distance_atr"
+        ]
     ):
         return False
 
     if (
         signal[
             "range_atr"
-        ] < minimum_range_atr
+        ]
+        < config[
+            "minimum_range_atr"
+        ]
     ):
         return False
 
     if (
         signal[
             "lower_wick_body"
-        ] < minimum_lower_wick_body
+        ]
+        < config[
+            "minimum_lower_wick_body"
+        ]
     ):
         return False
 
@@ -1284,86 +1155,13 @@ def passes_matrix(
         ] is None
         or daily[
             "atr_ratio_50"
-        ] < minimum_daily_atr_ratio
-    ):
-        return False
-
-    return True
-
-
-def passes_anchor(
-    signal,
-    anchor,
-):
-    return passes_matrix(
-        signal,
-        anchor[
-            "structure_lookback"
-        ],
-        anchor[
-            "structure_distance_atr"
-        ],
-        anchor[
-            "minimum_range_atr"
-        ],
-        anchor[
-            "minimum_lower_wick_body"
-        ],
-        anchor[
+        ] < config[
             "minimum_daily_atr_ratio_50"
-        ],
-    )
-
-
-def passes_edge_overlay(
-    signal,
-    edge,
-):
-    maximum_stop = edge.get(
-        "maximum_stop_size_atr"
-    )
-
-    if (
-        maximum_stop is not None
-        and signal[
-            "stop_size_atr"
-        ] > maximum_stop
-    ):
-        return False
-
-    minimum_close = edge.get(
-        "minimum_close_location"
-    )
-
-    if (
-        minimum_close is not None
-        and signal[
-            "close_location"
-        ] < minimum_close
-    ):
-        return False
-
-    momentum_lookback = edge.get(
-        "momentum_lookback"
-    )
-
-    if (
-        momentum_lookback is not None
-    ):
-        maximum_momentum = edge[
-            "maximum_momentum_atr"
         ]
+    ):
+        return False
 
-        if (
-            signal[
-                "momentum"
-            ][
-                momentum_lookback
-            ] > maximum_momentum
-        ):
-            return False
-
-    minimum_body_atr = edge.get(
+    minimum_body_atr = config.get(
         "minimum_body_atr"
     )
 
@@ -1375,59 +1173,30 @@ def passes_edge_overlay(
     ):
         return False
 
-    maximum_upper_wick = edge.get(
-        "maximum_upper_wick_body"
+    minimum_body_ratio = config.get(
+        "minimum_body_ratio_overlay",
+        1.00,
     )
 
     if (
-        maximum_upper_wick is not None
-        and signal[
-            "upper_wick_body"
-        ] > maximum_upper_wick
-    ):
-        return False
-
-    minimum_previous_body = edge.get(
-        "minimum_previous_body_atr"
-    )
-
-    if (
-        minimum_previous_body is not None
-        and signal[
-            "previous_body_atr"
-        ] < minimum_previous_body
-    ):
-        return False
-
-    minimum_body_ratio = edge.get(
-        "minimum_body_ratio_overlay"
-    )
-
-    if (
-        minimum_body_ratio is not None
-        and signal[
+        signal[
             "body_ratio"
         ] < minimum_body_ratio
     ):
         return False
 
-    daily_ema_length = edge.get(
+    ema_length = config.get(
         "daily_close_above_ema"
     )
 
     if (
-        daily_ema_length is not None
+        ema_length is not None
     ):
-        daily = signal[
-            "daily"
-        ]
-
         if (
-            daily is None
-            or daily[
+            daily[
                 "emas"
             ].get(
-                daily_ema_length
+                ema_length
             ) is None
             or not (
                 daily[
@@ -1436,33 +1205,20 @@ def passes_edge_overlay(
                 > daily[
                     "emas"
                 ][
-                    daily_ema_length
+                    ema_length
                 ]
             )
         ):
             return False
 
-    excluded_hour = edge.get(
-        "excluded_ny_hour"
-    )
-
     if (
-        excluded_hour is not None
+        config.get(
+            "exclude_ny_01",
+            False,
+        )
         and signal[
             "ny_hour"
-        ] == excluded_hour
-    ):
-        return False
-
-    excluded_weekday = edge.get(
-        "excluded_weekday"
-    )
-
-    if (
-        excluded_weekday is not None
-        and signal[
-            "weekday"
-        ] == excluded_weekday
+        ] == 1
     ):
         return False
 
@@ -2326,15 +2082,16 @@ def run_research():
             years,
             {
                 "anchor": None,
-                "edge_family": None,
-                "edge_variant": None,
                 "structure_lookback": 40,
                 "structure_distance_atr": 0.20,
                 "minimum_range_atr": None,
                 "minimum_lower_wick_body": 0.20,
                 "minimum_daily_atr_ratio_50": None,
-                "daily_close_above_ema200": True,
-                "exclude_ny_00_04": True,
+                "daily_close_above_ema": 200,
+                "minimum_body_atr": None,
+                "minimum_body_ratio_overlay": 1.00,
+                "exclude_ny_01": False,
+                "control_excludes_ny_00_04": True,
             },
         )
 
@@ -2342,39 +2099,32 @@ def run_research():
             control_row
         )
 
-        completed = 1
+        STATUS[
+            "completed_tests"
+        ] = 1
 
         # ----------------------------------------------------
-        # TIGHT CORE ROBUSTNESS MATRIX
+        # CONTROLLED CONFIRMATION MATRIX
         # ----------------------------------------------------
 
         STATUS.update({
-            "state": "running_matrix",
+            "state": "running_confirmation",
             "message": (
-                f"Running {TOTAL_MATRIX_TESTS} tight robustness combinations"
+                f"Running {TOTAL_CONFIRMATION_TESTS} "
+                f"controlled confirmation tests"
             ),
         })
 
-        for config in MATRIX_CONFIGS:
-            (
-                structure_lookback,
-                structure_distance,
-                minimum_range_atr,
-                minimum_lower_wick_body,
-                minimum_daily_atr_ratio,
-            ) = config
+        completed = 1
 
+        for config in CONFIRMATION_CONFIGS:
             eligible = [
                 signal
                 for signal
                 in raw_candidates
-                if passes_matrix(
+                if passes_confirmation(
                     signal,
-                    structure_lookback,
-                    structure_distance,
-                    minimum_range_atr,
-                    minimum_lower_wick_body,
-                    minimum_daily_atr_ratio,
+                    config,
                 )
             ]
 
@@ -2387,32 +2137,63 @@ def run_research():
             )
 
             row = make_result_row(
-                "ROBUSTNESS_MATRIX",
+                "CONFIRMATION",
                 eligible,
                 trades,
                 ignored,
                 years,
                 {
-                    "anchor": None,
-                    "edge_family": None,
-                    "edge_variant": None,
+                    "anchor": (
+                        config[
+                            "anchor"
+                        ]
+                    ),
                     "structure_lookback": (
-                        structure_lookback
+                        config[
+                            "structure_lookback"
+                        ]
                     ),
                     "structure_distance_atr": (
-                        structure_distance
+                        config[
+                            "structure_distance_atr"
+                        ]
                     ),
                     "minimum_range_atr": (
-                        minimum_range_atr
+                        config[
+                            "minimum_range_atr"
+                        ]
                     ),
                     "minimum_lower_wick_body": (
-                        minimum_lower_wick_body
+                        config[
+                            "minimum_lower_wick_body"
+                        ]
                     ),
                     "minimum_daily_atr_ratio_50": (
-                        minimum_daily_atr_ratio
+                        config[
+                            "minimum_daily_atr_ratio_50"
+                        ]
                     ),
-                    "daily_close_above_ema200": False,
-                    "exclude_ny_00_04": False,
+                    "daily_close_above_ema": (
+                        config[
+                            "daily_close_above_ema"
+                        ]
+                    ),
+                    "minimum_body_atr": (
+                        config[
+                            "minimum_body_atr"
+                        ]
+                    ),
+                    "minimum_body_ratio_overlay": (
+                        config[
+                            "minimum_body_ratio_overlay"
+                        ]
+                    ),
+                    "exclude_ny_01": (
+                        config[
+                            "exclude_ny_01"
+                        ]
+                    ),
+                    "control_excludes_ny_00_04": False,
                 },
             )
 
@@ -2426,133 +2207,14 @@ def run_research():
             ] = completed
 
             if (
-                completed % 100 == 0
+                completed % 50 == 0
+                or completed
+                == TOTAL_TESTS
             ):
                 print(
                     f"{completed}/{TOTAL_TESTS}",
                     flush=True,
                 )
-
-        # ----------------------------------------------------
-        # CONDITIONAL EDGE SIDECAR
-        # ----------------------------------------------------
-
-        STATUS.update({
-            "state": "running_edges",
-            "message": (
-                f"Running {TOTAL_EDGE_TESTS} conditional edge tests"
-            ),
-        })
-
-        for anchor in ANCHORS:
-            anchor_signals = [
-                signal
-                for signal
-                in raw_candidates
-                if passes_anchor(
-                    signal,
-                    anchor,
-                )
-            ]
-
-            for edge in EDGE_TESTS:
-                eligible = [
-                    signal
-                    for signal
-                    in anchor_signals
-                    if passes_edge_overlay(
-                        signal,
-                        edge,
-                    )
-                ]
-
-                (
-                    trades,
-                    ignored,
-                ) = simulate_variant(
-                    h1,
-                    eligible,
-                )
-
-                parameters = {
-                    "anchor": (
-                        anchor[
-                            "anchor"
-                        ]
-                    ),
-                    "edge_family": (
-                        edge[
-                            "edge_family"
-                        ]
-                    ),
-                    "edge_variant": (
-                        edge[
-                            "edge_variant"
-                        ]
-                    ),
-                    "structure_lookback": (
-                        anchor[
-                            "structure_lookback"
-                        ]
-                    ),
-                    "structure_distance_atr": (
-                        anchor[
-                            "structure_distance_atr"
-                        ]
-                    ),
-                    "minimum_range_atr": (
-                        anchor[
-                            "minimum_range_atr"
-                        ]
-                    ),
-                    "minimum_lower_wick_body": (
-                        anchor[
-                            "minimum_lower_wick_body"
-                        ]
-                    ),
-                    "minimum_daily_atr_ratio_50": (
-                        anchor[
-                            "minimum_daily_atr_ratio_50"
-                        ]
-                    ),
-                    "daily_close_above_ema200": False,
-                    "exclude_ny_00_04": False,
-                }
-
-                for key, value in edge.items():
-                    if key in {
-                        "edge_family",
-                        "edge_variant",
-                    }:
-                        continue
-                    parameters[key] = value
-
-                row = make_result_row(
-                    "CONDITIONAL_EDGE",
-                    eligible,
-                    trades,
-                    ignored,
-                    years,
-                    parameters,
-                )
-
-                rows.append(
-                    row
-                )
-
-                completed += 1
-                STATUS[
-                    "completed_tests"
-                ] = completed
-
-                if (
-                    completed % 100 == 0
-                    or completed == TOTAL_TESTS
-                ):
-                    print(
-                        f"{completed}/{TOTAL_TESTS}",
-                        flush=True,
-                    )
 
         df = pd.DataFrame(
             rows
@@ -2563,37 +2225,13 @@ def run_research():
             == "CURRENT_LIVE_CONTROL"
         ]
 
-        robustness_df = df[
+        confirmation_df = df[
             df["type"]
-            == "ROBUSTNESS_MATRIX"
+            == "CONFIRMATION"
         ].copy()
 
-        edge_df = df[
-            df["type"]
-            == "CONDITIONAL_EDGE"
-        ].copy()
-
-        robustness_df = (
-            robustness_df.sort_values(
-                by=[
-                    "profitable_eras",
-                    "minimum_era_pf_5_plus",
-                    "profit_factor",
-                    "expectancy_r",
-                    "trades",
-                ],
-                ascending=[
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
-                ],
-            )
-        )
-
-        edge_df = (
-            edge_df.sort_values(
+        confirmation_df = (
+            confirmation_df.sort_values(
                 by=[
                     "profitable_eras",
                     "minimum_era_pf_5_plus",
@@ -2614,8 +2252,7 @@ def run_research():
         df = pd.concat(
             [
                 control_df,
-                robustness_df,
-                edge_df,
+                confirmation_df,
             ],
             ignore_index=True,
         )
@@ -2628,7 +2265,7 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD long refined robustness + edge sweep complete"
+                "USD/CAD long controlled confirmation matrix complete"
             ),
             "completed_tests": (
                 TOTAL_TESTS
@@ -2671,14 +2308,11 @@ def run_research():
         print()
         print("=" * 90)
         print(
-            "USD/CAD LONG REFINED ROBUSTNESS + EDGE SWEEP COMPLETE"
+            "USD/CAD LONG CONTROLLED CONFIRMATION MATRIX COMPLETE"
         )
         print("=" * 90)
         print(
-            f"Core robustness tests: {TOTAL_MATRIX_TESTS}"
-        )
-        print(
-            f"Conditional edge tests: {TOTAL_EDGE_TESTS}"
+            f"Confirmation tests: {TOTAL_CONFIRMATION_TESTS}"
         )
         print(
             f"Rows saved: {len(df)}"
@@ -2711,7 +2345,7 @@ def run_research():
 def home():
     return jsonify({
         "service": (
-            "USD/CAD Long Refined Robustness + Conditional Edge Sweep"
+            "USD/CAD Long Controlled Confirmation Matrix"
         ),
         "status": STATUS,
         "instrument": INSTRUMENT,
@@ -2719,11 +2353,8 @@ def home():
         "mode": "READ_ONLY_RESEARCH",
         "orders_supported": False,
         "trading_enabled": False,
-        "matrix_tests": (
-            TOTAL_MATRIX_TESTS
-        ),
-        "conditional_edge_tests": (
-            TOTAL_EDGE_TESTS
+        "confirmation_tests": (
+            TOTAL_CONFIRMATION_TESTS
         ),
         "total_tests_including_control": (
             TOTAL_TESTS
@@ -2764,7 +2395,7 @@ if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
         name=(
-            "usdcad-long-refined-robustness-edges"
+            "usdcad-long-controlled-confirmation"
         ),
         daemon=True,
     )
