@@ -9,46 +9,53 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# EUR/USD LONG - CURRENT LIVE CONTROL BASELINE
+# EUR/USD LONG - SINGLE FACTOR DISCOVERY
 #
 # RESEARCH ONLY - NEVER SUBMITS ORDERS.
 #
-# Exact current live long:
+# PURPOSE
+# ------------------------------------------------------------
+# Start from the RAW bullish engulfing setup:
 #
-#   OANDA:EUR_USD
-#   H1
-#   long-only bullish engulfing
+#   previous bearish
+#   current bullish
+#   body engulfing
+#   minimum body ratio >= 1.00
 #
-#   previous candle bearish
-#   current candle bullish
-#   current body engulfs previous body
+# Keep RR fixed at 3.50.
 #
-#   minimum body ratio >= 1.05
-#   strong close >= 0.70
+# Then test ONE filter family at a time:
 #
-#   structure:
-#       previous 20 H1 bars excluding current
-#       signal low within 0.15 ATR14
-#       of previous lowest low
+# - current live control
+# - body ratio
+# - strong close
+# - lower wick
+# - upper wick
+# - body / ATR
+# - range / ATR
+# - stop size / ATR
+# - structure grids
+# - 6h / 12h / 24h / 48h momentum
+# - previous daily close > EMA
+# - previous daily EMA alignment
+# - daily ATR ratio
+# - single New York hour exclusions
+# - single weekday exclusions
 #
-#   daily regime:
-#       previous completed daily close > EMA187
-#       previous completed daily EMA30 > EMA187
-#
-#   session:
-#       include 08:00-16:59 America/New_York
-#
-#   excluded weekdays:
-#       Tuesday + Friday
-#
-#   RR = 3.50
-#   stop buffer = 10 ticks
-#   historical adverse fill = +5 ticks
+# This is discovery only. Do not freeze a strategy from this
+# output. We are looking for broad independent clues that can
+# be taken into the interaction stage.
 #
 # ============================================================
-# LOCKED BACKTEST CONVENTIONS
+# LOCKED EXECUTION CONVENTIONS
 #
-# OANDA midpoint H1 candles.
+# OANDA midpoint H1.
+#
+# Bullish engulfing:
+#   previous candle bearish
+#   current candle bullish
+#   current open <= previous close
+#   current close >= previous open
 #
 # ATR14 = Wilder/RMA, SMA-seeded.
 #
@@ -61,29 +68,25 @@ from zoneinfo import ZoneInfo
 # Stop =
 #       signal low - 10 ticks.
 #
-# Target is based on REFERENCE signal-close risk:
+# Target based on REFERENCE signal close:
 #       target = signal close
-#              + (signal close - stop) * RR
+#              + (signal close - stop) * 3.50
 #
-# Actual R uses adverse backtest fill:
-#       (exit - backtest_entry)
-#       /
-#       (backtest_entry - stop)
+# Actual R uses adverse fill.
 #
 # Pyramiding = 0.
 #
-# Same-bar target/stop tie for LONG:
-#   compare candle open->high vs open->low
+# Same-bar tie for LONG:
+#   compare open->high vs open->low
 #   high closer => target first
-#   otherwise stop first.
+#   else stop first.
 #
-# Signals with signal_index < position_exit_index are ignored.
-# Signal on exact exit candle is allowed.
+# Signals signal_index < position_exit_index ignored.
+# Exact exit-candle signal allowed.
 #
-# Exit checks begin signal_index + 1.
-# Signal candle target/stop is never checked.
+# Exits begin signal_index + 1.
 #
-# Daily candles:
+# Daily:
 #   dailyAlignment = 17
 #   alignmentTimezone = America/New_York
 #   previous completed daily candle only.
@@ -112,30 +115,12 @@ STOP_BUFFER_TICKS = 10
 BACKTEST_SLIPPAGE_TICKS = 5
 REWARD_RISK = 3.50
 
-MINIMUM_BODY_RATIO = 1.05
-MINIMUM_CLOSE_LOCATION = 0.70
-
 ATR_LENGTH = 14
+RAW_MINIMUM_BODY_RATIO = 1.00
 
-STRUCTURE_LOOKBACK = 20
-MAXIMUM_DISTANCE_ATR = 0.15
-
-FAST_DAILY_EMA = 30
-SLOW_DAILY_EMA = 187
-
-SESSION_TZ = ZoneInfo(
+NY_TZ = ZoneInfo(
     "America/New_York"
 )
-
-SESSION_START_HOUR = 8
-SESSION_END_HOUR = 17
-
-# Python weekday:
-# Monday=0 Tuesday=1 ... Friday=4
-EXCLUDED_WEEKDAYS = {
-    1,
-    4,
-}
 
 DAILY_ALIGNMENT_HOUR = 17
 DAILY_ALIGNMENT_TIMEZONE = (
@@ -165,24 +150,174 @@ RESEARCH_TO = (
 H1_CHUNK_DAYS = 180
 D_CHUNK_DAYS = 1500
 
-H1_WARMUP_DAYS = 200
+H1_WARMUP_DAYS = 220
 D_WARMUP_DAYS = 2500
 
-OUTPUT_SUMMARY = (
-    "eurusd_long_current_control_summary.csv"
+OUTPUT_FILE = (
+    "eurusd_long_single_factor_edges.csv"
 )
 
-OUTPUT_YEARLY = (
-    "eurusd_long_current_control_yearly.csv"
+
+# ============================================================
+# TEST GRIDS
+# ============================================================
+
+BODY_RATIO_VALUES = [
+    1.00,
+    1.05,
+    1.10,
+    1.20,
+    1.30,
+    1.40,
+    1.50,
+]
+
+CLOSE_LOCATION_VALUES = [
+    0.55,
+    0.60,
+    0.65,
+    0.70,
+    0.75,
+    0.80,
+    0.85,
+]
+
+LOWER_WICK_BODY_VALUES = [
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+]
+
+UPPER_WICK_BODY_MAX_VALUES = [
+    0.50,
+    0.40,
+    0.30,
+    0.20,
+    0.10,
+]
+
+BODY_ATR_VALUES = [
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    1.00,
+    1.20,
+]
+
+RANGE_ATR_VALUES = [
+    0.70,
+    0.80,
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+    1.30,
+    1.40,
+    1.50,
+]
+
+MAX_STOP_ATR_VALUES = [
+    0.80,
+    1.00,
+    1.20,
+    1.40,
+    1.60,
+    1.80,
+    2.00,
+    2.50,
+]
+
+STRUCTURE_LOOKBACK_VALUES = [
+    10,
+    15,
+    20,
+    30,
+    40,
+    50,
+    60,
+    80,
+]
+
+STRUCTURE_DISTANCE_VALUES = [
+    0.00,
+    0.05,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.35,
+    0.50,
+]
+
+MOMENTUM_LOOKBACKS = [
+    6,
+    12,
+    24,
+    48,
+]
+
+MOMENTUM_THRESHOLDS = [
+    0.00,
+    0.25,
+    0.50,
+    0.75,
+    1.00,
+]
+
+DAILY_CLOSE_EMAS = [
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    187,
+    200,
+    225,
+    250,
+    300,
+]
+
+DAILY_ALIGNMENT_PAIRS = [
+    (10, 100),
+    (20, 100),
+    (30, 100),
+    (20, 150),
+    (30, 150),
+    (50, 150),
+    (20, 187),
+    (30, 187),
+    (50, 187),
+    (30, 200),
+    (50, 200),
+]
+
+DAILY_ATR_RATIO_VALUES = [
+    0.70,
+    0.80,
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+]
+
+NY_HOURS = list(
+    range(
+        24
+    )
 )
 
-OUTPUT_ROLLING = (
-    "eurusd_long_current_control_rolling3y.csv"
-)
-
-OUTPUT_TRADES = (
-    "eurusd_long_current_control_trades.csv"
-)
+WEEKDAYS = [
+    0,
+    1,
+    2,
+    3,
+    4,
+]
 
 
 # ============================================================
@@ -247,7 +382,7 @@ STATUS = {
     "state": "not_started",
     "message": "Research has not started",
     "service": (
-        "EUR/USD Long Current Control Baseline"
+        "EUR/USD Long Single Factor Discovery"
     ),
     "instrument": INSTRUMENT,
     "orders_supported": False,
@@ -449,7 +584,9 @@ def fetch_chunked(
 # INDICATORS
 # ============================================================
 
-def true_ranges(candles):
+def true_ranges(
+    candles,
+):
     values = []
 
     for index, candle in enumerate(
@@ -549,6 +686,51 @@ def atr_series(
     )
 
 
+def sma_series(
+    values,
+    length,
+):
+    result = [
+        None
+    ] * len(
+        values
+    )
+
+    if len(values) < length:
+        return result
+
+    running = sum(
+        values[:length]
+    )
+
+    result[
+        length - 1
+    ] = (
+        running
+        / length
+    )
+
+    for index in range(
+        length,
+        len(values),
+    ):
+        running += (
+            values[index]
+            - values[
+                index - length
+            ]
+        )
+
+        result[
+            index
+        ] = (
+            running
+            / length
+        )
+
+    return result
+
+
 def ema_series(
     values,
     length,
@@ -608,11 +790,6 @@ def ema_series(
 # DAILY STATE
 # ============================================================
 
-NY_TZ = ZoneInfo(
-    "America/New_York"
-)
-
-
 def current_daily_start(
     timestamp_utc
 ):
@@ -656,15 +833,84 @@ def prepare_daily(
         in daily
     ]
 
-    ema30 = ema_series(
-        closes,
-        FAST_DAILY_EMA,
+    daily_atr = atr_series(
+        daily,
+        ATR_LENGTH,
     )
 
-    ema187 = ema_series(
-        closes,
-        SLOW_DAILY_EMA,
+    daily_atr_for_sma = [
+        (
+            value
+            if value is not None
+            else 0.0
+        )
+        for value
+        in daily_atr
+    ]
+
+    daily_atr_sma50_raw = (
+        sma_series(
+            daily_atr_for_sma,
+            50,
+        )
     )
+
+    # Do not treat periods before ATR itself is ready
+    # as valid daily ATR-ratio history.
+    daily_atr_sma50 = [
+        (
+            daily_atr_sma50_raw[index]
+            if (
+                index >= (
+                    ATR_LENGTH - 1
+                    + 50 - 1
+                )
+            )
+            else None
+        )
+        for index
+        in range(
+            len(
+                daily
+            )
+        )
+    ]
+
+    ema_lengths = sorted(
+        set(
+            DAILY_CLOSE_EMAS
+            + [
+                fast
+                for (
+                    fast,
+                    slow
+                )
+                in DAILY_ALIGNMENT_PAIRS
+            ]
+            + [
+                slow
+                for (
+                    fast,
+                    slow
+                )
+                in DAILY_ALIGNMENT_PAIRS
+            ]
+            + [
+                30,
+                187,
+            ]
+        )
+    )
+
+    ema_map = {
+        length:
+            ema_series(
+                closes,
+                length,
+            )
+        for length
+        in ema_lengths
+    }
 
     rows = []
 
@@ -680,12 +926,22 @@ def prepare_daily(
                 candle[
                     "close"
                 ],
-            "ema30":
-                ema30[
+            "emas": {
+                length:
+                    ema_map[
+                        length
+                    ][
+                        index
+                    ]
+                for length
+                in ema_lengths
+            },
+            "daily_atr":
+                daily_atr[
                     index
                 ],
-            "ema187":
-                ema187[
+            "daily_atr_sma50":
+                daily_atr_sma50[
                     index
                 ],
         })
@@ -719,19 +975,30 @@ def previous_completed_daily(
 
 
 # ============================================================
-# SIGNAL BUILD
+# RAW CANDIDATES
 # ============================================================
 
-def build_eligible_signals(
+MAX_STRUCTURE_LOOKBACK = max(
+    STRUCTURE_LOOKBACK_VALUES
+)
+
+MAX_MOMENTUM_LOOKBACK = max(
+    MOMENTUM_LOOKBACKS
+)
+
+
+def build_raw_candidates(
     h1,
     atr,
+    h1_atr_sma50,
     daily_state,
 ):
-    eligible = []
+    candidates = []
 
     start_index = max(
         ATR_LENGTH,
-        STRUCTURE_LOOKBACK,
+        MAX_STRUCTURE_LOOKBACK,
+        MAX_MOMENTUM_LOOKBACK,
     )
 
     for index in range(
@@ -769,18 +1036,30 @@ def build_eligible_signals(
             continue
 
         previous_body = abs(
-            previous["close"]
-            - previous["open"]
+            previous[
+                "close"
+            ]
+            - previous[
+                "open"
+            ]
         )
 
         current_body = abs(
-            signal["close"]
-            - signal["open"]
+            signal[
+                "close"
+            ]
+            - signal[
+                "open"
+            ]
         )
 
         signal_range = (
-            signal["high"]
-            - signal["low"]
+            signal[
+                "high"
+            ]
+            - signal[
+                "low"
+            ]
         )
 
         if (
@@ -791,17 +1070,33 @@ def build_eligible_signals(
             continue
 
         bullish_engulfing = (
-            previous["close"]
-            < previous["open"]
+            previous[
+                "close"
+            ]
+            < previous[
+                "open"
+            ]
             and
-            signal["close"]
-            > signal["open"]
+            signal[
+                "close"
+            ]
+            > signal[
+                "open"
+            ]
             and
-            signal["open"]
-            <= previous["close"]
+            signal[
+                "open"
+            ]
+            <= previous[
+                "close"
+            ]
             and
-            signal["close"]
-            >= previous["open"]
+            signal[
+                "close"
+            ]
+            >= previous[
+                "open"
+            ]
         )
 
         if not bullish_engulfing:
@@ -814,93 +1109,158 @@ def build_eligible_signals(
 
         if (
             body_ratio
-            < MINIMUM_BODY_RATIO
+            < RAW_MINIMUM_BODY_RATIO
         ):
             continue
 
-        close_location = (
-            signal["close"]
-            - signal["low"]
-        ) / signal_range
-
-        if (
-            close_location
-            < MINIMUM_CLOSE_LOCATION
-        ):
-            continue
-
-        previous_lowest = min(
-            candle["low"]
-            for candle
-            in h1[
-                index
-                - STRUCTURE_LOOKBACK:
-                index
+        lower_wick = (
+            min(
+                signal[
+                    "open"
+                ],
+                signal[
+                    "close"
+                ],
+            )
+            - signal[
+                "low"
             ]
         )
 
-        structure_distance = (
-            signal["low"]
-            - previous_lowest
-        ) / current_atr
+        upper_wick = (
+            signal[
+                "high"
+            ]
+            - max(
+                signal[
+                    "open"
+                ],
+                signal[
+                    "close"
+                ],
+            )
+        )
 
-        if (
-            structure_distance
-            > MAXIMUM_DISTANCE_ATR
+        close_location = (
+            signal[
+                "close"
+            ]
+            - signal[
+                "low"
+            ]
+        ) / signal_range
+
+        body_atr = (
+            current_body
+            / current_atr
+        )
+
+        range_atr = (
+            signal_range
+            / current_atr
+        )
+
+        reference_entry = (
+            signal[
+                "close"
+            ]
+        )
+
+        stop = (
+            signal[
+                "low"
+            ]
+            - STOP_BUFFER_TICKS
+            * TICK_SIZE
+        )
+
+        stop_size_atr = (
+            (
+                reference_entry
+                - stop
+            )
+            / current_atr
+        )
+
+        structure_distances = {}
+
+        for lookback in (
+            STRUCTURE_LOOKBACK_VALUES
         ):
-            continue
+            previous_lowest = min(
+                candle[
+                    "low"
+                ]
+                for candle
+                in h1[
+                    index - lookback:
+                    index
+                ]
+            )
+
+            structure_distances[
+                lookback
+            ] = (
+                signal[
+                    "low"
+                ]
+                - previous_lowest
+            ) / current_atr
+
+        momentum = {}
+
+        for lookback in (
+            MOMENTUM_LOOKBACKS
+        ):
+            momentum[
+                lookback
+            ] = (
+                signal[
+                    "close"
+                ]
+                - h1[
+                    index - lookback
+                ][
+                    "close"
+                ]
+            ) / current_atr
 
         daily = (
             previous_completed_daily(
-                signal["time"],
+                signal[
+                    "time"
+                ],
                 daily_state,
             )
         )
 
-        if daily is None:
-            continue
-
-        if (
-            daily["ema30"] is None
-            or daily["ema187"] is None
-        ):
-            continue
-
-        if not (
-            daily["close"]
-            > daily["ema187"]
-        ):
-            continue
-
-        if not (
-            daily["ema30"]
-            > daily["ema187"]
-        ):
-            continue
-
-        local_time = (
-            signal["time"]
+        ny = (
+            signal[
+                "time"
+            ]
             .astimezone(
-                SESSION_TZ
+                NY_TZ
             )
         )
 
-        if not (
-            local_time.hour
-            >= SESSION_START_HOUR
-            and
-            local_time.hour
-            < SESSION_END_HOUR
-        ):
-            continue
+        h1_atr_ratio_50 = None
 
         if (
-            local_time.weekday()
-            in EXCLUDED_WEEKDAYS
+            h1_atr_sma50[
+                index
+            ] is not None
+            and h1_atr_sma50[
+                index
+            ] > 0
         ):
-            continue
+            h1_atr_ratio_50 = (
+                current_atr
+                / h1_atr_sma50[
+                    index
+                ]
+            )
 
-        eligible.append({
+        candidates.append({
             "index":
                 index,
             "time":
@@ -911,43 +1271,159 @@ def build_eligible_signals(
                 body_ratio,
             "close_location":
                 close_location,
-            "structure_distance_atr":
-                structure_distance,
-            "daily_close":
-                daily[
-                    "close"
-                ],
-            "daily_ema30":
-                daily[
-                    "ema30"
-                ],
-            "daily_ema187":
-                daily[
-                    "ema187"
-                ],
-            "session_hour":
-                local_time.hour,
-            "session_weekday":
-                local_time.weekday(),
+            "lower_wick_body":
+                (
+                    lower_wick
+                    / current_body
+                ),
+            "upper_wick_body":
+                (
+                    upper_wick
+                    / current_body
+                ),
+            "body_atr":
+                body_atr,
+            "range_atr":
+                range_atr,
+            "stop_size_atr":
+                stop_size_atr,
+            "structure_distances":
+                structure_distances,
+            "momentum":
+                momentum,
+            "daily":
+                daily,
+            "ny_hour":
+                ny.hour,
+            "ny_weekday":
+                ny.weekday(),
+            "h1_atr_ratio_50":
+                h1_atr_ratio_50,
         })
 
-    return eligible
+    return candidates
+
+
+# ============================================================
+# CURRENT CONTROL
+# ============================================================
+
+def passes_current_control(
+    signal,
+):
+    if (
+        signal[
+            "body_ratio"
+        ] < 1.05
+    ):
+        return False
+
+    if (
+        signal[
+            "close_location"
+        ] < 0.70
+    ):
+        return False
+
+    if (
+        signal[
+            "structure_distances"
+        ][20] > 0.15
+    ):
+        return False
+
+    daily = signal[
+        "daily"
+    ]
+
+    if daily is None:
+        return False
+
+    ema30 = (
+        daily[
+            "emas"
+        ].get(
+            30
+        )
+    )
+
+    ema187 = (
+        daily[
+            "emas"
+        ].get(
+            187
+        )
+    )
+
+    if (
+        ema30 is None
+        or ema187 is None
+    ):
+        return False
+
+    if not (
+        daily[
+            "close"
+        ] > ema187
+    ):
+        return False
+
+    if not (
+        ema30 > ema187
+    ):
+        return False
+
+    if not (
+        signal[
+            "ny_hour"
+        ] >= 8
+        and signal[
+            "ny_hour"
+        ] < 17
+    ):
+        return False
+
+    if (
+        signal[
+            "ny_weekday"
+        ]
+        in {
+            1,
+            4,
+        }
+    ):
+        return False
+
+    return True
 
 
 # ============================================================
 # TRADE SIMULATION
 # ============================================================
 
+EXIT_CACHE = {}
+
+
 def calculate_trade_exit(
     h1,
     signal_index,
 ):
+    if (
+        signal_index
+        in EXIT_CACHE
+    ):
+        return EXIT_CACHE[
+            signal_index
+        ]
+
     signal = h1[
         signal_index
     ]
 
     reference_entry = (
-        signal["close"]
+        signal[
+            "close"
+        ]
     )
 
     backtest_entry = (
@@ -957,7 +1433,9 @@ def calculate_trade_exit(
     )
 
     stop = (
-        signal["low"]
+        signal[
+            "low"
+        ]
         - STOP_BUFFER_TICKS
         * TICK_SIZE
     )
@@ -970,6 +1448,10 @@ def calculate_trade_exit(
     if (
         reference_risk <= 0
     ):
+        EXIT_CACHE[
+            signal_index
+        ] = None
+
         return None
 
     target = (
@@ -986,6 +1468,10 @@ def calculate_trade_exit(
     if (
         actual_risk <= 0
     ):
+        EXIT_CACHE[
+            signal_index
+        ] = None
+
         return None
 
     for index in range(
@@ -997,19 +1483,22 @@ def calculate_trade_exit(
         ]
 
         if (
-            candle["time"]
-            >= RESEARCH_TO
+            candle[
+                "time"
+            ] >= RESEARCH_TO
         ):
             break
 
         stop_hit = (
-            candle["low"]
-            <= stop
+            candle[
+                "low"
+            ] <= stop
         )
 
         target_hit = (
-            candle["high"]
-            >= target
+            candle[
+                "high"
+            ] >= target
         )
 
         if not (
@@ -1023,13 +1512,21 @@ def calculate_trade_exit(
             and target_hit
         ):
             distance_to_high = abs(
-                candle["high"]
-                - candle["open"]
+                candle[
+                    "high"
+                ]
+                - candle[
+                    "open"
+                ]
             )
 
             distance_to_low = abs(
-                candle["open"]
-                - candle["low"]
+                candle[
+                    "open"
+                ]
+                - candle[
+                    "low"
+                ]
             )
 
             if (
@@ -1037,34 +1534,17 @@ def calculate_trade_exit(
                 < distance_to_low
             ):
                 exit_price = target
-                exit_reason = (
-                    "TARGET_TIE_FIRST"
-                )
 
             else:
                 exit_price = stop
-                exit_reason = (
-                    "STOP_TIE_FIRST"
-                )
 
         elif target_hit:
             exit_price = target
-            exit_reason = (
-                "TARGET"
-            )
 
         else:
             exit_price = stop
-            exit_reason = (
-                "STOP"
-            )
 
-        result_r = (
-            exit_price
-            - backtest_entry
-        ) / actual_risk
-
-        return {
+        result = {
             "signal_index":
                 signal_index,
             "signal_time":
@@ -1077,21 +1557,22 @@ def calculate_trade_exit(
                 candle[
                     "time"
                 ],
-            "entry_reference":
-                reference_entry,
-            "backtest_entry":
-                backtest_entry,
-            "stop":
-                stop,
-            "target":
-                target,
-            "exit_price":
-                exit_price,
-            "exit_reason":
-                exit_reason,
             "result_r":
-                result_r,
+                (
+                    exit_price
+                    - backtest_entry
+                ) / actual_risk,
         }
+
+        EXIT_CACHE[
+            signal_index
+        ] = result
+
+        return result
+
+    EXIT_CACHE[
+        signal_index
+    ] = None
 
     return None
 
@@ -1106,7 +1587,9 @@ def simulate_variant(
 
     for signal in eligible:
         signal_index = (
-            signal["index"]
+            signal[
+                "index"
+            ]
         )
 
         if (
@@ -1125,54 +1608,6 @@ def simulate_variant(
 
         if trade is None:
             break
-
-        trade[
-            "body_ratio"
-        ] = signal[
-            "body_ratio"
-        ]
-
-        trade[
-            "close_location"
-        ] = signal[
-            "close_location"
-        ]
-
-        trade[
-            "structure_distance_atr"
-        ] = signal[
-            "structure_distance_atr"
-        ]
-
-        trade[
-            "daily_close"
-        ] = signal[
-            "daily_close"
-        ]
-
-        trade[
-            "daily_ema30"
-        ] = signal[
-            "daily_ema30"
-        ]
-
-        trade[
-            "daily_ema187"
-        ] = signal[
-            "daily_ema187"
-        ]
-
-        trade[
-            "session_hour"
-        ] = signal[
-            "session_hour"
-        ]
-
-        trade[
-            "session_weekday"
-        ] = signal[
-            "session_weekday"
-        ]
 
         trades.append(
             trade
@@ -1236,7 +1671,9 @@ def stats_for_trades(
         }
 
     results = [
-        trade["result_r"]
+        trade[
+            "result_r"
+        ]
         for trade
         in selected
     ]
@@ -1368,31 +1805,162 @@ def subtract_years_safe(
 ):
     try:
         return dt.replace(
-            year=dt.year - years
+            year=
+                dt.year
+                - years
         )
 
     except ValueError:
         return dt.replace(
             month=2,
             day=28,
-            year=dt.year - years,
+            year=
+                dt.year
+                - years,
         )
 
 
-# ============================================================
-# OUTPUT BUILDERS
-# ============================================================
+def rolling_3y_worst(
+    trades,
+):
+    rows = []
 
-def build_summary(
+    for start_year in range(
+        2002,
+        RESEARCH_TO.year - 1,
+    ):
+        start = max(
+            RESEARCH_FROM,
+            datetime(
+                start_year,
+                1,
+                1,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        end = min(
+            RESEARCH_TO,
+            datetime(
+                start_year + 3,
+                1,
+                1,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        if start >= end:
+            continue
+
+        stats = stats_for_trades(
+            trades,
+            start,
+            end,
+        )
+
+        if (
+            stats[
+                "trades"
+            ] >= 5
+        ):
+            rows.append({
+                "label":
+                    f"{start_year}_"
+                    f"{start_year + 2}",
+                "pf":
+                    stats[
+                        "profit_factor"
+                    ],
+                "expectancy":
+                    stats[
+                        "expectancy_r"
+                    ],
+                "total_r":
+                    stats[
+                        "total_r"
+                    ],
+            })
+
+    if not rows:
+        return {
+            "worst_rolling_3y_pf":
+                None,
+            "worst_rolling_3y_pf_label":
+                None,
+            "worst_rolling_3y_expectancy":
+                None,
+            "worst_rolling_3y_expectancy_label":
+                None,
+            "worst_rolling_3y_total_r":
+                None,
+            "worst_rolling_3y_total_r_label":
+                None,
+        }
+
+    worst_pf = min(
+        rows,
+        key=lambda row:
+            row[
+                "pf"
+            ],
+    )
+
+    worst_exp = min(
+        rows,
+        key=lambda row:
+            row[
+                "expectancy"
+            ],
+    )
+
+    worst_total = min(
+        rows,
+        key=lambda row:
+            row[
+                "total_r"
+            ],
+    )
+
+    return {
+        "worst_rolling_3y_pf":
+            worst_pf[
+                "pf"
+            ],
+        "worst_rolling_3y_pf_label":
+            worst_pf[
+                "label"
+            ],
+        "worst_rolling_3y_expectancy":
+            worst_exp[
+                "expectancy"
+            ],
+        "worst_rolling_3y_expectancy_label":
+            worst_exp[
+                "label"
+            ],
+        "worst_rolling_3y_total_r":
+            worst_total[
+                "total_r"
+            ],
+        "worst_rolling_3y_total_r_label":
+            worst_total[
+                "label"
+            ],
+    }
+
+
+def make_result_row(
+    family,
+    label,
+    eligible,
     trades,
     ignored,
+    years,
+    parameters=None,
 ):
-    years = (
-        RESEARCH_TO
-        - RESEARCH_FROM
-    ).total_seconds() / (
-        365.2425
-        * 86400
+    parameters = (
+        parameters
+        or {}
     )
 
     full = stats_for_trades(
@@ -1400,15 +1968,14 @@ def build_summary(
     )
 
     row = {
-        "strategy":
-            "CURRENT_LIVE_CONTROL",
-        "research_from":
-            RESEARCH_FROM.isoformat(),
-        "research_to":
-            RESEARCH_TO.isoformat(),
+        "family":
+            family,
+        "label":
+            label,
         "eligible_signals":
-            len(trades)
-            + ignored,
+            len(
+                eligible
+            ),
         "ignored_due_to_open_trade":
             ignored,
         "trades":
@@ -1465,6 +2032,10 @@ def build_summary(
             ),
     }
 
+    row.update(
+        parameters
+    )
+
     minimum_era_pf = None
     profitable_eras = 0
 
@@ -1515,7 +2086,10 @@ def build_summary(
                 "trades"
             ] >= 5
         ):
-            if minimum_era_pf is None:
+            if (
+                minimum_era_pf
+                is None
+            ):
                 minimum_era_pf = (
                     stats[
                         "profit_factor"
@@ -1585,241 +2159,56 @@ def build_summary(
             "expectancy_r"
         ]
 
-    return pd.DataFrame(
-        [
-            row
-        ]
+    row.update(
+        rolling_3y_worst(
+            trades
+        )
     )
 
+    return row
 
-def build_yearly(
-    trades,
+
+# ============================================================
+# FILTER TEST RUNNER
+# ============================================================
+
+def run_variant(
+    rows,
+    family,
+    label,
+    raw_candidates,
+    predicate,
+    h1,
+    years,
+    parameters=None,
 ):
-    rows = []
-
-    for year in range(
-        RESEARCH_FROM.year,
-        RESEARCH_TO.year + 1,
-    ):
-        start = max(
-            RESEARCH_FROM,
-            datetime(
-                year,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
+    eligible = [
+        signal
+        for signal
+        in raw_candidates
+        if predicate(
+            signal
         )
+    ]
 
-        end = min(
-            RESEARCH_TO,
-            datetime(
-                year + 1,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-        )
+    (
+        trades,
+        ignored,
+    ) = simulate_variant(
+        h1,
+        eligible,
+    )
 
-        if start >= end:
-            continue
-
-        stats = stats_for_trades(
+    rows.append(
+        make_result_row(
+            family,
+            label,
+            eligible,
             trades,
-            start,
-            end,
+            ignored,
+            years,
+            parameters,
         )
-
-        rows.append({
-            "year":
-                year,
-            **stats,
-        })
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-def build_rolling(
-    trades,
-):
-    rows = []
-
-    for start_year in range(
-        2002,
-        RESEARCH_TO.year - 1,
-    ):
-        start = max(
-            RESEARCH_FROM,
-            datetime(
-                start_year,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-        )
-
-        end = min(
-            RESEARCH_TO,
-            datetime(
-                start_year + 3,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-        )
-
-        if start >= end:
-            continue
-
-        stats = stats_for_trades(
-            trades,
-            start,
-            end,
-        )
-
-        rows.append({
-            "window":
-                f"{start_year}_"
-                f"{start_year + 2}",
-            "start":
-                start.isoformat(),
-            "end":
-                end.isoformat(),
-            **stats,
-        })
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-def build_trades(
-    trades,
-):
-    rows = []
-
-    for trade in trades:
-        rows.append({
-            "strategy":
-                "CURRENT_LIVE_CONTROL",
-            "signal_time":
-                trade[
-                    "signal_time"
-                ].isoformat(),
-            "exit_time":
-                trade[
-                    "exit_time"
-                ].isoformat(),
-            "signal_index":
-                trade[
-                    "signal_index"
-                ],
-            "exit_index":
-                trade[
-                    "exit_index"
-                ],
-            "entry_reference":
-                round(
-                    trade[
-                        "entry_reference"
-                    ],
-                    6,
-                ),
-            "backtest_entry":
-                round(
-                    trade[
-                        "backtest_entry"
-                    ],
-                    6,
-                ),
-            "stop":
-                round(
-                    trade[
-                        "stop"
-                    ],
-                    6,
-                ),
-            "target":
-                round(
-                    trade[
-                        "target"
-                    ],
-                    6,
-                ),
-            "exit_price":
-                round(
-                    trade[
-                        "exit_price"
-                    ],
-                    6,
-                ),
-            "exit_reason":
-                trade[
-                    "exit_reason"
-                ],
-            "result_r":
-                round(
-                    trade[
-                        "result_r"
-                    ],
-                    6,
-                ),
-            "body_ratio":
-                round(
-                    trade[
-                        "body_ratio"
-                    ],
-                    6,
-                ),
-            "close_location":
-                round(
-                    trade[
-                        "close_location"
-                    ],
-                    6,
-                ),
-            "structure_distance_atr":
-                round(
-                    trade[
-                        "structure_distance_atr"
-                    ],
-                    6,
-                ),
-            "daily_close":
-                round(
-                    trade[
-                        "daily_close"
-                    ],
-                    6,
-                ),
-            "daily_ema30":
-                round(
-                    trade[
-                        "daily_ema30"
-                    ],
-                    6,
-                ),
-            "daily_ema187":
-                round(
-                    trade[
-                        "daily_ema187"
-                    ],
-                    6,
-                ),
-            "session_hour":
-                trade[
-                    "session_hour"
-                ],
-            "session_weekday":
-                trade[
-                    "session_weekday"
-                ],
-        })
-
-    return pd.DataFrame(
-        rows
     )
 
 
@@ -1877,7 +2266,7 @@ def run_research():
             "state":
                 "precomputing",
             "message":
-                "Calculating indicators",
+                "Precomputing raw EUR/USD engulfing features",
         })
 
         atr = atr_series(
@@ -1885,88 +2274,671 @@ def run_research():
             ATR_LENGTH,
         )
 
+        atr_for_sma = [
+            (
+                value
+                if value is not None
+                else 0.0
+            )
+            for value
+            in atr
+        ]
+
+        h1_atr_sma50_raw = (
+            sma_series(
+                atr_for_sma,
+                50,
+            )
+        )
+
+        h1_atr_sma50 = [
+            (
+                h1_atr_sma50_raw[
+                    index
+                ]
+                if (
+                    index >= (
+                        ATR_LENGTH - 1
+                        + 50 - 1
+                    )
+                )
+                else None
+            )
+            for index
+            in range(
+                len(
+                    h1
+                )
+            )
+        ]
+
         daily_state = (
             prepare_daily(
                 daily
             )
         )
 
-        eligible = (
-            build_eligible_signals(
+        raw_candidates = (
+            build_raw_candidates(
                 h1,
                 atr,
+                h1_atr_sma50,
                 daily_state,
             )
         )
 
+        STATUS[
+            "raw_candidates"
+        ] = len(
+            raw_candidates
+        )
+
+        years = (
+            RESEARCH_TO
+            - RESEARCH_FROM
+        ).total_seconds() / (
+            365.2425
+            * 86400
+        )
+
+        rows = []
+
+        # ----------------------------------------------------
+        # RAW BASELINE
+        # ----------------------------------------------------
+
         STATUS.update({
             "state":
-                "simulating",
+                "running",
             "message":
-                "Simulating current EUR/USD long control",
-            "eligible_signals":
-                len(
-                    eligible
-                ),
+                "Running raw baseline and single-factor tests",
         })
 
-        (
-            trades,
-            ignored,
-        ) = simulate_variant(
+        run_variant(
+            rows,
+            "REFERENCE",
+            "RAW_BULLISH_ENGULFING_BR100",
+            raw_candidates,
+            lambda s:
+                True,
             h1,
-            eligible,
+            years,
+            {
+                "parameter":
+                    "raw",
+                "value":
+                    1.00,
+            },
         )
 
-        summary = (
-            build_summary(
-                trades,
-                ignored,
+        # ----------------------------------------------------
+        # CURRENT LIVE CONTROL
+        # ----------------------------------------------------
+
+        run_variant(
+            rows,
+            "REFERENCE",
+            "CURRENT_LIVE_CONTROL",
+            raw_candidates,
+            passes_current_control,
+            h1,
+            years,
+            {
+                "parameter":
+                    "current_live",
+                "value":
+                    None,
+            },
+        )
+
+        # ----------------------------------------------------
+        # BODY RATIO
+        # ----------------------------------------------------
+
+        for value in (
+            BODY_RATIO_VALUES
+        ):
+            run_variant(
+                rows,
+                "BODY_RATIO",
+                f"BODY_RATIO_GTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "body_ratio"
+                    ] >= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_body_ratio",
+                    "value":
+                        value,
+                },
             )
-        )
 
-        yearly = (
-            build_yearly(
-                trades
+        # ----------------------------------------------------
+        # STRONG CLOSE
+        # ----------------------------------------------------
+
+        for value in (
+            CLOSE_LOCATION_VALUES
+        ):
+            run_variant(
+                rows,
+                "STRONG_CLOSE",
+                f"CLOSE_LOCATION_GTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "close_location"
+                    ] >= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_close_location",
+                    "value":
+                        value,
+                },
             )
-        )
 
-        rolling = (
-            build_rolling(
-                trades
+        # ----------------------------------------------------
+        # LOWER WICK
+        # ----------------------------------------------------
+
+        for value in (
+            LOWER_WICK_BODY_VALUES
+        ):
+            run_variant(
+                rows,
+                "LOWER_WICK",
+                f"LOWER_WICK_BODY_GTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "lower_wick_body"
+                    ] >= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_lower_wick_body_ratio",
+                    "value":
+                        value,
+                },
             )
-        )
 
-        trade_df = (
-            build_trades(
-                trades
+        # ----------------------------------------------------
+        # UPPER WICK
+        # ----------------------------------------------------
+
+        for value in (
+            UPPER_WICK_BODY_MAX_VALUES
+        ):
+            run_variant(
+                rows,
+                "UPPER_WICK",
+                f"UPPER_WICK_BODY_LTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "upper_wick_body"
+                    ] <= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "maximum_upper_wick_body_ratio",
+                    "value":
+                        value,
+                },
             )
+
+        # ----------------------------------------------------
+        # BODY / ATR
+        # ----------------------------------------------------
+
+        for value in (
+            BODY_ATR_VALUES
+        ):
+            run_variant(
+                rows,
+                "BODY_ATR",
+                f"BODY_ATR_GTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "body_atr"
+                    ] >= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_body_atr",
+                    "value":
+                        value,
+                },
+            )
+
+        # ----------------------------------------------------
+        # RANGE / ATR
+        # ----------------------------------------------------
+
+        for value in (
+            RANGE_ATR_VALUES
+        ):
+            run_variant(
+                rows,
+                "RANGE_ATR",
+                f"RANGE_ATR_GTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "range_atr"
+                    ] >= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_range_atr",
+                    "value":
+                        value,
+                },
+            )
+
+        # ----------------------------------------------------
+        # STOP SIZE / ATR
+        # ----------------------------------------------------
+
+        for value in (
+            MAX_STOP_ATR_VALUES
+        ):
+            run_variant(
+                rows,
+                "STOP_SIZE_ATR",
+                f"STOP_ATR_LTE_{value:.2f}",
+                raw_candidates,
+                lambda s, v=value:
+                    s[
+                        "stop_size_atr"
+                    ] <= v,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "maximum_stop_size_atr",
+                    "value":
+                        value,
+                },
+            )
+
+        # ----------------------------------------------------
+        # STRUCTURE
+        # ----------------------------------------------------
+
+        for lookback in (
+            STRUCTURE_LOOKBACK_VALUES
+        ):
+            for distance in (
+                STRUCTURE_DISTANCE_VALUES
+            ):
+                run_variant(
+                    rows,
+                    "STRUCTURE",
+                    (
+                        f"STRUCTURE_"
+                        f"{lookback}_"
+                        f"{distance:.2f}"
+                    ),
+                    raw_candidates,
+                    (
+                        lambda s,
+                        lb=lookback,
+                        d=distance:
+                            s[
+                                "structure_distances"
+                            ][lb] <= d
+                    ),
+                    h1,
+                    years,
+                    {
+                        "parameter":
+                            "structure",
+                        "structure_lookback":
+                            lookback,
+                        "maximum_distance_atr":
+                            distance,
+                    },
+                )
+
+        # ----------------------------------------------------
+        # MOMENTUM
+        # ----------------------------------------------------
+
+        for lookback in (
+            MOMENTUM_LOOKBACKS
+        ):
+            for threshold in (
+                MOMENTUM_THRESHOLDS
+            ):
+                run_variant(
+                    rows,
+                    f"MOMENTUM_{lookback}H",
+                    (
+                        f"MOMENTUM_"
+                        f"{lookback}H_"
+                        f"GTE_{threshold:.2f}"
+                    ),
+                    raw_candidates,
+                    (
+                        lambda s,
+                        lb=lookback,
+                        th=threshold:
+                            s[
+                                "momentum"
+                            ][lb] >= th
+                    ),
+                    h1,
+                    years,
+                    {
+                        "parameter":
+                            f"momentum_{lookback}h_atr",
+                        "value":
+                            threshold,
+                    },
+                )
+
+        # ----------------------------------------------------
+        # DAILY CLOSE > EMA
+        # ----------------------------------------------------
+
+        for ema_length in (
+            DAILY_CLOSE_EMAS
+        ):
+            run_variant(
+                rows,
+                "DAILY_CLOSE_EMA",
+                (
+                    f"DAILY_CLOSE_GT_"
+                    f"EMA{ema_length}"
+                ),
+                raw_candidates,
+                (
+                    lambda s,
+                    length=ema_length:
+                        (
+                            s[
+                                "daily"
+                            ]
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ].get(
+                                length
+                            )
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "close"
+                            ]
+                            >
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ][length]
+                        )
+                ),
+                h1,
+                years,
+                {
+                    "parameter":
+                        "daily_close_ema",
+                    "value":
+                        ema_length,
+                },
+            )
+
+        # ----------------------------------------------------
+        # DAILY EMA ALIGNMENT
+        # ----------------------------------------------------
+
+        for (
+            fast_length,
+            slow_length,
+        ) in DAILY_ALIGNMENT_PAIRS:
+            run_variant(
+                rows,
+                "DAILY_ALIGNMENT",
+                (
+                    f"EMA{fast_length}_"
+                    f"GT_EMA{slow_length}"
+                ),
+                raw_candidates,
+                (
+                    lambda s,
+                    fast=fast_length,
+                    slow=slow_length:
+                        (
+                            s[
+                                "daily"
+                            ]
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ].get(
+                                fast
+                            )
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ].get(
+                                slow
+                            )
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ][fast]
+                            >
+                            s[
+                                "daily"
+                            ][
+                                "emas"
+                            ][slow]
+                        )
+                ),
+                h1,
+                years,
+                {
+                    "parameter":
+                        "daily_alignment",
+                    "fast_ema":
+                        fast_length,
+                    "slow_ema":
+                        slow_length,
+                },
+            )
+
+        # ----------------------------------------------------
+        # DAILY ATR RATIO
+        # ----------------------------------------------------
+
+        for threshold in (
+            DAILY_ATR_RATIO_VALUES
+        ):
+            run_variant(
+                rows,
+                "DAILY_ATR_RATIO",
+                (
+                    f"DAILY_ATR14_"
+                    f"RATIO50_GTE_"
+                    f"{threshold:.2f}"
+                ),
+                raw_candidates,
+                (
+                    lambda s,
+                    th=threshold:
+                        (
+                            s[
+                                "daily"
+                            ]
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "daily_atr"
+                            ]
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "daily_atr_sma50"
+                            ]
+                            is not None
+                            and
+                            s[
+                                "daily"
+                            ][
+                                "daily_atr_sma50"
+                            ] > 0
+                            and
+                            (
+                                s[
+                                    "daily"
+                                ][
+                                    "daily_atr"
+                                ]
+                                /
+                                s[
+                                    "daily"
+                                ][
+                                    "daily_atr_sma50"
+                                ]
+                            ) >= th
+                        )
+                ),
+                h1,
+                years,
+                {
+                    "parameter":
+                        "minimum_daily_atr_ratio_50",
+                    "value":
+                        threshold,
+                },
+            )
+
+        # ----------------------------------------------------
+        # SINGLE NY HOUR EXCLUSION
+        # ----------------------------------------------------
+
+        for hour in NY_HOURS:
+            run_variant(
+                rows,
+                "NY_HOUR_EXCLUSION",
+                (
+                    f"EXCLUDE_NY_HOUR_"
+                    f"{hour:02d}"
+                ),
+                raw_candidates,
+                lambda s, h=hour:
+                    s[
+                        "ny_hour"
+                    ] != h,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "excluded_ny_hour",
+                    "value":
+                        hour,
+                },
+            )
+
+        # ----------------------------------------------------
+        # SINGLE WEEKDAY EXCLUSION
+        # ----------------------------------------------------
+
+        weekday_names = {
+            0:
+                "MON",
+            1:
+                "TUE",
+            2:
+                "WED",
+            3:
+                "THU",
+            4:
+                "FRI",
+        }
+
+        for weekday in WEEKDAYS:
+            run_variant(
+                rows,
+                "WEEKDAY_EXCLUSION",
+                (
+                    f"EXCLUDE_"
+                    f"{weekday_names[weekday]}"
+                ),
+                raw_candidates,
+                lambda s, wd=weekday:
+                    s[
+                        "ny_weekday"
+                    ] != wd,
+                h1,
+                years,
+                {
+                    "parameter":
+                        "excluded_weekday",
+                    "value":
+                        weekday,
+                },
+            )
+
+        # ----------------------------------------------------
+        # OUTPUT
+        # ----------------------------------------------------
+
+        df = pd.DataFrame(
+            rows
         )
 
-        summary.to_csv(
-            os.path.abspath(
-                OUTPUT_SUMMARY
-            ),
-            index=False,
+        df = df.sort_values(
+            by=[
+                "family",
+                "profit_factor",
+                "expectancy_r",
+                "trades",
+            ],
+            ascending=[
+                True,
+                False,
+                False,
+                False,
+            ],
+        ).reset_index(
+            drop=True
         )
 
-        yearly.to_csv(
+        df.to_csv(
             os.path.abspath(
-                OUTPUT_YEARLY
-            ),
-            index=False,
-        )
-
-        rolling.to_csv(
-            os.path.abspath(
-                OUTPUT_ROLLING
-            ),
-            index=False,
-        )
-
-        trade_df.to_csv(
-            os.path.abspath(
-                OUTPUT_TRADES
+                OUTPUT_FILE
             ),
             index=False,
         )
@@ -1975,40 +2947,30 @@ def run_research():
             "state":
                 "complete",
             "message":
-                "EUR/USD long current-control baseline complete",
-            "eligible_signals":
+                "EUR/USD long single-factor discovery complete",
+            "rows_saved":
                 len(
-                    eligible
+                    df
                 ),
-            "trades":
+            "raw_candidates":
                 len(
-                    trades
+                    raw_candidates
                 ),
-            "ignored_due_to_open_trade":
-                ignored,
-            "outputs": {
-                "summary":
-                    OUTPUT_SUMMARY,
-                "yearly":
-                    OUTPUT_YEARLY,
-                "rolling":
-                    OUTPUT_ROLLING,
-                "trades":
-                    OUTPUT_TRADES,
-            },
+            "output_file":
+                OUTPUT_FILE,
         })
 
         print()
-        print("=" * 90)
+        print("=" * 95)
         print(
-            "EUR/USD LONG CURRENT CONTROL BASELINE COMPLETE"
+            "EUR/USD LONG SINGLE FACTOR DISCOVERY COMPLETE"
         )
-        print("=" * 90)
+        print("=" * 95)
         print(
-            summary.to_string(
-                index=False
-            ),
-            flush=True,
+            f"Rows saved: {len(df)}"
+        )
+        print(
+            f"Output: {OUTPUT_FILE}"
         )
 
     except Exception as error:
@@ -2036,7 +2998,7 @@ def run_research():
 def home():
     return jsonify({
         "service":
-            "EUR/USD Long Current Control Baseline",
+            "EUR/USD Long Single Factor Discovery",
         "status":
             STATUS,
         "mode":
@@ -2045,16 +3007,8 @@ def home():
             False,
         "trading_enabled":
             False,
-        "downloads": {
-            "summary":
-                "/download/summary",
-            "yearly":
-                "/download/yearly",
-            "rolling":
-                "/download/rolling",
-            "trades":
-                "/download/trades",
-        },
+        "download":
+            "/download",
     })
 
 
@@ -2065,11 +3019,10 @@ def status():
     )
 
 
-def send_output(
-    filename,
-):
+@app.route("/download")
+def download():
     path = os.path.abspath(
-        filename
+        OUTPUT_FILE
     )
 
     if not os.path.exists(
@@ -2079,49 +3032,13 @@ def send_output(
             "status":
                 "not_ready",
             "message":
-                f"{filename} is not ready yet",
+                "CSV is not ready yet",
         }), 404
 
     return send_file(
         path,
         as_attachment=True,
-        download_name=filename,
-    )
-
-
-@app.route(
-    "/download/summary"
-)
-def download_summary():
-    return send_output(
-        OUTPUT_SUMMARY
-    )
-
-
-@app.route(
-    "/download/yearly"
-)
-def download_yearly():
-    return send_output(
-        OUTPUT_YEARLY
-    )
-
-
-@app.route(
-    "/download/rolling"
-)
-def download_rolling():
-    return send_output(
-        OUTPUT_ROLLING
-    )
-
-
-@app.route(
-    "/download/trades"
-)
-def download_trades():
-    return send_output(
-        OUTPUT_TRADES
+        download_name=OUTPUT_FILE,
     )
 
 
@@ -2129,7 +3046,7 @@ if __name__ == "__main__":
     thread = threading.Thread(
         target=run_research,
         name=(
-            "eurusd-long-current-control-baseline"
+            "eurusd-long-single-factor-discovery"
         ),
         daemon=True,
     )
