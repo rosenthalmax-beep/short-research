@@ -1084,12 +1084,48 @@ def fetch_daily_history(
         )
     )
 
-    return fetch_candles_range(
-        instrument,
-        "D",
-        warmup_start,
-        end
+    # OANDA will reject an excessively large candle range in
+    # a single request. Fetch the Daily history in safe chunks,
+    # exactly as the H1 history is chunked.
+    candles_by_time = {}
+
+    cursor = warmup_start
+
+    while cursor < end:
+
+        chunk_end = min(
+            cursor
+            + timedelta(
+                days=3000
+            ),
+            end
+        )
+
+        chunk = fetch_candles_range(
+            instrument,
+            "D",
+            cursor,
+            chunk_end
+        )
+
+        for candle in chunk:
+
+            candles_by_time[
+                candle["time"]
+            ] = candle
+
+        cursor = chunk_end
+
+    candles = list(
+        candles_by_time.values()
     )
+
+    candles.sort(
+        key=lambda item:
+            item["time"]
+    )
+
+    return candles
 
 
 def fetch_latest_complete_h1(
