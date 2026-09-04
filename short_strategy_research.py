@@ -8464,11 +8464,855 @@ def download_stats_trades():
     )
 
 
+# ============================================================
+# TRUE MONTHLY ROLLING PORTFOLIO ROBUSTNESS
+#
+# Every possible month-start 12M / 24M / 36M window.
+# Uses the exact final live 10-strategy portfolio above.
+#
+# Example:
+#   12M: 2005-01-01 -> 2006-01-01
+#        2005-02-01 -> 2006-02-01
+#        ...
+#
+# This is deliberately harsher than calendar-year stepping.
+# ============================================================
+
+MONTHLY_ROLLING_OUTPUT = (
+    "final_portfolio_monthly_rolling_all.csv"
+)
+
+MONTHLY_ROLLING_SUMMARY_OUTPUT = (
+    "final_portfolio_monthly_rolling_summary.csv"
+)
+
+MONTHLY_ROLLING_EXTREMES_OUTPUT = (
+    "final_portfolio_monthly_rolling_best_worst.csv"
+)
+
+MONTHLY_ROLLING_STATUS = {
+    "state": "not_started",
+    "message": "Monthly rolling analysis has not started",
+    "service": (
+        "Final Live Portfolio Monthly Rolling Robustness"
+    ),
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+
+def month_start(
+    dt
+):
+    return datetime(
+        dt.year,
+        dt.month,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+
+def add_months(
+    dt,
+    months,
+):
+    total = (
+        dt.year * 12
+        + (dt.month - 1)
+        + months
+    )
+
+    year = total // 12
+    month = (
+        total % 12
+        + 1
+    )
+
+    return datetime(
+        year,
+        month,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+
+def monthly_window_row(
+    trades,
+    start,
+    months,
+):
+    end = add_months(
+        start,
+        months,
+    )
+
+    selected = subset_trades(
+        trades,
+        start,
+        end,
+    )
+
+    basic = basic_stats(
+        selected
+    )
+
+    compound = compound_stats(
+        selected
+    )
+
+    return {
+        "months":
+            months,
+        "years":
+            months / 12.0,
+        "window":
+            (
+                f"{start:%Y-%m-%d}"
+                " -> "
+                f"{end:%Y-%m-%d}"
+            ),
+        "start_utc":
+            iso_utc(
+                start
+            ),
+        "end_utc":
+            iso_utc(
+                end
+            ),
+        "trades":
+            basic[
+                "trades"
+            ],
+        "winners":
+            basic[
+                "winners"
+            ],
+        "losers":
+            basic[
+                "losers"
+            ],
+        "win_rate":
+            round(
+                basic[
+                    "win_rate"
+                ],
+                4,
+            ),
+        "profit_factor":
+            round(
+                basic[
+                    "profit_factor"
+                ],
+                6,
+            ),
+        "total_r":
+            round(
+                basic[
+                    "total_r"
+                ],
+                4,
+            ),
+        "expectancy_r":
+            round(
+                basic[
+                    "expectancy_r"
+                ],
+                6,
+            ),
+        "max_r_drawdown":
+            round(
+                basic[
+                    "max_r_drawdown"
+                ],
+                4,
+            ),
+        "longest_loss_streak":
+            basic[
+                "longest_loss_streak"
+            ],
+        "ending_balance_from_100_at_1pct":
+            round(
+                compound[
+                    "ending_balance"
+                ],
+                4,
+            ),
+        "return_pct_at_1pct":
+            round(
+                compound[
+                    "return_pct"
+                ],
+                4,
+            ),
+        "max_closed_equity_dd_pct":
+            round(
+                compound[
+                    "max_closed_equity_dd_pct"
+                ],
+                4,
+            ),
+        "profitable":
+            (
+                compound[
+                    "return_pct"
+                ] > 0
+            ),
+    }
+
+
+def build_monthly_rolling(
+    trades,
+    months,
+):
+    rows = []
+
+    first_start = month_start(
+        PORTFOLIO_RESEARCH_FROM
+    )
+
+    if first_start < PORTFOLIO_RESEARCH_FROM:
+        first_start = add_months(
+            first_start,
+            1,
+        )
+
+    last_start = add_months(
+        month_start(
+            PORTFOLIO_RESEARCH_TO
+        ),
+        -months,
+    )
+
+    cursor = first_start
+
+    while cursor <= last_start:
+
+        end = add_months(
+            cursor,
+            months,
+        )
+
+        if end > PORTFOLIO_RESEARCH_TO:
+            break
+
+        rows.append(
+            monthly_window_row(
+                trades,
+                cursor,
+                months,
+            )
+        )
+
+        cursor = add_months(
+            cursor,
+            1,
+        )
+
+    return rows
+
+
+def percentile(
+    values,
+    q,
+):
+    clean = sorted(
+        float(value)
+        for value in values
+    )
+
+    if not clean:
+        return None
+
+    if len(clean) == 1:
+        return clean[0]
+
+    position = (
+        (len(clean) - 1)
+        * q
+    )
+
+    lower = int(
+        math.floor(
+            position
+        )
+    )
+
+    upper = int(
+        math.ceil(
+            position
+        )
+    )
+
+    if lower == upper:
+        return clean[
+            lower
+        ]
+
+    weight = (
+        position
+        - lower
+    )
+
+    return (
+        clean[lower]
+        * (
+            1.0
+            - weight
+        )
+        + clean[upper]
+        * weight
+    )
+
+
+def monthly_summary_row(
+    rows,
+    months,
+):
+    if not rows:
+        return {
+            "months":
+                months,
+            "windows":
+                0,
+        }
+
+    returns = [
+        float(
+            row[
+                "return_pct_at_1pct"
+            ]
+        )
+        for row in rows
+    ]
+
+    total_rs = [
+        float(
+            row[
+                "total_r"
+            ]
+        )
+        for row in rows
+    ]
+
+    pfs = [
+        float(
+            row[
+                "profit_factor"
+            ]
+        )
+        for row in rows
+    ]
+
+    dds = [
+        float(
+            row[
+                "max_closed_equity_dd_pct"
+            ]
+        )
+        for row in rows
+    ]
+
+    profitable = sum(
+        1
+        for row in rows
+        if row[
+            "profitable"
+        ]
+    )
+
+    positive_r = sum(
+        1
+        for row in rows
+        if float(
+            row[
+                "total_r"
+            ]
+        ) > 0
+    )
+
+    best_return = max(
+        rows,
+        key=lambda row:
+            float(
+                row[
+                    "return_pct_at_1pct"
+                ]
+            ),
+    )
+
+    worst_return = min(
+        rows,
+        key=lambda row:
+            float(
+                row[
+                    "return_pct_at_1pct"
+                ]
+            ),
+    )
+
+    return {
+        "months":
+            months,
+        "years":
+            months / 12.0,
+        "windows":
+            len(
+                rows
+            ),
+        "profitable_windows":
+            profitable,
+        "profitable_windows_pct":
+            round(
+                profitable
+                / len(rows)
+                * 100.0,
+                4,
+            ),
+        "positive_r_windows":
+            positive_r,
+        "positive_r_windows_pct":
+            round(
+                positive_r
+                / len(rows)
+                * 100.0,
+                4,
+            ),
+        "worst_return_pct":
+            round(
+                min(
+                    returns
+                ),
+                4,
+            ),
+        "p10_return_pct":
+            round(
+                percentile(
+                    returns,
+                    0.10,
+                ),
+                4,
+            ),
+        "p25_return_pct":
+            round(
+                percentile(
+                    returns,
+                    0.25,
+                ),
+                4,
+            ),
+        "median_return_pct":
+            round(
+                percentile(
+                    returns,
+                    0.50,
+                ),
+                4,
+            ),
+        "p75_return_pct":
+            round(
+                percentile(
+                    returns,
+                    0.75,
+                ),
+                4,
+            ),
+        "p90_return_pct":
+            round(
+                percentile(
+                    returns,
+                    0.90,
+                ),
+                4,
+            ),
+        "best_return_pct":
+            round(
+                max(
+                    returns
+                ),
+                4,
+            ),
+        "median_total_r":
+            round(
+                percentile(
+                    total_rs,
+                    0.50,
+                ),
+                4,
+            ),
+        "median_pf":
+            round(
+                percentile(
+                    pfs,
+                    0.50,
+                ),
+                6,
+            ),
+        "worst_pf":
+            round(
+                min(
+                    pfs
+                ),
+                6,
+            ),
+        "worst_window_drawdown_pct":
+            round(
+                min(
+                    dds
+                ),
+                4,
+            ),
+        "best_window":
+            best_return[
+                "window"
+            ],
+        "worst_window":
+            worst_return[
+                "window"
+            ],
+    }
+
+
+def build_monthly_extremes(
+    all_rows
+):
+    output = []
+
+    for months in [
+        12,
+        24,
+        36,
+    ]:
+        rows = [
+            row
+            for row in all_rows
+            if int(
+                row[
+                    "months"
+                ]
+            ) == months
+        ]
+
+        if not rows:
+            continue
+
+        metrics = [
+            (
+                "return_pct_at_1pct",
+                "COMPOUNDED_RETURN",
+            ),
+            (
+                "total_r",
+                "TOTAL_R",
+            ),
+            (
+                "profit_factor",
+                "PROFIT_FACTOR",
+            ),
+            (
+                "max_closed_equity_dd_pct",
+                "DRAWDOWN",
+            ),
+        ]
+
+        for (
+            metric,
+            label,
+        ) in metrics:
+
+            if metric == (
+                "max_closed_equity_dd_pct"
+            ):
+                best = max(
+                    rows,
+                    key=lambda row:
+                        float(
+                            row[
+                                metric
+                            ]
+                        ),
+                )
+
+                worst = min(
+                    rows,
+                    key=lambda row:
+                        float(
+                            row[
+                                metric
+                            ]
+                        ),
+                )
+
+            else:
+                best = max(
+                    rows,
+                    key=lambda row:
+                        float(
+                            row[
+                                metric
+                            ]
+                        ),
+                )
+
+                worst = min(
+                    rows,
+                    key=lambda row:
+                        float(
+                            row[
+                                metric
+                            ]
+                        ),
+                )
+
+            for rank, row in [
+                (
+                    "BEST",
+                    best,
+                ),
+                (
+                    "WORST",
+                    worst,
+                ),
+            ]:
+                output.append({
+                    "months":
+                        months,
+                    "years":
+                        months / 12.0,
+                    "metric":
+                        label,
+                    "rank":
+                        rank,
+                    "window":
+                        row[
+                            "window"
+                        ],
+                    "trades":
+                        row[
+                            "trades"
+                        ],
+                    "win_rate":
+                        row[
+                            "win_rate"
+                        ],
+                    "profit_factor":
+                        row[
+                            "profit_factor"
+                        ],
+                    "total_r":
+                        row[
+                            "total_r"
+                        ],
+                    "expectancy_r":
+                        row[
+                            "expectancy_r"
+                        ],
+                    "return_pct_at_1pct":
+                        row[
+                            "return_pct_at_1pct"
+                        ],
+                    "ending_balance_from_100_at_1pct":
+                        row[
+                            "ending_balance_from_100_at_1pct"
+                        ],
+                    "max_closed_equity_dd_pct":
+                        row[
+                            "max_closed_equity_dd_pct"
+                        ],
+                    "longest_loss_streak":
+                        row[
+                            "longest_loss_streak"
+                        ],
+                })
+
+    return output
+
+
+def run_monthly_rolling_analysis():
+    try:
+        MONTHLY_ROLLING_STATUS.update({
+            "state":
+                "fetching",
+            "message":
+                "Building exact final live full-history trade set",
+            "from":
+                iso_utc(
+                    PORTFOLIO_RESEARCH_FROM
+                ),
+            "to":
+                iso_utc(
+                    PORTFOLIO_RESEARCH_TO
+                ),
+        })
+
+        trades_raw, strategy_summaries = (
+            portfolio_collect_strategy_trades(
+                PORTFOLIO_RESEARCH_FROM,
+                PORTFOLIO_RESEARCH_TO,
+            )
+        )
+
+        trades = normalise_trade_times(
+            trades_raw
+        )
+
+        MONTHLY_ROLLING_STATUS.update({
+            "state":
+                "calculating",
+            "message":
+                "Calculating every monthly-start 1Y / 2Y / 3Y window",
+            "closed_trades":
+                len(
+                    trades
+                ),
+        })
+
+        all_rows = []
+
+        summary_rows = []
+
+        for months in [
+            12,
+            24,
+            36,
+        ]:
+            rows = (
+                build_monthly_rolling(
+                    trades,
+                    months,
+                )
+            )
+
+            all_rows.extend(
+                rows
+            )
+
+            summary_rows.append(
+                monthly_summary_row(
+                    rows,
+                    months,
+                )
+            )
+
+        extreme_rows = (
+            build_monthly_extremes(
+                all_rows
+            )
+        )
+
+        write_csv(
+            MONTHLY_ROLLING_OUTPUT,
+            all_rows,
+        )
+
+        write_csv(
+            MONTHLY_ROLLING_SUMMARY_OUTPUT,
+            summary_rows,
+        )
+
+        write_csv(
+            MONTHLY_ROLLING_EXTREMES_OUTPUT,
+            extreme_rows,
+        )
+
+        MONTHLY_ROLLING_STATUS.update({
+            "state":
+                "complete",
+            "message":
+                "Monthly rolling portfolio robustness complete",
+            "closed_trades":
+                len(
+                    trades
+                ),
+            "windows":
+                len(
+                    all_rows
+                ),
+            "outputs": {
+                "all":
+                    MONTHLY_ROLLING_OUTPUT,
+                "summary":
+                    MONTHLY_ROLLING_SUMMARY_OUTPUT,
+                "extremes":
+                    MONTHLY_ROLLING_EXTREMES_OUTPUT,
+            },
+        })
+
+        print()
+        print(
+            "=" * 100
+        )
+        print(
+            "FINAL LIVE PORTFOLIO - TRUE MONTHLY ROLLING ROBUSTNESS"
+        )
+        print(
+            "=" * 100
+        )
+        print()
+
+        for row in summary_rows:
+            print(
+                row
+            )
+
+    except Exception as error:
+        MONTHLY_ROLLING_STATUS.update({
+            "state":
+                "error",
+            "message":
+                str(
+                    error
+                ),
+        })
+
+        print(
+            "ERROR:",
+            error,
+            flush=True,
+        )
+
+
+@app.route(
+    "/monthly-rolling/status"
+)
+def monthly_rolling_status():
+    return jsonify(
+        MONTHLY_ROLLING_STATUS
+    )
+
+
+@app.route(
+    "/monthly-rolling/all"
+)
+def monthly_rolling_all():
+    return deep_send_file(
+        MONTHLY_ROLLING_OUTPUT
+    )
+
+
+@app.route(
+    "/monthly-rolling/summary"
+)
+def monthly_rolling_summary():
+    return deep_send_file(
+        MONTHLY_ROLLING_SUMMARY_OUTPUT
+    )
+
+
+@app.route(
+    "/monthly-rolling/extremes"
+)
+def monthly_rolling_extremes():
+    return deep_send_file(
+        MONTHLY_ROLLING_EXTREMES_OUTPUT
+    )
+
+
 if __name__ == "__main__":
+
     research_thread = threading.Thread(
-        target=run_deep_portfolio_stats,
+        target=run_monthly_rolling_analysis,
         name=(
-            "final-live-portfolio-deep-stats"
+            "final-live-monthly-rolling"
         ),
         daemon=True,
     )
