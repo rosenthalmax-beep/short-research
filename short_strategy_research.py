@@ -223,7 +223,7 @@ MAX_STOP_ATR_VALUES = [
 ]
 
 STRUCTURE_LOOKBACK_VALUES = [
-    10, 15, 20, 30, 40,
+    10, 15, 17, 20, 30, 40,
     50, 60, 80, 100,
 ]
 
