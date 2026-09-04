@@ -1318,15 +1318,29 @@ def run_research():
                 len(candidates),
         })
 
+        current_completed_hour = (
+            datetime.now(timezone.utc)
+            .replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        )
+
+        fetch_end = min(
+            overall_end
+            + timedelta(
+                days=45
+            ),
+            current_completed_hour,
+        )
+
         h1 = fetch_chunked(
             overall_start
             - timedelta(
                 days=H1_WARMUP_DAYS
             ),
-            overall_end
-            + timedelta(
-                days=45
-            ),
+            fetch_end,
         )
 
         if not h1:
