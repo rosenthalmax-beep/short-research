@@ -12,28 +12,22 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# EUR/USD M15 SHORT - STAGE 1 FAST DISCOVERY
+# EUR/USD M15 SHORT - STAGE 2 FAST INTERACTION TEST
 #
 # READ-ONLY RESEARCH. NEVER SENDS ORDERS.
 #
-# Built completely from scratch.
+# Stage 1 findings:
+#   - raw bearish engulfing weak
+#   - large range/body improved results materially
+#   - early NY hours ~01:00-05:00 were least bad
+#   - structure was not a dominant standalone edge
 #
-# Exact bearish engulfing:
-#   previous candle bullish
-#   current candle bearish
-#   current open >= previous close
-#   current close <= previous open
-#
-# Stage 1:
-#   1) raw engulfing baseline
-#   2) body-ratio sweep
-#   3) body/ATR sweep
-#   4) range/ATR sweep
-#   5) bearish close-location sweep
-#   6) structure sweep near prior highs
-#   7) RR sweep
-#   8) NY hour breakdown
-#   9) weekday breakdown
+# Stage 2 therefore focuses on:
+#   - range ATR
+#   - body ATR
+#   - early NY hour sets
+#   - RR
+#   - light structure overlay
 #
 # Costs:
 #   0.50 / 1.00 / 1.50 / 2.00 pips adverse entry
@@ -41,12 +35,18 @@ from flask import Flask, jsonify, send_file
 # Primary development cost:
 #   1.00 pip
 #
+# Validation:
+#   full history
+#   4 eras
+#   recent 5Y / 2Y
+#
 # Historical conventions:
 #   - OANDA midpoint M15
+#   - exact bearish engulfing
 #   - ATR14 Wilder/RMA, SMA seeded
-#   - short stop = signal high + 10 ticks
-#   - target based on REFERENCE signal-close risk
-#   - adverse short entry = signal close - cost
+#   - stop = signal high + 10 ticks
+#   - target from REFERENCE signal close
+#   - adverse entry = signal close - cost
 #   - exits begin NEXT candle
 #   - same-bar short tie:
 #       high closer => STOP first
@@ -97,29 +97,29 @@ COST_PIPS_GRID = [
 ]
 
 OUTPUT_SUMMARY = (
-    "eurusd_m15_short_stage1_summary.csv"
+    "eurusd_m15_short_stage2_summary.csv"
 )
 
 OUTPUT_TOP = (
-    "eurusd_m15_short_stage1_top.csv"
+    "eurusd_m15_short_stage2_top.csv"
 )
 
-OUTPUT_HOURS = (
-    "eurusd_m15_short_stage1_hours.csv"
+OUTPUT_ERAS = (
+    "eurusd_m15_short_stage2_eras.csv"
 )
 
-OUTPUT_WEEKDAYS = (
-    "eurusd_m15_short_stage1_weekdays.csv"
+OUTPUT_RECENT = (
+    "eurusd_m15_short_stage2_recent.csv"
 )
 
-OUTPUT_RAW_TRADES = (
-    "eurusd_m15_short_stage1_raw_trades.csv"
+OUTPUT_TRADES = (
+    "eurusd_m15_short_stage2_best_trades.csv"
 )
 
 STATUS = {
     "state": "not_started",
-    "message": "EUR/USD M15 short Stage 1 has not started",
-    "service": "EURUSD M15 Short Stage 1 Fast Discovery",
+    "message": "EUR/USD M15 short Stage 2 has not started",
+    "service": "EURUSD M15 Short Stage 2 Fast Interaction",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -156,6 +156,19 @@ def parse_oanda_time(value):
     )
 
 
+def years_ago_safe(dt, years):
+    try:
+        return dt.replace(
+            year=dt.year - years
+        )
+    except ValueError:
+        return dt.replace(
+            month=2,
+            day=28,
+            year=dt.year - years,
+        )
+
+
 def write_csv(path, rows):
     if not rows:
         with open(
@@ -166,14 +179,14 @@ def write_csv(path, rows):
             handle.write("")
         return
 
-    fieldnames = []
+    fields = []
     seen = set()
 
     for row in rows:
         for key in row:
             if key not in seen:
                 seen.add(key)
-                fieldnames.append(key)
+                fields.append(key)
 
     with open(
         path,
@@ -183,7 +196,7 @@ def write_csv(path, rows):
     ) as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=fieldnames,
+            fieldnames=fields,
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -204,7 +217,7 @@ def download_file(path):
 
 
 # ============================================================
-# OANDA FETCH
+# OANDA DATA
 # ============================================================
 
 def oanda_headers():
@@ -301,12 +314,10 @@ def fetch_full_history(start, end):
             "chunk": chunk_number,
         })
 
-        chunk = fetch_chunk(
+        for candle in fetch_chunk(
             cursor,
             chunk_end,
-        )
-
-        for candle in chunk:
+        ):
             by_time[
                 candle["time"]
             ] = candle
@@ -327,13 +338,13 @@ def fetch_full_history(start, end):
 
 
 # ============================================================
-# ATR
+# ATR / SIGNAL CACHE
 # ============================================================
 
 def add_atr14(candles):
     n = len(candles)
 
-    true_ranges = [None] * n
+    trs = [None] * n
     atr = [None] * n
 
     for i in range(n):
@@ -341,40 +352,34 @@ def add_atr14(candles):
         low = candles[i]["low"]
 
         if i == 0:
-            tr = high - low
+            trs[i] = high - low
         else:
             previous_close = candles[
                 i - 1
             ]["close"]
 
-            tr = max(
+            trs[i] = max(
                 high - low,
                 abs(high - previous_close),
                 abs(low - previous_close),
             )
 
-        true_ranges[i] = tr
-
     if n < 14:
         return atr
 
     atr[13] = (
-        sum(true_ranges[:14])
+        sum(trs[:14])
         / 14.0
     )
 
     for i in range(14, n):
         atr[i] = (
             atr[i - 1] * 13.0
-            + true_ranges[i]
+            + trs[i]
         ) / 14.0
 
     return atr
 
-
-# ============================================================
-# SIGNAL CACHE
-# ============================================================
 
 def bearish_engulfing(candles, i):
     if i < 1:
@@ -395,12 +400,19 @@ def bearish_engulfing(candles, i):
 
 
 STRUCTURE_LOOKBACKS = [
-    10,
     20,
     40,
     60,
     100,
-    150,
+]
+
+RR_GRID = [
+    1.50,
+    2.00,
+    2.50,
+    3.00,
+    3.50,
+    4.00,
 ]
 
 
@@ -415,10 +427,7 @@ def build_signal_cache(
     )
 
     for i in range(
-        max(
-            14,
-            max_lookback,
-        ),
+        max(14, max_lookback),
         len(candles),
     ):
         if not bearish_engulfing(
@@ -466,8 +475,6 @@ def build_signal_cache(
             candle_range / atr
         )
 
-        # For a bearish candle, lower close location is stronger.
-        # 0.0 = closes at low, 1.0 = closes at high.
         close_location = (
             (
                 current["close"]
@@ -531,18 +538,6 @@ def build_signal_cache(
 # TRADE OUTCOME CACHE
 # ============================================================
 
-RR_GRID = [
-    1.50,
-    2.00,
-    2.50,
-    3.00,
-    3.50,
-    4.00,
-    4.50,
-    5.00,
-]
-
-
 def compute_trade_outcome(
     candles,
     signal_index,
@@ -598,13 +593,11 @@ def compute_trade_outcome(
         candle = candles[j]
 
         hit_stop = (
-            candle["high"]
-            >= stop
+            candle["high"] >= stop
         )
 
         hit_target = (
-            candle["low"]
-            <= target
+            candle["low"] <= target
         )
 
         if (
@@ -622,9 +615,6 @@ def compute_trade_outcome(
                 - candle["low"]
             )
 
-            # Locked short same-bar tie:
-            # high closer => stop first,
-            # otherwise target first.
             if distance_high < distance_low:
                 exit_price = stop
                 exit_reason = "STOP"
@@ -715,7 +705,7 @@ def build_outcome_cache(
                             "precomputing",
                         "message":
                             (
-                                "Caching trade outcomes "
+                                "Caching short trade outcomes "
                                 f"{done}/{total}"
                             ),
                         "outcomes_done":
@@ -741,8 +731,141 @@ def build_outcome_cache(
 
 
 # ============================================================
-# FAST EXECUTION
+# CONFIG GENERATION
 # ============================================================
+
+def stage2_configs():
+    configs = []
+
+    hour_sets = [
+        None,
+        {1, 2, 3, 4, 5},
+        {2, 3, 4},
+        {1, 2, 3, 4},
+        {2, 3, 4, 5},
+        {2, 3},
+        {3, 4},
+    ]
+
+    body_atrs = [
+        0.80,
+        1.00,
+        1.20,
+        1.40,
+    ]
+
+    range_atrs = [
+        1.20,
+        1.40,
+        1.60,
+        1.80,
+        2.00,
+    ]
+
+    # Light structure overlay only.
+    structure_options = [
+        (None, None),
+        (40, 0.20),
+        (60, 0.20),
+        (60, 0.30),
+        (100, 0.30),
+    ]
+
+    counter = 0
+
+    # Main family: body + range + hours + RR
+    for hours in hour_sets:
+        for body_atr in body_atrs:
+            for range_atr in range_atrs:
+                for rr in RR_GRID:
+                    counter += 1
+
+                    configs.append({
+                        "label":
+                            (
+                                f"C{counter:04d}_"
+                                f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
+                                f"BA{body_atr:.2f}_"
+                                f"RA{range_atr:.2f}_"
+                                f"RR{rr:.2f}"
+                            ),
+                        "minimum_body_ratio":
+                            1.00,
+                        "minimum_body_atr":
+                            body_atr,
+                        "minimum_range_atr":
+                            range_atr,
+                        "maximum_close_location":
+                            None,
+                        "structure_lookback":
+                            None,
+                        "maximum_distance_atr":
+                            None,
+                        "included_ny_hours":
+                            hours,
+                        "excluded_weekdays":
+                            set(),
+                        "reward_risk":
+                            rr,
+                    })
+
+    # Secondary family: add mild structure to the stronger
+    # large-candle combinations.
+    for hours in [
+        {1, 2, 3, 4, 5},
+        {2, 3, 4},
+        {2, 3, 4, 5},
+    ]:
+        for body_atr in [
+            1.00,
+            1.20,
+            1.40,
+        ]:
+            for range_atr in [
+                1.40,
+                1.60,
+                1.80,
+            ]:
+                for (
+                    lookback,
+                    distance,
+                ) in structure_options[1:]:
+                    for rr in RR_GRID:
+                        counter += 1
+
+                        configs.append({
+                            "label":
+                                (
+                                    f"C{counter:04d}_"
+                                    f"H{''.join(str(h) for h in sorted(hours))}_"
+                                    f"BA{body_atr:.2f}_"
+                                    f"RA{range_atr:.2f}_"
+                                    f"S{lookback}_"
+                                    f"D{distance:.2f}_"
+                                    f"RR{rr:.2f}"
+                                ),
+                            "minimum_body_ratio":
+                                1.00,
+                            "minimum_body_atr":
+                                body_atr,
+                            "minimum_range_atr":
+                                range_atr,
+                            "maximum_close_location":
+                                None,
+                            "structure_lookback":
+                                lookback,
+                            "maximum_distance_atr":
+                                distance,
+                            "included_ny_hours":
+                                hours,
+                            "excluded_weekdays":
+                                set(),
+                            "reward_risk":
+                                rr,
+                        })
+
+    return configs
+
 
 def signal_passes(
     signal,
@@ -753,59 +876,54 @@ def signal_passes(
             "body_ratio"
         ]
         <
-        config.get(
-            "minimum_body_ratio",
-            1.0,
-        )
+        config[
+            "minimum_body_ratio"
+        ]
     ):
         return False
 
-    body_atr = config.get(
-        "minimum_body_atr"
-    )
-
     if (
-        body_atr is not None
-        and
         signal[
             "body_atr"
-        ] < body_atr
+        ]
+        <
+        config[
+            "minimum_body_atr"
+        ]
     ):
         return False
 
-    range_atr = config.get(
-        "minimum_range_atr"
-    )
-
     if (
-        range_atr is not None
-        and
         signal[
             "range_atr"
-        ] < range_atr
+        ]
+        <
+        config[
+            "minimum_range_atr"
+        ]
     ):
         return False
 
-    max_close_location = config.get(
-        "maximum_close_location"
-    )
+    hours = config[
+        "included_ny_hours"
+    ]
 
     if (
-        max_close_location is not None
+        hours is not None
         and
         signal[
-            "close_location"
-        ] > max_close_location
+            "ny_hour"
+        ] not in hours
     ):
         return False
 
-    lookback = config.get(
+    lookback = config[
         "structure_lookback"
-    )
+    ]
 
-    distance = config.get(
+    distance = config[
         "maximum_distance_atr"
-    )
+    ]
 
     if (
         lookback is not None
@@ -820,50 +938,47 @@ def signal_passes(
     ):
         return False
 
-    included_hours = config.get(
-        "included_ny_hours"
-    )
-
-    if (
-        included_hours is not None
-        and
-        signal[
-            "ny_hour"
-        ] not in included_hours
-    ):
-        return False
-
-    excluded_weekdays = config.get(
-        "excluded_weekdays",
-        set(),
-    )
-
-    if (
-        signal[
-            "ny_weekday"
-        ] in excluded_weekdays
-    ):
-        return False
-
     return True
 
+
+# ============================================================
+# FAST EXECUTION
+# ============================================================
 
 def run_config_cached(
     signals,
     outcome_cache,
     config,
     cost_pips,
+    start=None,
+    end=None,
 ):
     candidates = [
         signal
         for signal in signals
-        if signal_passes(
-            signal,
-            config,
+        if (
+            signal_passes(
+                signal,
+                config,
+            )
+            and
+            (
+                start is None
+                or signal[
+                    "time"
+                ] >= start
+            )
+            and
+            (
+                end is None
+                or signal[
+                    "time"
+                ] < end
+            )
         )
     ]
 
-    signal_indices = [
+    indices = [
         signal[
             "signal_index"
         ]
@@ -871,7 +986,6 @@ def run_config_cached(
     ]
 
     trades = []
-
     position = 0
 
     while position < len(
@@ -902,7 +1016,7 @@ def run_config_cached(
         )
 
         position = bisect.bisect_left(
-            signal_indices,
+            indices,
             trade[
                 "exit_index"
             ],
@@ -919,44 +1033,35 @@ def run_config_cached(
 def stats_from_trades(trades):
     results = [
         float(
-            trade["result_r"]
+            trade[
+                "result_r"
+            ]
         )
         for trade in trades
     ]
 
     winners = [
-        r
-        for r in results
+        r for r in results
         if r > 0
     ]
 
     losers = [
-        r
-        for r in results
+        r for r in results
         if r < 0
     ]
 
-    gross_profit = sum(
-        winners
-    )
-
-    gross_loss = abs(
-        sum(losers)
-    )
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
+    total_r = sum(results)
 
     pf = (
-        gross_profit
-        / gross_loss
+        gross_profit / gross_loss
         if gross_loss > 0
         else (
             999.0
             if gross_profit > 0
             else 0.0
         )
-    )
-
-    total_r = sum(
-        results
     )
 
     equity = 0.0
@@ -1019,7 +1124,6 @@ def stats_from_trades(trades):
 
 
 def result_row(
-    family,
     config,
     cost,
     trades,
@@ -1029,37 +1133,42 @@ def result_row(
     )
 
     return {
-        "family":
-            family,
         "candidate":
             config[
                 "label"
             ],
         "cost_pips":
             cost,
-        "minimum_body_ratio":
-            config.get(
-                "minimum_body_ratio"
-            ),
         "minimum_body_atr":
-            config.get(
+            config[
                 "minimum_body_atr"
-            ),
+            ],
         "minimum_range_atr":
-            config.get(
+            config[
                 "minimum_range_atr"
-            ),
-        "maximum_close_location":
-            config.get(
-                "maximum_close_location"
-            ),
+            ],
         "structure_lookback":
-            config.get(
+            config[
                 "structure_lookback"
-            ),
+            ],
         "maximum_distance_atr":
-            config.get(
+            config[
                 "maximum_distance_atr"
+            ],
+        "included_ny_hours":
+            (
+                "ALL"
+                if config[
+                    "included_ny_hours"
+                ] is None
+                else ",".join(
+                    str(hour)
+                    for hour in sorted(
+                        config[
+                            "included_ny_hours"
+                        ]
+                    )
+                )
             ),
         "reward_risk":
             config[
@@ -1120,351 +1229,159 @@ def result_row(
 
 
 # ============================================================
-# DISCOVERY CONFIGS
+# VALIDATION WINDOWS
 # ============================================================
 
-def base_config():
-    return {
-        "label":
-            "RAW_BASELINE",
-        "minimum_body_ratio":
-            1.00,
-        "minimum_body_atr":
-            None,
-        "minimum_range_atr":
-            None,
-        "maximum_close_location":
-            None,
-        "structure_lookback":
-            None,
-        "maximum_distance_atr":
-            None,
-        "included_ny_hours":
-            None,
-        "excluded_weekdays":
-            set(),
-        "reward_risk":
-            2.50,
-    }
+def era_windows():
+    return [
+        (
+            "ERA_2010_2013",
+            datetime(
+                2010, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2014_2017",
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2018, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2018_2021",
+            datetime(
+                2018, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2022, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2022_NOW",
+            datetime(
+                2022, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            RESEARCH_TO,
+        ),
+    ]
 
 
-def discovery_configs():
-    configs = []
-
-    configs.append((
-        "BASELINE",
-        base_config(),
-    ))
-
-    for value in [
-        1.00,
-        1.10,
-        1.20,
-        1.30,
-        1.40,
-        1.60,
-        1.80,
-        2.00,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_body_ratio"
-        ] = value
-        cfg[
-            "label"
-        ] = f"BR_{value:.2f}"
-
-        configs.append((
-            "BODY_RATIO",
-            cfg,
-        ))
-
-    for value in [
-        0.30,
-        0.40,
-        0.50,
-        0.60,
-        0.70,
-        0.80,
-        1.00,
-        1.20,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_body_atr"
-        ] = value
-        cfg[
-            "label"
-        ] = f"BODY_ATR_{value:.2f}"
-
-        configs.append((
-            "BODY_ATR",
-            cfg,
-        ))
-
-    for value in [
-        0.60,
-        0.80,
-        1.00,
-        1.20,
-        1.40,
-        1.60,
-        1.80,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_range_atr"
-        ] = value
-        cfg[
-            "label"
-        ] = f"RANGE_ATR_{value:.2f}"
-
-        configs.append((
-            "RANGE_ATR",
-            cfg,
-        ))
-
-    # Lower close-location = stronger bearish close.
-    for value in [
-        0.45,
-        0.40,
-        0.35,
-        0.30,
-        0.25,
-        0.20,
-        0.15,
-    ]:
-        cfg = base_config()
-        cfg[
-            "maximum_close_location"
-        ] = value
-        cfg[
-            "label"
-        ] = f"BEAR_CLOSE_{value:.2f}"
-
-        configs.append((
-            "CLOSE_LOCATION",
-            cfg,
-        ))
-
-    for lookback in STRUCTURE_LOOKBACKS:
-        for distance in [
-            0.05,
-            0.10,
-            0.20,
-            0.30,
-            0.50,
-            0.75,
-        ]:
-            cfg = base_config()
-
-            cfg[
-                "structure_lookback"
-            ] = lookback
-
-            cfg[
-                "maximum_distance_atr"
-            ] = distance
-
-            cfg[
-                "label"
-            ] = (
-                f"STRUCT_{lookback}_"
-                f"{distance:.2f}"
-            )
-
-            configs.append((
-                "STRUCTURE",
-                cfg,
-            ))
-
-    for rr in RR_GRID:
-        cfg = base_config()
-
-        cfg[
-            "reward_risk"
-        ] = rr
-
-        cfg[
-            "label"
-        ] = f"RR_{rr:.2f}"
-
-        configs.append((
-            "REWARD_RISK",
-            cfg,
-        ))
-
-    return configs
+def recent_windows():
+    return [
+        (
+            "LAST_5Y",
+            years_ago_safe(
+                RESEARCH_TO,
+                5,
+            ),
+            RESEARCH_TO,
+        ),
+        (
+            "LAST_2Y",
+            years_ago_safe(
+                RESEARCH_TO,
+                2,
+            ),
+            RESEARCH_TO,
+        ),
+    ]
 
 
-# ============================================================
-# RAW HOUR / WEEKDAY BREAKDOWN
-# ============================================================
-
-def raw_signal_trades(
+def validation_rows(
     signals,
-    outcome_cache,
+    cache,
+    finalists,
+    windows,
 ):
-    config = base_config()
-
-    candidates = [
-        signal
-        for signal in signals
-        if signal_passes(
-            signal,
-            config,
-        )
-    ]
-
-    signal_indices = [
-        s[
-            "signal_index"
-        ]
-        for s in candidates
-    ]
-
-    trades = []
-
-    position = 0
-
-    while position < len(
-        candidates
-    ):
-        signal = candidates[
-            position
-        ]
-
-        trade = outcome_cache.get(
-            (
-                signal[
-                    "signal_index"
-                ],
-                config[
-                    "reward_risk"
-                ],
-                PRIMARY_COST_PIPS,
-            )
-        )
-
-        if trade is None:
-            position += 1
-            continue
-
-        row = dict(
-            trade
-        )
-
-        row.update({
-            "body_ratio":
-                signal[
-                    "body_ratio"
-                ],
-            "body_atr":
-                signal[
-                    "body_atr"
-                ],
-            "range_atr":
-                signal[
-                    "range_atr"
-                ],
-            "close_location":
-                signal[
-                    "close_location"
-                ],
-            "ny_hour":
-                signal[
-                    "ny_hour"
-                ],
-            "ny_weekday":
-                signal[
-                    "ny_weekday"
-                ],
-        })
-
-        trades.append(
-            row
-        )
-
-        position = bisect.bisect_left(
-            signal_indices,
-            trade[
-                "exit_index"
-            ],
-            lo=position + 1,
-        )
-
-    return trades
-
-
-def grouped_stats(
-    trades,
-    field,
-):
-    values = sorted(
-        set(
-            trade[field]
-            for trade in trades
-        )
-    )
-
     rows = []
 
-    for value in values:
-        subset = [
-            trade
-            for trade in trades
-            if trade[field] == value
-        ]
-
-        stats = stats_from_trades(
-            subset
-        )
-
-        rows.append({
-            field:
-                value,
-            "cost_pips":
+    for rank, config in enumerate(
+        finalists,
+        start=1,
+    ):
+        for (
+            label,
+            start,
+            end,
+        ) in windows:
+            trades = run_config_cached(
+                signals,
+                cache,
+                config,
                 PRIMARY_COST_PIPS,
-            "trades":
-                stats[
-                    "trades"
-                ],
-            "win_rate":
-                round(
-                    stats[
-                        "win_rate"
+                start=start,
+                end=end,
+            )
+
+            stats = stats_from_trades(
+                trades
+            )
+
+            rows.append({
+                "rank":
+                    rank,
+                "window":
+                    label,
+                "candidate":
+                    config[
+                        "label"
                     ],
-                    4,
-                ),
-            "profit_factor":
-                round(
+                "trades":
                     stats[
-                        "profit_factor"
+                        "trades"
                     ],
-                    6,
-                ),
-            "total_r":
-                round(
+                "win_rate":
+                    round(
+                        stats[
+                            "win_rate"
+                        ],
+                        4,
+                    ),
+                "profit_factor":
+                    round(
+                        stats[
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+                "total_r":
+                    round(
+                        stats[
+                            "total_r"
+                        ],
+                        4,
+                    ),
+                "expectancy_r":
+                    round(
+                        stats[
+                            "expectancy_r"
+                        ],
+                        6,
+                    ),
+                "max_drawdown_r":
+                    round(
+                        stats[
+                            "max_drawdown_r"
+                        ],
+                        4,
+                    ),
+                "longest_loss_streak":
                     stats[
-                        "total_r"
+                        "longest_loss_streak"
                     ],
-                    4,
-                ),
-            "expectancy_r":
-                round(
-                    stats[
-                        "expectancy_r"
-                    ],
-                    6,
-                ),
-            "max_drawdown_r":
-                round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
-                    4,
-                ),
-        })
+            })
 
     return rows
 
@@ -1504,7 +1421,7 @@ def run_research():
             "state":
                 "precomputing",
             "message":
-                "Calculating ATR and caching bearish engulfing signals",
+                "Calculating ATR and caching bearish signals",
             "candles":
                 len(candles),
         })
@@ -1532,7 +1449,7 @@ def run_research():
             signals,
         )
 
-        configs = discovery_configs()
+        configs = stage2_configs()
 
         summary_rows = []
 
@@ -1543,7 +1460,7 @@ def run_research():
 
         run_number = 0
 
-        for family, config in configs:
+        for config in configs:
             for cost in COST_PIPS_GRID:
                 run_number += 1
 
@@ -1552,9 +1469,8 @@ def run_research():
                         "calculating",
                     "message":
                         (
-                            f"{family} / "
-                            f"{config['label']} / "
-                            f"{cost:.2f} pip"
+                            f"{config['label']} "
+                            f"at {cost:.2f} pip"
                         ),
                     "run":
                         run_number,
@@ -1571,7 +1487,6 @@ def run_research():
 
                 summary_rows.append(
                     result_row(
-                        family,
                         config,
                         cost,
                         trades,
@@ -1625,143 +1540,194 @@ def run_research():
             reverse=True,
         )
 
-        top_rows = primary[:30]
+        top_rows = primary[
+            :30
+        ]
 
         write_csv(
             OUTPUT_TOP,
             top_rows,
         )
 
-        raw_trades = raw_signal_trades(
+        config_map = {
+            config[
+                "label"
+            ]:
+                config
+            for config in configs
+        }
+
+        finalists = [
+            config_map[
+                row[
+                    "candidate"
+                ]
+            ]
+            for row in top_rows[
+                :15
+            ]
+        ]
+
+        era_rows = validation_rows(
             signals,
             outcome_cache,
+            finalists,
+            era_windows(),
+        )
+
+        recent_rows = validation_rows(
+            signals,
+            outcome_cache,
+            finalists,
+            recent_windows(),
         )
 
         write_csv(
-            OUTPUT_RAW_TRADES,
-            raw_trades,
+            OUTPUT_ERAS,
+            era_rows,
         )
 
-        hour_rows = grouped_stats(
-            raw_trades,
-            "ny_hour",
+        write_csv(
+            OUTPUT_RECENT,
+            recent_rows,
         )
 
-        weekday_rows = grouped_stats(
-            raw_trades,
-            "ny_weekday",
-        )
+        provisional = None
 
-        weekday_names = {
-            0: "Monday",
-            1: "Tuesday",
-            2: "Wednesday",
-            3: "Thursday",
-            4: "Friday",
-            5: "Saturday",
-            6: "Sunday",
-        }
+        for row in top_rows:
+            label = row[
+                "candidate"
+            ]
 
-        for row in weekday_rows:
-            row[
-                "weekday_name"
-            ] = weekday_names.get(
-                int(
-                    row[
-                        "ny_weekday"
-                    ]
-                ),
-                "Unknown",
+            eras = [
+                item
+                for item in era_rows
+                if item[
+                    "candidate"
+                ] == label
+            ]
+
+            recent = [
+                item
+                for item in recent_rows
+                if item[
+                    "candidate"
+                ] == label
+            ]
+
+            positive_eras = sum(
+                1
+                for item in eras
+                if (
+                    int(
+                        item[
+                            "trades"
+                        ]
+                    ) >= 20
+                    and
+                    float(
+                        item[
+                            "profit_factor"
+                        ]
+                    ) > 1.0
+                )
+            )
+
+            recent_ok = (
+                len(recent) == 2
+                and
+                all(
+                    int(
+                        item[
+                            "trades"
+                        ]
+                    ) >= 20
+                    and
+                    float(
+                        item[
+                            "profit_factor"
+                        ]
+                    ) > 1.0
+                    for item in recent
+                )
+            )
+
+            if (
+                positive_eras >= 3
+                and recent_ok
+            ):
+                provisional = row
+                break
+
+        if provisional is None and top_rows:
+            provisional = top_rows[0]
+
+        best_trades = []
+
+        if provisional is not None:
+            config = config_map[
+                provisional[
+                    "candidate"
+                ]
+            ]
+
+            best_trades = run_config_cached(
+                signals,
+                outcome_cache,
+                config,
+                PRIMARY_COST_PIPS,
             )
 
         write_csv(
-            OUTPUT_HOURS,
-            hour_rows,
-        )
-
-        write_csv(
-            OUTPUT_WEEKDAYS,
-            weekday_rows,
-        )
-
-        baseline = next(
-            (
-                row
-                for row in summary_rows
-                if (
-                    row[
-                        "candidate"
-                    ] == "RAW_BASELINE"
-                    and
-                    abs(
-                        float(
-                            row[
-                                "cost_pips"
-                            ]
-                        )
-                        - PRIMARY_COST_PIPS
-                    ) < 1e-12
-                )
-            ),
-            None,
+            OUTPUT_TRADES,
+            best_trades,
         )
 
         STATUS.update({
             "state":
                 "complete",
             "message":
-                "EUR/USD M15 short Stage 1 complete",
+                "EUR/USD M15 short Stage 2 complete",
             "candles":
                 len(candles),
             "engulfing_signals":
                 len(signals),
+            "configs":
+                len(configs),
             "candidate_runs":
                 len(summary_rows),
             "primary_cost_pips":
                 PRIMARY_COST_PIPS,
-            "baseline_primary":
-                baseline,
-            "top_primary_candidates":
-                top_rows[:10],
+            "provisional_best":
+                provisional,
             "outputs": {
                 "summary":
                     OUTPUT_SUMMARY,
                 "top":
                     OUTPUT_TOP,
-                "hours":
-                    OUTPUT_HOURS,
-                "weekdays":
-                    OUTPUT_WEEKDAYS,
-                "raw_trades":
-                    OUTPUT_RAW_TRADES,
+                "eras":
+                    OUTPUT_ERAS,
+                "recent":
+                    OUTPUT_RECENT,
+                "best_trades":
+                    OUTPUT_TRADES,
             },
         })
 
         print()
         print("=" * 100)
         print(
-            "EUR/USD M15 SHORT STAGE 1 COMPLETE"
+            "EUR/USD M15 SHORT STAGE 2 COMPLETE"
         )
         print("=" * 100)
         print(
-            "Candles:",
-            len(candles),
+            "Configs:",
+            len(configs),
         )
         print(
-            "Bearish engulfing signals:",
-            len(signals),
+            "Provisional best:",
+            provisional,
         )
-        print(
-            "Baseline:",
-            baseline,
-        )
-        print()
-        print(
-            "Top 10 candidates:"
-        )
-
-        for row in top_rows[:10]:
-            print(row)
 
     except Exception as error:
         STATUS.update({
@@ -1786,7 +1752,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "EURUSD M15 Short Stage 1 Fast Discovery",
+            "EURUSD M15 Short Stage 2 Fast Interaction",
         "status":
             STATUS[
                 "state"
@@ -1802,62 +1768,62 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/m15-short/status",
-            "/m15-short/summary",
-            "/m15-short/top",
-            "/m15-short/hours",
-            "/m15-short/weekdays",
-            "/m15-short/raw-trades",
+            "/m15-short-stage2/status",
+            "/m15-short-stage2/summary",
+            "/m15-short-stage2/top",
+            "/m15-short-stage2/eras",
+            "/m15-short-stage2/recent",
+            "/m15-short-stage2/best-trades",
         ],
     })
 
 
-@app.route("/m15-short/status")
+@app.route("/m15-short-stage2/status")
 def route_status():
     return jsonify(
         STATUS
     )
 
 
-@app.route("/m15-short/summary")
+@app.route("/m15-short-stage2/summary")
 def route_summary():
     return download_file(
         OUTPUT_SUMMARY
     )
 
 
-@app.route("/m15-short/top")
+@app.route("/m15-short-stage2/top")
 def route_top():
     return download_file(
         OUTPUT_TOP
     )
 
 
-@app.route("/m15-short/hours")
-def route_hours():
+@app.route("/m15-short-stage2/eras")
+def route_eras():
     return download_file(
-        OUTPUT_HOURS
+        OUTPUT_ERAS
     )
 
 
-@app.route("/m15-short/weekdays")
-def route_weekdays():
+@app.route("/m15-short-stage2/recent")
+def route_recent():
     return download_file(
-        OUTPUT_WEEKDAYS
+        OUTPUT_RECENT
     )
 
 
-@app.route("/m15-short/raw-trades")
-def route_raw_trades():
+@app.route("/m15-short-stage2/best-trades")
+def route_best_trades():
     return download_file(
-        OUTPUT_RAW_TRADES
+        OUTPUT_TRADES
     )
 
 
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="eurusd-m15-short-stage1-fast",
+        name="eurusd-m15-short-stage2-fast",
         daemon=True,
     )
 
