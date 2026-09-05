@@ -12,46 +12,51 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# EUR/USD M15 LONG - STAGE 1 DISCOVERY
+# EUR/USD M15 LONG - STAGE 2 INTERACTION MATRIX
 #
 # READ-ONLY RESEARCH. NEVER SENDS ORDERS.
 #
-# Purpose:
-#   Build EUR/USD M15 LONG from scratch.
+# Built from Stage 1 evidence:
+#   - raw engulfing was negative
+#   - structure near prior lows was the strongest single factor
+#   - certain NY hours were materially less bad
 #
-# Signal family:
-#   Exact bullish engulfing:
-#     previous candle bearish
-#     current candle bullish
-#     current open <= previous close
-#     current close >= previous open
+# Stage 2 purpose:
+#   Test controlled interactions around:
+#     structure lookback
+#     structure distance
+#     NY session/hour sets
+#     body/ATR
+#     range/ATR
+#     strong close
+#     body ratio
+#     RR
 #
-# Research sequence in this script:
-#   1) Raw engulfing baseline
-#   2) Body-ratio sweep
-#   3) Body/ATR sweep
-#   4) Range/ATR sweep
-#   5) Strong-close sweep
-#   6) Structure matrix
-#   7) RR sweep
-#   8) New York hour breakdown
-#   9) Weekday breakdown
+# Every candidate is tested at:
+#   0.50 / 1.00 / 1.50 / 2.00 pips adverse entry cost
 #
-# Cost stress on EVERY candidate:
-#   0.50 / 1.00 / 1.50 / 2.00 pips adverse entry.
+# Primary ranking cost:
+#   1.00 pip
+#
+# Validation:
+#   full history
+#   era splits
+#   recent 5Y
+#   recent 2Y
 #
 # Historical conventions:
-#   - OANDA midpoint M15 candles
+#   - OANDA midpoint M15
+#   - exact bullish engulfing
 #   - ATR14 Wilder/RMA, SMA seeded
 #   - stop = signal low - 10 ticks
 #   - target based on REFERENCE signal close risk
-#   - stressed historical entry = signal close + cost
+#   - adverse historical entry = close + cost
 #   - exits begin NEXT candle
 #   - same-bar tie:
-#       compare distance from candle open to high vs low
 #       high closer => target first
 #       otherwise stop first
-#   - pyramiding = 0
+#   - pyramiding 0
+#   - exit-candle signal eligible
 # ============================================================
 
 
@@ -66,8 +71,6 @@ OANDA_BASE = os.getenv(
 INSTRUMENT = "EUR_USD"
 GRANULARITY = "M15"
 
-# Discovery history. Broad enough to span multiple regimes,
-# but not so enormous that first-stage iteration becomes painful.
 RESEARCH_FROM = datetime(
     2010, 1, 1, 0, 0,
     tzinfo=timezone.utc,
@@ -97,36 +100,39 @@ COST_PIPS_GRID = [
     2.00,
 ]
 
-# Use 1 pip as the main ranking cost for discovery.
 PRIMARY_COST_PIPS = 1.00
 
 OUTPUT_SUMMARY = (
-    "eurusd_m15_long_stage1_summary.csv"
+    "eurusd_m15_long_stage2_summary.csv"
 )
 
-OUTPUT_TRADES = (
-    "eurusd_m15_long_stage1_primary_trades.csv"
-)
-
-OUTPUT_HOURS = (
-    "eurusd_m15_long_stage1_hour_breakdown.csv"
-)
-
-OUTPUT_WEEKDAYS = (
-    "eurusd_m15_long_stage1_weekday_breakdown.csv"
+OUTPUT_PRIMARY = (
+    "eurusd_m15_long_stage2_primary.csv"
 )
 
 OUTPUT_TOP = (
-    "eurusd_m15_long_stage1_top_candidates.csv"
+    "eurusd_m15_long_stage2_top_candidates.csv"
+)
+
+OUTPUT_ERAS = (
+    "eurusd_m15_long_stage2_era_validation.csv"
+)
+
+OUTPUT_RECENT = (
+    "eurusd_m15_long_stage2_recent_validation.csv"
+)
+
+OUTPUT_TRADES = (
+    "eurusd_m15_long_stage2_best_trade_log.csv"
 )
 
 STATUS = {
     "state": "not_started",
     "message": (
-        "EUR/USD M15 long discovery has not started"
+        "EUR/USD M15 Stage 2 has not started"
     ),
     "service": (
-        "EURUSD M15 Long Stage 1 Discovery"
+        "EURUSD M15 Long Stage 2 Interaction Matrix"
     ),
     "orders_supported": False,
     "trading_enabled": False,
@@ -134,7 +140,7 @@ STATUS = {
 
 
 # ============================================================
-# BASIC HELPERS
+# HELPERS
 # ============================================================
 
 def iso_utc(dt):
@@ -151,7 +157,6 @@ def iso_utc(dt):
 
 
 def parse_oanda_time(value):
-    # OANDA RFC3339 may contain nanoseconds.
     if value.endswith("Z"):
         value = (
             value[:-1]
@@ -193,12 +198,6 @@ def parse_oanda_time(value):
     )
 
 
-def safe_float(value):
-    return float(
-        value
-    )
-
-
 def write_csv(
     path,
     rows,
@@ -213,7 +212,6 @@ def write_csv(
         return
 
     fieldnames = []
-
     seen = set()
 
     for row in rows:
@@ -250,9 +248,7 @@ def download_file(path):
         path
     ):
         return jsonify({
-            "error": (
-                "Output not ready yet"
-            ),
+            "error": "Output not ready yet",
             "path": path,
         }), 404
 
@@ -267,6 +263,22 @@ def download_file(path):
     )
 
 
+def years_ago_safe(
+    dt,
+    years,
+):
+    try:
+        return dt.replace(
+            year=dt.year - years
+        )
+    except ValueError:
+        return dt.replace(
+            month=2,
+            day=28,
+            year=dt.year - years,
+        )
+
+
 # ============================================================
 # OANDA DATA
 # ============================================================
@@ -274,17 +286,15 @@ def download_file(path):
 def oanda_headers():
     if not OANDA_TOKEN:
         raise RuntimeError(
-            "OANDA_API_TOKEN is not configured"
+            "OANDA_TOKEN is not configured"
         )
 
     return {
-        "Authorization": (
+        "Authorization":
             "Bearer "
-            + OANDA_TOKEN.strip()
-        ),
-        "Content-Type": (
-            "application/json"
-        ),
+            + OANDA_TOKEN.strip(),
+        "Content-Type":
+            "application/json",
     }
 
 
@@ -342,19 +352,19 @@ def fetch_m15_chunk(
                     item["time"]
                 ),
             "open":
-                safe_float(
+                float(
                     mid["o"]
                 ),
             "high":
-                safe_float(
+                float(
                     mid["h"]
                 ),
             "low":
-                safe_float(
+                float(
                     mid["l"]
                 ),
             "close":
-                safe_float(
+                float(
                     mid["c"]
                 ),
             "volume":
@@ -373,14 +383,9 @@ def fetch_full_m15(
     start,
     end,
 ):
-    # 30 days ~= 2880 M15 candles, safely under OANDA's
-    # per-request candle limit.
-    chunk_days = 30
-
     cursor = start
-
     by_time = {}
-
+    chunk_days = 30
     chunk_number = 0
 
     while cursor < end:
@@ -397,41 +402,39 @@ def fetch_full_m15(
         STATUS.update({
             "state": "fetching",
             "message": (
-                "Fetching EUR/USD M15 "
-                f"{iso_utc(cursor)} "
-                f"to {iso_utc(chunk_end)}"
+                f"Fetching chunk {chunk_number}: "
+                f"{iso_utc(cursor)} -> "
+                f"{iso_utc(chunk_end)}"
             ),
-            "chunk":
-                chunk_number,
+            "chunk": chunk_number,
         })
 
-        candles = fetch_m15_chunk(
+        chunk = fetch_m15_chunk(
             cursor,
             chunk_end,
         )
 
-        for candle in candles:
+        for candle in chunk:
             by_time[
                 candle["time"]
             ] = candle
 
         cursor = chunk_end
 
-        # Be polite to the API.
         time.sleep(
             0.03
         )
 
-    result = list(
+    candles = list(
         by_time.values()
     )
 
-    result.sort(
+    candles.sort(
         key=lambda row:
             row["time"]
     )
 
-    return result
+    return candles
 
 
 # ============================================================
@@ -445,7 +448,7 @@ def add_atr14(
         candles
     )
 
-    true_ranges = [
+    trs = [
         None
     ] * n
 
@@ -461,15 +464,11 @@ def add_atr14(
         ]
 
         if i == 0:
-            tr = (
-                high - low
-            )
+            tr = high - low
         else:
-            previous_close = (
-                candles[
-                    i - 1
-                ]["close"]
-            )
+            previous_close = candles[
+                i - 1
+            ]["close"]
 
             tr = max(
                 high - low,
@@ -483,7 +482,7 @@ def add_atr14(
                 ),
             )
 
-        true_ranges[i] = tr
+        trs[i] = tr
 
     atr = [
         None
@@ -492,33 +491,32 @@ def add_atr14(
     if n < 14:
         return atr
 
-    seed = sum(
-        true_ranges[
-            0:14
-        ]
-    ) / 14.0
-
-    atr[13] = seed
+    atr[13] = (
+        sum(
+            trs[
+                0:14
+            ]
+        )
+        / 14.0
+    )
 
     for i in range(
         14,
         n
     ):
         atr[i] = (
-            (
-                atr[
-                    i - 1
-                ]
-                * 13.0
-            )
-            + true_ranges[i]
+            atr[
+                i - 1
+            ]
+            * 13.0
+            + trs[i]
         ) / 14.0
 
     return atr
 
 
 # ============================================================
-# SIGNAL / FILTER LOGIC
+# SIGNAL FEATURES
 # ============================================================
 
 def bullish_engulfing(
@@ -536,30 +534,18 @@ def bullish_engulfing(
         i
     ]
 
-    previous_bearish = (
+    return (
         previous["close"]
         < previous["open"]
-    )
-
-    current_bullish = (
+        and
         current["close"]
         > current["open"]
-    )
-
-    body_engulf = (
+        and
         current["open"]
         <= previous["close"]
         and
         current["close"]
         >= previous["open"]
-    )
-
-    return (
-        previous_bearish
-        and
-        current_bullish
-        and
-        body_engulf
     )
 
 
@@ -568,12 +554,12 @@ def signal_features(
     atr14,
     i,
 ):
-    current = candles[
-        i
-    ]
-
     previous = candles[
         i - 1
+    ]
+
+    current = candles[
+        i
     ]
 
     current_body = (
@@ -595,39 +581,6 @@ def signal_features(
         i
     ]
 
-    body_ratio = (
-        current_body
-        / previous_body
-        if previous_body > 0
-        else 999.0
-    )
-
-    body_atr = (
-        current_body
-        / atr
-        if atr
-        and atr > 0
-        else None
-    )
-
-    range_atr = (
-        candle_range
-        / atr
-        if atr
-        and atr > 0
-        else None
-    )
-
-    close_location = (
-        (
-            current["close"]
-            - current["low"]
-        )
-        / candle_range
-        if candle_range > 0
-        else 0.0
-    )
-
     ny_time = (
         current["time"]
         .astimezone(
@@ -637,13 +590,38 @@ def signal_features(
 
     return {
         "body_ratio":
-            body_ratio,
+            (
+                current_body
+                / previous_body
+                if previous_body > 0
+                else 999.0
+            ),
         "body_atr":
-            body_atr,
+            (
+                current_body
+                / atr
+                if atr
+                and atr > 0
+                else None
+            ),
         "range_atr":
-            range_atr,
+            (
+                candle_range
+                / atr
+                if atr
+                and atr > 0
+                else None
+            ),
         "close_location":
-            close_location,
+            (
+                (
+                    current["close"]
+                    - current["low"]
+                )
+                / candle_range
+                if candle_range > 0
+                else 0.0
+            ),
         "ny_hour":
             ny_time.hour,
         "ny_weekday":
@@ -658,12 +636,6 @@ def structure_ok(
     lookback,
     maximum_distance_atr,
 ):
-    if (
-        lookback is None
-        or maximum_distance_atr is None
-    ):
-        return True
-
     if i < lookback:
         return False
 
@@ -684,12 +656,10 @@ def structure_ok(
         ]
     )
 
-    signal_low = candles[
-        i
-    ]["low"]
-
     distance = abs(
-        signal_low
+        candles[
+            i
+        ]["low"]
         - previous_low
     )
 
@@ -719,19 +689,20 @@ def passes_config(
     )
 
     if (
-        features["body_ratio"]
+        features[
+            "body_ratio"
+        ]
         <
-        config.get(
-            "minimum_body_ratio",
-            1.0,
-        )
+        config[
+            "minimum_body_ratio"
+        ]
     ):
         return False
 
     minimum_body_atr = (
-        config.get(
+        config[
             "minimum_body_atr"
-        )
+        ]
     )
 
     if (
@@ -753,9 +724,9 @@ def passes_config(
         return False
 
     minimum_range_atr = (
-        config.get(
+        config[
             "minimum_range_atr"
-        )
+        ]
     )
 
     if (
@@ -777,9 +748,9 @@ def passes_config(
         return False
 
     minimum_close_location = (
-        config.get(
+        config[
             "minimum_close_location"
-        )
+        ]
     )
 
     if (
@@ -798,19 +769,19 @@ def passes_config(
         candles,
         atr14,
         i,
-        config.get(
+        config[
             "structure_lookback"
-        ),
-        config.get(
+        ],
+        config[
             "maximum_distance_atr"
-        ),
+        ],
     ):
         return False
 
     included_hours = (
-        config.get(
+        config[
             "included_ny_hours"
-        )
+        ]
     )
 
     if (
@@ -824,10 +795,9 @@ def passes_config(
         return False
 
     excluded_weekdays = (
-        config.get(
-            "excluded_weekdays",
-            set(),
-        )
+        config[
+            "excluded_weekdays"
+        ]
     )
 
     if (
@@ -893,10 +863,6 @@ def simulate_trade(
     if actual_risk <= 0:
         return None
 
-    exit_index = None
-    exit_reason = None
-    exit_price = None
-
     for j in range(
         signal_index + 1,
         len(candles),
@@ -915,6 +881,9 @@ def simulate_trade(
             >= target
         )
 
+        exit_reason = None
+        exit_price = None
+
         if (
             hit_stop
             and
@@ -930,94 +899,86 @@ def simulate_trade(
                 - candle["low"]
             )
 
-            # Locked long same-bar tie rule:
-            # high closer => target first,
-            # otherwise stop first.
             if (
                 distance_high
                 < distance_low
             ):
-                exit_index = j
                 exit_reason = (
                     "TARGET"
                 )
+
                 exit_price = (
                     target
                 )
             else:
-                exit_index = j
                 exit_reason = (
                     "STOP"
                 )
+
                 exit_price = (
                     stop
                 )
 
-            break
-
-        if hit_target:
-            exit_index = j
+        elif hit_target:
             exit_reason = (
                 "TARGET"
             )
+
             exit_price = (
                 target
             )
-            break
 
-        if hit_stop:
-            exit_index = j
+        elif hit_stop:
             exit_reason = (
                 "STOP"
             )
+
             exit_price = (
                 stop
             )
-            break
 
-    if exit_index is None:
-        return None
+        if exit_reason is not None:
+            result_r = (
+                exit_price
+                - backtest_entry
+            ) / actual_risk
 
-    result_r = (
-        (
-            exit_price
-            - backtest_entry
-        )
-        / actual_risk
-    )
+            return {
+                "signal_index":
+                    signal_index,
+                "exit_index":
+                    j,
+                "entry_time":
+                    signal["time"],
+                "exit_time":
+                    candle["time"],
+                "entry_time_utc":
+                    iso_utc(
+                        signal["time"]
+                    ),
+                "exit_time_utc":
+                    iso_utc(
+                        candle["time"]
+                    ),
+                "reference_entry":
+                    reference_entry,
+                "backtest_entry":
+                    backtest_entry,
+                "stop":
+                    stop,
+                "target":
+                    target,
+                "exit_reason":
+                    exit_reason,
+                "result_r":
+                    result_r,
+                "reward_risk":
+                    reward_risk,
+                "cost_pips":
+                    cost_pips,
+            }
 
-    return {
-        "signal_index":
-            signal_index,
-        "entry_time_utc":
-            iso_utc(
-                signal["time"]
-            ),
-        "exit_time_utc":
-            iso_utc(
-                candles[
-                    exit_index
-                ]["time"]
-            ),
-        "reference_entry":
-            reference_entry,
-        "backtest_entry":
-            backtest_entry,
-        "stop":
-            stop,
-        "target":
-            target,
-        "exit_reason":
-            exit_reason,
-        "result_r":
-            result_r,
-        "reward_risk":
-            reward_risk,
-        "cost_pips":
-            cost_pips,
-        "exit_index":
-            exit_index,
-    }
+    return None
 
 
 def run_config(
@@ -1025,15 +986,41 @@ def run_config(
     atr14,
     config,
     cost_pips,
+    start=None,
+    end=None,
     include_trade_log=False,
 ):
     trades = []
 
-    i = 14
+    i = max(
+        14,
+        int(
+            config[
+                "structure_lookback"
+            ]
+        ),
+    )
 
     while i < len(
         candles
     ):
+        candle_time = candles[
+            i
+        ]["time"]
+
+        if (
+            start is not None
+            and candle_time < start
+        ):
+            i += 1
+            continue
+
+        if (
+            end is not None
+            and candle_time >= end
+        ):
+            break
+
         if not passes_config(
             candles,
             atr14,
@@ -1057,12 +1044,10 @@ def run_config(
             continue
 
         if include_trade_log:
-            features = (
-                signal_features(
-                    candles,
-                    atr14,
-                    i,
-                )
+            features = signal_features(
+                candles,
+                atr14,
+                i,
             )
 
             row = dict(
@@ -1114,9 +1099,7 @@ def run_config(
                 trade
             )
 
-        # Pyramiding = 0:
-        # exact exit-candle signal remains eligible,
-        # therefore resume at exit_index rather than +1.
+        # exact exit-candle signal allowed
         i = trade[
             "exit_index"
         ]
@@ -1133,21 +1116,23 @@ def stats_from_trades(
 ):
     results = [
         float(
-            trade["result_r"]
+            trade[
+                "result_r"
+            ]
         )
         for trade in trades
     ]
 
     winners = [
-        value
-        for value in results
-        if value > 0
+        result
+        for result in results
+        if result > 0
     ]
 
     losers = [
-        value
-        for value in results
-        if value < 0
+        result
+        for result in results
+        if result < 0
     ]
 
     gross_profit = sum(
@@ -1160,7 +1145,7 @@ def stats_from_trades(
         )
     )
 
-    pf = (
+    profit_factor = (
         gross_profit
         / gross_loss
         if gross_loss > 0
@@ -1179,8 +1164,8 @@ def stats_from_trades(
     peak = 0.0
     max_dd = 0.0
 
+    loss_streak = 0
     longest_loss_streak = 0
-    current_loss_streak = 0
 
     for result in results:
         equity += result
@@ -1190,24 +1175,19 @@ def stats_from_trades(
             equity,
         )
 
-        dd = (
-            equity
-            - peak
-        )
-
         max_dd = min(
             max_dd,
-            dd,
+            equity - peak,
         )
 
         if result < 0:
-            current_loss_streak += 1
+            loss_streak += 1
             longest_loss_streak = max(
                 longest_loss_streak,
-                current_loss_streak,
+                loss_streak,
             )
         else:
-            current_loss_streak = 0
+            loss_streak = 0
 
     return {
         "trades":
@@ -1235,7 +1215,7 @@ def stats_from_trades(
                 else 0.0
             ),
         "profit_factor":
-            pf,
+            profit_factor,
         "total_r":
             total_r,
         "expectancy_r":
@@ -1254,8 +1234,7 @@ def stats_from_trades(
     }
 
 
-def candidate_row(
-    family,
+def make_row(
     config,
     cost_pips,
     trades,
@@ -1264,43 +1243,69 @@ def candidate_row(
         trades
     )
 
+    hours_text = (
+        "ALL"
+        if config[
+            "included_ny_hours"
+        ] is None
+        else ",".join(
+            str(hour)
+            for hour in sorted(
+                config[
+                    "included_ny_hours"
+                ]
+            )
+        )
+    )
+
+    weekdays_text = ",".join(
+        str(day)
+        for day in sorted(
+            config[
+                "excluded_weekdays"
+            ]
+        )
+    )
+
     return {
-        "family":
-            family,
         "candidate":
             config[
                 "label"
             ],
         "cost_pips":
             cost_pips,
-        "minimum_body_ratio":
-            config.get(
-                "minimum_body_ratio"
-            ),
-        "minimum_body_atr":
-            config.get(
-                "minimum_body_atr"
-            ),
-        "minimum_range_atr":
-            config.get(
-                "minimum_range_atr"
-            ),
-        "minimum_close_location":
-            config.get(
-                "minimum_close_location"
-            ),
         "structure_lookback":
-            config.get(
+            config[
                 "structure_lookback"
-            ),
+            ],
         "maximum_distance_atr":
-            config.get(
+            config[
                 "maximum_distance_atr"
-            ),
+            ],
+        "minimum_body_ratio":
+            config[
+                "minimum_body_ratio"
+            ],
+        "minimum_body_atr":
+            config[
+                "minimum_body_atr"
+            ],
+        "minimum_range_atr":
+            config[
+                "minimum_range_atr"
+            ],
+        "minimum_close_location":
+            config[
+                "minimum_close_location"
+            ],
+        "included_ny_hours":
+            hours_text,
+        "excluded_weekdays":
+            weekdays_text,
         "reward_risk":
-            config.get(
+            config[
                 "reward_risk"
-            ),
+            ],
         "trades":
             stats[
                 "trades"
@@ -1356,318 +1361,422 @@ def candidate_row(
 
 
 # ============================================================
-# DISCOVERY CONFIGS
+# CONTROLLED STAGE 2 CANDIDATE GENERATION
 # ============================================================
 
-def base_config():
-    return {
-        "label":
-            "RAW_BASELINE",
-        "minimum_body_ratio":
-            1.00,
-        "minimum_body_atr":
-            None,
-        "minimum_range_atr":
-            None,
-        "minimum_close_location":
-            None,
-        "structure_lookback":
-            None,
-        "maximum_distance_atr":
-            None,
-        "reward_risk":
-            2.50,
-        "included_ny_hours":
-            None,
-        "excluded_weekdays":
-            set(),
-    }
-
-
-def discovery_configs():
+def stage2_configs():
     configs = []
 
-    baseline = base_config()
-
-    configs.append((
-        "BASELINE",
-        baseline,
-    ))
-
-    for value in [
-        1.00,
-        1.10,
-        1.20,
-        1.30,
-        1.40,
-        1.60,
-        1.80,
-        2.00,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_body_ratio"
-        ] = value
-        cfg[
-            "label"
-        ] = (
-            f"BR_{value:.2f}"
-        )
-
-        configs.append((
-            "BODY_RATIO",
-            cfg,
-        ))
-
-    for value in [
-        0.30,
-        0.40,
-        0.50,
-        0.60,
-        0.70,
-        0.80,
-        1.00,
-        1.20,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_body_atr"
-        ] = value
-        cfg[
-            "label"
-        ] = (
-            f"BODY_ATR_{value:.2f}"
-        )
-
-        configs.append((
-            "BODY_ATR",
-            cfg,
-        ))
-
-    for value in [
-        0.60,
-        0.80,
-        1.00,
-        1.20,
-        1.40,
-        1.60,
-        1.80,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_range_atr"
-        ] = value
-        cfg[
-            "label"
-        ] = (
-            f"RANGE_ATR_{value:.2f}"
-        )
-
-        configs.append((
-            "RANGE_ATR",
-            cfg,
-        ))
-
-    for value in [
-        0.55,
-        0.60,
-        0.65,
-        0.70,
-        0.75,
-        0.80,
-        0.85,
-    ]:
-        cfg = base_config()
-        cfg[
-            "minimum_close_location"
-        ] = value
-        cfg[
-            "label"
-        ] = (
-            f"STRONG_CLOSE_{value:.2f}"
-        )
-
-        configs.append((
-            "STRONG_CLOSE",
-            cfg,
-        ))
-
-    for lookback in [
-        10,
-        20,
-        40,
+    structure_lookbacks = [
         60,
         100,
         150,
-    ]:
-        for distance in [
-            0.05,
-            0.10,
-            0.20,
-            0.30,
-            0.50,
-            0.75,
-        ]:
-            cfg = base_config()
+    ]
 
-            cfg[
-                "structure_lookback"
-            ] = lookback
+    structure_distances = [
+        0.05,
+        0.10,
+        0.15,
+        0.20,
+    ]
 
-            cfg[
-                "maximum_distance_atr"
-            ] = distance
+    hour_sets = [
+        None,
+        {8, 9, 10, 11},
+        {8, 9, 10},
+        {9, 10, 11},
+        {9, 11},
+        {8, 9, 11},
+    ]
 
-            cfg[
-                "label"
-            ] = (
-                f"STRUCT_{lookback}_"
-                f"{distance:.2f}"
-            )
+    body_atrs = [
+        None,
+        0.40,
+        0.60,
+        0.80,
+    ]
 
-            configs.append((
-                "STRUCTURE",
-                cfg,
-            ))
+    range_atrs = [
+        None,
+        0.80,
+        1.00,
+        1.20,
+    ]
 
-    for rr in [
+    close_locations = [
+        None,
+        0.60,
+        0.70,
+        0.80,
+    ]
+
+    body_ratios = [
+        1.00,
+        1.10,
+        1.20,
+        1.40,
+    ]
+
+    reward_risks = [
         1.50,
         2.00,
         2.50,
         3.00,
         3.50,
         4.00,
-        4.50,
-        5.00,
-    ]:
-        cfg = base_config()
+    ]
 
-        cfg[
-            "reward_risk"
-        ] = rr
+    # Core structure/session discovery:
+    # vary one candle-quality family at a time to avoid a
+    # combinatorial explosion.
+    counter = 0
 
-        cfg[
-            "label"
-        ] = (
-            f"RR_{rr:.2f}"
+    for lookback in structure_lookbacks:
+        for distance in structure_distances:
+            for hours in hour_sets:
+
+                # body ATR family
+                for body_atr in body_atrs:
+                    for rr in reward_risks:
+                        counter += 1
+
+                        config = {
+                            "label":
+                                (
+                                    f"C{counter:04d}_"
+                                    f"S{lookback}_"
+                                    f"D{distance:.2f}_"
+                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
+                                    f"BA{('OFF' if body_atr is None else f'{body_atr:.2f}')}_"
+                                    f"RR{rr:.2f}"
+                                ),
+                            "structure_lookback":
+                                lookback,
+                            "maximum_distance_atr":
+                                distance,
+                            "minimum_body_ratio":
+                                1.00,
+                            "minimum_body_atr":
+                                body_atr,
+                            "minimum_range_atr":
+                                None,
+                            "minimum_close_location":
+                                None,
+                            "included_ny_hours":
+                                hours,
+                            "excluded_weekdays":
+                                set(),
+                            "reward_risk":
+                                rr,
+                        }
+
+                        configs.append(
+                            config
+                        )
+
+                # range ATR family
+                for range_atr in range_atrs:
+                    for rr in reward_risks:
+                        counter += 1
+
+                        config = {
+                            "label":
+                                (
+                                    f"C{counter:04d}_"
+                                    f"S{lookback}_"
+                                    f"D{distance:.2f}_"
+                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
+                                    f"RA{('OFF' if range_atr is None else f'{range_atr:.2f}')}_"
+                                    f"RR{rr:.2f}"
+                                ),
+                            "structure_lookback":
+                                lookback,
+                            "maximum_distance_atr":
+                                distance,
+                            "minimum_body_ratio":
+                                1.00,
+                            "minimum_body_atr":
+                                None,
+                            "minimum_range_atr":
+                                range_atr,
+                            "minimum_close_location":
+                                None,
+                            "included_ny_hours":
+                                hours,
+                            "excluded_weekdays":
+                                set(),
+                            "reward_risk":
+                                rr,
+                        }
+
+                        configs.append(
+                            config
+                        )
+
+                # strong-close family
+                for close_location in close_locations:
+                    for rr in reward_risks:
+                        counter += 1
+
+                        config = {
+                            "label":
+                                (
+                                    f"C{counter:04d}_"
+                                    f"S{lookback}_"
+                                    f"D{distance:.2f}_"
+                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
+                                    f"CL{('OFF' if close_location is None else f'{close_location:.2f}')}_"
+                                    f"RR{rr:.2f}"
+                                ),
+                            "structure_lookback":
+                                lookback,
+                            "maximum_distance_atr":
+                                distance,
+                            "minimum_body_ratio":
+                                1.00,
+                            "minimum_body_atr":
+                                None,
+                            "minimum_range_atr":
+                                None,
+                            "minimum_close_location":
+                                close_location,
+                            "included_ny_hours":
+                                hours,
+                            "excluded_weekdays":
+                                set(),
+                            "reward_risk":
+                                rr,
+                        }
+
+                        configs.append(
+                            config
+                        )
+
+                # body-ratio family
+                for body_ratio in body_ratios:
+                    for rr in reward_risks:
+                        counter += 1
+
+                        config = {
+                            "label":
+                                (
+                                    f"C{counter:04d}_"
+                                    f"S{lookback}_"
+                                    f"D{distance:.2f}_"
+                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
+                                    f"BR{body_ratio:.2f}_"
+                                    f"RR{rr:.2f}"
+                                ),
+                            "structure_lookback":
+                                lookback,
+                            "maximum_distance_atr":
+                                distance,
+                            "minimum_body_ratio":
+                                body_ratio,
+                            "minimum_body_atr":
+                                None,
+                            "minimum_range_atr":
+                                None,
+                            "minimum_close_location":
+                                None,
+                            "included_ny_hours":
+                                hours,
+                            "excluded_weekdays":
+                                set(),
+                            "reward_risk":
+                                rr,
+                        }
+
+                        configs.append(
+                            config
+                        )
+
+    # Deduplicate because OFF / BR1.00 variants overlap.
+    unique = {}
+
+    for config in configs:
+        key = (
+            config[
+                "structure_lookback"
+            ],
+            config[
+                "maximum_distance_atr"
+            ],
+            config[
+                "minimum_body_ratio"
+            ],
+            config[
+                "minimum_body_atr"
+            ],
+            config[
+                "minimum_range_atr"
+            ],
+            config[
+                "minimum_close_location"
+            ],
+            (
+                None
+                if config[
+                    "included_ny_hours"
+                ] is None
+                else tuple(
+                    sorted(
+                        config[
+                            "included_ny_hours"
+                        ]
+                    )
+                )
+            ),
+            config[
+                "reward_risk"
+            ],
         )
 
-        configs.append((
-            "REWARD_RISK",
-            cfg,
-        ))
+        if key not in unique:
+            unique[
+                key
+            ] = config
 
-    return configs
-
-
-# ============================================================
-# HOUR / WEEKDAY BREAKDOWNS
-# ============================================================
-
-def raw_signal_trade_log(
-    candles,
-    atr14,
-):
-    config = base_config()
-
-    config[
-        "label"
-    ] = (
-        "RAW_BASELINE"
-    )
-
-    return run_config(
-        candles,
-        atr14,
-        config,
-        PRIMARY_COST_PIPS,
-        include_trade_log=True,
+    return list(
+        unique.values()
     )
 
 
-def grouped_stats(
+# ============================================================
+# ERA / RECENT VALIDATION
+# ============================================================
+
+def validation_windows():
+    return [
+        (
+            "ERA_2010_2013",
+            datetime(
+                2010, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2014_2017",
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2018, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2018_2021",
+            datetime(
+                2018, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2022, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "ERA_2022_NOW",
+            datetime(
+                2022, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            RESEARCH_TO,
+        ),
+    ]
+
+
+def recent_windows():
+    return [
+        (
+            "LAST_5Y",
+            years_ago_safe(
+                RESEARCH_TO,
+                5,
+            ),
+            RESEARCH_TO,
+        ),
+        (
+            "LAST_2Y",
+            years_ago_safe(
+                RESEARCH_TO,
+                2,
+            ),
+            RESEARCH_TO,
+        ),
+    ]
+
+
+def validation_row(
+    label,
+    config,
     trades,
-    field,
 ):
-    values = sorted(
-        set(
-            trade[
-                field
-            ]
-            for trade in trades
-        )
+    stats = stats_from_trades(
+        trades
     )
 
-    rows = []
-
-    for value in values:
-        subset = [
-            trade
-            for trade in trades
-            if trade[
-                field
-            ] == value
-        ]
-
-        stats = stats_from_trades(
-            subset
-        )
-
-        row = {
-            field:
-                value,
-            "cost_pips":
-                PRIMARY_COST_PIPS,
-            "trades":
+    return {
+        "window":
+            label,
+        "candidate":
+            config[
+                "label"
+            ],
+        "trades":
+            stats[
+                "trades"
+            ],
+        "win_rate":
+            round(
                 stats[
-                    "trades"
+                    "win_rate"
                 ],
-            "win_rate":
-                round(
-                    stats[
-                        "win_rate"
-                    ],
-                    4,
-                ),
-            "profit_factor":
-                round(
-                    stats[
-                        "profit_factor"
-                    ],
-                    6,
-                ),
-            "total_r":
-                round(
-                    stats[
-                        "total_r"
-                    ],
-                    4,
-                ),
-            "expectancy_r":
-                round(
-                    stats[
-                        "expectancy_r"
-                    ],
-                    6,
-                ),
-            "max_drawdown_r":
-                round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
-                    4,
-                ),
-        }
-
-        rows.append(
-            row
-        )
-
-    return rows
+                4,
+            ),
+        "profit_factor":
+            round(
+                stats[
+                    "profit_factor"
+                ],
+                6,
+            ),
+        "total_r":
+            round(
+                stats[
+                    "total_r"
+                ],
+                4,
+            ),
+        "expectancy_r":
+            round(
+                stats[
+                    "expectancy_r"
+                ],
+                6,
+            ),
+        "max_drawdown_r":
+            round(
+                stats[
+                    "max_drawdown_r"
+                ],
+                4,
+            ),
+        "longest_loss_streak":
+            stats[
+                "longest_loss_streak"
+            ],
+    }
 
 
 # ============================================================
-# RESEARCH RUNNER
+# RUNNER
 # ============================================================
 
 def run_research():
@@ -1699,24 +1808,29 @@ def run_research():
                 "Too few M15 candles returned"
             )
 
-        STATUS.update({
-            "state":
-                "calculating",
-            "message":
-                "Calculating ATR14 and Stage 1 discovery",
-            "candles":
-                len(
-                    candles
-                ),
-        })
-
         atr14 = add_atr14(
             candles
         )
 
-        summary_rows = []
+        configs = stage2_configs()
 
-        configs = discovery_configs()
+        STATUS.update({
+            "state":
+                "calculating",
+            "message":
+                "Running controlled interaction matrix",
+            "candles":
+                len(
+                    candles
+                ),
+            "candidates":
+                len(
+                    configs
+                ),
+        })
+
+        summary_rows = []
+        primary_rows = []
 
         total_runs = (
             len(
@@ -1729,7 +1843,7 @@ def run_research():
 
         run_number = 0
 
-        for family, config in configs:
+        for config in configs:
             for cost_pips in COST_PIPS_GRID:
                 run_number += 1
 
@@ -1738,9 +1852,8 @@ def run_research():
                         "calculating",
                     "message":
                         (
-                            f"{family} / "
-                            f"{config['label']} / "
-                            f"{cost_pips:.2f} pip"
+                            f"{config['label']} "
+                            f"at {cost_pips:.2f} pip"
                         ),
                     "run":
                         run_number,
@@ -1753,37 +1866,37 @@ def run_research():
                     atr14,
                     config,
                     cost_pips,
-                    include_trade_log=False,
+                )
+
+                row = make_row(
+                    config,
+                    cost_pips,
+                    trades,
                 )
 
                 summary_rows.append(
-                    candidate_row(
-                        family,
-                        config,
-                        cost_pips,
-                        trades,
-                    )
+                    row
                 )
+
+                if abs(
+                    cost_pips
+                    - PRIMARY_COST_PIPS
+                ) < 1e-12:
+                    primary_rows.append(
+                        row
+                    )
 
         write_csv(
             OUTPUT_SUMMARY,
             summary_rows,
         )
 
-        primary_rows = [
-            row
-            for row in summary_rows
-            if abs(
-                float(
-                    row[
-                        "cost_pips"
-                    ]
-                )
-                - PRIMARY_COST_PIPS
-            ) < 1e-12
-        ]
+        write_csv(
+            OUTPUT_PRIMARY,
+            primary_rows,
+        )
 
-        # Avoid tiny-sample junk dominating the first sort.
+        # Require enough trades to be credible at this stage.
         eligible = [
             row
             for row in primary_rows
@@ -1791,9 +1904,11 @@ def run_research():
                 row[
                     "trades"
                 ]
-            ) >= 100
+            ) >= 120
         ]
 
+        # Score robustness-oriented rather than pure PF.
+        # PF and expectancy dominate, with total R as a tie-breaker.
         eligible.sort(
             key=lambda row: (
                 float(
@@ -1811,12 +1926,17 @@ def run_research():
                         "total_r"
                     ]
                 ),
+                int(
+                    row[
+                        "trades"
+                    ]
+                ),
             ),
             reverse=True,
         )
 
         top_rows = eligible[
-            :30
+            :40
         ]
 
         write_csv(
@@ -1824,92 +1944,214 @@ def run_research():
             top_rows,
         )
 
-        raw_trades = (
-            raw_signal_trade_log(
+        # Map label back to config.
+        config_by_label = {
+            config[
+                "label"
+            ]:
+                config
+            for config in configs
+        }
+
+        # Validate top 20 across eras and recent windows.
+        era_rows = []
+        recent_rows = []
+
+        for rank, top_row in enumerate(
+            top_rows[
+                :20
+            ],
+            start=1,
+        ):
+            config = config_by_label[
+                top_row[
+                    "candidate"
+                ]
+            ]
+
+            for (
+                label,
+                start,
+                end,
+            ) in validation_windows():
+                trades = run_config(
+                    candles,
+                    atr14,
+                    config,
+                    PRIMARY_COST_PIPS,
+                    start=start,
+                    end=end,
+                )
+
+                row = validation_row(
+                    label,
+                    config,
+                    trades,
+                )
+
+                row[
+                    "rank"
+                ] = rank
+
+                era_rows.append(
+                    row
+                )
+
+            for (
+                label,
+                start,
+                end,
+            ) in recent_windows():
+                trades = run_config(
+                    candles,
+                    atr14,
+                    config,
+                    PRIMARY_COST_PIPS,
+                    start=start,
+                    end=end,
+                )
+
+                row = validation_row(
+                    label,
+                    config,
+                    trades,
+                )
+
+                row[
+                    "rank"
+                ] = rank
+
+                recent_rows.append(
+                    row
+                )
+
+        write_csv(
+            OUTPUT_ERAS,
+            era_rows,
+        )
+
+        write_csv(
+            OUTPUT_RECENT,
+            recent_rows,
+        )
+
+        # Pick a provisional best candidate using:
+        #  - top primary ranking
+        #  - at least 3/4 positive-PF eras
+        #  - recent 5Y and 2Y PF > 1
+        provisional = None
+
+        for top_row in top_rows:
+            label = top_row[
+                "candidate"
+            ]
+
+            candidate_eras = [
+                row
+                for row in era_rows
+                if row[
+                    "candidate"
+                ] == label
+            ]
+
+            candidate_recent = [
+                row
+                for row in recent_rows
+                if row[
+                    "candidate"
+                ] == label
+            ]
+
+            positive_eras = sum(
+                1
+                for row in candidate_eras
+                if (
+                    int(
+                        row[
+                            "trades"
+                        ]
+                    ) >= 20
+                    and
+                    float(
+                        row[
+                            "profit_factor"
+                        ]
+                    ) > 1.0
+                )
+            )
+
+            recent_ok = (
+                len(
+                    candidate_recent
+                ) == 2
+                and
+                all(
+                    int(
+                        row[
+                            "trades"
+                        ]
+                    ) >= 20
+                    and
+                    float(
+                        row[
+                            "profit_factor"
+                        ]
+                    ) > 1.0
+                    for row in candidate_recent
+                )
+            )
+
+            if (
+                positive_eras >= 3
+                and recent_ok
+            ):
+                provisional = (
+                    top_row
+                )
+                break
+
+        if (
+            provisional is None
+            and top_rows
+        ):
+            provisional = (
+                top_rows[0]
+            )
+
+        best_trade_log = []
+
+        if provisional is not None:
+            best_config = config_by_label[
+                provisional[
+                    "candidate"
+                ]
+            ]
+
+            best_trade_log = run_config(
                 candles,
                 atr14,
+                best_config,
+                PRIMARY_COST_PIPS,
+                include_trade_log=True,
             )
-        )
 
         write_csv(
             OUTPUT_TRADES,
-            raw_trades,
-        )
-
-        hour_rows = grouped_stats(
-            raw_trades,
-            "ny_hour",
-        )
-
-        weekday_rows = grouped_stats(
-            raw_trades,
-            "ny_weekday",
-        )
-
-        weekday_names = {
-            0: "Monday",
-            1: "Tuesday",
-            2: "Wednesday",
-            3: "Thursday",
-            4: "Friday",
-            5: "Saturday",
-            6: "Sunday",
-        }
-
-        for row in weekday_rows:
-            row[
-                "weekday_name"
-            ] = weekday_names.get(
-                int(
-                    row[
-                        "ny_weekday"
-                    ]
-                ),
-                "Unknown",
-            )
-
-        write_csv(
-            OUTPUT_HOURS,
-            hour_rows,
-        )
-
-        write_csv(
-            OUTPUT_WEEKDAYS,
-            weekday_rows,
-        )
-
-        baseline_primary = next(
-            (
-                row
-                for row in summary_rows
-                if (
-                    row[
-                        "candidate"
-                    ]
-                    == "RAW_BASELINE"
-                    and
-                    abs(
-                        float(
-                            row[
-                                "cost_pips"
-                            ]
-                        )
-                        - PRIMARY_COST_PIPS
-                    )
-                    < 1e-12
-                )
-            ),
-            None,
+            best_trade_log,
         )
 
         STATUS.update({
             "state":
                 "complete",
             "message":
-                "EUR/USD M15 Stage 1 discovery complete",
+                "EUR/USD M15 Stage 2 complete",
             "candles":
                 len(
                     candles
+                ),
+            "candidates":
+                len(
+                    configs
                 ),
             "candidate_runs":
                 len(
@@ -1917,23 +2159,21 @@ def run_research():
                 ),
             "primary_cost_pips":
                 PRIMARY_COST_PIPS,
-            "baseline_primary":
-                baseline_primary,
-            "top_primary_candidates":
-                top_rows[
-                    :10
-                ],
+            "provisional_best":
+                provisional,
             "outputs": {
                 "summary":
                     OUTPUT_SUMMARY,
+                "primary":
+                    OUTPUT_PRIMARY,
                 "top":
                     OUTPUT_TOP,
-                "raw_trades":
+                "eras":
+                    OUTPUT_ERAS,
+                "recent":
+                    OUTPUT_RECENT,
+                "best_trades":
                     OUTPUT_TRADES,
-                "hours":
-                    OUTPUT_HOURS,
-                "weekdays":
-                    OUTPUT_WEEKDAYS,
             },
         })
 
@@ -1942,41 +2182,21 @@ def run_research():
             "=" * 100
         )
         print(
-            "EUR/USD M15 LONG - STAGE 1 COMPLETE"
+            "EUR/USD M15 LONG STAGE 2 COMPLETE"
         )
         print(
             "=" * 100
         )
-        print()
         print(
-            "Candles:",
+            "Candidates:",
             len(
-                candles
+                configs
             ),
         )
         print(
-            "Primary discovery cost:",
-            PRIMARY_COST_PIPS,
-            "pip",
+            "Provisional best:",
+            provisional,
         )
-        print()
-        print(
-            "Baseline:"
-        )
-        print(
-            baseline_primary
-        )
-        print()
-        print(
-            "Top 10 primary-cost candidates:"
-        )
-
-        for row in top_rows[
-            :10
-        ]:
-            print(
-                row
-            )
 
     except Exception as error:
         STATUS.update({
@@ -2003,7 +2223,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "EURUSD M15 Long Stage 1 Discovery",
+            "EURUSD M15 Long Stage 2 Interaction Matrix",
         "status":
             STATUS[
                 "state"
@@ -2019,62 +2239,84 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/m15/status",
-            "/m15/summary",
-            "/m15/top",
-            "/m15/raw-trades",
-            "/m15/hours",
-            "/m15/weekdays",
+            "/m15-stage2/status",
+            "/m15-stage2/summary",
+            "/m15-stage2/primary",
+            "/m15-stage2/top",
+            "/m15-stage2/eras",
+            "/m15-stage2/recent",
+            "/m15-stage2/best-trades",
         ],
     })
 
 
-@app.route("/m15/status")
-def m15_status():
+@app.route(
+    "/m15-stage2/status"
+)
+def stage2_status():
     return jsonify(
         STATUS
     )
 
 
-@app.route("/m15/summary")
-def m15_summary():
+@app.route(
+    "/m15-stage2/summary"
+)
+def stage2_summary():
     return download_file(
         OUTPUT_SUMMARY
     )
 
 
-@app.route("/m15/top")
-def m15_top():
+@app.route(
+    "/m15-stage2/primary"
+)
+def stage2_primary():
+    return download_file(
+        OUTPUT_PRIMARY
+    )
+
+
+@app.route(
+    "/m15-stage2/top"
+)
+def stage2_top():
     return download_file(
         OUTPUT_TOP
     )
 
 
-@app.route("/m15/raw-trades")
-def m15_raw_trades():
+@app.route(
+    "/m15-stage2/eras"
+)
+def stage2_eras():
+    return download_file(
+        OUTPUT_ERAS
+    )
+
+
+@app.route(
+    "/m15-stage2/recent"
+)
+def stage2_recent():
+    return download_file(
+        OUTPUT_RECENT
+    )
+
+
+@app.route(
+    "/m15-stage2/best-trades"
+)
+def stage2_best_trades():
     return download_file(
         OUTPUT_TRADES
-    )
-
-
-@app.route("/m15/hours")
-def m15_hours():
-    return download_file(
-        OUTPUT_HOURS
-    )
-
-
-@app.route("/m15/weekdays")
-def m15_weekdays():
-    return download_file(
-        OUTPUT_WEEKDAYS
     )
 
 
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="eurusd-m15-long-stage1",
+        name="eurusd-m15-long-stage2",
         daemon=True,
     )
 
