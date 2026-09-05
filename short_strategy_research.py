@@ -57,7 +57,7 @@ from flask import Flask, jsonify, send_file
 
 app = Flask(__name__)
 
-OANDA_TOKEN = os.getenv("OANDA_API_TOKEN")
+OANDA_TOKEN = os.getenv("OANDA_TOKEN")
 OANDA_BASE = os.getenv(
     "OANDA_API_URL",
     "https://api-fxtrade.oanda.com"
