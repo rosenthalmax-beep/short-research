@@ -12,7 +12,7 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# EUR/USD M15 LONG - STAGE 2 INTERACTION MATRIX
+# EUR/USD M15 LONG - STAGE 3 TIGHT ROBUSTNESS SWEEP
 #
 # READ-ONLY RESEARCH. NEVER SENDS ORDERS.
 #
@@ -103,27 +103,27 @@ COST_PIPS_GRID = [
 PRIMARY_COST_PIPS = 1.00
 
 OUTPUT_SUMMARY = (
-    "eurusd_m15_long_stage2_summary.csv"
+    "eurusd_m15_long_stage3_summary.csv"
 )
 
 OUTPUT_PRIMARY = (
-    "eurusd_m15_long_stage2_primary.csv"
+    "eurusd_m15_long_stage3_primary.csv"
 )
 
 OUTPUT_TOP = (
-    "eurusd_m15_long_stage2_top_candidates.csv"
+    "eurusd_m15_long_stage3_top_candidates.csv"
 )
 
 OUTPUT_ERAS = (
-    "eurusd_m15_long_stage2_era_validation.csv"
+    "eurusd_m15_long_stage3_era_validation.csv"
 )
 
 OUTPUT_RECENT = (
-    "eurusd_m15_long_stage2_recent_validation.csv"
+    "eurusd_m15_long_stage3_recent_validation.csv"
 )
 
 OUTPUT_TRADES = (
-    "eurusd_m15_long_stage2_best_trade_log.csv"
+    "eurusd_m15_long_stage3_best_trade_log.csv"
 )
 
 STATUS = {
@@ -132,7 +132,7 @@ STATUS = {
         "EUR/USD M15 Stage 2 has not started"
     ),
     "service": (
-        "EURUSD M15 Long Stage 2 Interaction Matrix"
+        "EURUSD M15 Long Stage 3 Tight Robustness Sweep"
     ),
     "orders_supported": False,
     "trading_enabled": False,
@@ -1365,281 +1365,93 @@ def make_row(
 # ============================================================
 
 def stage2_configs():
+    # Stage 3 deliberately stays in the neighbourhood of the
+    # strongest Stage 2 family:
+    #
+    #   structure ~150
+    #   distance ~0.10 ATR
+    #   body >= ~0.80 ATR
+    #   all NY hours
+    #
+    # No new filters are introduced here.
     configs = []
 
     structure_lookbacks = [
-        60,
-        100,
+        120,
+        135,
         150,
+        165,
+        180,
     ]
 
     structure_distances = [
-        0.05,
-        0.10,
-        0.15,
-        0.20,
-    ]
-
-    hour_sets = [
-        None,
-        {8, 9, 10, 11},
-        {8, 9, 10},
-        {9, 10, 11},
-        {9, 11},
-        {8, 9, 11},
+        0.075,
+        0.100,
+        0.125,
+        0.150,
     ]
 
     body_atrs = [
-        None,
-        0.40,
-        0.60,
-        0.80,
-    ]
-
-    range_atrs = [
-        None,
-        0.80,
-        1.00,
-        1.20,
-    ]
-
-    close_locations = [
-        None,
-        0.60,
         0.70,
+        0.75,
         0.80,
-    ]
-
-    body_ratios = [
-        1.00,
-        1.10,
-        1.20,
-        1.40,
+        0.85,
+        0.90,
     ]
 
     reward_risks = [
-        1.50,
-        2.00,
         2.50,
+        2.75,
         3.00,
+        3.25,
         3.50,
+        3.75,
         4.00,
+        4.25,
     ]
 
-    # Core structure/session discovery:
-    # vary one candle-quality family at a time to avoid a
-    # combinatorial explosion.
     counter = 0
 
     for lookback in structure_lookbacks:
         for distance in structure_distances:
-            for hours in hour_sets:
+            for body_atr in body_atrs:
+                for rr in reward_risks:
+                    counter += 1
 
-                # body ATR family
-                for body_atr in body_atrs:
-                    for rr in reward_risks:
-                        counter += 1
+                    config = {
+                        "label":
+                            (
+                                f"R{counter:04d}_"
+                                f"S{lookback}_"
+                                f"D{distance:.3f}_"
+                                f"BA{body_atr:.2f}_"
+                                f"RR{rr:.2f}"
+                            ),
+                        "structure_lookback":
+                            lookback,
+                        "maximum_distance_atr":
+                            distance,
+                        "minimum_body_ratio":
+                            1.00,
+                        "minimum_body_atr":
+                            body_atr,
+                        "minimum_range_atr":
+                            None,
+                        "minimum_close_location":
+                            None,
+                        "included_ny_hours":
+                            None,
+                        "excluded_weekdays":
+                            set(),
+                        "reward_risk":
+                            rr,
+                    }
 
-                        config = {
-                            "label":
-                                (
-                                    f"C{counter:04d}_"
-                                    f"S{lookback}_"
-                                    f"D{distance:.2f}_"
-                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
-                                    f"BA{('OFF' if body_atr is None else f'{body_atr:.2f}')}_"
-                                    f"RR{rr:.2f}"
-                                ),
-                            "structure_lookback":
-                                lookback,
-                            "maximum_distance_atr":
-                                distance,
-                            "minimum_body_ratio":
-                                1.00,
-                            "minimum_body_atr":
-                                body_atr,
-                            "minimum_range_atr":
-                                None,
-                            "minimum_close_location":
-                                None,
-                            "included_ny_hours":
-                                hours,
-                            "excluded_weekdays":
-                                set(),
-                            "reward_risk":
-                                rr,
-                        }
-
-                        configs.append(
-                            config
-                        )
-
-                # range ATR family
-                for range_atr in range_atrs:
-                    for rr in reward_risks:
-                        counter += 1
-
-                        config = {
-                            "label":
-                                (
-                                    f"C{counter:04d}_"
-                                    f"S{lookback}_"
-                                    f"D{distance:.2f}_"
-                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
-                                    f"RA{('OFF' if range_atr is None else f'{range_atr:.2f}')}_"
-                                    f"RR{rr:.2f}"
-                                ),
-                            "structure_lookback":
-                                lookback,
-                            "maximum_distance_atr":
-                                distance,
-                            "minimum_body_ratio":
-                                1.00,
-                            "minimum_body_atr":
-                                None,
-                            "minimum_range_atr":
-                                range_atr,
-                            "minimum_close_location":
-                                None,
-                            "included_ny_hours":
-                                hours,
-                            "excluded_weekdays":
-                                set(),
-                            "reward_risk":
-                                rr,
-                        }
-
-                        configs.append(
-                            config
-                        )
-
-                # strong-close family
-                for close_location in close_locations:
-                    for rr in reward_risks:
-                        counter += 1
-
-                        config = {
-                            "label":
-                                (
-                                    f"C{counter:04d}_"
-                                    f"S{lookback}_"
-                                    f"D{distance:.2f}_"
-                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
-                                    f"CL{('OFF' if close_location is None else f'{close_location:.2f}')}_"
-                                    f"RR{rr:.2f}"
-                                ),
-                            "structure_lookback":
-                                lookback,
-                            "maximum_distance_atr":
-                                distance,
-                            "minimum_body_ratio":
-                                1.00,
-                            "minimum_body_atr":
-                                None,
-                            "minimum_range_atr":
-                                None,
-                            "minimum_close_location":
-                                close_location,
-                            "included_ny_hours":
-                                hours,
-                            "excluded_weekdays":
-                                set(),
-                            "reward_risk":
-                                rr,
-                        }
-
-                        configs.append(
-                            config
-                        )
-
-                # body-ratio family
-                for body_ratio in body_ratios:
-                    for rr in reward_risks:
-                        counter += 1
-
-                        config = {
-                            "label":
-                                (
-                                    f"C{counter:04d}_"
-                                    f"S{lookback}_"
-                                    f"D{distance:.2f}_"
-                                    f"H{('ALL' if hours is None else ''.join(str(h) for h in sorted(hours)))}_"
-                                    f"BR{body_ratio:.2f}_"
-                                    f"RR{rr:.2f}"
-                                ),
-                            "structure_lookback":
-                                lookback,
-                            "maximum_distance_atr":
-                                distance,
-                            "minimum_body_ratio":
-                                body_ratio,
-                            "minimum_body_atr":
-                                None,
-                            "minimum_range_atr":
-                                None,
-                            "minimum_close_location":
-                                None,
-                            "included_ny_hours":
-                                hours,
-                            "excluded_weekdays":
-                                set(),
-                            "reward_risk":
-                                rr,
-                        }
-
-                        configs.append(
-                            config
-                        )
-
-    # Deduplicate because OFF / BR1.00 variants overlap.
-    unique = {}
-
-    for config in configs:
-        key = (
-            config[
-                "structure_lookback"
-            ],
-            config[
-                "maximum_distance_atr"
-            ],
-            config[
-                "minimum_body_ratio"
-            ],
-            config[
-                "minimum_body_atr"
-            ],
-            config[
-                "minimum_range_atr"
-            ],
-            config[
-                "minimum_close_location"
-            ],
-            (
-                None
-                if config[
-                    "included_ny_hours"
-                ] is None
-                else tuple(
-                    sorted(
-                        config[
-                            "included_ny_hours"
-                        ]
+                    configs.append(
+                        config
                     )
-                )
-            ),
-            config[
-                "reward_risk"
-            ],
-        )
 
-        if key not in unique:
-            unique[
-                key
-            ] = config
-
-    return list(
-        unique.values()
-    )
+    return configs
 
 
 # ============================================================
@@ -1776,6 +1588,289 @@ def validation_row(
 
 
 # ============================================================
+# MONTHLY ROLLING VALIDATION
+# ============================================================
+
+OUTPUT_ROLLING = (
+    "eurusd_m15_long_stage3_rolling_validation.csv"
+)
+
+OUTPUT_ROLLING_SUMMARY = (
+    "eurusd_m15_long_stage3_rolling_summary.csv"
+)
+
+
+def month_start(dt):
+    return datetime(
+        dt.year,
+        dt.month,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+
+def add_months(dt, months):
+    total = (
+        dt.year * 12
+        + (dt.month - 1)
+        + months
+    )
+
+    year = total // 12
+    month = (
+        total % 12
+        + 1
+    )
+
+    return datetime(
+        year,
+        month,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+
+def monthly_rolling_rows(
+    candles,
+    atr14,
+    config,
+    months,
+):
+    rows = []
+
+    cursor = month_start(
+        RESEARCH_FROM
+    )
+
+    if cursor < RESEARCH_FROM:
+        cursor = add_months(
+            cursor,
+            1,
+        )
+
+    last_start = add_months(
+        month_start(
+            RESEARCH_TO
+        ),
+        -months,
+    )
+
+    while cursor <= last_start:
+        end = add_months(
+            cursor,
+            months,
+        )
+
+        if end > RESEARCH_TO:
+            break
+
+        trades = run_config(
+            candles,
+            atr14,
+            config,
+            PRIMARY_COST_PIPS,
+            start=cursor,
+            end=end,
+        )
+
+        stats = stats_from_trades(
+            trades
+        )
+
+        rows.append({
+            "candidate":
+                config[
+                    "label"
+                ],
+            "months":
+                months,
+            "window":
+                (
+                    f"{cursor:%Y-%m-%d}"
+                    " -> "
+                    f"{end:%Y-%m-%d}"
+                ),
+            "start_utc":
+                iso_utc(
+                    cursor
+                ),
+            "end_utc":
+                iso_utc(
+                    end
+                ),
+            "trades":
+                stats[
+                    "trades"
+                ],
+            "profit_factor":
+                round(
+                    stats[
+                        "profit_factor"
+                    ],
+                    6,
+                ),
+            "total_r":
+                round(
+                    stats[
+                        "total_r"
+                    ],
+                    4,
+                ),
+            "expectancy_r":
+                round(
+                    stats[
+                        "expectancy_r"
+                    ],
+                    6,
+                ),
+            "max_drawdown_r":
+                round(
+                    stats[
+                        "max_drawdown_r"
+                    ],
+                    4,
+                ),
+            "positive":
+                (
+                    stats[
+                        "total_r"
+                    ] > 0
+                ),
+        })
+
+        cursor = add_months(
+            cursor,
+            1,
+        )
+
+    return rows
+
+
+def rolling_summary_row(
+    candidate,
+    months,
+    rows,
+):
+    if not rows:
+        return {
+            "candidate":
+                candidate,
+            "months":
+                months,
+            "windows":
+                0,
+        }
+
+    pfs = [
+        float(
+            row[
+                "profit_factor"
+            ]
+        )
+        for row in rows
+    ]
+
+    total_rs = [
+        float(
+            row[
+                "total_r"
+            ]
+        )
+        for row in rows
+    ]
+
+    positive = sum(
+        1
+        for row in rows
+        if row[
+            "positive"
+        ]
+    )
+
+    worst_pf_row = min(
+        rows,
+        key=lambda row:
+            float(
+                row[
+                    "profit_factor"
+                ]
+            ),
+    )
+
+    worst_r_row = min(
+        rows,
+        key=lambda row:
+            float(
+                row[
+                    "total_r"
+                ]
+            ),
+    )
+
+    return {
+        "candidate":
+            candidate,
+        "months":
+            months,
+        "windows":
+            len(
+                rows
+            ),
+        "positive_windows":
+            positive,
+        "positive_windows_pct":
+            round(
+                positive
+                / len(rows)
+                * 100.0,
+                4,
+            ),
+        "worst_profit_factor":
+            round(
+                min(
+                    pfs
+                ),
+                6,
+            ),
+        "median_profit_factor":
+            round(
+                sorted(
+                    pfs
+                )[
+                    len(pfs) // 2
+                ],
+                6,
+            ),
+        "worst_total_r":
+            round(
+                min(
+                    total_rs
+                ),
+                4,
+            ),
+        "median_total_r":
+            round(
+                sorted(
+                    total_rs
+                )[
+                    len(
+                        total_rs
+                    ) // 2
+                ],
+                4,
+            ),
+        "worst_pf_window":
+            worst_pf_row[
+                "window"
+            ],
+        "worst_r_window":
+            worst_r_row[
+                "window"
+            ],
+    }
+
+
+# ============================================================
 # RUNNER
 # ============================================================
 
@@ -1818,7 +1913,7 @@ def run_research():
             "state":
                 "calculating",
             "message":
-                "Running controlled interaction matrix",
+                "Running Stage 3 tight robustness sweep",
             "candles":
                 len(
                     candles
@@ -2035,6 +2130,55 @@ def run_research():
             recent_rows,
         )
 
+
+        # Monthly rolling validation on the top 10 only.
+        # This is deliberately narrower because each candidate
+        # is evaluated over every possible month-start 2Y/3Y window.
+        rolling_rows = []
+        rolling_summary_rows = []
+
+        for top_row in top_rows[:10]:
+            config = config_by_label[
+                top_row[
+                    "candidate"
+                ]
+            ]
+
+            for months in [
+                24,
+                36,
+            ]:
+                rows = monthly_rolling_rows(
+                    candles,
+                    atr14,
+                    config,
+                    months,
+                )
+
+                rolling_rows.extend(
+                    rows
+                )
+
+                rolling_summary_rows.append(
+                    rolling_summary_row(
+                        config[
+                            "label"
+                        ],
+                        months,
+                        rows,
+                    )
+                )
+
+        write_csv(
+            OUTPUT_ROLLING,
+            rolling_rows,
+        )
+
+        write_csv(
+            OUTPUT_ROLLING_SUMMARY,
+            rolling_summary_rows,
+        )
+
         # Pick a provisional best candidate using:
         #  - top primary ranking
         #  - at least 3/4 positive-PF eras
@@ -2144,7 +2288,7 @@ def run_research():
             "state":
                 "complete",
             "message":
-                "EUR/USD M15 Stage 2 complete",
+                "EUR/USD M15 Stage 3 complete",
             "candles":
                 len(
                     candles
@@ -2174,6 +2318,10 @@ def run_research():
                     OUTPUT_RECENT,
                 "best_trades":
                     OUTPUT_TRADES,
+                "rolling":
+                    OUTPUT_ROLLING,
+                "rolling_summary":
+                    OUTPUT_ROLLING_SUMMARY,
             },
         })
 
@@ -2182,7 +2330,7 @@ def run_research():
             "=" * 100
         )
         print(
-            "EUR/USD M15 LONG STAGE 2 COMPLETE"
+            "EUR/USD M15 LONG STAGE 3 COMPLETE"
         )
         print(
             "=" * 100
@@ -2223,7 +2371,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "EURUSD M15 Long Stage 2 Interaction Matrix",
+            "EURUSD M15 Long Stage 3 Tight Robustness Sweep",
         "status":
             STATUS[
                 "state"
@@ -2239,19 +2387,21 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/m15-stage2/status",
-            "/m15-stage2/summary",
-            "/m15-stage2/primary",
-            "/m15-stage2/top",
-            "/m15-stage2/eras",
-            "/m15-stage2/recent",
-            "/m15-stage2/best-trades",
+            "/m15-stage3/status",
+            "/m15-stage3/summary",
+            "/m15-stage3/primary",
+            "/m15-stage3/top",
+            "/m15-stage3/eras",
+            "/m15-stage3/recent",
+            "/m15-stage3/best-trades",
+            "/m15-stage3/rolling",
+            "/m15-stage3/rolling-summary",
         ],
     })
 
 
 @app.route(
-    "/m15-stage2/status"
+    "/m15-stage3/status"
 )
 def stage2_status():
     return jsonify(
@@ -2260,7 +2410,7 @@ def stage2_status():
 
 
 @app.route(
-    "/m15-stage2/summary"
+    "/m15-stage3/summary"
 )
 def stage2_summary():
     return download_file(
@@ -2269,7 +2419,7 @@ def stage2_summary():
 
 
 @app.route(
-    "/m15-stage2/primary"
+    "/m15-stage3/primary"
 )
 def stage2_primary():
     return download_file(
@@ -2278,7 +2428,7 @@ def stage2_primary():
 
 
 @app.route(
-    "/m15-stage2/top"
+    "/m15-stage3/top"
 )
 def stage2_top():
     return download_file(
@@ -2287,7 +2437,7 @@ def stage2_top():
 
 
 @app.route(
-    "/m15-stage2/eras"
+    "/m15-stage3/eras"
 )
 def stage2_eras():
     return download_file(
@@ -2296,7 +2446,7 @@ def stage2_eras():
 
 
 @app.route(
-    "/m15-stage2/recent"
+    "/m15-stage3/recent"
 )
 def stage2_recent():
     return download_file(
@@ -2305,7 +2455,7 @@ def stage2_recent():
 
 
 @app.route(
-    "/m15-stage2/best-trades"
+    "/m15-stage3/best-trades"
 )
 def stage2_best_trades():
     return download_file(
@@ -2313,10 +2463,28 @@ def stage2_best_trades():
     )
 
 
+@app.route(
+    "/m15-stage3/rolling"
+)
+def stage3_rolling():
+    return download_file(
+        OUTPUT_ROLLING
+    )
+
+
+@app.route(
+    "/m15-stage3/rolling-summary"
+)
+def stage3_rolling_summary():
+    return download_file(
+        OUTPUT_ROLLING_SUMMARY
+    )
+
+
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="eurusd-m15-long-stage2",
+        name="eurusd-m15-long-stage3",
         daemon=True,
     )
 
