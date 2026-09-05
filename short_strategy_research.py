@@ -9308,592 +9308,188 @@ def monthly_rolling_extremes():
 
 
 # ============================================================
-# FINAL LIVE PORTFOLIO - TRADE FREQUENCY / QUIET GAP ANALYSIS
-#
-# READ-ONLY RESEARCH. NEVER SENDS ORDERS.
-#
-# Measures:
-#   - average / median / longest time between trade entries
-#   - counts of 7d / 14d / 21d / 28d+ entry gaps
-#   - weekly trade-count distribution
-#   - monthly trade-count distribution
-#   - busiest / quietest active weeks and months
-#   - full history + trailing 1Y / 2Y / 5Y / 10Y
+# FINAL LIVE PORTFOLIO TRANSACTION-COST STRESS
 # ============================================================
 
-FREQ_SUMMARY_OUTPUT = "final_portfolio_frequency_summary.csv"
-FREQ_GAPS_OUTPUT = "final_portfolio_trade_gaps.csv"
-FREQ_WEEKS_OUTPUT = "final_portfolio_weekly_frequency.csv"
-FREQ_MONTHS_OUTPUT = "final_portfolio_monthly_frequency.csv"
+COST_STRESS_PIPS = [0.50, 0.75, 1.00, 1.50, 2.00]
 
-FREQ_STATUS = {
+COST_STRESS_OVERVIEW_OUTPUT = "final_portfolio_cost_stress_overview.csv"
+COST_STRESS_SUMMARY_OUTPUT = "final_portfolio_cost_stress_summary.csv"
+COST_STRESS_EXTREMES_OUTPUT = "final_portfolio_cost_stress_best_worst.csv"
+COST_STRESS_ALL_OUTPUT = "final_portfolio_cost_stress_monthly_all.csv"
+
+COST_STRESS_STATUS = {
     "state": "not_started",
-    "message": "Frequency analysis has not started",
-    "service": "Final Live Portfolio Frequency Analysis",
+    "message": "Portfolio cost stress has not started",
+    "service": "Final Live Portfolio Transaction Cost Stress",
     "orders_supported": False,
     "trading_enabled": False,
 }
 
 
-def median(values):
-    clean = sorted(values)
-    n = len(clean)
-
-    if n == 0:
-        return None
-
-    middle = n // 2
-
-    if n % 2 == 1:
-        return clean[middle]
-
-    return (
-        clean[middle - 1]
-        + clean[middle]
-    ) / 2.0
+def pip_size_for(instrument):
+    return 0.01 if instrument == "USD_JPY" else 0.0001
 
 
-def trade_entries_in_window(
-    trades,
-    start,
-    end,
-):
-    return [
-        trade
-        for trade in trades
-        if (
-            trade["entry_dt"] >= start
-            and trade["entry_dt"] < end
-        )
-    ]
+def stress_trade_result(trade, cost_pips):
+    reference_entry = float(trade["reference_entry"])
+    stop = float(trade["stop"])
+    target = float(trade["target"])
+    pip_size = pip_size_for(trade["instrument"])
+    side = trade["side"].upper()
+    is_winner = float(trade["result_r"]) > 0
+
+    if side == "BUY":
+        stressed_entry = reference_entry + cost_pips * pip_size
+        risk = stressed_entry - stop
+        if risk <= 0:
+            return None
+        if is_winner:
+            return (target - stressed_entry) / risk
+        return (stop - stressed_entry) / risk
+
+    if side == "SELL":
+        stressed_entry = reference_entry - cost_pips * pip_size
+        risk = stop - stressed_entry
+        if risk <= 0:
+            return None
+        if is_winner:
+            return (stressed_entry - target) / risk
+        return (stressed_entry - stop) / risk
+
+    raise ValueError(f"Unknown side: {side}")
 
 
-def gap_rows_for_trades(
-    trades,
-    label,
-):
-    rows = []
+def stress_trade_set(trades, cost_pips):
+    stressed = []
 
-    ordered = sorted(
-        trades,
-        key=lambda trade:
-            trade["entry_dt"],
-    )
+    for trade in trades:
+        row = dict(trade)
+        stressed_r = stress_trade_result(row, cost_pips)
 
-    for index in range(
-        1,
-        len(ordered),
-    ):
-        previous = ordered[
-            index - 1
-        ]
+        if stressed_r is None:
+            continue
 
-        current = ordered[
-            index
-        ]
+        row["result_r"] = stressed_r
+        stressed.append(row)
 
-        delta = (
-            current["entry_dt"]
-            - previous["entry_dt"]
-        )
-
-        hours = (
-            delta.total_seconds()
-            / 3600.0
-        )
-
-        days = (
-            hours / 24.0
-        )
-
-        rows.append({
-            "window":
-                label,
-            "previous_entry_utc":
-                iso_utc(
-                    previous["entry_dt"]
-                ),
-            "previous_instrument":
-                previous["instrument"],
-            "previous_side":
-                previous["side"],
-            "next_entry_utc":
-                iso_utc(
-                    current["entry_dt"]
-                ),
-            "next_instrument":
-                current["instrument"],
-            "next_side":
-                current["side"],
-            "gap_hours":
-                round(
-                    hours,
-                    4,
-                ),
-            "gap_days":
-                round(
-                    days,
-                    4,
-                ),
-            "gap_7d_plus":
-                days >= 7.0,
-            "gap_14d_plus":
-                days >= 14.0,
-            "gap_21d_plus":
-                days >= 21.0,
-            "gap_28d_plus":
-                days >= 28.0,
-        })
-
-    return rows
+    return stressed
 
 
-def monday_start(
-    dt
-):
-    start = (
-        dt
-        - timedelta(
-            days=dt.weekday()
-        )
-    )
-
-    return start.replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-
-
-def month_floor(
-    dt
-):
-    return datetime(
-        dt.year,
-        dt.month,
-        1,
-        tzinfo=timezone.utc,
-    )
-
-
-def next_month(
-    dt
-):
-    if dt.month == 12:
-        return datetime(
-            dt.year + 1,
-            1,
-            1,
-            tzinfo=timezone.utc,
-        )
-
-    return datetime(
-        dt.year,
-        dt.month + 1,
-        1,
-        tzinfo=timezone.utc,
-    )
-
-
-def build_week_rows(
-    trades,
-    label,
-    start,
-    end,
-):
-    rows = []
-
-    cursor = monday_start(
-        start
-    )
-
-    while cursor < end:
-
-        week_end = (
-            cursor
-            + timedelta(
-                days=7
-            )
-        )
-
-        count = sum(
-            1
-            for trade in trades
-            if (
-                trade["entry_dt"] >= cursor
-                and
-                trade["entry_dt"] < week_end
-            )
-        )
-
-        rows.append({
-            "window":
-                label,
-            "week_start_utc":
-                iso_utc(
-                    cursor
-                ),
-            "week_end_utc":
-                iso_utc(
-                    week_end
-                ),
-            "trades":
-                count,
-            "zero_trades":
-                count == 0,
-            "one_trade":
-                count == 1,
-            "two_trades":
-                count == 2,
-            "three_plus_trades":
-                count >= 3,
-        })
-
-        cursor = week_end
-
-    return rows
-
-
-def build_month_rows(
-    trades,
-    label,
-    start,
-    end,
-):
-    rows = []
-
-    cursor = month_floor(
-        start
-    )
-
-    while cursor < end:
-
-        month_end = next_month(
-            cursor
-        )
-
-        count = sum(
-            1
-            for trade in trades
-            if (
-                trade["entry_dt"] >= cursor
-                and
-                trade["entry_dt"] < month_end
-            )
-        )
-
-        rows.append({
-            "window":
-                label,
-            "month":
-                cursor.strftime(
-                    "%Y-%m"
-                ),
-            "month_start_utc":
-                iso_utc(
-                    cursor
-                ),
-            "month_end_utc":
-                iso_utc(
-                    month_end
-                ),
-            "trades":
-                count,
-        })
-
-        cursor = month_end
-
-    return rows
-
-
-def frequency_summary_row(
-    trades,
-    label,
-    start,
-    end,
-):
-    selected = trade_entries_in_window(
-        trades,
-        start,
-        end,
-    )
-
-    gaps = gap_rows_for_trades(
-        selected,
-        label,
-    )
-
-    gap_days = [
-        float(
-            row["gap_days"]
-        )
-        for row in gaps
-    ]
-
-    week_rows = build_week_rows(
-        selected,
-        label,
-        start,
-        end,
-    )
-
-    month_rows = build_month_rows(
-        selected,
-        label,
-        start,
-        end,
-    )
-
-    total_weeks = len(
-        week_rows
-    )
-
-    zero_weeks = sum(
-        1
-        for row in week_rows
-        if row[
-            "zero_trades"
-        ]
-    )
-
-    one_weeks = sum(
-        1
-        for row in week_rows
-        if row[
-            "one_trade"
-        ]
-    )
-
-    two_weeks = sum(
-        1
-        for row in week_rows
-        if row[
-            "two_trades"
-        ]
-    )
-
-    three_plus_weeks = sum(
-        1
-        for row in week_rows
-        if row[
-            "three_plus_trades"
-        ]
-    )
-
-    duration_years = (
+def verify_half_pip_parity(original_trades, stressed_trades):
+    original = {
         (
-            end - start
-        ).total_seconds()
-        / (
-            365.2425
-            * 86400.0
-        )
-    )
+            t["instrument"],
+            t["side"],
+            t["entry_time_utc"],
+            t["exit_time_utc"],
+        ): float(t["result_r"])
+        for t in original_trades
+    }
 
-    longest_gap = (
-        max(
-            gaps,
-            key=lambda row:
-                float(
-                    row[
-                        "gap_days"
-                    ]
-                ),
+    diffs = []
+
+    for trade in stressed_trades:
+        key = (
+            trade["instrument"],
+            trade["side"],
+            trade["entry_time_utc"],
+            trade["exit_time_utc"],
         )
-        if gaps
-        else None
-    )
+
+        if key in original:
+            diffs.append(
+                abs(
+                    original[key]
+                    - float(trade["result_r"])
+                )
+            )
 
     return {
-        "window":
-            label,
-        "start_utc":
-            iso_utc(
-                start
-            ),
-        "end_utc":
-            iso_utc(
-                end
-            ),
-        "trades":
-            len(
-                selected
-            ),
-        "trades_per_year":
-            round(
-                len(selected)
-                / duration_years,
-                4,
-            )
-            if duration_years > 0
-            else None,
-        "trades_per_month":
-            round(
-                len(selected)
-                / (
-                    duration_years
-                    * 12.0
-                ),
-                4,
-            )
-            if duration_years > 0
-            else None,
-        "trades_per_week":
-            round(
-                len(selected)
-                / (
-                    duration_years
-                    * 52.1775
-                ),
-                4,
-            )
-            if duration_years > 0
-            else None,
-        "average_gap_days":
-            round(
-                sum(
-                    gap_days
-                )
-                / len(
-                    gap_days
-                ),
-                4,
-            )
-            if gap_days
-            else None,
-        "median_gap_days":
-            round(
-                median(
-                    gap_days
-                ),
-                4,
-            )
-            if gap_days
-            else None,
-        "longest_gap_days":
-            (
-                longest_gap[
-                    "gap_days"
-                ]
-                if longest_gap
-                else None
-            ),
-        "longest_gap_from":
-            (
-                longest_gap[
-                    "previous_entry_utc"
-                ]
-                if longest_gap
-                else None
-            ),
-        "longest_gap_to":
-            (
-                longest_gap[
-                    "next_entry_utc"
-                ]
-                if longest_gap
-                else None
-            ),
-        "gaps_7d_plus":
-            sum(
-                1
-                for days in gap_days
-                if days >= 7.0
-            ),
-        "gaps_14d_plus":
-            sum(
-                1
-                for days in gap_days
-                if days >= 14.0
-            ),
-        "gaps_21d_plus":
-            sum(
-                1
-                for days in gap_days
-                if days >= 21.0
-            ),
-        "gaps_28d_plus":
-            sum(
-                1
-                for days in gap_days
-                if days >= 28.0
-            ),
-        "calendar_weeks":
-            total_weeks,
-        "zero_trade_weeks":
-            zero_weeks,
-        "zero_trade_weeks_pct":
-            round(
-                zero_weeks
-                / total_weeks
-                * 100.0,
-                4,
-            )
-            if total_weeks
-            else None,
-        "one_trade_weeks":
-            one_weeks,
-        "one_trade_weeks_pct":
-            round(
-                one_weeks
-                / total_weeks
-                * 100.0,
-                4,
-            )
-            if total_weeks
-            else None,
-        "two_trade_weeks":
-            two_weeks,
-        "two_trade_weeks_pct":
-            round(
-                two_weeks
-                / total_weeks
-                * 100.0,
-                4,
-            )
-            if total_weeks
-            else None,
-        "three_plus_trade_weeks":
-            three_plus_weeks,
-        "three_plus_trade_weeks_pct":
-            round(
-                three_plus_weeks
-                / total_weeks
-                * 100.0,
-                4,
-            )
-            if total_weeks
-            else None,
-        "quietest_month_trades":
-            min(
-                row[
-                    "trades"
-                ]
-                for row in month_rows
-            )
-            if month_rows
-            else None,
-        "busiest_month_trades":
-            max(
-                row[
-                    "trades"
-                ]
-                for row in month_rows
-            )
-            if month_rows
-            else None,
+        "matched_trades": len(diffs),
+        "maximum_absolute_r_difference": max(diffs) if diffs else None,
+        "mean_absolute_r_difference": (
+            sum(diffs) / len(diffs)
+            if diffs
+            else None
+        ),
     }
 
 
-def run_frequency_analysis():
-    try:
+def cost_overview_rows(trades, cost_pips):
+    end = PORTFOLIO_RESEARCH_TO
 
-        FREQ_STATUS.update({
-            "state":
-                "fetching",
-            "message":
-                "Building exact final live portfolio trade sequence",
+    windows = [
+        ("FULL_HISTORY", PORTFOLIO_RESEARCH_FROM),
+        ("LAST_10Y", years_ago_safe(end, 10)),
+        ("LAST_5Y", years_ago_safe(end, 5)),
+        ("LAST_3Y", years_ago_safe(end, 3)),
+        ("LAST_2Y", years_ago_safe(end, 2)),
+        ("LAST_1Y", years_ago_safe(end, 1)),
+    ]
+
+    rows = []
+
+    for label, start in windows:
+        row = window_row(
+            label,
+            trades,
+            max(start, PORTFOLIO_RESEARCH_FROM),
+            end,
+        )
+        row["cost_pips"] = cost_pips
+        rows.append(row)
+
+    return rows
+
+
+def cost_monthly_rows(trades, cost_pips):
+    rows = []
+
+    for months in [12, 24, 36]:
+        part = build_monthly_rolling(trades, months)
+
+        for row in part:
+            row["cost_pips"] = cost_pips
+
+        rows.extend(part)
+
+    return rows
+
+
+def cost_summary_rows(monthly_rows, cost_pips):
+    output = []
+
+    for months in [12, 24, 36]:
+        part = [
+            row
+            for row in monthly_rows
+            if int(row["months"]) == months
+        ]
+
+        summary = monthly_summary_row(part, months)
+        summary["cost_pips"] = cost_pips
+        output.append(summary)
+
+    return output
+
+
+def cost_extreme_rows(monthly_rows, cost_pips):
+    rows = build_monthly_extremes(monthly_rows)
+
+    for row in rows:
+        row["cost_pips"] = cost_pips
+
+    return rows
+
+
+def run_portfolio_cost_stress():
+    try:
+        COST_STRESS_STATUS.update({
+            "state": "fetching",
+            "message": "Building exact final live full-history trade set",
+            "from": iso_utc(PORTFOLIO_RESEARCH_FROM),
+            "to": iso_utc(PORTFOLIO_RESEARCH_TO),
         })
 
         trades_raw, strategy_summaries = (
@@ -9903,239 +9499,105 @@ def run_frequency_analysis():
             )
         )
 
-        trades = normalise_trade_times(
-            trades_raw
-        )
+        trades = normalise_trade_times(trades_raw)
 
-        end = PORTFOLIO_RESEARCH_TO
+        all_overview = []
+        all_summary = []
+        all_extremes = []
+        all_monthly = []
+        parity = None
 
-        windows = [
-            (
-                "FULL_HISTORY",
-                PORTFOLIO_RESEARCH_FROM,
-            ),
-            (
-                "LAST_10Y",
-                years_ago_safe(
-                    end,
-                    10,
-                ),
-            ),
-            (
-                "LAST_5Y",
-                years_ago_safe(
-                    end,
-                    5,
-                ),
-            ),
-            (
-                "LAST_2Y",
-                years_ago_safe(
-                    end,
-                    2,
-                ),
-            ),
-            (
-                "LAST_1Y",
-                years_ago_safe(
-                    end,
-                    1,
-                ),
-            ),
-        ]
+        for cost_pips in COST_STRESS_PIPS:
+            COST_STRESS_STATUS.update({
+                "state": "calculating",
+                "message": f"Running stress at {cost_pips:.2f} pips",
+                "current_cost_pips": cost_pips,
+                "closed_trades": len(trades),
+            })
 
-        summary_rows = []
-        all_gap_rows = []
-        all_week_rows = []
-        all_month_rows = []
+            stressed = stress_trade_set(trades, cost_pips)
 
-        for label, start in windows:
+            if abs(cost_pips - 0.50) < 1e-12:
+                parity = verify_half_pip_parity(trades, stressed)
 
-            start = max(
-                start,
-                PORTFOLIO_RESEARCH_FROM,
-            )
+            overview = cost_overview_rows(stressed, cost_pips)
+            monthly = cost_monthly_rows(stressed, cost_pips)
+            summary = cost_summary_rows(monthly, cost_pips)
+            extremes = cost_extreme_rows(monthly, cost_pips)
 
-            summary_rows.append(
-                frequency_summary_row(
-                    trades,
-                    label,
-                    start,
-                    end,
-                )
-            )
+            all_overview.extend(overview)
+            all_monthly.extend(monthly)
+            all_summary.extend(summary)
+            all_extremes.extend(extremes)
 
-            selected = (
-                trade_entries_in_window(
-                    trades,
-                    start,
-                    end,
-                )
-            )
+        write_csv(COST_STRESS_OVERVIEW_OUTPUT, all_overview)
+        write_csv(COST_STRESS_SUMMARY_OUTPUT, all_summary)
+        write_csv(COST_STRESS_EXTREMES_OUTPUT, all_extremes)
+        write_csv(COST_STRESS_ALL_OUTPUT, all_monthly)
 
-            all_gap_rows.extend(
-                gap_rows_for_trades(
-                    selected,
-                    label,
-                )
-            )
-
-            all_week_rows.extend(
-                build_week_rows(
-                    selected,
-                    label,
-                    start,
-                    end,
-                )
-            )
-
-            all_month_rows.extend(
-                build_month_rows(
-                    selected,
-                    label,
-                    start,
-                    end,
-                )
-            )
-
-        write_csv(
-            FREQ_SUMMARY_OUTPUT,
-            summary_rows,
-        )
-
-        write_csv(
-            FREQ_GAPS_OUTPUT,
-            all_gap_rows,
-        )
-
-        write_csv(
-            FREQ_WEEKS_OUTPUT,
-            all_week_rows,
-        )
-
-        write_csv(
-            FREQ_MONTHS_OUTPUT,
-            all_month_rows,
-        )
-
-        FREQ_STATUS.update({
-            "state":
-                "complete",
-            "message":
-                "Portfolio frequency analysis complete",
-            "closed_trades":
-                len(
-                    trades
-                ),
+        COST_STRESS_STATUS.update({
+            "state": "complete",
+            "message": "Portfolio transaction-cost stress complete",
+            "closed_trades": len(trades),
+            "baseline_half_pip_parity": parity,
             "outputs": {
-                "summary":
-                    FREQ_SUMMARY_OUTPUT,
-                "gaps":
-                    FREQ_GAPS_OUTPUT,
-                "weeks":
-                    FREQ_WEEKS_OUTPUT,
-                "months":
-                    FREQ_MONTHS_OUTPUT,
+                "overview": COST_STRESS_OVERVIEW_OUTPUT,
+                "summary": COST_STRESS_SUMMARY_OUTPUT,
+                "extremes": COST_STRESS_EXTREMES_OUTPUT,
+                "all": COST_STRESS_ALL_OUTPUT,
             },
         })
 
-        print()
-        print(
-            "=" * 100
-        )
-        print(
-            "FINAL LIVE PORTFOLIO FREQUENCY ANALYSIS COMPLETE"
-        )
-        print(
-            "=" * 100
-        )
+        print("=" * 100)
+        print("FINAL LIVE PORTFOLIO TRANSACTION-COST STRESS COMPLETE")
+        print("=" * 100)
+        print("0.50-pip parity:", parity)
 
-        for row in summary_rows:
-            print(
-                row
-            )
+        for row in all_summary:
+            print(row)
 
     except Exception as error:
-
-        FREQ_STATUS.update({
-            "state":
-                "error",
-            "message":
-                str(
-                    error
-                ),
+        COST_STRESS_STATUS.update({
+            "state": "error",
+            "message": str(error),
         })
-
-        print(
-            "ERROR:",
-            error,
-            flush=True,
-        )
+        print("ERROR:", error, flush=True)
 
 
-@app.route(
-    "/frequency/status"
-)
-def frequency_status():
-    return jsonify(
-        FREQ_STATUS
-    )
+@app.route("/cost-stress/status")
+def cost_stress_status():
+    return jsonify(COST_STRESS_STATUS)
 
 
-@app.route(
-    "/frequency/summary"
-)
-def frequency_summary():
-    return deep_send_file(
-        FREQ_SUMMARY_OUTPUT
-    )
+@app.route("/cost-stress/overview")
+def cost_stress_overview():
+    return deep_send_file(COST_STRESS_OVERVIEW_OUTPUT)
 
 
-@app.route(
-    "/frequency/gaps"
-)
-def frequency_gaps():
-    return deep_send_file(
-        FREQ_GAPS_OUTPUT
-    )
+@app.route("/cost-stress/summary")
+def cost_stress_summary():
+    return deep_send_file(COST_STRESS_SUMMARY_OUTPUT)
 
 
-@app.route(
-    "/frequency/weeks"
-)
-def frequency_weeks():
-    return deep_send_file(
-        FREQ_WEEKS_OUTPUT
-    )
+@app.route("/cost-stress/extremes")
+def cost_stress_extremes():
+    return deep_send_file(COST_STRESS_EXTREMES_OUTPUT)
 
 
-@app.route(
-    "/frequency/months"
-)
-def frequency_months():
-    return deep_send_file(
-        FREQ_MONTHS_OUTPUT
-    )
+@app.route("/cost-stress/all")
+def cost_stress_all():
+    return deep_send_file(COST_STRESS_ALL_OUTPUT)
 
 
 if __name__ == "__main__":
-
     research_thread = threading.Thread(
-        target=run_frequency_analysis,
-        name=(
-            "final-live-portfolio-frequency"
-        ),
+        target=run_portfolio_cost_stress,
+        name="final-live-portfolio-cost-stress",
         daemon=True,
     )
-
     research_thread.start()
 
-    port = int(
-        os.getenv(
-            "PORT",
-            5000,
-        )
-    )
+    port = int(os.getenv("PORT", 5000))
 
     app.run(
         host="0.0.0.0",
