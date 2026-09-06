@@ -12,71 +12,62 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# EUR/USD M15 SHORT
-# FINAL LOCAL ANTI-OVERFIT CONFIRMATION
+# GBP/USD M15 LONG
+# EXHAUSTIVE-BUT-CONTROLLED RESEARCH PASS
 #
 # READ-ONLY RESEARCH. NEVER SENDS ORDERS.
 #
-# Core held fixed from exhaustive pass:
-#   - exact bearish engulfing
-#   - body >= 1.00 ATR14
-#   - no bearish close-strength filter
-#   - no upper-wick filter
-#   - no H1 / Daily regime
-#   - stop = signal high + 10 ticks
-#   - pyramiding 0
+# This is a fresh M15 build from scratch.
+# It does NOT inherit the H1 GBP/USD rules.
 #
-# Local confirmation dimensions:
-#   - range ATR:
-#       1.55 / 1.60 / 1.65 / 1.70 / 1.75 / 1.80
-#   - structure:
-#       50 / 60 / 70
-#   - distance:
-#       0.25 / 0.30 / 0.35 ATR
-#   - RR:
-#       3.50 / 3.75 / 4.00
-#   - weekday filters:
-#       none
-#       exclude Wed
-#       exclude Thu
-#       exclude Fri
-#       exclude Wed+Thu
-#       exclude Thu+Fri
-#   - session sets:
-#       02-04
-#       01-04
-#       02-05
-#       01-05
-#       02-03
-#       03-04
-#       03-05
+# Research start:
+#   2010-01-01 -> current completed hour
 #
-# Costs:
-#   0.50 / 1.00 / 1.50 / 2.00 pips adverse entry
+# Historical development convention:
+#   1.0 pip adverse entry assumption
 #
-# Primary development cost:
-#   1.00 pip
-#
-# Validation:
-#   - 4 eras
-#   - DEV 2010-2017 vs VALIDATION 2018-now
-#   - recent 5Y / 2Y
-#   - rolling monthly-start 2Y / 3Y
-#   - overlap/exclusive vs old incumbent
-#   - overlap/exclusive vs current lead
-#
-# Historical conventions:
-#   - OANDA midpoint M15
+# Core conventions:
+#   - OANDA midpoint candles
+#   - exact bullish engulfing
 #   - ATR14 Wilder/RMA, SMA seeded
-#   - exact bearish engulfing
 #   - signal time = M15 candle OPEN
+#   - stop = signal low - 10 ticks
 #   - target based on REFERENCE signal-close risk
-#   - adverse short entry = signal close - cost
+#   - adverse long entry = signal close + cost
 #   - exits begin NEXT candle
-#   - same-bar short tie:
-#       high closer => STOP first
-#       otherwise TARGET first
+#   - same-bar tie:
+#       high closer => TARGET first
+#       otherwise STOP first
+#   - pyramiding 0
 #   - exact exit-candle signal eligible
+#
+# Broad hypothesis families:
+#   - body ratio
+#   - body ATR
+#   - range ATR
+#   - close strength
+#   - lower wick/body
+#   - structure lookback/distance
+#   - M15 ATR regime
+#   - prior momentum 4h/12h/24h
+#   - stop-size / ATR
+#   - NY sessions / single-hour exclusions
+#   - weekday exclusions
+#   - H1 close vs EMA
+#   - H1 EMA alignment
+#   - H1 ATR regime
+#   - Daily close vs EMA
+#   - Daily EMA alignment
+#   - Daily ATR regime
+#   - RR neighbourhood
+#
+# Then:
+#   - controlled interactions
+#   - 4 eras
+#   - dev/validation
+#   - recent 5Y / 2Y
+#   - rolling 2Y / 3Y
+#   - cost stress 0.5 / 1 / 1.5 / 2 pips
 # ============================================================
 
 
@@ -88,8 +79,7 @@ OANDA_BASE = os.getenv(
     "https://api-fxtrade.oanda.com",
 )
 
-INSTRUMENT = "EUR_USD"
-GRANULARITY = "M15"
+INSTRUMENT = "GBP_USD"
 
 RESEARCH_FROM = datetime(
     2010, 1, 1, 0, 0,
@@ -120,159 +110,85 @@ COST_PIPS_GRID = [
     2.00,
 ]
 
-BODY_ATR_FIXED = 1.00
-BODY_RATIO_FIXED = 1.00
-
-RANGE_ATRS = [
-    1.55,
-    1.60,
-    1.65,
-    1.70,
-    1.75,
-    1.80,
-]
-
-LOOKBACKS = [
-    50,
-    60,
-    70,
-]
-
-DISTANCES = [
-    0.25,
-    0.30,
-    0.35,
-]
-
-REWARD_RISKS = [
-    3.50,
-    3.75,
-    4.00,
-]
-
-WEEKDAY_FILTERS = [
-    {
-        "name": "NONE",
-        "excluded_weekdays": set(),
-    },
-    {
-        "name": "EX_WED",
-        "excluded_weekdays": {2},
-    },
-    {
-        "name": "EX_THU",
-        "excluded_weekdays": {3},
-    },
-    {
-        "name": "EX_FRI",
-        "excluded_weekdays": {4},
-    },
-    {
-        "name": "EX_WED_THU",
-        "excluded_weekdays": {2, 3},
-    },
-    {
-        "name": "EX_THU_FRI",
-        "excluded_weekdays": {3, 4},
-    },
-]
-
-SESSION_FILTERS = [
-    {
-        "name": "H02_04",
-        "included_hours": {2, 3, 4},
-    },
-    {
-        "name": "H01_04",
-        "included_hours": {1, 2, 3, 4},
-    },
-    {
-        "name": "H02_05",
-        "included_hours": {2, 3, 4, 5},
-    },
-    {
-        "name": "H01_05",
-        "included_hours": {1, 2, 3, 4, 5},
-    },
-    {
-        "name": "H02_03",
-        "included_hours": {2, 3},
-    },
-    {
-        "name": "H03_04",
-        "included_hours": {3, 4},
-    },
-    {
-        "name": "H03_05",
-        "included_hours": {3, 4, 5},
-    },
-]
-
-OLD_INCUMBENT = {
-    "label": "OLD_INCUMBENT",
+# Broad neutral baseline.
+BASELINE = {
+    "label": "BASELINE",
     "minimum_body_ratio": 1.00,
-    "minimum_body_atr": 1.00,
-    "minimum_range_atr": 1.50,
-    "structure_lookback": 60,
-    "maximum_distance_atr": 0.30,
+    "minimum_body_atr": None,
+    "minimum_range_atr": None,
+    "minimum_close_location": None,
+    "minimum_lower_wick_body": None,
+    "structure_lookback": None,
+    "maximum_distance_atr": None,
+    "minimum_m15_atr_ratio": None,
+    "maximum_m15_atr_ratio": None,
+    "minimum_momentum_4h_atr": None,
+    "maximum_momentum_4h_atr": None,
+    "minimum_momentum_12h_atr": None,
+    "maximum_momentum_12h_atr": None,
+    "minimum_momentum_24h_atr": None,
+    "maximum_momentum_24h_atr": None,
+    "maximum_stop_atr": None,
+    "minimum_stop_atr": None,
+    "included_ny_hours": None,
+    "excluded_ny_hours": set(),
     "excluded_weekdays": set(),
-    "included_hours": {2, 3, 4},
-    "reward_risk": 3.75,
-}
-
-CURRENT_LEAD = {
-    "label": "CURRENT_LEAD_RA1.70_EX_THU",
-    "minimum_body_ratio": 1.00,
-    "minimum_body_atr": 1.00,
-    "minimum_range_atr": 1.70,
-    "structure_lookback": 60,
-    "maximum_distance_atr": 0.30,
-    "excluded_weekdays": {3},
-    "included_hours": {2, 3, 4},
-    "reward_risk": 3.75,
+    "h1_close_above_ema": None,
+    "h1_fast_ema": None,
+    "h1_slow_ema": None,
+    "minimum_h1_atr_ratio": None,
+    "daily_close_above_ema": None,
+    "daily_fast_ema": None,
+    "daily_slow_ema": None,
+    "minimum_daily_atr_ratio": None,
+    "reward_risk": 3.50,
 }
 
 
-OUTPUT_SUMMARY = (
-    "eurusd_m15_short_final_local_summary.csv"
+OUTPUT_SINGLE = (
+    "gbpusd_m15_long_exhaustive_single_family.csv"
+)
+
+OUTPUT_SINGLE_TOP = (
+    "gbpusd_m15_long_exhaustive_single_top.csv"
+)
+
+OUTPUT_INTERACTIONS = (
+    "gbpusd_m15_long_exhaustive_interactions.csv"
 )
 
 OUTPUT_TOP = (
-    "eurusd_m15_short_final_local_top.csv"
+    "gbpusd_m15_long_exhaustive_top.csv"
 )
 
 OUTPUT_ERAS = (
-    "eurusd_m15_short_final_local_eras.csv"
+    "gbpusd_m15_long_exhaustive_eras.csv"
 )
 
 OUTPUT_DEVVAL = (
-    "eurusd_m15_short_final_local_dev_validation.csv"
+    "gbpusd_m15_long_exhaustive_dev_validation.csv"
 )
 
 OUTPUT_RECENT = (
-    "eurusd_m15_short_final_local_recent.csv"
+    "gbpusd_m15_long_exhaustive_recent.csv"
 )
 
 OUTPUT_ROLLING = (
-    "eurusd_m15_short_final_local_rolling.csv"
+    "gbpusd_m15_long_exhaustive_rolling.csv"
 )
 
 OUTPUT_ROLLING_SUMMARY = (
-    "eurusd_m15_short_final_local_rolling_summary.csv"
-)
-
-OUTPUT_OVERLAP = (
-    "eurusd_m15_short_final_local_overlap.csv"
+    "gbpusd_m15_long_exhaustive_rolling_summary.csv"
 )
 
 OUTPUT_BEST_TRADES = (
-    "eurusd_m15_short_final_local_best_trades.csv"
+    "gbpusd_m15_long_exhaustive_best_trades.csv"
 )
 
 STATUS = {
     "state": "not_started",
-    "message": "Final local short confirmation has not started",
-    "service": "EURUSD M15 Short Final Local Confirmation",
+    "message": "GBP/USD M15 long exhaustive pass has not started",
+    "service": "GBPUSD M15 Long Exhaustive Controlled",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -393,8 +309,21 @@ def download_file(path):
     )
 
 
+def clone_config(base, label):
+    result = {}
+
+    for key, value in base.items():
+        if isinstance(value, set):
+            result[key] = set(value)
+        else:
+            result[key] = value
+
+    result["label"] = label
+    return result
+
+
 # ============================================================
-# OANDA
+# OANDA FETCH
 # ============================================================
 
 def oanda_headers():
@@ -411,7 +340,12 @@ def oanda_headers():
     }
 
 
-def fetch_chunk(start, end):
+def fetch_candles_chunk(
+    granularity,
+    start,
+    end,
+    daily_alignment=False,
+):
     url = (
         f"{OANDA_BASE}"
         f"/v3/instruments/"
@@ -420,12 +354,18 @@ def fetch_chunk(start, end):
 
     params = {
         "price": "M",
-        "granularity": GRANULARITY,
+        "granularity": granularity,
         "smooth": "false",
         "from": iso_utc(start),
         "to": iso_utc(end),
         "includeFirst": "true",
     }
+
+    if daily_alignment:
+        params["dailyAlignment"] = 17
+        params["alignmentTimezone"] = (
+            "America/New_York"
+        )
 
     response = requests.get(
         url,
@@ -436,7 +376,7 @@ def fetch_chunk(start, end):
 
     response.raise_for_status()
 
-    candles = []
+    rows = []
 
     for item in response.json().get(
         "candles",
@@ -450,7 +390,7 @@ def fetch_chunk(start, end):
 
         mid = item["mid"]
 
-        candles.append({
+        rows.append({
             "time":
                 parse_oanda_time(
                     item["time"]
@@ -465,10 +405,16 @@ def fetch_chunk(start, end):
                 float(mid["c"]),
         })
 
-    return candles
+    return rows
 
 
-def fetch_full_history(start, end):
+def fetch_history(
+    granularity,
+    start,
+    end,
+    chunk_days,
+    daily_alignment=False,
+):
     cursor = start
     by_time = {}
     chunk_number = 0
@@ -477,88 +423,238 @@ def fetch_full_history(start, end):
         chunk_number += 1
 
         chunk_end = min(
-            cursor + timedelta(days=30),
+            cursor + timedelta(
+                days=chunk_days
+            ),
             end,
         )
 
         STATUS.update({
             "state": "fetching",
             "message": (
-                f"Fetching chunk {chunk_number}: "
+                f"Fetching {granularity} "
+                f"chunk {chunk_number}: "
                 f"{iso_utc(cursor)} -> "
                 f"{iso_utc(chunk_end)}"
             ),
+            "granularity": granularity,
             "chunk": chunk_number,
         })
 
-        for candle in fetch_chunk(
+        rows = fetch_candles_chunk(
+            granularity,
             cursor,
             chunk_end,
-        ):
+            daily_alignment=daily_alignment,
+        )
+
+        for row in rows:
             by_time[
-                candle["time"]
-            ] = candle
+                row["time"]
+            ] = row
 
         cursor = chunk_end
         time.sleep(0.02)
 
-    candles = list(
+    result = list(
         by_time.values()
     )
 
-    candles.sort(
+    result.sort(
         key=lambda row:
             row["time"]
     )
 
-    return candles
+    return result
 
 
 # ============================================================
-# INDICATORS / SIGNAL CACHE
+# INDICATORS
 # ============================================================
 
-def atr14(candles):
-    n = len(candles)
+def true_ranges(candles):
+    result = [
+        None
+    ] * len(candles)
 
-    trs = [None] * n
-    atr = [None] * n
-
-    for i in range(n):
+    for i in range(len(candles)):
         high = candles[i]["high"]
         low = candles[i]["low"]
 
         if i == 0:
-            trs[i] = high - low
+            result[i] = high - low
         else:
             previous_close = candles[
                 i - 1
             ]["close"]
 
-            trs[i] = max(
+            result[i] = max(
                 high - low,
-                abs(high - previous_close),
-                abs(low - previous_close),
+                abs(
+                    high - previous_close
+                ),
+                abs(
+                    low - previous_close
+                ),
             )
 
-    if n < 14:
-        return atr
+    return result
 
-    atr[13] = (
-        sum(trs[:14])
-        / 14.0
+
+def rma_from_values(values, length):
+    result = [
+        None
+    ] * len(values)
+
+    if len(values) < length:
+        return result
+
+    seed = values[:length]
+
+    if any(
+        value is None
+        for value in seed
+    ):
+        return result
+
+    result[
+        length - 1
+    ] = (
+        sum(seed)
+        / length
     )
 
-    for i in range(14, n):
-        atr[i] = (
-            atr[i - 1] * 13.0
-            + trs[i]
-        ) / 14.0
+    for i in range(
+        length,
+        len(values),
+    ):
+        value = values[i]
 
-    return atr
+        if (
+            value is None
+            or result[
+                i - 1
+            ] is None
+        ):
+            continue
+
+        result[i] = (
+            result[
+                i - 1
+            ] * (
+                length - 1
+            )
+            + value
+        ) / length
+
+    return result
 
 
-def bearish_engulfing(candles, i):
+def atr14(candles):
+    return rma_from_values(
+        true_ranges(candles),
+        14,
+    )
+
+
+def ema(values, length):
+    result = [
+        None
+    ] * len(values)
+
+    if len(values) < length:
+        return result
+
+    seed = values[:length]
+
+    if any(
+        value is None
+        for value in seed
+    ):
+        return result
+
+    result[
+        length - 1
+    ] = (
+        sum(seed)
+        / length
+    )
+
+    alpha = (
+        2.0
+        /
+        (
+            length
+            + 1.0
+        )
+    )
+
+    for i in range(
+        length,
+        len(values),
+    ):
+        if (
+            values[i] is None
+            or
+            result[
+                i - 1
+            ] is None
+        ):
+            continue
+
+        result[i] = (
+            alpha
+            * values[i]
+            +
+            (
+                1.0
+                - alpha
+            )
+            * result[
+                i - 1
+            ]
+        )
+
+    return result
+
+
+def sma(values, length):
+    result = [
+        None
+    ] * len(values)
+
+    queue = []
+    running = 0.0
+
+    for i, value in enumerate(values):
+        queue.append(value)
+
+        if value is not None:
+            running += value
+
+        if len(queue) > length:
+            removed = queue.pop(0)
+
+            if removed is not None:
+                running -= removed
+
+        if (
+            len(queue) == length
+            and
+            all(
+                item is not None
+                for item in queue
+            )
+        ):
+            result[i] = (
+                running
+                / length
+            )
+
+    return result
+
+
+def bullish_engulfing(candles, i):
     if i < 1:
         return False
 
@@ -566,24 +662,197 @@ def bearish_engulfing(candles, i):
     current = candles[i]
 
     return (
-        previous["close"] > previous["open"]
+        previous["close"]
+        <
+        previous["open"]
         and
-        current["close"] < current["open"]
+        current["close"]
+        >
+        current["open"]
         and
-        current["open"] >= previous["close"]
+        current["open"]
+        <=
+        previous["close"]
         and
-        current["close"] <= previous["open"]
+        current["close"]
+        >=
+        previous["open"]
     )
 
 
-def build_signal_cache(
+# ============================================================
+# HTF STATE
+# ============================================================
+
+H1_EMA_LENGTHS = [
+    20,
+    50,
+    100,
+    200,
+]
+
+DAILY_EMA_LENGTHS = [
+    20,
+    50,
+    70,
+    100,
+    150,
+    200,
+    300,
+]
+
+H1_ALIGNMENT_PAIRS = [
+    (20, 50),
+    (50, 100),
+    (50, 200),
+]
+
+DAILY_ALIGNMENT_PAIRS = [
+    (20, 50),
+    (20, 100),
+    (50, 70),
+    (50, 100),
+    (50, 200),
+    (100, 200),
+]
+
+
+def build_htf_state(
     candles,
-    atr,
+    ema_lengths,
+):
+    closes = [
+        candle["close"]
+        for candle in candles
+    ]
+
+    atr = atr14(candles)
+    atr_mean50 = sma(
+        atr,
+        50,
+    )
+
+    ema_map = {
+        length:
+            ema(
+                closes,
+                length,
+            )
+        for length in ema_lengths
+    }
+
+    rows = []
+
+    for i, candle in enumerate(
+        candles
+    ):
+        atr_ratio = None
+
+        if (
+            atr[i] is not None
+            and
+            atr_mean50[i] is not None
+            and
+            atr_mean50[i] > 0
+        ):
+            atr_ratio = (
+                atr[i]
+                /
+                atr_mean50[i]
+            )
+
+        rows.append({
+            "time":
+                candle["time"],
+            "close":
+                candle["close"],
+            "atr14":
+                atr[i],
+            "atr_ratio_50":
+                atr_ratio,
+            "emas":
+                {
+                    length:
+                        ema_map[
+                            length
+                        ][i]
+                    for length in ema_lengths
+                },
+        })
+
+    return rows
+
+
+def previous_completed_state(
+    state_rows,
+    times,
+    signal_time,
+):
+    position = bisect.bisect_left(
+        times,
+        signal_time,
+    ) - 1
+
+    if position < 0:
+        return None
+
+    return state_rows[
+        position
+    ]
+
+
+# ============================================================
+# SIGNAL FEATURE CACHE
+# ============================================================
+
+STRUCTURE_LOOKBACKS = [
+    20,
+    40,
+    60,
+    80,
+    100,
+    120,
+    150,
+    180,
+]
+
+MOMENTUM_BARS = {
+    "4h": 16,
+    "12h": 48,
+    "24h": 96,
+}
+
+
+def build_signal_cache(
+    m15,
+    m15_atr,
+    h1_state,
+    daily_state,
 ):
     signals = []
 
+    m15_atr_mean50 = sma(
+        m15_atr,
+        50,
+    )
+
+    h1_times = [
+        row["time"]
+        for row in h1_state
+    ]
+
+    daily_times = [
+        row["time"]
+        for row in daily_state
+    ]
+
     max_lookback = max(
-        LOOKBACKS
+        max(
+            STRUCTURE_LOOKBACKS
+        ),
+        max(
+            MOMENTUM_BARS.values()
+        ),
     )
 
     for i in range(
@@ -591,32 +860,45 @@ def build_signal_cache(
             14,
             max_lookback,
         ),
-        len(candles),
+        len(m15),
     ):
-        if not bearish_engulfing(
-            candles,
+        if not bullish_engulfing(
+            m15,
             i,
         ):
             continue
 
-        current = candles[i]
-        previous = candles[i - 1]
-        atr_value = atr[i]
+        current = m15[i]
+        previous = m15[i - 1]
+        atr = m15_atr[i]
 
         if (
-            atr_value is None
-            or atr_value <= 0
+            atr is None
+            or atr <= 0
         ):
             continue
 
         body = (
-            current["open"]
-            - current["close"]
+            current["close"]
+            - current["open"]
         )
 
         previous_body = abs(
             previous["close"]
             - previous["open"]
+        )
+
+        candle_range = (
+            current["high"]
+            - current["low"]
+        )
+
+        lower_wick = (
+            min(
+                current["open"],
+                current["close"],
+            )
+            - current["low"]
         )
 
         body_ratio = (
@@ -626,37 +908,87 @@ def build_signal_cache(
         )
 
         body_atr = (
-            body / atr_value
-        )
-
-        candle_range = (
-            current["high"]
-            - current["low"]
+            body / atr
         )
 
         range_atr = (
-            candle_range
-            / atr_value
+            candle_range / atr
         )
 
-        structure = {}
+        close_location = (
+            (
+                current["close"]
+                - current["low"]
+            )
+            / candle_range
+            if candle_range > 0
+            else 0.0
+        )
 
-        for lookback in LOOKBACKS:
-            previous_high = max(
-                candle["high"]
-                for candle in candles[
+        lower_wick_body = (
+            lower_wick / body
+            if body > 0
+            else 0.0
+        )
+
+        stop_distance = (
+            current["close"]
+            -
+            (
+                current["low"]
+                -
+                STOP_BUFFER_TICKS
+                * TICK_SIZE
+            )
+        )
+
+        stop_atr = (
+            stop_distance / atr
+        )
+
+        m15_atr_ratio = None
+
+        if (
+            m15_atr_mean50[i] is not None
+            and
+            m15_atr_mean50[i] > 0
+        ):
+            m15_atr_ratio = (
+                atr
+                /
+                m15_atr_mean50[i]
+            )
+
+        momentum = {}
+
+        for name, bars in MOMENTUM_BARS.items():
+            prior_close = m15[
+                i - bars
+            ]["close"]
+
+            momentum[name] = (
+                current["close"]
+                - prior_close
+            ) / atr
+
+        structure_distance_atr = {}
+
+        for lookback in STRUCTURE_LOOKBACKS:
+            previous_low = min(
+                candle["low"]
+                for candle in m15[
                     i - lookback:i
                 ]
             )
 
-            structure[
+            structure_distance_atr[
                 lookback
             ] = (
                 abs(
-                    current["high"]
-                    - previous_high
+                    current["low"]
+                    - previous_low
                 )
-                / atr_value
+                / atr
             )
 
         ny_time = (
@@ -664,23 +996,40 @@ def build_signal_cache(
             .astimezone(NY)
         )
 
+        h1_prev = previous_completed_state(
+            h1_state,
+            h1_times,
+            current["time"],
+        )
+
+        daily_prev = previous_completed_state(
+            daily_state,
+            daily_times,
+            current["time"],
+        )
+
         signals.append({
-            "signal_index":
-                i,
-            "time":
-                current["time"],
-            "body_ratio":
-                body_ratio,
-            "body_atr":
-                body_atr,
-            "range_atr":
-                range_atr,
+            "signal_index": i,
+            "time": current["time"],
+            "body_ratio": body_ratio,
+            "body_atr": body_atr,
+            "range_atr": range_atr,
+            "close_location": close_location,
+            "lower_wick_body": lower_wick_body,
+            "stop_atr": stop_atr,
+            "m15_atr_ratio": m15_atr_ratio,
+            "momentum_4h_atr":
+                momentum["4h"],
+            "momentum_12h_atr":
+                momentum["12h"],
+            "momentum_24h_atr":
+                momentum["24h"],
             "structure_distance_atr":
-                structure,
-            "ny_hour":
-                ny_time.hour,
-            "ny_weekday":
-                ny_time.weekday(),
+                structure_distance_atr,
+            "ny_hour": ny_time.hour,
+            "ny_weekday": ny_time.weekday(),
+            "h1_prev": h1_prev,
+            "daily_prev": daily_prev,
         })
 
     return signals
@@ -689,6 +1038,19 @@ def build_signal_cache(
 # ============================================================
 # OUTCOME CACHE
 # ============================================================
+
+RR_VALUES = [
+    2.00,
+    2.50,
+    3.00,
+    3.50,
+    3.75,
+    4.00,
+    4.25,
+    4.50,
+    5.00,
+]
+
 
 def compute_trade_outcome(
     candles,
@@ -705,14 +1067,14 @@ def compute_trade_outcome(
     )
 
     stop = (
-        signal["high"]
-        + STOP_BUFFER_TICKS
+        signal["low"]
+        -
+        STOP_BUFFER_TICKS
         * TICK_SIZE
     )
 
     reference_risk = (
-        stop
-        - reference_entry
+        reference_entry - stop
     )
 
     if reference_risk <= 0:
@@ -720,19 +1082,20 @@ def compute_trade_outcome(
 
     target = (
         reference_entry
-        - reward_risk
+        +
+        reward_risk
         * reference_risk
     )
 
     backtest_entry = (
         reference_entry
-        - cost_pips
+        +
+        cost_pips
         * PIP_SIZE
     )
 
     actual_risk = (
-        stop
-        - backtest_entry
+        backtest_entry - stop
     )
 
     if actual_risk <= 0:
@@ -745,11 +1108,13 @@ def compute_trade_outcome(
         candle = candles[j]
 
         hit_stop = (
-            candle["high"] >= stop
+            candle["low"]
+            <= stop
         )
 
         hit_target = (
-            candle["low"] <= target
+            candle["high"]
+            >= target
         )
 
         if (
@@ -758,42 +1123,46 @@ def compute_trade_outcome(
         ):
             distance_high = abs(
                 candle["high"]
-                - candle["open"]
+                -
+                candle["open"]
             )
 
             distance_low = abs(
                 candle["open"]
-                - candle["low"]
+                -
+                candle["low"]
             )
 
-            if distance_high < distance_low:
-                exit_price = stop
-                exit_reason = "STOP"
-            else:
+            if (
+                distance_high
+                <
+                distance_low
+            ):
                 exit_price = target
                 exit_reason = "TARGET"
-
-        elif hit_stop:
-            exit_price = stop
-            exit_reason = "STOP"
+            else:
+                exit_price = stop
+                exit_reason = "STOP"
 
         elif hit_target:
             exit_price = target
             exit_reason = "TARGET"
 
+        elif hit_stop:
+            exit_price = stop
+            exit_reason = "STOP"
+
         else:
             continue
 
         result_r = (
-            backtest_entry
-            - exit_price
+            exit_price
+            - backtest_entry
         ) / actual_risk
 
         return {
-            "signal_index":
-                signal_index,
-            "exit_index":
-                j,
+            "signal_index": signal_index,
+            "exit_index": j,
             "entry_time":
                 signal["time"],
             "exit_time":
@@ -810,14 +1179,10 @@ def compute_trade_outcome(
                 reference_entry,
             "backtest_entry":
                 backtest_entry,
-            "stop":
-                stop,
-            "target":
-                target,
-            "exit_reason":
-                exit_reason,
-            "result_r":
-                result_r,
+            "stop": stop,
+            "target": target,
+            "exit_reason": exit_reason,
+            "result_r": result_r,
             "reward_risk":
                 reward_risk,
             "cost_pips":
@@ -835,7 +1200,7 @@ def build_outcome_cache(
 
     total = (
         len(signals)
-        * len(REWARD_RISKS)
+        * len(RR_VALUES)
         * len(COST_PIPS_GRID)
     )
 
@@ -846,7 +1211,7 @@ def build_outcome_cache(
             "signal_index"
         ]
 
-        for rr in REWARD_RISKS:
+        for rr in RR_VALUES:
             for cost in COST_PIPS_GRID:
                 done += 1
 
@@ -854,7 +1219,7 @@ def build_outcome_cache(
                     STATUS.update({
                         "state": "precomputing",
                         "message": (
-                            "Caching outcomes "
+                            "Caching reusable outcomes "
                             f"{done}/{total}"
                         ),
                         "outcomes_done": done,
@@ -878,67 +1243,50 @@ def build_outcome_cache(
 
 
 # ============================================================
-# CONFIGS
+# FILTERS
 # ============================================================
 
-def build_configs():
-    configs = []
-    counter = 0
+def state_close_above_ema(
+    state,
+    length,
+):
+    if state is None:
+        return False
 
-    for weekday_filter in WEEKDAY_FILTERS:
-        for session_filter in SESSION_FILTERS:
-            for range_atr in RANGE_ATRS:
-                for lookback in LOOKBACKS:
-                    for distance in DISTANCES:
-                        for rr in REWARD_RISKS:
-                            counter += 1
+    value = state[
+        "emas"
+    ].get(length)
 
-                            configs.append({
-                                "label":
-                                    (
-                                        f"S{counter:04d}_"
-                                        f"{weekday_filter['name']}_"
-                                        f"{session_filter['name']}_"
-                                        f"RA{range_atr:.2f}_"
-                                        f"S{lookback}_"
-                                        f"D{distance:.2f}_"
-                                        f"RR{rr:.2f}"
-                                    ),
-                                "minimum_body_ratio":
-                                    BODY_RATIO_FIXED,
-                                "minimum_body_atr":
-                                    BODY_ATR_FIXED,
-                                "minimum_range_atr":
-                                    range_atr,
-                                "structure_lookback":
-                                    lookback,
-                                "maximum_distance_atr":
-                                    distance,
-                                "excluded_weekdays":
-                                    set(
-                                        weekday_filter[
-                                            "excluded_weekdays"
-                                        ]
-                                    ),
-                                "included_hours":
-                                    set(
-                                        session_filter[
-                                            "included_hours"
-                                        ]
-                                    ),
-                                "weekday_filter_name":
-                                    weekday_filter[
-                                        "name"
-                                    ],
-                                "session_filter_name":
-                                    session_filter[
-                                        "name"
-                                    ],
-                                "reward_risk":
-                                    rr,
-                            })
+    return (
+        value is not None
+        and
+        state["close"] > value
+    )
 
-    return configs
+
+def state_ema_alignment(
+    state,
+    fast,
+    slow,
+):
+    if state is None:
+        return False
+
+    fast_value = state[
+        "emas"
+    ].get(fast)
+
+    slow_value = state[
+        "emas"
+    ].get(slow)
+
+    return (
+        fast_value is not None
+        and
+        slow_value is not None
+        and
+        fast_value > slow_value
+    )
 
 
 def signal_passes(
@@ -953,6 +1301,9 @@ def signal_passes(
         return False
 
     if (
+        config["minimum_body_atr"]
+        is not None
+        and
         signal["body_atr"]
         <
         config["minimum_body_atr"]
@@ -960,9 +1311,32 @@ def signal_passes(
         return False
 
     if (
+        config["minimum_range_atr"]
+        is not None
+        and
         signal["range_atr"]
         <
         config["minimum_range_atr"]
+    ):
+        return False
+
+    if (
+        config["minimum_close_location"]
+        is not None
+        and
+        signal["close_location"]
+        <
+        config["minimum_close_location"]
+    ):
+        return False
+
+    if (
+        config["minimum_lower_wick_body"]
+        is not None
+        and
+        signal["lower_wick_body"]
+        <
+        config["minimum_lower_wick_body"]
     ):
         return False
 
@@ -970,34 +1344,222 @@ def signal_passes(
         "structure_lookback"
     ]
 
+    if lookback is not None:
+        if (
+            signal[
+                "structure_distance_atr"
+            ][lookback]
+            >
+            config[
+                "maximum_distance_atr"
+            ]
+        ):
+            return False
+
     if (
-        signal[
-            "structure_distance_atr"
-        ][lookback]
-        >
-        config[
-            "maximum_distance_atr"
+        config["minimum_m15_atr_ratio"]
+        is not None
+    ):
+        if (
+            signal["m15_atr_ratio"]
+            is None
+            or
+            signal["m15_atr_ratio"]
+            <
+            config[
+                "minimum_m15_atr_ratio"
+            ]
+        ):
+            return False
+
+    if (
+        config["maximum_m15_atr_ratio"]
+        is not None
+    ):
+        if (
+            signal["m15_atr_ratio"]
+            is None
+            or
+            signal["m15_atr_ratio"]
+            >
+            config[
+                "maximum_m15_atr_ratio"
+            ]
+        ):
+            return False
+
+    for horizon in [
+        "4h",
+        "12h",
+        "24h",
+    ]:
+        value = signal[
+            f"momentum_{horizon}_atr"
         ]
+
+        minimum = config[
+            f"minimum_momentum_{horizon}_atr"
+        ]
+
+        maximum = config[
+            f"maximum_momentum_{horizon}_atr"
+        ]
+
+        if (
+            minimum is not None
+            and
+            value < minimum
+        ):
+            return False
+
+        if (
+            maximum is not None
+            and
+            value > maximum
+        ):
+            return False
+
+    if (
+        config["maximum_stop_atr"]
+        is not None
+        and
+        signal["stop_atr"]
+        >
+        config["maximum_stop_atr"]
+    ):
+        return False
+
+    if (
+        config["minimum_stop_atr"]
+        is not None
+        and
+        signal["stop_atr"]
+        <
+        config["minimum_stop_atr"]
+    ):
+        return False
+
+    included = config[
+        "included_ny_hours"
+    ]
+
+    if (
+        included is not None
+        and
+        signal["ny_hour"]
+        not in included
+    ):
+        return False
+
+    if (
+        signal["ny_hour"]
+        in
+        config["excluded_ny_hours"]
     ):
         return False
 
     if (
         signal["ny_weekday"]
         in
-        config[
-            "excluded_weekdays"
-        ]
+        config["excluded_weekdays"]
     ):
         return False
 
     if (
-        signal["ny_hour"]
-        not in
-        config[
-            "included_hours"
-        ]
+        config["h1_close_above_ema"]
+        is not None
+        and
+        not state_close_above_ema(
+            signal["h1_prev"],
+            config[
+                "h1_close_above_ema"
+            ],
+        )
     ):
         return False
+
+    if (
+        config["h1_fast_ema"]
+        is not None
+        and
+        config["h1_slow_ema"]
+        is not None
+        and
+        not state_ema_alignment(
+            signal["h1_prev"],
+            config["h1_fast_ema"],
+            config["h1_slow_ema"],
+        )
+    ):
+        return False
+
+    if (
+        config["minimum_h1_atr_ratio"]
+        is not None
+    ):
+        state = signal["h1_prev"]
+
+        if (
+            state is None
+            or
+            state["atr_ratio_50"]
+            is None
+            or
+            state["atr_ratio_50"]
+            <
+            config[
+                "minimum_h1_atr_ratio"
+            ]
+        ):
+            return False
+
+    if (
+        config["daily_close_above_ema"]
+        is not None
+        and
+        not state_close_above_ema(
+            signal["daily_prev"],
+            config[
+                "daily_close_above_ema"
+            ],
+        )
+    ):
+        return False
+
+    if (
+        config["daily_fast_ema"]
+        is not None
+        and
+        config["daily_slow_ema"]
+        is not None
+        and
+        not state_ema_alignment(
+            signal["daily_prev"],
+            config["daily_fast_ema"],
+            config["daily_slow_ema"],
+        )
+    ):
+        return False
+
+    if (
+        config["minimum_daily_atr_ratio"]
+        is not None
+    ):
+        state = signal["daily_prev"]
+
+        if (
+            state is None
+            or
+            state["atr_ratio_50"]
+            is None
+            or
+            state["atr_ratio_50"]
+            <
+            config[
+                "minimum_daily_atr_ratio"
+            ]
+        ):
+            return False
 
     return True
 
@@ -1021,12 +1583,14 @@ def run_config_cached(
             and
             (
                 start is None
-                or signal["time"] >= start
+                or
+                signal["time"] >= start
             )
             and
             (
                 end is None
-                or signal["time"] < end
+                or
+                signal["time"] < end
             )
         )
     ]
@@ -1040,7 +1604,9 @@ def run_config_cached(
     position = 0
 
     while position < len(candidates):
-        signal = candidates[position]
+        signal = candidates[
+            position
+        ]
 
         trade = cache.get(
             (
@@ -1080,13 +1646,13 @@ def stats_from_trades(trades):
     ]
 
     winners = [
-        r for r in results
-        if r > 0
+        x for x in results
+        if x > 0
     ]
 
     losers = [
-        r for r in results
-        if r < 0
+        x for x in results
+        if x < 0
     ]
 
     gross_profit = sum(winners)
@@ -1152,11 +1718,13 @@ def stats_from_trades(trades):
                 else 0.0
             ),
         "max_drawdown_r": max_dd,
-        "longest_loss_streak": longest,
+        "longest_loss_streak":
+            longest,
     }
 
 
 def result_row(
+    family,
     config,
     cost,
     trades,
@@ -1166,50 +1734,10 @@ def result_row(
     )
 
     return {
+        "family": family,
         "candidate":
             config["label"],
-        "weekday_filter":
-            config.get(
-                "weekday_filter_name",
-                "REFERENCE",
-            ),
-        "session_filter":
-            config.get(
-                "session_filter_name",
-                "REFERENCE",
-            ),
-        "cost_pips":
-            cost,
-        "minimum_body_ratio":
-            config["minimum_body_ratio"],
-        "minimum_body_atr":
-            config["minimum_body_atr"],
-        "minimum_range_atr":
-            config["minimum_range_atr"],
-        "structure_lookback":
-            config["structure_lookback"],
-        "maximum_distance_atr":
-            config["maximum_distance_atr"],
-        "excluded_weekdays":
-            ",".join(
-                str(day)
-                for day in sorted(
-                    config[
-                        "excluded_weekdays"
-                    ]
-                )
-            ),
-        "included_hours":
-            ",".join(
-                str(hour)
-                for hour in sorted(
-                    config[
-                        "included_hours"
-                    ]
-                )
-            ),
-        "reward_risk":
-            config["reward_risk"],
+        "cost_pips": cost,
         "trades":
             stats["trades"],
         "winners":
@@ -1242,10 +1770,677 @@ def result_row(
                 4,
             ),
         "longest_loss_streak":
-            stats[
-                "longest_loss_streak"
-            ],
+            stats["longest_loss_streak"],
+        "minimum_body_ratio":
+            config["minimum_body_ratio"],
+        "minimum_body_atr":
+            config["minimum_body_atr"],
+        "minimum_range_atr":
+            config["minimum_range_atr"],
+        "minimum_close_location":
+            config["minimum_close_location"],
+        "minimum_lower_wick_body":
+            config["minimum_lower_wick_body"],
+        "structure_lookback":
+            config["structure_lookback"],
+        "maximum_distance_atr":
+            config["maximum_distance_atr"],
+        "minimum_m15_atr_ratio":
+            config["minimum_m15_atr_ratio"],
+        "maximum_m15_atr_ratio":
+            config["maximum_m15_atr_ratio"],
+        "minimum_momentum_4h_atr":
+            config["minimum_momentum_4h_atr"],
+        "maximum_momentum_4h_atr":
+            config["maximum_momentum_4h_atr"],
+        "minimum_momentum_12h_atr":
+            config["minimum_momentum_12h_atr"],
+        "maximum_momentum_12h_atr":
+            config["maximum_momentum_12h_atr"],
+        "minimum_momentum_24h_atr":
+            config["minimum_momentum_24h_atr"],
+        "maximum_momentum_24h_atr":
+            config["maximum_momentum_24h_atr"],
+        "maximum_stop_atr":
+            config["maximum_stop_atr"],
+        "minimum_stop_atr":
+            config["minimum_stop_atr"],
+        "included_ny_hours":
+            (
+                None
+                if config[
+                    "included_ny_hours"
+                ] is None
+                else ",".join(
+                    str(hour)
+                    for hour in sorted(
+                        config[
+                            "included_ny_hours"
+                        ]
+                    )
+                )
+            ),
+        "excluded_ny_hours":
+            ",".join(
+                str(hour)
+                for hour in sorted(
+                    config[
+                        "excluded_ny_hours"
+                    ]
+                )
+            ),
+        "excluded_weekdays":
+            ",".join(
+                str(day)
+                for day in sorted(
+                    config[
+                        "excluded_weekdays"
+                    ]
+                )
+            ),
+        "h1_close_above_ema":
+            config["h1_close_above_ema"],
+        "h1_fast_ema":
+            config["h1_fast_ema"],
+        "h1_slow_ema":
+            config["h1_slow_ema"],
+        "minimum_h1_atr_ratio":
+            config["minimum_h1_atr_ratio"],
+        "daily_close_above_ema":
+            config["daily_close_above_ema"],
+        "daily_fast_ema":
+            config["daily_fast_ema"],
+        "daily_slow_ema":
+            config["daily_slow_ema"],
+        "minimum_daily_atr_ratio":
+            config["minimum_daily_atr_ratio"],
+        "reward_risk":
+            config["reward_risk"],
     }
+
+
+# ============================================================
+# SINGLE-FAMILY SWEEP
+# ============================================================
+
+def single_family_configs():
+    rows = []
+
+    def add(
+        family,
+        label,
+        mutator,
+    ):
+        config = clone_config(
+            BASELINE,
+            label,
+        )
+
+        mutator(config)
+
+        rows.append(
+            (
+                family,
+                config,
+            )
+        )
+
+    for value in [
+        1.00,
+        1.05,
+        1.10,
+        1.20,
+        1.30,
+        1.40,
+        1.50,
+        1.60,
+    ]:
+        add(
+            "BODY_RATIO",
+            f"BR_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_body_ratio",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.30,
+        0.40,
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+    ]:
+        add(
+            "BODY_ATR",
+            f"BA_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_body_atr",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.60,
+        0.80,
+        1.00,
+        1.20,
+        1.40,
+        1.60,
+        1.80,
+        2.00,
+    ]:
+        add(
+            "RANGE_ATR",
+            f"RA_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_range_atr",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.55,
+        0.60,
+        0.65,
+        0.70,
+        0.75,
+        0.80,
+        0.85,
+    ]:
+        add(
+            "CLOSE_LOCATION",
+            f"SC_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_close_location",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.10,
+        0.20,
+        0.30,
+        0.40,
+        0.50,
+        0.75,
+        1.00,
+    ]:
+        add(
+            "LOWER_WICK",
+            f"LW_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_lower_wick_body",
+                    v,
+                ),
+        )
+
+    for lookback in STRUCTURE_LOOKBACKS:
+        for distance in [
+            0.05,
+            0.075,
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+            0.40,
+            0.50,
+            0.75,
+        ]:
+            add(
+                "STRUCTURE",
+                (
+                    f"S{lookback}_"
+                    f"D{distance:.3f}"
+                ),
+                lambda c,
+                lb=lookback,
+                d=distance:
+                    (
+                        c.__setitem__(
+                            "structure_lookback",
+                            lb,
+                        ),
+                        c.__setitem__(
+                            "maximum_distance_atr",
+                            d,
+                        )
+                    ),
+            )
+
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+    ]:
+        add(
+            "M15_ATR_MIN",
+            f"M15ATR_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_m15_atr_ratio",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+        1.50,
+    ]:
+        add(
+            "M15_ATR_MAX",
+            f"M15ATR_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_m15_atr_ratio",
+                    v,
+                ),
+        )
+
+    for horizon in [
+        "4h",
+        "12h",
+        "24h",
+    ]:
+        for value in [
+            -2.0,
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+        ]:
+            key = (
+                f"minimum_momentum_"
+                f"{horizon}_atr"
+            )
+
+            add(
+                f"MOM_{horizon}_MIN",
+                (
+                    f"MOM_{horizon}_"
+                    f"MIN_{value:+.2f}"
+                ),
+                lambda c,
+                k=key,
+                v=value:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
+
+        for value in [
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            3.0,
+        ]:
+            key = (
+                f"maximum_momentum_"
+                f"{horizon}_atr"
+            )
+
+            add(
+                f"MOM_{horizon}_MAX",
+                (
+                    f"MOM_{horizon}_"
+                    f"MAX_{value:+.2f}"
+                ),
+                lambda c,
+                k=key,
+                v=value:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
+
+    for value in [
+        0.60,
+        0.80,
+        1.00,
+        1.20,
+        1.40,
+        1.60,
+        2.00,
+        2.50,
+    ]:
+        add(
+            "STOP_MAX",
+            f"STOP_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_stop_atr",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.20,
+        0.30,
+        0.40,
+        0.50,
+        0.60,
+        0.70,
+    ]:
+        add(
+            "STOP_MIN",
+            f"STOP_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_stop_atr",
+                    v,
+                ),
+        )
+
+    hour_sets = {
+        "NY_00_05":
+            set(range(0, 6)),
+        "NY_02_06":
+            set(range(2, 7)),
+        "NY_07_11":
+            set(range(7, 12)),
+        "NY_08_12":
+            set(range(8, 13)),
+        "NY_08_15":
+            set(range(8, 16)),
+        "NY_09_13":
+            set(range(9, 14)),
+        "NY_12_16":
+            set(range(12, 17)),
+        "NY_14_18":
+            set(range(14, 19)),
+    }
+
+    for label, hours in hour_sets.items():
+        add(
+            "SESSION_INCLUDE",
+            label,
+            lambda c, h=hours:
+                c.__setitem__(
+                    "included_ny_hours",
+                    set(h),
+                ),
+        )
+
+    for hour in range(24):
+        add(
+            "HOUR_EXCLUDE",
+            f"EXCLUDE_H{hour:02d}",
+            lambda c, h=hour:
+                c.__setitem__(
+                    "excluded_ny_hours",
+                    {h},
+                ),
+        )
+
+    weekday_names = {
+        0: "MON",
+        1: "TUE",
+        2: "WED",
+        3: "THU",
+        4: "FRI",
+    }
+
+    for day in range(5):
+        add(
+            "WEEKDAY_EXCLUDE",
+            (
+                "EXCLUDE_"
+                + weekday_names[day]
+            ),
+            lambda c, d=day:
+                c.__setitem__(
+                    "excluded_weekdays",
+                    {d},
+                ),
+        )
+
+    for length in H1_EMA_LENGTHS:
+        add(
+            "H1_CLOSE_EMA",
+            f"H1_CLOSE_GT_EMA{length}",
+            lambda c, v=length:
+                c.__setitem__(
+                    "h1_close_above_ema",
+                    v,
+                ),
+        )
+
+    for fast, slow in H1_ALIGNMENT_PAIRS:
+        def mutate_h1(
+            c,
+            f=fast,
+            s=slow,
+        ):
+            c["h1_fast_ema"] = f
+            c["h1_slow_ema"] = s
+
+        add(
+            "H1_ALIGNMENT",
+            f"H1_EMA{fast}_GT_{slow}",
+            mutate_h1,
+        )
+
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+    ]:
+        add(
+            "H1_ATR",
+            f"H1_ATR_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_h1_atr_ratio",
+                    v,
+                ),
+        )
+
+    for length in DAILY_EMA_LENGTHS:
+        add(
+            "DAILY_CLOSE_EMA",
+            f"D_CLOSE_GT_EMA{length}",
+            lambda c, v=length:
+                c.__setitem__(
+                    "daily_close_above_ema",
+                    v,
+                ),
+        )
+
+    for fast, slow in DAILY_ALIGNMENT_PAIRS:
+        def mutate_daily(
+            c,
+            f=fast,
+            s=slow,
+        ):
+            c["daily_fast_ema"] = f
+            c["daily_slow_ema"] = s
+
+        add(
+            "DAILY_ALIGNMENT",
+            f"D_EMA{fast}_GT_{slow}",
+            mutate_daily,
+        )
+
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+    ]:
+        add(
+            "DAILY_ATR",
+            f"D_ATR_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_daily_atr_ratio",
+                    v,
+                ),
+        )
+
+    for rr in RR_VALUES:
+        add(
+            "RR",
+            f"RR_{rr:.2f}",
+            lambda c, v=rr:
+                c.__setitem__(
+                    "reward_risk",
+                    v,
+                ),
+        )
+
+    return rows
+
+
+# ============================================================
+# CONTROLLED INTERACTIONS
+# ============================================================
+
+def config_signature(config):
+    return tuple(
+        sorted(
+            (
+                key,
+                tuple(sorted(value))
+                if isinstance(value, set)
+                else value,
+            )
+            for key, value in config.items()
+            if key != "label"
+        )
+    )
+
+
+def build_controlled_interactions(
+    family_best,
+):
+    pool = []
+    seen_families = set()
+
+    for family, config in family_best:
+        if family in seen_families:
+            continue
+
+        seen_families.add(family)
+        pool.append(
+            (
+                family,
+                config,
+            )
+        )
+
+        if len(pool) >= 10:
+            break
+
+    interactions = []
+    seen = set()
+    counter = 0
+
+    def overlay(base, source):
+        result = clone_config(
+            base,
+            base["label"],
+        )
+
+        for key, value in source.items():
+            if key == "label":
+                continue
+
+            baseline_value = BASELINE.get(
+                key
+            )
+
+            if value != baseline_value:
+                if isinstance(value, set):
+                    result[key] = set(value)
+                else:
+                    result[key] = value
+
+        return result
+
+    for i in range(len(pool)):
+        for j in range(
+            i + 1,
+            len(pool),
+        ):
+            family_a, config_a = pool[i]
+            family_b, config_b = pool[j]
+
+            config = clone_config(
+                BASELINE,
+                "TEMP",
+            )
+
+            config = overlay(
+                config,
+                config_a,
+            )
+
+            config = overlay(
+                config,
+                config_b,
+            )
+
+            signature = config_signature(
+                config
+            )
+
+            if signature in seen:
+                continue
+
+            seen.add(signature)
+
+            counter += 1
+
+            config["label"] = (
+                f"INT{counter:03d}_"
+                f"{family_a}_"
+                f"{family_b}"
+            )
+
+            interactions.append(
+                (
+                    (
+                        f"INTERACTION_"
+                        f"{family_a}_"
+                        f"{family_b}"
+                    ),
+                    config,
+                )
+            )
+
+    return interactions
 
 
 # ============================================================
@@ -1346,13 +2541,13 @@ def recent_windows():
 def validation_rows(
     signals,
     cache,
-    finalists,
+    configs,
     windows,
 ):
     rows = []
 
     for rank, config in enumerate(
-        finalists,
+        configs,
         start=1,
     ):
         for label, start, end in windows:
@@ -1370,19 +2565,15 @@ def validation_rows(
             )
 
             rows.append({
-                "rank":
-                    rank,
-                "window":
-                    label,
+                "rank": rank,
+                "window": label,
                 "candidate":
                     config["label"],
                 "trades":
                     stats["trades"],
                 "profit_factor":
                     round(
-                        stats[
-                            "profit_factor"
-                        ],
+                        stats["profit_factor"],
                         6,
                     ),
                 "total_r":
@@ -1392,22 +2583,16 @@ def validation_rows(
                     ),
                 "expectancy_r":
                     round(
-                        stats[
-                            "expectancy_r"
-                        ],
+                        stats["expectancy_r"],
                         6,
                     ),
                 "max_drawdown_r":
                     round(
-                        stats[
-                            "max_drawdown_r"
-                        ],
+                        stats["max_drawdown_r"],
                         4,
                     ),
                 "longest_loss_streak":
-                    stats[
-                        "longest_loss_streak"
-                    ],
+                    stats["longest_loss_streak"],
             })
 
     return rows
@@ -1461,8 +2646,7 @@ def monthly_rolling_rows(
         rows.append({
             "candidate":
                 config["label"],
-            "months":
-                months,
+            "months": months,
             "window":
                 (
                     f"{cursor:%Y-%m-%d}"
@@ -1473,9 +2657,7 @@ def monthly_rolling_rows(
                 stats["trades"],
             "profit_factor":
                 round(
-                    stats[
-                        "profit_factor"
-                    ],
+                    stats["profit_factor"],
                     6,
                 ),
             "total_r":
@@ -1485,16 +2667,12 @@ def monthly_rolling_rows(
                 ),
             "expectancy_r":
                 round(
-                    stats[
-                        "expectancy_r"
-                    ],
+                    stats["expectancy_r"],
                     6,
                 ),
             "max_drawdown_r":
                 round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
+                    stats["max_drawdown_r"],
                     4,
                 ),
             "positive":
@@ -1525,7 +2703,8 @@ def median(values):
         ordered[
             n // 2 - 1
         ]
-        + ordered[
+        +
+        ordered[
             n // 2
         ]
     ) / 2.0
@@ -1615,163 +2794,36 @@ def rolling_summary(rows):
 
 
 # ============================================================
-# OVERLAP / EXCLUSIVE
-# ============================================================
-
-def trade_key(trade):
-    return (
-        trade[
-            "entry_time_utc"
-        ],
-        trade[
-            "exit_time_utc"
-        ],
-    )
-
-
-def compare_against_reference(
-    signals,
-    cache,
-    reference,
-    finalist,
-    reference_name,
-):
-    reference_trades = run_config_cached(
-        signals,
-        cache,
-        reference,
-        PRIMARY_COST_PIPS,
-    )
-
-    finalist_trades = run_config_cached(
-        signals,
-        cache,
-        finalist,
-        PRIMARY_COST_PIPS,
-    )
-
-    reference_keys = {
-        trade_key(trade)
-        for trade in reference_trades
-    }
-
-    finalist_keys = {
-        trade_key(trade)
-        for trade in finalist_trades
-    }
-
-    shared = (
-        reference_keys
-        & finalist_keys
-    )
-
-    added = (
-        finalist_keys
-        - reference_keys
-    )
-
-    removed = (
-        reference_keys
-        - finalist_keys
-    )
-
-    subsets = [
-        (
-            "REFERENCE_ALL",
-            reference_trades,
-        ),
-        (
-            "FINALIST_ALL",
-            finalist_trades,
-        ),
-        (
-            "FINALIST_SHARED",
-            [
-                trade
-                for trade in finalist_trades
-                if trade_key(trade)
-                in shared
-            ],
-        ),
-        (
-            "FINALIST_ADDED",
-            [
-                trade
-                for trade in finalist_trades
-                if trade_key(trade)
-                in added
-            ],
-        ),
-        (
-            "REFERENCE_REMOVED",
-            [
-                trade
-                for trade in reference_trades
-                if trade_key(trade)
-                in removed
-            ],
-        ),
-    ]
-
-    rows = []
-
-    for subset_name, subset in subsets:
-        stats = stats_from_trades(
-            subset
-        )
-
-        rows.append({
-            "reference":
-                reference_name,
-            "finalist":
-                finalist["label"],
-            "subset":
-                subset_name,
-            "trades":
-                stats["trades"],
-            "profit_factor":
-                round(
-                    stats[
-                        "profit_factor"
-                    ],
-                    6,
-                ),
-            "total_r":
-                round(
-                    stats["total_r"],
-                    4,
-                ),
-            "expectancy_r":
-                round(
-                    stats[
-                        "expectancy_r"
-                    ],
-                    6,
-                ),
-            "max_drawdown_r":
-                round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
-                    4,
-                ),
-        })
-
-    return rows
-
-
-# ============================================================
 # RUNNER
 # ============================================================
 
 def run_research():
     try:
-        candles = fetch_full_history(
+        m15 = fetch_history(
+            "M15",
             RESEARCH_FROM,
             RESEARCH_TO,
+            30,
         )
 
-        if len(candles) < 1000:
+        h1 = fetch_history(
+            "H1",
+            RESEARCH_FROM
+            - timedelta(days=500),
+            RESEARCH_TO,
+            120,
+        )
+
+        daily = fetch_history(
+            "D",
+            RESEARCH_FROM
+            - timedelta(days=1500),
+            RESEARCH_TO,
+            2500,
+            daily_alignment=True,
+        )
+
+        if len(m15) < 1000:
             raise RuntimeError(
                 "Too few M15 candles returned"
             )
@@ -1779,47 +2831,64 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message":
-                "Building ATR and short signal cache",
-            "candles":
-                len(candles),
+                "Building ATR, H1/Daily state and GBPUSD M15 long features",
+            "m15_candles":
+                len(m15),
+            "h1_candles":
+                len(h1),
+            "daily_candles":
+                len(daily),
         })
 
-        atr = atr14(
-            candles
+        m15_atr = atr14(m15)
+
+        h1_state = build_htf_state(
+            h1,
+            H1_EMA_LENGTHS,
+        )
+
+        daily_state = build_htf_state(
+            daily,
+            DAILY_EMA_LENGTHS,
         )
 
         signals = build_signal_cache(
-            candles,
-            atr,
+            m15,
+            m15_atr,
+            h1_state,
+            daily_state,
         )
 
         STATUS.update({
             "state": "precomputing",
             "message":
-                "Caching reusable short outcomes",
+                "Caching reusable GBPUSD M15 long outcomes",
             "engulfing_signals":
                 len(signals),
         })
 
         cache = build_outcome_cache(
-            candles,
+            m15,
             signals,
         )
 
-        configs = build_configs()
+        singles = single_family_configs()
 
         STATUS.update({
             "state": "calculating",
             "message":
-                "Running final local short grid",
-            "configs":
-                len(configs),
+                "Running GBPUSD M15 long single-family sweep",
+            "single_configs":
+                len(singles),
         })
 
-        summary_rows = []
+        single_rows = []
 
-        for number, config in enumerate(
-            configs,
+        for number, (
+            family,
+            config,
+        ) in enumerate(
+            singles,
             start=1,
         ):
             for cost in COST_PIPS_GRID:
@@ -1830,116 +2899,249 @@ def run_research():
                     cost,
                 )
 
-                summary_rows.append(
+                single_rows.append(
                     result_row(
+                        family,
                         config,
                         cost,
                         trades,
                     )
                 )
 
-            if number % 100 == 0:
+            if number % 25 == 0:
                 STATUS.update({
                     "state": "calculating",
                     "message": (
-                        f"Evaluated {number}/"
-                        f"{len(configs)} configs"
+                        "Single-family sweep "
+                        f"{number}/{len(singles)}"
                     ),
-                    "config":
-                        number,
-                    "configs_total":
-                        len(configs),
                 })
 
-        for ref in [
-            OLD_INCUMBENT,
-            CURRENT_LEAD,
-        ]:
-            for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    cache,
-                    ref,
-                    cost,
-                )
-
-                summary_rows.append(
-                    result_row(
-                        ref,
-                        cost,
-                        trades,
-                    )
-                )
-
         write_csv(
-            OUTPUT_SUMMARY,
-            summary_rows,
+            OUTPUT_SINGLE,
+            single_rows,
         )
 
-        primary = [
+        primary_single = [
             row
-            for row in summary_rows
+            for row in single_rows
             if (
                 abs(
                     float(
-                        row[
-                            "cost_pips"
-                        ]
+                        row["cost_pips"]
                     )
-                    - PRIMARY_COST_PIPS
-                ) < 1e-12
+                    -
+                    PRIMARY_COST_PIPS
+                )
+                < 1e-12
                 and
                 int(
                     row["trades"]
-                ) >= 60
+                )
+                >= 80
             )
         ]
 
-        primary.sort(
+        primary_single.sort(
             key=lambda row: (
                 float(
-                    row[
-                        "profit_factor"
-                    ]
+                    row["profit_factor"]
                 ),
                 float(
-                    row[
-                        "expectancy_r"
-                    ]
+                    row["expectancy_r"]
                 ),
                 float(
                     row["total_r"]
-                ),
-                int(
-                    row["trades"]
                 ),
             ),
             reverse=True,
         )
 
-        top_rows = primary[:30]
+        write_csv(
+            OUTPUT_SINGLE_TOP,
+            primary_single[:100],
+        )
+
+        config_by_label = {
+            config["label"]:
+                config
+            for _, config in singles
+        }
+
+        family_best_rows = {}
+
+        for row in primary_single:
+            family = row["family"]
+
+            if family in family_best_rows:
+                continue
+
+            if (
+                float(
+                    row["profit_factor"]
+                )
+                >= 1.20
+            ):
+                family_best_rows[
+                    family
+                ] = row
+
+        family_best = []
+
+        for family, row in sorted(
+            family_best_rows.items(),
+            key=lambda item:
+                float(
+                    item[1][
+                        "profit_factor"
+                    ]
+                ),
+            reverse=True,
+        ):
+            family_best.append(
+                (
+                    family,
+                    config_by_label[
+                        row["candidate"]
+                    ],
+                )
+            )
+
+        interactions = (
+            build_controlled_interactions(
+                family_best
+            )
+        )
+
+        STATUS.update({
+            "state": "calculating",
+            "message":
+                "Running GBPUSD M15 long controlled interactions",
+            "interaction_configs":
+                len(interactions),
+        })
+
+        interaction_rows = []
+
+        for number, (
+            family,
+            config,
+        ) in enumerate(
+            interactions,
+            start=1,
+        ):
+            for cost in COST_PIPS_GRID:
+                trades = run_config_cached(
+                    signals,
+                    cache,
+                    config,
+                    cost,
+                )
+
+                interaction_rows.append(
+                    result_row(
+                        family,
+                        config,
+                        cost,
+                        trades,
+                    )
+                )
+
+            if number % 20 == 0:
+                STATUS.update({
+                    "state": "calculating",
+                    "message": (
+                        "Controlled interactions "
+                        f"{number}/{len(interactions)}"
+                    ),
+                })
+
+        write_csv(
+            OUTPUT_INTERACTIONS,
+            interaction_rows,
+        )
+
+        baseline_trades = run_config_cached(
+            signals,
+            cache,
+            BASELINE,
+            PRIMARY_COST_PIPS,
+        )
+
+        baseline_row = result_row(
+            "BASELINE",
+            BASELINE,
+            PRIMARY_COST_PIPS,
+            baseline_trades,
+        )
+
+        combined_primary = [
+            baseline_row
+        ]
+
+        combined_primary.extend(
+            primary_single
+        )
+
+        combined_primary.extend(
+            row
+            for row in interaction_rows
+            if (
+                abs(
+                    float(
+                        row["cost_pips"]
+                    )
+                    -
+                    PRIMARY_COST_PIPS
+                )
+                < 1e-12
+                and
+                int(
+                    row["trades"]
+                )
+                >= 80
+            )
+        )
+
+        combined_primary.sort(
+            key=lambda row: (
+                float(
+                    row["profit_factor"]
+                ),
+                float(
+                    row["expectancy_r"]
+                ),
+                float(
+                    row["total_r"]
+                ),
+            ),
+            reverse=True,
+        )
+
+        top_rows = combined_primary[:30]
 
         write_csv(
             OUTPUT_TOP,
             top_rows,
         )
 
-        config_map = {
-            config["label"]:
-                config
-            for config in configs
+        all_configs = {
+            "BASELINE":
+                BASELINE
         }
 
-        config_map[
-            OLD_INCUMBENT["label"]
-        ] = OLD_INCUMBENT
+        for _, config in singles:
+            all_configs[
+                config["label"]
+            ] = config
 
-        config_map[
-            CURRENT_LEAD["label"]
-        ] = CURRENT_LEAD
+        for _, config in interactions:
+            all_configs[
+                config["label"]
+            ] = config
 
         finalists = [
-            config_map[
+            all_configs[
                 row["candidate"]
             ]
             for row in top_rows[:12]
@@ -2016,9 +3218,7 @@ def run_research():
 
             era_pfs = [
                 float(
-                    row[
-                        "profit_factor"
-                    ]
+                    row["profit_factor"]
                 )
                 for row in eras
                 if int(
@@ -2028,9 +3228,7 @@ def run_research():
 
             devval_pfs = [
                 float(
-                    row[
-                        "profit_factor"
-                    ]
+                    row["profit_factor"]
                 )
                 for row in devval
                 if int(
@@ -2040,9 +3238,7 @@ def run_research():
 
             recent_pfs = [
                 float(
-                    row[
-                        "profit_factor"
-                    ]
+                    row["profit_factor"]
                 )
                 for row in recent
                 if int(
@@ -2085,7 +3281,9 @@ def run_research():
                     ),
                 "full_total_r":
                     float(
-                        base["total_r"]
+                        base[
+                            "total_r"
+                        ]
                     ),
                 "trades":
                     int(
@@ -2100,9 +3298,12 @@ def run_research():
                 "score":
                     (
                         min_era * 3.0
-                        + min_devval * 2.0
-                        + min_recent * 2.0
-                        + float(
+                        +
+                        min_devval * 2.0
+                        +
+                        min_recent * 2.0
+                        +
+                        float(
                             base[
                                 "profit_factor"
                             ]
@@ -2117,7 +3318,7 @@ def run_research():
         )
 
         robust_finalists = [
-            config_map[
+            all_configs[
                 row["candidate"]
             ]
             for row in robust[:5]
@@ -2138,62 +3339,10 @@ def run_research():
                     months,
                 )
 
-                rolling_rows.extend(
-                    rows
-                )
-
-                summary = rolling_summary(
-                    rows
-                )
-
-                summary[
-                    "minimum_range_atr"
-                ] = config[
-                    "minimum_range_atr"
-                ]
-
-                summary[
-                    "structure_lookback"
-                ] = config[
-                    "structure_lookback"
-                ]
-
-                summary[
-                    "maximum_distance_atr"
-                ] = config[
-                    "maximum_distance_atr"
-                ]
-
-                summary[
-                    "excluded_weekdays"
-                ] = ",".join(
-                    str(day)
-                    for day in sorted(
-                        config[
-                            "excluded_weekdays"
-                        ]
-                    )
-                )
-
-                summary[
-                    "included_hours"
-                ] = ",".join(
-                    str(hour)
-                    for hour in sorted(
-                        config[
-                            "included_hours"
-                        ]
-                    )
-                )
-
-                summary[
-                    "reward_risk"
-                ] = config[
-                    "reward_risk"
-                ]
+                rolling_rows.extend(rows)
 
                 rolling_summary_rows.append(
-                    summary
+                    rolling_summary(rows)
                 )
 
         write_csv(
@@ -2206,38 +3355,10 @@ def run_research():
             rolling_summary_rows,
         )
 
-        overlap_rows = []
-
-        for finalist in robust_finalists:
-            overlap_rows.extend(
-                compare_against_reference(
-                    signals,
-                    cache,
-                    OLD_INCUMBENT,
-                    finalist,
-                    "OLD_INCUMBENT",
-                )
-            )
-
-            overlap_rows.extend(
-                compare_against_reference(
-                    signals,
-                    cache,
-                    CURRENT_LEAD,
-                    finalist,
-                    "CURRENT_LEAD_RA1.70_EX_THU",
-                )
-            )
-
-        write_csv(
-            OUTPUT_OVERLAP,
-            overlap_rows,
-        )
-
         best = (
             robust_finalists[0]
             if robust_finalists
-            else CURRENT_LEAD
+            else BASELINE
         )
 
         best_trades = run_config_cached(
@@ -2255,22 +3376,32 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message":
-                "EUR/USD M15 short final local confirmation complete",
-            "candles":
-                len(candles),
+                "GBP/USD M15 long exhaustive controlled pass complete",
+            "m15_candles":
+                len(m15),
+            "h1_candles":
+                len(h1),
+            "daily_candles":
+                len(daily),
             "engulfing_signals":
                 len(signals),
-            "configs":
-                len(configs),
-            "primary_cost_pips":
-                PRIMARY_COST_PIPS,
+            "single_configs":
+                len(singles),
+            "interaction_configs":
+                len(interactions),
+            "baseline":
+                baseline_row,
             "robust_ranking":
                 robust[:10],
             "selected_best":
                 best,
             "outputs": {
-                "summary":
-                    OUTPUT_SUMMARY,
+                "single_family":
+                    OUTPUT_SINGLE,
+                "single_top":
+                    OUTPUT_SINGLE_TOP,
+                "interactions":
+                    OUTPUT_INTERACTIONS,
                 "top":
                     OUTPUT_TOP,
                 "eras":
@@ -2283,33 +3414,10 @@ def run_research():
                     OUTPUT_ROLLING,
                 "rolling_summary":
                     OUTPUT_ROLLING_SUMMARY,
-                "overlap":
-                    OUTPUT_OVERLAP,
                 "best_trades":
                     OUTPUT_BEST_TRADES,
             },
         })
-
-        print()
-        print("=" * 100)
-        print(
-            "EUR/USD M15 SHORT FINAL LOCAL CONFIRMATION COMPLETE"
-        )
-        print("=" * 100)
-        print(
-            "Configs:",
-            len(configs),
-        )
-        print(
-            "Selected best:",
-            best,
-        )
-        print(
-            "Robust ranking:"
-        )
-
-        for row in robust[:10]:
-            print(row)
 
     except Exception as error:
         STATUS.update({
@@ -2332,36 +3440,37 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "EURUSD M15 Short Final Local Confirmation",
+            "GBPUSD M15 Long Exhaustive Controlled",
         "status":
             STATUS["state"],
         "instrument":
             INSTRUMENT,
         "timeframe":
-            GRANULARITY,
+            "M15",
         "side":
-            "SELL",
+            "BUY",
         "orders_supported":
             False,
         "trading_enabled":
             False,
         "routes": [
-            "/m15-short-final-local/status",
-            "/m15-short-final-local/summary",
-            "/m15-short-final-local/top",
-            "/m15-short-final-local/eras",
-            "/m15-short-final-local/dev-validation",
-            "/m15-short-final-local/recent",
-            "/m15-short-final-local/rolling",
-            "/m15-short-final-local/rolling-summary",
-            "/m15-short-final-local/overlap",
-            "/m15-short-final-local/best-trades",
+            "/gbpusd-m15-long/status",
+            "/gbpusd-m15-long/single-family",
+            "/gbpusd-m15-long/single-top",
+            "/gbpusd-m15-long/interactions",
+            "/gbpusd-m15-long/top",
+            "/gbpusd-m15-long/eras",
+            "/gbpusd-m15-long/dev-validation",
+            "/gbpusd-m15-long/recent",
+            "/gbpusd-m15-long/rolling",
+            "/gbpusd-m15-long/rolling-summary",
+            "/gbpusd-m15-long/best-trades",
         ],
     })
 
 
 @app.route(
-    "/m15-short-final-local/status"
+    "/gbpusd-m15-long/status"
 )
 def route_status():
     return jsonify(
@@ -2370,16 +3479,34 @@ def route_status():
 
 
 @app.route(
-    "/m15-short-final-local/summary"
+    "/gbpusd-m15-long/single-family"
 )
-def route_summary():
+def route_single_family():
     return download_file(
-        OUTPUT_SUMMARY
+        OUTPUT_SINGLE
     )
 
 
 @app.route(
-    "/m15-short-final-local/top"
+    "/gbpusd-m15-long/single-top"
+)
+def route_single_top():
+    return download_file(
+        OUTPUT_SINGLE_TOP
+    )
+
+
+@app.route(
+    "/gbpusd-m15-long/interactions"
+)
+def route_interactions():
+    return download_file(
+        OUTPUT_INTERACTIONS
+    )
+
+
+@app.route(
+    "/gbpusd-m15-long/top"
 )
 def route_top():
     return download_file(
@@ -2388,7 +3515,7 @@ def route_top():
 
 
 @app.route(
-    "/m15-short-final-local/eras"
+    "/gbpusd-m15-long/eras"
 )
 def route_eras():
     return download_file(
@@ -2397,7 +3524,7 @@ def route_eras():
 
 
 @app.route(
-    "/m15-short-final-local/dev-validation"
+    "/gbpusd-m15-long/dev-validation"
 )
 def route_devval():
     return download_file(
@@ -2406,7 +3533,7 @@ def route_devval():
 
 
 @app.route(
-    "/m15-short-final-local/recent"
+    "/gbpusd-m15-long/recent"
 )
 def route_recent():
     return download_file(
@@ -2415,7 +3542,7 @@ def route_recent():
 
 
 @app.route(
-    "/m15-short-final-local/rolling"
+    "/gbpusd-m15-long/rolling"
 )
 def route_rolling():
     return download_file(
@@ -2424,7 +3551,7 @@ def route_rolling():
 
 
 @app.route(
-    "/m15-short-final-local/rolling-summary"
+    "/gbpusd-m15-long/rolling-summary"
 )
 def route_rolling_summary():
     return download_file(
@@ -2433,16 +3560,7 @@ def route_rolling_summary():
 
 
 @app.route(
-    "/m15-short-final-local/overlap"
-)
-def route_overlap():
-    return download_file(
-        OUTPUT_OVERLAP
-    )
-
-
-@app.route(
-    "/m15-short-final-local/best-trades"
+    "/gbpusd-m15-long/best-trades"
 )
 def route_best_trades():
     return download_file(
@@ -2453,7 +3571,7 @@ def route_best_trades():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="eurusd-m15-short-final-local",
+        name="gbpusd-m15-long-exhaustive",
         daemon=True,
     )
 
