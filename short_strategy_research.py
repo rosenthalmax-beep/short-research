@@ -206,13 +206,13 @@ OUTPUT_BEST_TRADES = (
 )
 
 OUTPUT_BUNDLE = (
-    "gbpusd_m15_long_gen2_RESULTS.zip"
+    "gbpusd_m15_long_gen2_CORRECTED_RESULTS.zip"
 )
 
 STATUS = {
     "state": "not_started",
     "message": "GBP/USD M15 Gen2 research has not started",
-    "service": "GBPUSD M15 Long Gen2 Structural Context",
+    "service": "GBPUSD M15 Long Gen2 Structural Context CORRECTED",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -800,6 +800,28 @@ def build_htf_state(
     ema_lengths,
     structural_lookbacks=None,
 ):
+    """
+    Build higher-timeframe state with an explicit completion timestamp.
+
+    IMPORTANT:
+    OANDA candle timestamps are candle OPEN times.
+
+    A higher-timeframe candle is only available to an M15 signal when
+    that HTF candle has fully completed. The safest historical mapping
+    is therefore:
+
+        complete_at = next HTF candle's OPEN time
+
+    Example:
+        H1 09:00 candle completes at 10:00.
+        M15 signal opening 10:00 may use the 09:00 H1 candle.
+        M15 signal opening 09:45 may NOT use it.
+
+    This also handles OANDA daily candles aligned to 17:00 New York
+    correctly across DST because the next actual daily candle timestamp
+    defines completion instead of assuming a fixed 24-hour duration.
+    """
+
     closes = [
         candle["close"]
         for candle in candles
@@ -818,6 +840,8 @@ def build_htf_state(
 
     rows = []
 
+    # Last HTF candle has no observed next-open completion marker.
+    # We intentionally do not expose it as completed state.
     for i, candle in enumerate(
         candles
     ):
@@ -839,9 +863,17 @@ def build_htf_state(
                         lookback
                     ] = None
 
+        complete_at = (
+            candles[i + 1]["time"]
+            if i + 1 < len(candles)
+            else None
+        )
+
         rows.append({
             "time":
                 candle["time"],
+            "complete_at":
+                complete_at,
             "open":
                 candle["open"],
             "high":
@@ -867,15 +899,32 @@ def build_htf_state(
     return rows
 
 
-def previous_completed_state(
-    state_rows,
-    times,
+def completed_state_index(
+    completion_times,
     signal_time,
 ):
-    position = bisect.bisect_left(
-        times,
+    """
+    Return index of latest HTF candle whose completion time is
+    <= the M15 signal candle OPEN time.
+    """
+
+    position = bisect.bisect_right(
+        completion_times,
         signal_time,
     ) - 1
+
+    return position
+
+
+def previous_completed_state(
+    state_rows,
+    completion_times,
+    signal_time,
+):
+    position = completed_state_index(
+        completion_times,
+        signal_time,
+    )
 
     if position < 0:
         return None
@@ -887,20 +936,14 @@ def previous_completed_state(
 
 def previous_completed_daily_state(
     state_rows,
-    times,
+    completion_times,
     signal_time,
 ):
-    position = bisect.bisect_left(
-        times,
+    return previous_completed_state(
+        state_rows,
+        completion_times,
         signal_time,
-    ) - 1
-
-    if position < 0:
-        return None
-
-    return state_rows[
-        position
-    ]
+    )
 
 
 # ============================================================
@@ -936,19 +979,44 @@ def build_signal_universe(
 ):
     signals = []
 
-    h1_times = [
-        row["time"]
+    # Only states with a known observed completion time are
+    # eligible. Since complete_at is the next candle OPEN, these arrays
+    # are naturally chronological and safe for bisect.
+    h1_completion_times = [
+        row["complete_at"]
         for row in h1_state
+        if row["complete_at"] is not None
     ]
 
-    h4_times = [
-        row["time"]
+    h4_completion_times = [
+        row["complete_at"]
         for row in h4_state
+        if row["complete_at"] is not None
     ]
 
-    daily_times = [
-        row["time"]
+    daily_completion_times = [
+        row["complete_at"]
         for row in daily_state
+        if row["complete_at"] is not None
+    ]
+
+    # State arrays aligned to the completion-time arrays above.
+    h1_completed_rows = [
+        row
+        for row in h1_state
+        if row["complete_at"] is not None
+    ]
+
+    h4_completed_rows = [
+        row
+        for row in h4_state
+        if row["complete_at"] is not None
+    ]
+
+    daily_completed_rows = [
+        row
+        for row in daily_state
+        if row["complete_at"] is not None
     ]
 
     max_lookback = max(
@@ -1087,27 +1155,34 @@ def build_signal_universe(
                     ),
             }
 
+        # Strictly PRE-SIGNAL selloff context.
+        # End at the previous completed M15 candle, so the current
+        # bullish reversal candle cannot manufacture its own context.
+        prior_close = m15[
+            i - 1
+        ]["close"]
+
         selloff_4h = (
-            current["close"]
+            prior_close
             -
             m15[
-                i - 16
+                i - 1 - 16
             ]["close"]
         ) / atr
 
         selloff_8h = (
-            current["close"]
+            prior_close
             -
             m15[
-                i - 32
+                i - 1 - 32
             ]["close"]
         ) / atr
 
         selloff_12h = (
-            current["close"]
+            prior_close
             -
             m15[
-                i - 48
+                i - 1 - 48
             ]["close"]
         ) / atr
 
@@ -1205,21 +1280,21 @@ def build_signal_universe(
         )
 
         h1_prev = previous_completed_state(
-            h1_state,
-            h1_times,
+            h1_completed_rows,
+            h1_completion_times,
             current["time"],
         )
 
         h4_prev = previous_completed_state(
-            h4_state,
-            h4_times,
+            h4_completed_rows,
+            h4_completion_times,
             current["time"],
         )
 
         daily_prev = (
             previous_completed_daily_state(
-                daily_state,
-                daily_times,
+                daily_completed_rows,
+                daily_completion_times,
                 current["time"],
             )
         )
@@ -2353,6 +2428,54 @@ def build_outcome_cache(
 # BACKTEST ENGINE
 # ============================================================
 
+CANDIDATE_CACHE = {}
+
+
+def candidate_cache_key(
+    config,
+):
+    return config_signature(
+        config
+    )
+
+
+def qualifying_candidates(
+    signals,
+    config,
+):
+    """
+    Cache the full-history qualifying signal list for each configuration.
+    Windowed validation then slices this much smaller list rather than
+    re-running every filter against the entire signal universe.
+    """
+
+    key = candidate_cache_key(
+        config
+    )
+
+    cached = CANDIDATE_CACHE.get(
+        key
+    )
+
+    if cached is not None:
+        return cached
+
+    candidates = [
+        signal
+        for signal in signals
+        if signal_passes(
+            signal,
+            config,
+        )
+    ]
+
+    CANDIDATE_CACHE[
+        key
+    ] = candidates
+
+    return candidates
+
+
 def run_config_cached(
     signals,
     cache,
@@ -2361,28 +2484,44 @@ def run_config_cached(
     start=None,
     end=None,
 ):
-    candidates = [
-        signal
-        for signal in signals
-        if (
-            signal_passes(
-                signal,
-                config,
-            )
-            and
-            (
-                start is None
-                or
-                signal["time"] >= start
-            )
-            and
-            (
-                end is None
-                or
-                signal["time"] < end
+    all_candidates = qualifying_candidates(
+        signals,
+        config,
+    )
+
+    if (
+        start is None
+        and
+        end is None
+    ):
+        candidates = all_candidates
+    else:
+        candidate_times = [
+            signal["time"]
+            for signal in all_candidates
+        ]
+
+        left = (
+            0
+            if start is None
+            else bisect.bisect_left(
+                candidate_times,
+                start,
             )
         )
-    ]
+
+        right = (
+            len(all_candidates)
+            if end is None
+            else bisect.bisect_left(
+                candidate_times,
+                end,
+            )
+        )
+
+        candidates = all_candidates[
+            left:right
+        ]
 
     indices = [
         signal["signal_index"]
@@ -2393,7 +2532,9 @@ def run_config_cached(
     position = 0
 
     while position < len(candidates):
-        signal = candidates[position]
+        signal = candidates[
+            position
+        ]
 
         trade = cache.get(
             (
@@ -4274,6 +4415,12 @@ def run_research():
         # VALIDATION
         # ----------------------------------------------------
 
+        STATUS.update({
+            "state": "validating",
+            "message":
+                "Running 4-era validation",
+        })
+
         era_rows = validation_rows(
             signals,
             cache,
@@ -4281,12 +4428,24 @@ def run_research():
             era_windows(),
         )
 
+        STATUS.update({
+            "state": "validating",
+            "message":
+                "Running dev / validation split",
+        })
+
         devval_rows = validation_rows(
             signals,
             cache,
             finalists,
             devval_windows(),
         )
+
+        STATUS.update({
+            "state": "validating",
+            "message":
+                "Running recent 5Y / 2Y validation",
+        })
 
         recent_rows = validation_rows(
             signals,
@@ -4449,6 +4608,12 @@ def run_research():
             for row in robust[:6]
         ]
 
+        STATUS.update({
+            "state": "validating",
+            "message":
+                "Running rolling 2Y / 3Y validation",
+        })
+
         rolling_rows = []
         rolling_summary_rows = []
 
@@ -4503,6 +4668,12 @@ def run_research():
             best_trades,
         )
 
+
+        STATUS.update({
+            "state": "packaging",
+            "message":
+                "Building single ZIP results bundle",
+        })
 
         build_results_bundle()
 
@@ -4606,7 +4777,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "GBPUSD M15 Long Gen2 Structural Context",
+            "GBPUSD M15 Long Gen2 Structural Context CORRECTED",
         "status":
             STATUS["state"],
         "instrument":
