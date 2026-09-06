@@ -3,8 +3,8 @@ import os
 import csv
 import time
 import bisect
-import threading
 import zipfile
+import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -13,95 +13,62 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# GBP/USD M15 LONG
-# SECOND-GENERATION STRUCTURAL / CONTEXT RESEARCH
+# GBP/USD M15 SHORT
+# EXHAUSTIVE-BUT-CONTROLLED RESEARCH
 #
-# ONE SELF-CONTAINED RESEARCH SCRIPT
 # READ-ONLY. NEVER SENDS ORDERS.
 #
-# Why this exists:
-#   The first-generation "standard filter" search failed to
-#   produce a robust GBP/USD M15 long edge.
+# Corrected from outset:
+#   - HTF state uses only candles completed by M15 signal OPEN
+#   - H1/H4/Daily completion based on NEXT actual OANDA candle open
+#   - Daily DST-safe via actual OANDA timestamps
+#   - momentum context ends on previous M15 candle
+#   - candidate lists cached per config
+#   - one ZIP download route
 #
-# This script deliberately explores NEW HYPOTHESES rather than
-# simply tuning the same filters more finely.
-#
-# Research families:
-#
-# A) TRIGGER FAMILIES
-#   1. exact bullish engulfing
-#   2. bullish body-engulf only
-#   3. bullish close above previous high
-#   4. bullish displacement after sweep
-#
-# B) LIQUIDITY SWEEP / RECLAIM
-#   - prior 20 / 40 / 60 / 100-bar low sweep
-#   - reclaim back above prior low
-#   - previous-day-low sweep / reclaim
-#
-# C) PREVIOUS-DAY LOCATION
-#   - lower 20/30/40% of previous day range
-#   - near previous day low
-#
-# D) SELLOFF -> REVERSAL CONTEXT
-#   - prior 4h / 8h / 12h move negative by ATR thresholds
-#   - consecutive bearish bars before signal
-#
-# E) HTF PULLBACK / TREND
-#   - prior completed H1 close above EMA50/100/200
-#   - H1 EMA20 > EMA50 etc.
-#   - signal price below/near H1 EMA20 after bullish H1 trend
-#   - same on H4
-#
-# F) HTF STRUCTURAL LOWS
-#   - proximity to prior H1 20/50 bar low
-#   - proximity to prior H4 10/20 bar low
-#
-# G) COMPRESSION -> EXPANSION
-#   - prior 4/8/12 bar average range compressed vs ATR
-#   - signal range expands vs prior average
-#
-# H) MULTI-CANDLE REVERSAL
-#   - N prior bearish candles
-#   - signal closes above prior 2/3-bar high
-#
-# I) SESSION TRANSITIONS
-#   - London open
-#   - pre-NY / NY open
-#   - London/NY overlap
-#   - early US
-#
-# J) PRIOR-DAY STATE
-#   - prior day bearish
-#   - prior day range high/low vs ATR
-#   - prior day close in lower part of own range
-#
-# K) CONTROLLED INTERACTIONS
-#   Only independently useful families are paired.
-#
-# Anti-overfit:
-#   - 1 pip development cost
-#   - cost stress 0.5 / 1 / 1.5 / 2 pips
-#   - 4 eras
-#   - dev 2010-2017 vs validation 2018-now
-#   - last 5Y / 2Y
-#   - rolling monthly-start 2Y / 3Y
-#   - trade count minimums
-#
-# Historical conventions:
-#   - OANDA midpoint candles
-#   - M15 signal time = candle OPEN
-#   - ATR14 Wilder/RMA, SMA-seeded
-#   - stop = signal low - 10 ticks
-#   - target based on REFERENCE signal-close risk
-#   - adverse long entry = signal close + cost
-#   - exits begin next candle
-#   - same-bar tie:
-#       high closer => target first
-#       otherwise stop first
+# Core:
+#   - exact bearish engulfing
+#   - OANDA midpoint M15
+#   - ATR14 Wilder/RMA, SMA seeded
+#   - stop = signal high + 10 ticks
+#   - target based on REFERENCE signal close
+#   - adverse short entry = signal close - cost
+#   - exits begin NEXT candle
+#   - same-bar short tie:
+#       high closer => STOP first
+#       otherwise TARGET first
 #   - pyramiding 0
 #   - exact exit-candle signal eligible
-#   - Daily alignment 17 America/New_York
+#
+# Development cost:
+#   1.0 pip adverse
+#
+# Cost stress:
+#   0.5 / 1.0 / 1.5 / 2.0 pips
+#
+# Families:
+#   - body ratio
+#   - body ATR
+#   - range ATR
+#   - bearish close location
+#   - upper wick/body
+#   - structure lookback/distance
+#   - M15 ATR regime
+#   - prior 4h/12h/24h momentum
+#   - stop-size / ATR
+#   - session includes / hour exclusions
+#   - weekday exclusions
+#   - H1 trend/alignment/ATR
+#   - H4 trend/alignment/ATR
+#   - Daily trend/alignment/ATR
+#   - RR
+#
+# Then:
+#   - controlled interactions
+#   - 4 eras
+#   - DEV 2010-2017 / VALIDATION 2018-now
+#   - recent 5Y / 2Y
+#   - rolling 2Y / 3Y
 # ============================================================
 
 
@@ -130,7 +97,6 @@ RESEARCH_TO = (
 )
 
 NY = ZoneInfo("America/New_York")
-LONDON = ZoneInfo("Europe/London")
 
 TICK_SIZE = 0.00001
 PIP_SIZE = 0.0001
@@ -146,12 +112,16 @@ COST_PIPS_GRID = [
 ]
 
 RR_VALUES = [
+    2.00,
     2.50,
     3.00,
+    3.25,
     3.50,
     3.75,
     4.00,
+    4.25,
     4.50,
+    5.00,
 ]
 
 MIN_TRADES_PRIMARY = 60
@@ -161,58 +131,54 @@ MIN_TRADES_PRIMARY = 60
 # OUTPUTS
 # ============================================================
 
-OUTPUT_BASELINES = (
-    "gbpusd_m15_long_gen2_baselines.csv"
-)
-
 OUTPUT_SINGLE = (
-    "gbpusd_m15_long_gen2_single_family.csv"
+    "gbpusd_m15_short_exhaustive_single_family.csv"
 )
 
 OUTPUT_SINGLE_TOP = (
-    "gbpusd_m15_long_gen2_single_top.csv"
+    "gbpusd_m15_short_exhaustive_single_top.csv"
 )
 
 OUTPUT_INTERACTIONS = (
-    "gbpusd_m15_long_gen2_interactions.csv"
+    "gbpusd_m15_short_exhaustive_interactions.csv"
 )
 
 OUTPUT_TOP = (
-    "gbpusd_m15_long_gen2_top.csv"
+    "gbpusd_m15_short_exhaustive_top.csv"
 )
 
 OUTPUT_ERAS = (
-    "gbpusd_m15_long_gen2_eras.csv"
+    "gbpusd_m15_short_exhaustive_eras.csv"
 )
 
 OUTPUT_DEVVAL = (
-    "gbpusd_m15_long_gen2_dev_validation.csv"
+    "gbpusd_m15_short_exhaustive_dev_validation.csv"
 )
 
 OUTPUT_RECENT = (
-    "gbpusd_m15_long_gen2_recent.csv"
+    "gbpusd_m15_short_exhaustive_recent.csv"
 )
 
 OUTPUT_ROLLING = (
-    "gbpusd_m15_long_gen2_rolling.csv"
+    "gbpusd_m15_short_exhaustive_rolling.csv"
 )
 
 OUTPUT_ROLLING_SUMMARY = (
-    "gbpusd_m15_long_gen2_rolling_summary.csv"
+    "gbpusd_m15_short_exhaustive_rolling_summary.csv"
 )
 
 OUTPUT_BEST_TRADES = (
-    "gbpusd_m15_long_gen2_best_trades.csv"
+    "gbpusd_m15_short_exhaustive_best_trades.csv"
 )
 
 OUTPUT_BUNDLE = (
-    "gbpusd_m15_long_gen2_CORRECTED_RESULTS.zip"
+    "gbpusd_m15_short_exhaustive_RESULTS.zip"
 )
 
 STATUS = {
     "state": "not_started",
-    "message": "GBP/USD M15 Gen2 research has not started",
-    "service": "GBPUSD M15 Long Gen2 Structural Context CORRECTED",
+    "message": "GBP/USD M15 short research has not started",
+    "service": "GBPUSD M15 Short Exhaustive Controlled",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -335,7 +301,6 @@ def download_file(path):
 
 def build_results_bundle():
     files = [
-        OUTPUT_BASELINES,
         OUTPUT_SINGLE,
         OUTPUT_SINGLE_TOP,
         OUTPUT_INTERACTIONS,
@@ -560,8 +525,8 @@ def rma_from_values(values, length):
     seed = values[:length]
 
     if any(
-        v is None
-        for v in seed
+        value is None
+        for value in seed
     ):
         return result
 
@@ -576,8 +541,10 @@ def rma_from_values(values, length):
         length,
         len(values),
     ):
+        value = values[i]
+
         if (
-            values[i] is None
+            value is None
             or
             result[
                 i - 1
@@ -592,8 +559,7 @@ def rma_from_values(values, length):
             * (
                 length - 1
             )
-            +
-            values[i]
+            + value
         ) / length
 
     return result
@@ -617,8 +583,8 @@ def ema(values, length):
     seed = values[:length]
 
     if any(
-        v is None
-        for v in seed
+        value is None
+        for value in seed
     ):
         return result
 
@@ -633,8 +599,7 @@ def ema(values, length):
         2.0
         /
         (
-            length
-            + 1.0
+            length + 1.0
         )
     )
 
@@ -656,8 +621,7 @@ def ema(values, length):
             * values[i]
             +
             (
-                1.0
-                - alpha
+                1.0 - alpha
             )
             * result[
                 i - 1
@@ -696,87 +660,49 @@ def sma(values, length):
             )
         ):
             result[i] = (
-                running
-                / length
+                running / length
             )
 
     return result
 
 
-def bullish_exact_engulf(
-    previous,
-    current,
-):
-    return (
-        previous["close"]
-        <
-        previous["open"]
-        and
-        current["close"]
-        >
-        current["open"]
-        and
-        current["open"]
-        <=
-        previous["close"]
-        and
-        current["close"]
-        >=
-        previous["open"]
-    )
+def bearish_engulfing(candles, i):
+    if i < 1:
+        return False
 
-
-def bullish_body_engulf(
-    previous,
-    current,
-):
-    previous_body_low = min(
-        previous["open"],
-        previous["close"],
-    )
-
-    previous_body_high = max(
-        previous["open"],
-        previous["close"],
-    )
-
-    current_body_low = min(
-        current["open"],
-        current["close"],
-    )
-
-    current_body_high = max(
-        current["open"],
-        current["close"],
-    )
+    previous = candles[i - 1]
+    current = candles[i]
 
     return (
         previous["close"]
-        <
+        >
         previous["open"]
         and
         current["close"]
-        >
+        <
         current["open"]
         and
-        current_body_low
-        <=
-        previous_body_low
-        and
-        current_body_high
+        current["open"]
         >=
-        previous_body_high
+        previous["close"]
+        and
+        current["close"]
+        <=
+        previous["open"]
     )
 
 
 # ============================================================
-# HTF STATE
+# HTF STATE - COMPLETED ONLY
 # ============================================================
 
 H1_EMA_LENGTHS = [
     20,
+    40,
     50,
+    70,
     100,
+    150,
     200,
 ]
 
@@ -789,45 +715,31 @@ H4_EMA_LENGTHS = [
 
 DAILY_EMA_LENGTHS = [
     20,
+    40,
     50,
+    70,
+    85,
     100,
+    150,
     200,
+    300,
 ]
 
 
 def build_htf_state(
     candles,
     ema_lengths,
-    structural_lookbacks=None,
 ):
-    """
-    Build higher-timeframe state with an explicit completion timestamp.
-
-    IMPORTANT:
-    OANDA candle timestamps are candle OPEN times.
-
-    A higher-timeframe candle is only available to an M15 signal when
-    that HTF candle has fully completed. The safest historical mapping
-    is therefore:
-
-        complete_at = next HTF candle's OPEN time
-
-    Example:
-        H1 09:00 candle completes at 10:00.
-        M15 signal opening 10:00 may use the 09:00 H1 candle.
-        M15 signal opening 09:45 may NOT use it.
-
-    This also handles OANDA daily candles aligned to 17:00 New York
-    correctly across DST because the next actual daily candle timestamp
-    defines completion instead of assuming a fixed 24-hour duration.
-    """
-
     closes = [
         candle["close"]
         for candle in candles
     ]
 
     atr = atr14(candles)
+    atr_mean50 = sma(
+        atr,
+        50,
+    )
 
     ema_map = {
         length:
@@ -840,34 +752,31 @@ def build_htf_state(
 
     rows = []
 
-    # Last HTF candle has no observed next-open completion marker.
-    # We intentionally do not expose it as completed state.
     for i, candle in enumerate(
         candles
     ):
-        structural_lows = {}
-
-        if structural_lookbacks:
-            for lookback in structural_lookbacks:
-                if i >= lookback:
-                    structural_lows[
-                        lookback
-                    ] = min(
-                        c["low"]
-                        for c in candles[
-                            i - lookback:i
-                        ]
-                    )
-                else:
-                    structural_lows[
-                        lookback
-                    ] = None
-
         complete_at = (
-            candles[i + 1]["time"]
+            candles[
+                i + 1
+            ]["time"]
             if i + 1 < len(candles)
             else None
         )
+
+        atr_ratio = None
+
+        if (
+            atr[i] is not None
+            and
+            atr_mean50[i] is not None
+            and
+            atr_mean50[i] > 0
+        ):
+            atr_ratio = (
+                atr[i]
+                /
+                atr_mean50[i]
+            )
 
         rows.append({
             "time":
@@ -884,6 +793,8 @@ def build_htf_state(
                 candle["close"],
             "atr14":
                 atr[i],
+            "atr_ratio_50":
+                atr_ratio,
             "emas":
                 {
                     length:
@@ -892,85 +803,51 @@ def build_htf_state(
                         ][i]
                     for length in ema_lengths
                 },
-            "structural_lows":
-                structural_lows,
         })
 
     return rows
 
 
-def completed_state_index(
+def previous_completed_state(
+    rows,
     completion_times,
     signal_time,
 ):
-    """
-    Return index of latest HTF candle whose completion time is
-    <= the M15 signal candle OPEN time.
-    """
-
     position = bisect.bisect_right(
         completion_times,
         signal_time,
     ) - 1
 
-    return position
-
-
-def previous_completed_state(
-    state_rows,
-    completion_times,
-    signal_time,
-):
-    position = completed_state_index(
-        completion_times,
-        signal_time,
-    )
-
     if position < 0:
         return None
 
-    return state_rows[
+    return rows[
         position
     ]
 
 
-def previous_completed_daily_state(
-    state_rows,
-    completion_times,
-    signal_time,
-):
-    return previous_completed_state(
-        state_rows,
-        completion_times,
-        signal_time,
-    )
-
-
 # ============================================================
-# FEATURE CACHE
+# SIGNAL FEATURE CACHE
 # ============================================================
 
-M15_SWEEP_LOOKBACKS = [
+STRUCTURE_LOOKBACKS = [
     20,
     40,
     60,
-    100,
+    70,
+    90,
+    120,
+    150,
 ]
 
-PRIOR_BEAR_SEQUENCE_LENGTHS = [
-    2,
-    3,
-    4,
-]
-
-COMPRESSION_WINDOWS = [
-    4,
-    8,
-    12,
-]
+MOMENTUM_BARS = {
+    "4h": 16,
+    "12h": 48,
+    "24h": 96,
+}
 
 
-def build_signal_universe(
+def build_signal_cache(
     m15,
     m15_atr,
     h1_state,
@@ -979,61 +856,76 @@ def build_signal_universe(
 ):
     signals = []
 
-    # Only states with a known observed completion time are
-    # eligible. Since complete_at is the next candle OPEN, these arrays
-    # are naturally chronological and safe for bisect.
+    m15_atr_mean50 = sma(
+        m15_atr,
+        50,
+    )
+
+    h1_rows = [
+        row
+        for row in h1_state
+        if row[
+            "complete_at"
+        ] is not None
+    ]
+
+    h4_rows = [
+        row
+        for row in h4_state
+        if row[
+            "complete_at"
+        ] is not None
+    ]
+
+    daily_rows = [
+        row
+        for row in daily_state
+        if row[
+            "complete_at"
+        ] is not None
+    ]
+
     h1_completion_times = [
         row["complete_at"]
-        for row in h1_state
-        if row["complete_at"] is not None
+        for row in h1_rows
     ]
 
     h4_completion_times = [
         row["complete_at"]
-        for row in h4_state
-        if row["complete_at"] is not None
+        for row in h4_rows
     ]
 
     daily_completion_times = [
         row["complete_at"]
-        for row in daily_state
-        if row["complete_at"] is not None
-    ]
-
-    # State arrays aligned to the completion-time arrays above.
-    h1_completed_rows = [
-        row
-        for row in h1_state
-        if row["complete_at"] is not None
-    ]
-
-    h4_completed_rows = [
-        row
-        for row in h4_state
-        if row["complete_at"] is not None
-    ]
-
-    daily_completed_rows = [
-        row
-        for row in daily_state
-        if row["complete_at"] is not None
+        for row in daily_rows
     ]
 
     max_lookback = max(
-        max(M15_SWEEP_LOOKBACKS),
-        96,
-        12,
+        max(
+            STRUCTURE_LOOKBACKS
+        ),
+        max(
+            MOMENTUM_BARS.values()
+        ) + 1,
     )
 
     for i in range(
         max(
-            20,
+            14,
             max_lookback,
         ),
         len(m15),
     ):
+        if not bearish_engulfing(
+            m15,
+            i,
+        ):
+            continue
+
         current = m15[i]
-        previous = m15[i - 1]
+        previous = m15[
+            i - 1
+        ]
         atr = m15_atr[i]
 
         if (
@@ -1042,25 +934,10 @@ def build_signal_universe(
         ):
             continue
 
-        bullish = (
-            current["close"]
-            >
-            current["open"]
-        )
-
-        if not bullish:
-            continue
-
         body = (
-            current["close"]
-            -
             current["open"]
-        )
-
-        candle_range = (
-            current["high"]
             -
-            current["low"]
+            current["close"]
         )
 
         previous_body = abs(
@@ -1079,10 +956,18 @@ def build_signal_universe(
             body / atr
         )
 
+        candle_range = (
+            current["high"]
+            -
+            current["low"]
+        )
+
         range_atr = (
             candle_range / atr
         )
 
+        # For bearish candles:
+        # 0 = close at low, 1 = close at high.
         close_location = (
             (
                 current["close"]
@@ -1091,388 +976,120 @@ def build_signal_universe(
             )
             / candle_range
             if candle_range > 0
+            else 1.0
+        )
+
+        upper_wick = (
+            current["high"]
+            -
+            max(
+                current["open"],
+                current["close"],
+            )
+        )
+
+        upper_wick_body = (
+            upper_wick / body
+            if body > 0
             else 0.0
         )
 
-        exact_engulf = bullish_exact_engulf(
-            previous,
-            current,
+        stop = (
+            current["high"]
+            +
+            STOP_BUFFER_TICKS
+            * TICK_SIZE
         )
 
-        body_engulf = bullish_body_engulf(
-            previous,
-            current,
-        )
-
-        close_above_prev_high = (
-            current["close"]
-            >
-            previous["high"]
-        )
-
-        sweep_info = {}
-
-        for lookback in M15_SWEEP_LOOKBACKS:
-            prior_low = min(
-                c["low"]
-                for c in m15[
-                    i - lookback:i
-                ]
-            )
-
-            swept = (
-                current["low"]
-                <
-                prior_low
-            )
-
-            reclaimed = (
-                swept
-                and
+        stop_atr = (
+            (
+                stop
+                -
                 current["close"]
-                >
-                prior_low
+            )
+            / atr
+        )
+
+        m15_atr_ratio = None
+
+        if (
+            m15_atr_mean50[i] is not None
+            and
+            m15_atr_mean50[i] > 0
+        ):
+            m15_atr_ratio = (
+                atr
+                /
+                m15_atr_mean50[i]
             )
 
-            sweep_info[
-                lookback
-            ] = {
-                "prior_low":
-                    prior_low,
-                "swept":
-                    swept,
-                "reclaimed":
-                    reclaimed,
-                "distance_atr":
-                    (
-                        abs(
-                            current["low"]
-                            -
-                            prior_low
-                        )
-                        /
-                        atr
-                    ),
-            }
-
-        # Strictly PRE-SIGNAL selloff context.
-        # End at the previous completed M15 candle, so the current
-        # bullish reversal candle cannot manufacture its own context.
+        # Strictly PRIOR context.
         prior_close = m15[
             i - 1
         ]["close"]
 
-        selloff_4h = (
-            prior_close
-            -
-            m15[
-                i - 1 - 16
+        momentum = {}
+
+        for name, bars in MOMENTUM_BARS.items():
+            old_close = m15[
+                i - 1 - bars
             ]["close"]
-        ) / atr
 
-        selloff_8h = (
-            prior_close
-            -
-            m15[
-                i - 1 - 32
-            ]["close"]
-        ) / atr
+            momentum[name] = (
+                prior_close
+                -
+                old_close
+            ) / atr
 
-        selloff_12h = (
-            prior_close
-            -
-            m15[
-                i - 1 - 48
-            ]["close"]
-        ) / atr
+        structure_distance_atr = {}
 
-        bearish_sequence = {}
-
-        for n in PRIOR_BEAR_SEQUENCE_LENGTHS:
-            bearish_sequence[
-                n
-            ] = all(
-                m15[j]["close"]
-                <
-                m15[j]["open"]
-                for j in range(
-                    i - n,
-                    i,
-                )
+        for lookback in STRUCTURE_LOOKBACKS:
+            previous_high = max(
+                candle["high"]
+                for candle in m15[
+                    i - lookback:i
+                ]
             )
 
-        close_above_prior_2_high = (
-            current["close"]
-            >
-            max(
-                m15[
-                    i - 1
-                ]["high"],
-                m15[
-                    i - 2
-                ]["high"],
-            )
-        )
-
-        close_above_prior_3_high = (
-            current["close"]
-            >
-            max(
-                m15[
-                    i - 1
-                ]["high"],
-                m15[
-                    i - 2
-                ]["high"],
-                m15[
-                    i - 3
-                ]["high"],
-            )
-        )
-
-        compression = {}
-
-        for window in COMPRESSION_WINDOWS:
-            prior_ranges = [
-                (
-                    m15[j]["high"]
+            structure_distance_atr[
+                lookback
+            ] = (
+                abs(
+                    current["high"]
                     -
-                    m15[j]["low"]
+                    previous_high
                 )
-                for j in range(
-                    i - window,
-                    i,
-                )
-            ]
-
-            avg_prior_range = (
-                sum(prior_ranges)
-                / len(prior_ranges)
+                / atr
             )
-
-            compression[
-                window
-            ] = {
-                "avg_range_atr":
-                    (
-                        avg_prior_range
-                        /
-                        atr
-                    ),
-                "expansion_multiple":
-                    (
-                        candle_range
-                        /
-                        avg_prior_range
-                        if avg_prior_range > 0
-                        else 0.0
-                    ),
-            }
 
         ny_time = (
             current["time"]
             .astimezone(NY)
         )
 
-        london_time = (
-            current["time"]
-            .astimezone(LONDON)
-        )
-
         h1_prev = previous_completed_state(
-            h1_completed_rows,
+            h1_rows,
             h1_completion_times,
             current["time"],
         )
 
         h4_prev = previous_completed_state(
-            h4_completed_rows,
+            h4_rows,
             h4_completion_times,
             current["time"],
         )
 
-        daily_prev = (
-            previous_completed_daily_state(
-                daily_completed_rows,
-                daily_completion_times,
-                current["time"],
-            )
+        daily_prev = previous_completed_state(
+            daily_rows,
+            daily_completion_times,
+            current["time"],
         )
-
-        prev_day_low_sweep = False
-        prev_day_low_reclaim = False
-        prev_day_location = None
-        prev_day_near_low_atr = None
-        prior_day_bearish = None
-        prior_day_close_location = None
-        prior_day_range_atr = None
-
-        if (
-            daily_prev is not None
-            and
-            daily_prev["atr14"] is not None
-            and
-            daily_prev["atr14"] > 0
-        ):
-            prev_day_low = daily_prev["low"]
-            prev_day_high = daily_prev["high"]
-            prev_day_range = (
-                prev_day_high
-                -
-                prev_day_low
-            )
-
-            prev_day_low_sweep = (
-                current["low"]
-                <
-                prev_day_low
-            )
-
-            prev_day_low_reclaim = (
-                prev_day_low_sweep
-                and
-                current["close"]
-                >
-                prev_day_low
-            )
-
-            if prev_day_range > 0:
-                prev_day_location = (
-                    current["close"]
-                    -
-                    prev_day_low
-                ) / prev_day_range
-
-                prior_day_close_location = (
-                    daily_prev["close"]
-                    -
-                    prev_day_low
-                ) / prev_day_range
-
-            prev_day_near_low_atr = (
-                abs(
-                    current["low"]
-                    -
-                    prev_day_low
-                )
-                /
-                atr
-            )
-
-            prior_day_bearish = (
-                daily_prev["close"]
-                <
-                daily_prev["open"]
-            )
-
-            prior_day_range_atr = (
-                prev_day_range
-                /
-                daily_prev["atr14"]
-            )
-
-        h1_pullback_distance_ema20_atr = None
-        h4_pullback_distance_ema20_atr = None
-        h1_low_distance = {}
-        h4_low_distance = {}
-
-        if (
-            h1_prev is not None
-            and
-            h1_prev["atr14"] is not None
-            and
-            h1_prev["atr14"] > 0
-        ):
-            ema20 = h1_prev["emas"].get(20)
-
-            if ema20 is not None:
-                h1_pullback_distance_ema20_atr = (
-                    current["close"]
-                    -
-                    ema20
-                ) / h1_prev["atr14"]
-
-            for lb in [
-                20,
-                50,
-            ]:
-                structural_low = (
-                    h1_prev[
-                        "structural_lows"
-                    ].get(lb)
-                )
-
-                if structural_low is not None:
-                    h1_low_distance[
-                        lb
-                    ] = (
-                        abs(
-                            current["low"]
-                            -
-                            structural_low
-                        )
-                        /
-                        h1_prev["atr14"]
-                    )
-                else:
-                    h1_low_distance[
-                        lb
-                    ] = None
-
-        if (
-            h4_prev is not None
-            and
-            h4_prev["atr14"] is not None
-            and
-            h4_prev["atr14"] > 0
-        ):
-            ema20 = h4_prev["emas"].get(20)
-
-            if ema20 is not None:
-                h4_pullback_distance_ema20_atr = (
-                    current["close"]
-                    -
-                    ema20
-                ) / h4_prev["atr14"]
-
-            for lb in [
-                10,
-                20,
-            ]:
-                structural_low = (
-                    h4_prev[
-                        "structural_lows"
-                    ].get(lb)
-                )
-
-                if structural_low is not None:
-                    h4_low_distance[
-                        lb
-                    ] = (
-                        abs(
-                            current["low"]
-                            -
-                            structural_low
-                        )
-                        /
-                        h4_prev["atr14"]
-                    )
-                else:
-                    h4_low_distance[
-                        lb
-                    ] = None
 
         signals.append({
             "signal_index":
                 i,
             "time":
                 current["time"],
-            "exact_engulf":
-                exact_engulf,
-            "body_engulf":
-                body_engulf,
-            "close_above_prev_high":
-                close_above_prev_high,
             "body_ratio":
                 body_ratio,
             "body_atr":
@@ -1481,162 +1098,123 @@ def build_signal_universe(
                 range_atr,
             "close_location":
                 close_location,
-            "sweep_info":
-                sweep_info,
-            "selloff_4h_atr":
-                selloff_4h,
-            "selloff_8h_atr":
-                selloff_8h,
-            "selloff_12h_atr":
-                selloff_12h,
-            "bearish_sequence":
-                bearish_sequence,
-            "close_above_prior_2_high":
-                close_above_prior_2_high,
-            "close_above_prior_3_high":
-                close_above_prior_3_high,
-            "compression":
-                compression,
+            "upper_wick_body":
+                upper_wick_body,
+            "stop_atr":
+                stop_atr,
+            "m15_atr_ratio":
+                m15_atr_ratio,
+            "momentum_4h_atr":
+                momentum["4h"],
+            "momentum_12h_atr":
+                momentum["12h"],
+            "momentum_24h_atr":
+                momentum["24h"],
+            "structure_distance_atr":
+                structure_distance_atr,
             "ny_hour":
                 ny_time.hour,
             "ny_weekday":
                 ny_time.weekday(),
-            "london_hour":
-                london_time.hour,
             "h1_prev":
                 h1_prev,
             "h4_prev":
                 h4_prev,
             "daily_prev":
                 daily_prev,
-            "prev_day_low_sweep":
-                prev_day_low_sweep,
-            "prev_day_low_reclaim":
-                prev_day_low_reclaim,
-            "prev_day_location":
-                prev_day_location,
-            "prev_day_near_low_atr":
-                prev_day_near_low_atr,
-            "prior_day_bearish":
-                prior_day_bearish,
-            "prior_day_close_location":
-                prior_day_close_location,
-            "prior_day_range_atr":
-                prior_day_range_atr,
-            "h1_pullback_distance_ema20_atr":
-                h1_pullback_distance_ema20_atr,
-            "h4_pullback_distance_ema20_atr":
-                h4_pullback_distance_ema20_atr,
-            "h1_low_distance":
-                h1_low_distance,
-            "h4_low_distance":
-                h4_low_distance,
         })
 
     return signals
 
 
 # ============================================================
-# CONFIG MODEL
+# CONFIG
 # ============================================================
 
-BASE_CONFIG = {
+BASELINE = {
     "label":
-        "BASE",
-    "trigger":
-        "EXACT_ENGULF",
+        "BASELINE",
     "minimum_body_ratio":
         1.00,
     "minimum_body_atr":
         None,
     "minimum_range_atr":
         None,
-    "minimum_close_location":
+    "maximum_close_location":
+        None,
+    "minimum_upper_wick_body":
         None,
 
-    "sweep_lookback":
+    "structure_lookback":
         None,
-    "require_sweep":
-        False,
-    "require_reclaim":
-        False,
-
-    "require_prev_day_low_sweep":
-        False,
-    "require_prev_day_low_reclaim":
-        False,
-    "maximum_prev_day_location":
-        None,
-    "maximum_prev_day_low_distance_atr":
+    "maximum_distance_atr":
         None,
 
-    "maximum_selloff_4h_atr":
+    "minimum_m15_atr_ratio":
         None,
-    "maximum_selloff_8h_atr":
-        None,
-    "maximum_selloff_12h_atr":
+    "maximum_m15_atr_ratio":
         None,
 
-    "minimum_prior_bearish_bars":
+    "minimum_momentum_4h_atr":
         None,
-    "require_close_above_prior_2_high":
-        False,
-    "require_close_above_prior_3_high":
-        False,
+    "maximum_momentum_4h_atr":
+        None,
+    "minimum_momentum_12h_atr":
+        None,
+    "maximum_momentum_12h_atr":
+        None,
+    "minimum_momentum_24h_atr":
+        None,
+    "maximum_momentum_24h_atr":
+        None,
 
-    "compression_window":
+    "minimum_stop_atr":
         None,
-    "maximum_prior_avg_range_atr":
-        None,
-    "minimum_expansion_multiple":
+    "maximum_stop_atr":
         None,
 
     "included_ny_hours":
         None,
+    "excluded_ny_hours":
+        set(),
     "excluded_weekdays":
         set(),
 
-    "h1_close_above_ema":
+    "h1_close_below_ema":
         None,
     "h1_fast_ema":
         None,
     "h1_slow_ema":
         None,
-    "minimum_h1_pullback_ema20_atr":
+    "maximum_h1_atr_ratio":
         None,
-    "maximum_h1_pullback_ema20_atr":
-        None,
-    "maximum_h1_low_distance_20_atr":
-        None,
-    "maximum_h1_low_distance_50_atr":
+    "minimum_h1_atr_ratio":
         None,
 
-    "h4_close_above_ema":
+    "h4_close_below_ema":
         None,
     "h4_fast_ema":
         None,
     "h4_slow_ema":
         None,
-    "minimum_h4_pullback_ema20_atr":
+    "maximum_h4_atr_ratio":
         None,
-    "maximum_h4_pullback_ema20_atr":
-        None,
-    "maximum_h4_low_distance_10_atr":
-        None,
-    "maximum_h4_low_distance_20_atr":
+    "minimum_h4_atr_ratio":
         None,
 
-    "require_prior_day_bearish":
-        False,
-    "maximum_prior_day_close_location":
+    "daily_close_below_ema":
         None,
-    "minimum_prior_day_range_atr":
+    "daily_fast_ema":
         None,
-    "maximum_prior_day_range_atr":
+    "daily_slow_ema":
+        None,
+    "maximum_daily_atr_ratio":
+        None,
+    "minimum_daily_atr_ratio":
         None,
 
     "reward_risk":
-        3.50,
+        3.00,
 }
 
 
@@ -1644,25 +1222,25 @@ BASE_CONFIG = {
 # FILTER HELPERS
 # ============================================================
 
-def state_close_above_ema(
+def state_close_below_ema(
     state,
     length,
 ):
     if state is None:
         return False
 
-    value = state["emas"].get(
-        length
-    )
+    value = state[
+        "emas"
+    ].get(length)
 
     return (
         value is not None
         and
-        state["close"] > value
+        state["close"] < value
     )
 
 
-def state_ema_alignment(
+def state_bear_alignment(
     state,
     fast,
     slow,
@@ -1670,70 +1248,69 @@ def state_ema_alignment(
     if state is None:
         return False
 
-    fast_value = state["emas"].get(
-        fast
-    )
+    fast_value = state[
+        "emas"
+    ].get(fast)
 
-    slow_value = state["emas"].get(
-        slow
-    )
+    slow_value = state[
+        "emas"
+    ].get(slow)
 
     return (
         fast_value is not None
         and
         slow_value is not None
         and
-        fast_value > slow_value
+        fast_value < slow_value
     )
 
 
-def trigger_passes(
-    signal,
-    config,
+def atr_ratio_passes(
+    state,
+    minimum,
+    maximum,
 ):
-    trigger = config["trigger"]
+    if (
+        minimum is None
+        and
+        maximum is None
+    ):
+        return True
 
-    if trigger == "EXACT_ENGULF":
-        return signal["exact_engulf"]
+    if (
+        state is None
+        or
+        state[
+            "atr_ratio_50"
+        ] is None
+    ):
+        return False
 
-    if trigger == "BODY_ENGULF":
-        return signal["body_engulf"]
+    value = state[
+        "atr_ratio_50"
+    ]
 
-    if trigger == "CLOSE_ABOVE_PREV_HIGH":
-        return (
-            signal["close_above_prev_high"]
-        )
+    if (
+        minimum is not None
+        and
+        value < minimum
+    ):
+        return False
 
-    if trigger == "SWEEP_DISPLACEMENT":
-        # broad displacement definition:
-        # any 20/40/60/100 sweep + bullish candle
-        # + close above previous high.
-        swept_any = any(
-            info["swept"]
-            for info in signal[
-                "sweep_info"
-            ].values()
-        )
+    if (
+        maximum is not None
+        and
+        value > maximum
+    ):
+        return False
 
-        return (
-            swept_any
-            and
-            signal["close_above_prev_high"]
-        )
-
-    return False
+    return True
 
 
 def signal_passes(
     signal,
     config,
 ):
-    if not trigger_passes(
-        signal,
-        config,
-    ):
-        return False
-
     if (
         signal["body_ratio"]
         <
@@ -1762,212 +1339,174 @@ def signal_passes(
         return False
 
     if (
-        config["minimum_close_location"]
+        config["maximum_close_location"]
         is not None
         and
         signal["close_location"]
-        <
-        config["minimum_close_location"]
-    ):
-        return False
-
-    sweep_lb = config["sweep_lookback"]
-
-    if sweep_lb is not None:
-        info = signal[
-            "sweep_info"
-        ][sweep_lb]
-
-        if (
-            config["require_sweep"]
-            and
-            not info["swept"]
-        ):
-            return False
-
-        if (
-            config["require_reclaim"]
-            and
-            not info["reclaimed"]
-        ):
-            return False
-
-    if (
-        config["require_prev_day_low_sweep"]
-        and
-        not signal["prev_day_low_sweep"]
+        >
+        config["maximum_close_location"]
     ):
         return False
 
     if (
-        config["require_prev_day_low_reclaim"]
-        and
-        not signal["prev_day_low_reclaim"]
-    ):
-        return False
-
-    if (
-        config["maximum_prev_day_location"]
+        config["minimum_upper_wick_body"]
         is not None
+        and
+        signal["upper_wick_body"]
+        <
+        config["minimum_upper_wick_body"]
     ):
+        return False
+
+    lookback = config[
+        "structure_lookback"
+    ]
+
+    if lookback is not None:
         if (
-            signal["prev_day_location"]
-            is None
-            or
-            signal["prev_day_location"]
+            signal[
+                "structure_distance_atr"
+            ][lookback]
             >
             config[
-                "maximum_prev_day_location"
+                "maximum_distance_atr"
             ]
         ):
             return False
 
     if (
         config[
-            "maximum_prev_day_low_distance_atr"
+            "minimum_m15_atr_ratio"
         ]
         is not None
     ):
+        value = signal[
+            "m15_atr_ratio"
+        ]
+
         if (
-            signal[
-                "prev_day_near_low_atr"
-            ]
-            is None
+            value is None
             or
-            signal[
-                "prev_day_near_low_atr"
+            value
+            <
+            config[
+                "minimum_m15_atr_ratio"
             ]
+        ):
+            return False
+
+    if (
+        config[
+            "maximum_m15_atr_ratio"
+        ]
+        is not None
+    ):
+        value = signal[
+            "m15_atr_ratio"
+        ]
+
+        if (
+            value is None
+            or
+            value
             >
             config[
-                "maximum_prev_day_low_distance_atr"
+                "maximum_m15_atr_ratio"
             ]
         ):
             return False
 
     for horizon in [
         "4h",
-        "8h",
         "12h",
+        "24h",
     ]:
+        value = signal[
+            f"momentum_{horizon}_atr"
+        ]
+
+        minimum = config[
+            f"minimum_momentum_{horizon}_atr"
+        ]
+
         maximum = config[
-            f"maximum_selloff_{horizon}_atr"
+            f"maximum_momentum_{horizon}_atr"
         ]
 
-        if maximum is not None:
-            if (
-                signal[
-                    f"selloff_{horizon}_atr"
-                ]
-                >
-                maximum
-            ):
-                return False
+        if (
+            minimum is not None
+            and
+            value < minimum
+        ):
+            return False
 
-    if (
-        config[
-            "minimum_prior_bearish_bars"
-        ]
-        is not None
-    ):
-        n = config[
-            "minimum_prior_bearish_bars"
-        ]
-
-        if not signal[
-            "bearish_sequence"
-        ][n]:
+        if (
+            maximum is not None
+            and
+            value > maximum
+        ):
             return False
 
     if (
-        config[
-            "require_close_above_prior_2_high"
-        ]
+        config["minimum_stop_atr"]
+        is not None
         and
-        not signal[
-            "close_above_prior_2_high"
-        ]
+        signal["stop_atr"]
+        <
+        config["minimum_stop_atr"]
     ):
         return False
 
     if (
-        config[
-            "require_close_above_prior_3_high"
-        ]
+        config["maximum_stop_atr"]
+        is not None
         and
-        not signal[
-            "close_above_prior_3_high"
-        ]
+        signal["stop_atr"]
+        >
+        config["maximum_stop_atr"]
     ):
         return False
 
-    comp_window = config[
-        "compression_window"
+    included = config[
+        "included_ny_hours"
     ]
 
-    if comp_window is not None:
-        comp = signal[
-            "compression"
-        ][comp_window]
-
-        if (
-            config[
-                "maximum_prior_avg_range_atr"
-            ]
-            is not None
-            and
-            comp[
-                "avg_range_atr"
-            ]
-            >
-            config[
-                "maximum_prior_avg_range_atr"
-            ]
-        ):
-            return False
-
-        if (
-            config[
-                "minimum_expansion_multiple"
-            ]
-            is not None
-            and
-            comp[
-                "expansion_multiple"
-            ]
-            <
-            config[
-                "minimum_expansion_multiple"
-            ]
-        ):
-            return False
-
     if (
-        config["included_ny_hours"]
-        is not None
+        included is not None
         and
         signal["ny_hour"]
-        not in
-        config["included_ny_hours"]
+        not in included
+    ):
+        return False
+
+    if (
+        signal["ny_hour"]
+        in
+        config[
+            "excluded_ny_hours"
+        ]
     ):
         return False
 
     if (
         signal["ny_weekday"]
         in
-        config["excluded_weekdays"]
+        config[
+            "excluded_weekdays"
+        ]
     ):
         return False
 
     h1 = signal["h1_prev"]
 
     if (
-        config["h1_close_above_ema"]
+        config["h1_close_below_ema"]
         is not None
         and
-        not state_close_above_ema(
+        not state_close_below_ema(
             h1,
             config[
-                "h1_close_above_ema"
+                "h1_close_below_ema"
             ],
         )
     ):
@@ -1980,7 +1519,7 @@ def signal_passes(
         config["h1_slow_ema"]
         is not None
         and
-        not state_ema_alignment(
+        not state_bear_alignment(
             h1,
             config["h1_fast_ema"],
             config["h1_slow_ema"],
@@ -1988,78 +1527,27 @@ def signal_passes(
     ):
         return False
 
-    if (
+    if not atr_ratio_passes(
+        h1,
         config[
-            "minimum_h1_pullback_ema20_atr"
-        ]
-        is not None
-    ):
-        value = signal[
-            "h1_pullback_distance_ema20_atr"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            <
-            config[
-                "minimum_h1_pullback_ema20_atr"
-            ]
-        ):
-            return False
-
-    if (
+            "minimum_h1_atr_ratio"
+        ],
         config[
-            "maximum_h1_pullback_ema20_atr"
-        ]
-        is not None
+            "maximum_h1_atr_ratio"
+        ],
     ):
-        value = signal[
-            "h1_pullback_distance_ema20_atr"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            >
-            config[
-                "maximum_h1_pullback_ema20_atr"
-            ]
-        ):
-            return False
-
-    for lb in [
-        20,
-        50,
-    ]:
-        threshold = config[
-            f"maximum_h1_low_distance_{lb}_atr"
-        ]
-
-        if threshold is not None:
-            value = signal[
-                "h1_low_distance"
-            ].get(lb)
-
-            if (
-                value is None
-                or
-                value > threshold
-            ):
-                return False
+        return False
 
     h4 = signal["h4_prev"]
 
     if (
-        config["h4_close_above_ema"]
+        config["h4_close_below_ema"]
         is not None
         and
-        not state_close_above_ema(
+        not state_close_below_ema(
             h4,
             config[
-                "h4_close_above_ema"
+                "h4_close_below_ema"
             ],
         )
     ):
@@ -2072,7 +1560,7 @@ def signal_passes(
         config["h4_slow_ema"]
         is not None
         and
-        not state_ema_alignment(
+        not state_bear_alignment(
             h4,
             config["h4_fast_ema"],
             config["h4_slow_ema"],
@@ -2080,144 +1568,71 @@ def signal_passes(
     ):
         return False
 
-    if (
+    if not atr_ratio_passes(
+        h4,
         config[
-            "minimum_h4_pullback_ema20_atr"
-        ]
-        is not None
+            "minimum_h4_atr_ratio"
+        ],
+        config[
+            "maximum_h4_atr_ratio"
+        ],
     ):
-        value = signal[
-            "h4_pullback_distance_ema20_atr"
-        ]
+        return False
 
-        if (
-            value is None
-            or
-            value
-            <
-            config[
-                "minimum_h4_pullback_ema20_atr"
-            ]
-        ):
-            return False
+    daily = signal[
+        "daily_prev"
+    ]
 
     if (
         config[
-            "maximum_h4_pullback_ema20_atr"
+            "daily_close_below_ema"
         ]
         is not None
-    ):
-        value = signal[
-            "h4_pullback_distance_ema20_atr"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            >
-            config[
-                "maximum_h4_pullback_ema20_atr"
-            ]
-        ):
-            return False
-
-    for lb in [
-        10,
-        20,
-    ]:
-        threshold = config[
-            f"maximum_h4_low_distance_{lb}_atr"
-        ]
-
-        if threshold is not None:
-            value = signal[
-                "h4_low_distance"
-            ].get(lb)
-
-            if (
-                value is None
-                or
-                value > threshold
-            ):
-                return False
-
-    if (
-        config["require_prior_day_bearish"]
         and
-        signal["prior_day_bearish"]
-        is not True
+        not state_close_below_ema(
+            daily,
+            config[
+                "daily_close_below_ema"
+            ],
+        )
     ):
         return False
 
     if (
-        config[
-            "maximum_prior_day_close_location"
-        ]
+        config["daily_fast_ema"]
         is not None
-    ):
-        value = signal[
-            "prior_day_close_location"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            >
-            config[
-                "maximum_prior_day_close_location"
-            ]
-        ):
-            return False
-
-    if (
-        config[
-            "minimum_prior_day_range_atr"
-        ]
+        and
+        config["daily_slow_ema"]
         is not None
-    ):
-        value = signal[
-            "prior_day_range_atr"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            <
+        and
+        not state_bear_alignment(
+            daily,
             config[
-                "minimum_prior_day_range_atr"
-            ]
-        ):
-            return False
+                "daily_fast_ema"
+            ],
+            config[
+                "daily_slow_ema"
+            ],
+        )
+    ):
+        return False
 
-    if (
+    if not atr_ratio_passes(
+        daily,
         config[
-            "maximum_prior_day_range_atr"
-        ]
-        is not None
+            "minimum_daily_atr_ratio"
+        ],
+        config[
+            "maximum_daily_atr_ratio"
+        ],
     ):
-        value = signal[
-            "prior_day_range_atr"
-        ]
-
-        if (
-            value is None
-            or
-            value
-            >
-            config[
-                "maximum_prior_day_range_atr"
-            ]
-        ):
-            return False
+        return False
 
     return True
 
 
 # ============================================================
-# OUTCOME CACHE
+# TRADE OUTCOME CACHE
 # ============================================================
 
 def compute_trade_outcome(
@@ -2235,16 +1650,16 @@ def compute_trade_outcome(
     )
 
     stop = (
-        signal["low"]
-        -
+        signal["high"]
+        +
         STOP_BUFFER_TICKS
         * TICK_SIZE
     )
 
     reference_risk = (
-        reference_entry
-        -
         stop
+        -
+        reference_entry
     )
 
     if reference_risk <= 0:
@@ -2252,22 +1667,22 @@ def compute_trade_outcome(
 
     target = (
         reference_entry
-        +
+        -
         reward_risk
         * reference_risk
     )
 
     backtest_entry = (
         reference_entry
-        +
+        -
         cost_pips
         * PIP_SIZE
     )
 
     actual_risk = (
-        backtest_entry
-        -
         stop
+        -
+        backtest_entry
     )
 
     if actual_risk <= 0:
@@ -2280,13 +1695,13 @@ def compute_trade_outcome(
         candle = candles[j]
 
         hit_stop = (
-            candle["low"]
-            <= stop
+            candle["high"]
+            >= stop
         )
 
         hit_target = (
-            candle["high"]
-            >= target
+            candle["low"]
+            <= target
         )
 
         if (
@@ -2311,27 +1726,27 @@ def compute_trade_outcome(
                 <
                 distance_low
             ):
-                exit_price = target
-                exit_reason = "TARGET"
-            else:
                 exit_price = stop
                 exit_reason = "STOP"
-
-        elif hit_target:
-            exit_price = target
-            exit_reason = "TARGET"
+            else:
+                exit_price = target
+                exit_reason = "TARGET"
 
         elif hit_stop:
             exit_price = stop
             exit_reason = "STOP"
 
+        elif hit_target:
+            exit_price = target
+            exit_reason = "TARGET"
+
         else:
             continue
 
         result_r = (
-            exit_price
-            -
             backtest_entry
+            -
+            exit_price
         ) / actual_risk
 
         return {
@@ -2397,9 +1812,10 @@ def build_outcome_cache(
 
                 if done % 1000 == 0:
                     STATUS.update({
-                        "state": "precomputing",
+                        "state":
+                            "precomputing",
                         "message": (
-                            "Caching reusable outcomes "
+                            "Caching outcomes "
                             f"{done}/{total}"
                         ),
                         "outcomes_done":
@@ -2425,31 +1841,33 @@ def build_outcome_cache(
 
 
 # ============================================================
-# BACKTEST ENGINE
+# CONFIG CACHING / BACKTEST
 # ============================================================
 
-CANDIDATE_CACHE = {}
-
-
-def candidate_cache_key(
-    config,
-):
-    return config_signature(
-        config
+def config_signature(config):
+    return tuple(
+        sorted(
+            (
+                key,
+                tuple(sorted(value))
+                if isinstance(value, set)
+                else value,
+            )
+            for key, value
+            in config.items()
+            if key != "label"
+        )
     )
+
+
+CANDIDATE_CACHE = {}
 
 
 def qualifying_candidates(
     signals,
     config,
 ):
-    """
-    Cache the full-history qualifying signal list for each configuration.
-    Windowed validation then slices this much smaller list rather than
-    re-running every filter against the entire signal universe.
-    """
-
-    key = candidate_cache_key(
+    key = config_signature(
         config
     )
 
@@ -2484,9 +1902,11 @@ def run_config_cached(
     start=None,
     end=None,
 ):
-    all_candidates = qualifying_candidates(
-        signals,
-        config,
+    all_candidates = (
+        qualifying_candidates(
+            signals,
+            config,
+        )
     )
 
     if (
@@ -2494,18 +1914,21 @@ def run_config_cached(
         and
         end is None
     ):
-        candidates = all_candidates
+        candidates = (
+            all_candidates
+        )
     else:
-        candidate_times = [
+        times = [
             signal["time"]
-            for signal in all_candidates
+            for signal
+            in all_candidates
         ]
 
         left = (
             0
             if start is None
             else bisect.bisect_left(
-                candidate_times,
+                times,
                 start,
             )
         )
@@ -2514,32 +1937,42 @@ def run_config_cached(
             len(all_candidates)
             if end is None
             else bisect.bisect_left(
-                candidate_times,
+                times,
                 end,
             )
         )
 
-        candidates = all_candidates[
-            left:right
-        ]
+        candidates = (
+            all_candidates[
+                left:right
+            ]
+        )
 
     indices = [
-        signal["signal_index"]
+        signal[
+            "signal_index"
+        ]
         for signal in candidates
     ]
 
     trades = []
     position = 0
 
-    while position < len(candidates):
+    while position < len(
+        candidates
+    ):
         signal = candidates[
             position
         ]
 
         trade = cache.get(
             (
-                signal["signal_index"],
-                config["reward_risk"],
+                signal[
+                    "signal_index"
+                ],
+                config[
+                    "reward_risk"
+                ],
                 cost_pips,
             )
         )
@@ -2552,10 +1985,14 @@ def run_config_cached(
             dict(trade)
         )
 
-        position = bisect.bisect_left(
-            indices,
-            trade["exit_index"],
-            lo=position + 1,
+        position = (
+            bisect.bisect_left(
+                indices,
+                trade[
+                    "exit_index"
+                ],
+                lo=position + 1,
+            )
         )
 
     return trades
@@ -2574,19 +2011,20 @@ def stats_from_trades(trades):
     ]
 
     winners = [
-        value
-        for value in results
-        if value > 0
+        r for r in results
+        if r > 0
     ]
 
     losers = [
-        value
-        for value in results
-        if value < 0
+        r for r in results
+        if r < 0
     ]
 
     gross_profit = sum(winners)
-    gross_loss = abs(sum(losers))
+    gross_loss = abs(
+        sum(losers)
+    )
+
     total_r = sum(results)
 
     pf = (
@@ -2607,6 +2045,7 @@ def stats_from_trades(trades):
 
     for result in results:
         equity += result
+
         peak = max(
             peak,
             equity,
@@ -2619,6 +2058,7 @@ def stats_from_trades(trades):
 
         if result < 0:
             streak += 1
+
             longest = max(
                 longest,
                 streak,
@@ -2671,7 +2111,7 @@ def result_row(
         trades
     )
 
-    return {
+    row = {
         "family":
             family,
         "candidate":
@@ -2706,210 +2146,37 @@ def result_row(
             ),
         "max_drawdown_r":
             round(
-                stats["max_drawdown_r"],
+                stats[
+                    "max_drawdown_r"
+                ],
                 4,
             ),
         "longest_loss_streak":
             stats[
                 "longest_loss_streak"
             ],
-        "trigger":
-            config["trigger"],
-        "minimum_body_ratio":
-            config["minimum_body_ratio"],
-        "minimum_body_atr":
-            config["minimum_body_atr"],
-        "minimum_range_atr":
-            config["minimum_range_atr"],
-        "minimum_close_location":
-            config["minimum_close_location"],
-        "sweep_lookback":
-            config["sweep_lookback"],
-        "require_sweep":
-            config["require_sweep"],
-        "require_reclaim":
-            config["require_reclaim"],
-        "require_prev_day_low_sweep":
-            config[
-                "require_prev_day_low_sweep"
-            ],
-        "require_prev_day_low_reclaim":
-            config[
-                "require_prev_day_low_reclaim"
-            ],
-        "maximum_prev_day_location":
-            config[
-                "maximum_prev_day_location"
-            ],
-        "maximum_prev_day_low_distance_atr":
-            config[
-                "maximum_prev_day_low_distance_atr"
-            ],
-        "maximum_selloff_4h_atr":
-            config[
-                "maximum_selloff_4h_atr"
-            ],
-        "maximum_selloff_8h_atr":
-            config[
-                "maximum_selloff_8h_atr"
-            ],
-        "maximum_selloff_12h_atr":
-            config[
-                "maximum_selloff_12h_atr"
-            ],
-        "minimum_prior_bearish_bars":
-            config[
-                "minimum_prior_bearish_bars"
-            ],
-        "require_close_above_prior_2_high":
-            config[
-                "require_close_above_prior_2_high"
-            ],
-        "require_close_above_prior_3_high":
-            config[
-                "require_close_above_prior_3_high"
-            ],
-        "compression_window":
-            config[
-                "compression_window"
-            ],
-        "maximum_prior_avg_range_atr":
-            config[
-                "maximum_prior_avg_range_atr"
-            ],
-        "minimum_expansion_multiple":
-            config[
-                "minimum_expansion_multiple"
-            ],
-        "included_ny_hours":
-            (
-                None
-                if config["included_ny_hours"]
-                is None
-                else ",".join(
-                    str(h)
-                    for h in sorted(
-                        config[
-                            "included_ny_hours"
-                        ]
-                    )
-                )
-            ),
-        "excluded_weekdays":
-            ",".join(
-                str(d)
-                for d in sorted(
-                    config[
-                        "excluded_weekdays"
-                    ]
-                )
-            ),
-        "h1_close_above_ema":
-            config[
-                "h1_close_above_ema"
-            ],
-        "h1_fast_ema":
-            config[
-                "h1_fast_ema"
-            ],
-        "h1_slow_ema":
-            config[
-                "h1_slow_ema"
-            ],
-        "minimum_h1_pullback_ema20_atr":
-            config[
-                "minimum_h1_pullback_ema20_atr"
-            ],
-        "maximum_h1_pullback_ema20_atr":
-            config[
-                "maximum_h1_pullback_ema20_atr"
-            ],
-        "maximum_h1_low_distance_20_atr":
-            config[
-                "maximum_h1_low_distance_20_atr"
-            ],
-        "maximum_h1_low_distance_50_atr":
-            config[
-                "maximum_h1_low_distance_50_atr"
-            ],
-        "h4_close_above_ema":
-            config[
-                "h4_close_above_ema"
-            ],
-        "h4_fast_ema":
-            config[
-                "h4_fast_ema"
-            ],
-        "h4_slow_ema":
-            config[
-                "h4_slow_ema"
-            ],
-        "minimum_h4_pullback_ema20_atr":
-            config[
-                "minimum_h4_pullback_ema20_atr"
-            ],
-        "maximum_h4_pullback_ema20_atr":
-            config[
-                "maximum_h4_pullback_ema20_atr"
-            ],
-        "maximum_h4_low_distance_10_atr":
-            config[
-                "maximum_h4_low_distance_10_atr"
-            ],
-        "maximum_h4_low_distance_20_atr":
-            config[
-                "maximum_h4_low_distance_20_atr"
-            ],
-        "require_prior_day_bearish":
-            config[
-                "require_prior_day_bearish"
-            ],
-        "maximum_prior_day_close_location":
-            config[
-                "maximum_prior_day_close_location"
-            ],
-        "minimum_prior_day_range_atr":
-            config[
-                "minimum_prior_day_range_atr"
-            ],
-        "maximum_prior_day_range_atr":
-            config[
-                "maximum_prior_day_range_atr"
-            ],
-        "reward_risk":
-            config["reward_risk"],
     }
 
+    for key, value in config.items():
+        if key == "label":
+            continue
 
-# ============================================================
-# BASELINES / SINGLE FAMILY CONFIGS
-# ============================================================
-
-def baseline_configs():
-    rows = []
-
-    for trigger in [
-        "EXACT_ENGULF",
-        "BODY_ENGULF",
-        "CLOSE_ABOVE_PREV_HIGH",
-        "SWEEP_DISPLACEMENT",
-    ]:
-        config = clone_config(
-            BASE_CONFIG,
-            f"BASE_{trigger}",
-        )
-
-        config["trigger"] = trigger
-
-        rows.append(
-            (
-                "TRIGGER_BASELINE",
-                config,
+        if isinstance(value, set):
+            row[key] = ",".join(
+                str(item)
+                for item in sorted(
+                    value
+                )
             )
-        )
+        else:
+            row[key] = value
 
-    return rows
+    return row
 
+
+# ============================================================
+# SINGLE-FAMILY SWEEP
+# ============================================================
 
 def single_family_configs():
     rows = []
@@ -2918,14 +2185,12 @@ def single_family_configs():
         family,
         label,
         mutator,
-        trigger="EXACT_ENGULF",
     ):
         config = clone_config(
-            BASE_CONFIG,
+            BASELINE,
             label,
         )
 
-        config["trigger"] = trigger
         mutator(config)
 
         rows.append(
@@ -2935,296 +2200,325 @@ def single_family_configs():
             )
         )
 
-    # --------------------------------------------------------
-    # Trigger + candle-quality variants
-    # --------------------------------------------------------
-
-    for trigger in [
-        "EXACT_ENGULF",
-        "BODY_ENGULF",
-        "CLOSE_ABOVE_PREV_HIGH",
-        "SWEEP_DISPLACEMENT",
-    ]:
-        for body_atr in [
-            0.50,
-            0.75,
-            1.00,
-            1.25,
-        ]:
-            add(
-                "TRIGGER_BODY",
-                (
-                    f"{trigger}_"
-                    f"BA{body_atr:.2f}"
-                ),
-                lambda c,
-                v=body_atr:
-                    c.__setitem__(
-                        "minimum_body_atr",
-                        v,
-                    ),
-                trigger=trigger,
-            )
-
-    # --------------------------------------------------------
-    # Liquidity sweep / reclaim
-    # --------------------------------------------------------
-
-    for lb in M15_SWEEP_LOOKBACKS:
-        add(
-            "SWEEP",
-            f"SWEEP_{lb}",
-            lambda c,
-            lookback=lb:
-                (
-                    c.__setitem__(
-                        "sweep_lookback",
-                        lookback,
-                    ),
-                    c.__setitem__(
-                        "require_sweep",
-                        True,
-                    )
-                ),
-        )
-
-        add(
-            "SWEEP_RECLAIM",
-            f"SWEEP_RECLAIM_{lb}",
-            lambda c,
-            lookback=lb:
-                (
-                    c.__setitem__(
-                        "sweep_lookback",
-                        lookback,
-                    ),
-                    c.__setitem__(
-                        "require_sweep",
-                        True,
-                    ),
-                    c.__setitem__(
-                        "require_reclaim",
-                        True,
-                    )
-                ),
-        )
-
-    add(
-        "PREV_DAY_SWEEP",
-        "PREV_DAY_LOW_SWEEP",
-        lambda c:
-            c.__setitem__(
-                "require_prev_day_low_sweep",
-                True,
-            ),
-    )
-
-    add(
-        "PREV_DAY_RECLAIM",
-        "PREV_DAY_LOW_RECLAIM",
-        lambda c:
-            c.__setitem__(
-                "require_prev_day_low_reclaim",
-                True,
-            ),
-    )
-
-    # --------------------------------------------------------
-    # Prior-day location
-    # --------------------------------------------------------
-
     for value in [
-        0.20,
-        0.30,
-        0.40,
+        1.00,
+        1.05,
+        1.10,
+        1.20,
+        1.30,
+        1.40,
+        1.50,
+        1.60,
     ]:
         add(
-            "PREV_DAY_LOCATION",
-            f"PREV_DAY_LOC_MAX_{value:.2f}",
-            lambda c,
-            v=value:
+            "BODY_RATIO",
+            f"BR_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "maximum_prev_day_location",
+                    "minimum_body_ratio",
                     v,
                 ),
         )
 
     for value in [
+        0.30,
+        0.40,
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+        1.40,
+    ]:
+        add(
+            "BODY_ATR",
+            f"BA_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_body_atr",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.60,
+        0.80,
+        1.00,
+        1.20,
+        1.40,
+        1.60,
+        1.80,
+        2.00,
+    ]:
+        add(
+            "RANGE_ATR",
+            f"RA_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_range_atr",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.10,
+        0.15,
+        0.20,
         0.25,
+        0.30,
+        0.35,
+        0.40,
+        0.45,
+    ]:
+        add(
+            "CLOSE_LOCATION",
+            f"CL_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_close_location",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.05,
+        0.10,
+        0.20,
+        0.30,
+        0.40,
         0.50,
         0.75,
         1.00,
     ]:
         add(
-            "PREV_DAY_LOW_DISTANCE",
-            f"PREV_DAY_LOW_DIST_{value:.2f}",
-            lambda c,
-            v=value:
+            "UPPER_WICK",
+            f"UW_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "maximum_prev_day_low_distance_atr",
+                    "minimum_upper_wick_body",
                     v,
                 ),
         )
 
-    # --------------------------------------------------------
-    # Selloff -> reversal
-    # --------------------------------------------------------
+    for lookback in (
+        STRUCTURE_LOOKBACKS
+    ):
+        for distance in [
+            0.05,
+            0.075,
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+            0.40,
+            0.50,
+            0.75,
+        ]:
+            def mutate_structure(
+                c,
+                lb=lookback,
+                d=distance,
+            ):
+                c[
+                    "structure_lookback"
+                ] = lb
+
+                c[
+                    "maximum_distance_atr"
+                ] = d
+
+            add(
+                "STRUCTURE",
+                (
+                    f"S{lookback}_"
+                    f"D{distance:.3f}"
+                ),
+                mutate_structure,
+            )
+
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+    ]:
+        add(
+            "M15_ATR_MIN",
+            f"M15ATR_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_m15_atr_ratio",
+                    v,
+                ),
+        )
+
+    for value in [
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+        1.50,
+    ]:
+        add(
+            "M15_ATR_MAX",
+            f"M15ATR_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_m15_atr_ratio",
+                    v,
+                ),
+        )
 
     for horizon in [
         "4h",
-        "8h",
         "12h",
+        "24h",
     ]:
-        for threshold in [
-            -0.50,
-            -1.00,
-            -1.50,
-            -2.00,
-            -3.00,
+        for value in [
+            -3.0,
+            -2.0,
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
         ]:
             key = (
-                f"maximum_selloff_"
+                f"minimum_momentum_"
                 f"{horizon}_atr"
             )
 
             add(
-                f"SELLOFF_{horizon}",
+                f"MOM_{horizon}_MIN",
                 (
-                    f"SELLOFF_{horizon}_"
-                    f"{threshold:+.2f}"
+                    f"MOM_{horizon}_"
+                    f"MIN_{value:+.2f}"
                 ),
                 lambda c,
                 k=key,
-                v=threshold:
+                v=value:
                     c.__setitem__(
                         k,
                         v,
                     ),
             )
 
-    # --------------------------------------------------------
-    # Multi-candle reversal
-    # --------------------------------------------------------
+        for value in [
+            -2.0,
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            3.0,
+        ]:
+            key = (
+                f"maximum_momentum_"
+                f"{horizon}_atr"
+            )
 
-    for n in PRIOR_BEAR_SEQUENCE_LENGTHS:
+            add(
+                f"MOM_{horizon}_MAX",
+                (
+                    f"MOM_{horizon}_"
+                    f"MAX_{value:+.2f}"
+                ),
+                lambda c,
+                k=key,
+                v=value:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
+
+    for value in [
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+        1.00,
+    ]:
         add(
-            "BEAR_SEQUENCE",
-            f"PRIOR_{n}_BEAR",
-            lambda c,
-            value=n:
+            "STOP_MIN",
+            f"STOP_MIN_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "minimum_prior_bearish_bars",
-                    value,
+                    "minimum_stop_atr",
+                    v,
                 ),
         )
 
-    add(
-        "DISPLACEMENT",
-        "CLOSE_ABOVE_PRIOR_2_HIGH",
-        lambda c:
-            c.__setitem__(
-                "require_close_above_prior_2_high",
-                True,
-            ),
-    )
-
-    add(
-        "DISPLACEMENT",
-        "CLOSE_ABOVE_PRIOR_3_HIGH",
-        lambda c:
-            c.__setitem__(
-                "require_close_above_prior_3_high",
-                True,
-            ),
-    )
-
-    # --------------------------------------------------------
-    # Compression -> expansion
-    # --------------------------------------------------------
-
-    for window in COMPRESSION_WINDOWS:
-        for max_avg in [
-            0.60,
-            0.75,
-            0.90,
-            1.00,
-        ]:
-            add(
-                "COMPRESSION",
-                (
-                    f"COMP_{window}_"
-                    f"MAX{max_avg:.2f}"
+    for value in [
+        0.80,
+        1.00,
+        1.20,
+        1.40,
+        1.60,
+        2.00,
+        2.50,
+    ]:
+        add(
+            "STOP_MAX",
+            f"STOP_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_stop_atr",
+                    v,
                 ),
-                lambda c,
-                w=window,
-                v=max_avg:
-                    (
-                        c.__setitem__(
-                            "compression_window",
-                            w,
-                        ),
-                        c.__setitem__(
-                            "maximum_prior_avg_range_atr",
-                            v,
-                        )
-                    ),
-            )
-
-        for expansion in [
-            1.25,
-            1.50,
-            1.75,
-            2.00,
-        ]:
-            add(
-                "EXPANSION",
-                (
-                    f"EXP_{window}_"
-                    f"MIN{expansion:.2f}"
-                ),
-                lambda c,
-                w=window,
-                v=expansion:
-                    (
-                        c.__setitem__(
-                            "compression_window",
-                            w,
-                        ),
-                        c.__setitem__(
-                            "minimum_expansion_multiple",
-                            v,
-                        )
-                    ),
-            )
-
-    # --------------------------------------------------------
-    # Session transitions
-    # --------------------------------------------------------
+        )
 
     session_sets = {
-        "LONDON_OPEN":
-            set(range(3, 7)),
-        "LONDON_MORNING":
-            set(range(3, 9)),
-        "PRE_NY":
-            set(range(7, 9)),
-        "NY_OPEN":
-            set(range(8, 11)),
-        "LONDON_NY_OVERLAP":
-            set(range(8, 12)),
-        "EARLY_US":
-            set(range(9, 13)),
+        "NY_00_05":
+            set(range(0, 6)),
+        "NY_02_06":
+            set(range(2, 7)),
+        "NY_07_11":
+            set(range(7, 12)),
+        "NY_08_12":
+            set(range(8, 13)),
+        "NY_08_15":
+            set(range(8, 16)),
+        "NY_09_13":
+            set(range(9, 14)),
+        "NY_12_16":
+            set(range(12, 17)),
+        "NY_14_18":
+            set(range(14, 19)),
     }
 
-    for label, hours in session_sets.items():
+    for label, hours in (
+        session_sets.items()
+    ):
         add(
-            "SESSION",
+            "SESSION_INCLUDE",
             label,
-            lambda c,
-            h=hours:
+            lambda c, h=hours:
                 c.__setitem__(
                     "included_ny_hours",
                     set(h),
+                ),
+        )
+
+    for hour in range(24):
+        add(
+            "HOUR_EXCLUDE",
+            f"EX_H{hour:02d}",
+            lambda c, h=hour:
+                c.__setitem__(
+                    "excluded_ny_hours",
+                    {h},
                 ),
         )
 
@@ -3236,42 +2530,41 @@ def single_family_configs():
         (4, "FRI"),
     ]:
         add(
-            "WEEKDAY",
+            "WEEKDAY_EXCLUDE",
             f"EX_{name}",
-            lambda c,
-            d=day:
+            lambda c, d=day:
                 c.__setitem__(
                     "excluded_weekdays",
                     {d},
                 ),
         )
 
-    # --------------------------------------------------------
-    # H1 trend / pullback / structure
-    # --------------------------------------------------------
-
     for length in [
+        40,
         50,
+        70,
         100,
+        150,
         200,
     ]:
         add(
-            "H1_TREND",
-            f"H1_CLOSE_GT_EMA{length}",
-            lambda c,
-            v=length:
+            "H1_CLOSE_EMA",
+            f"H1_CLOSE_LT_EMA{length}",
+            lambda c, v=length:
                 c.__setitem__(
-                    "h1_close_above_ema",
+                    "h1_close_below_ema",
                     v,
                 ),
         )
 
     for fast, slow in [
         (20, 50),
+        (40, 100),
         (50, 100),
         (50, 200),
+        (70, 150),
     ]:
-        def mutate_h1_align(
+        def mutate_h1(
             c,
             f=fast,
             s=slow,
@@ -3281,57 +2574,44 @@ def single_family_configs():
 
         add(
             "H1_ALIGNMENT",
-            f"H1_EMA{fast}_GT_{slow}",
-            mutate_h1_align,
+            f"H1_EMA{fast}_LT_{slow}",
+            mutate_h1,
         )
 
-    for maximum in [
-        -0.25,
-        0.00,
-        0.25,
-        0.50,
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
     ]:
         add(
-            "H1_PULLBACK",
-            f"H1_EMA20_PULLBACK_MAX_{maximum:+.2f}",
-            lambda c,
-            v=maximum:
+            "H1_ATR_MIN",
+            f"H1ATR_MIN_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "maximum_h1_pullback_ema20_atr",
+                    "minimum_h1_atr_ratio",
                     v,
                 ),
         )
 
-    for lb in [
-        20,
-        50,
+    for value in [
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
     ]:
-        for value in [
-            0.25,
-            0.50,
-            0.75,
-            1.00,
-        ]:
-            key = (
-                f"maximum_h1_low_distance_"
-                f"{lb}_atr"
-            )
-
-            add(
-                "H1_STRUCT_LOW",
-                f"H1_LOW{lb}_DIST_{value:.2f}",
-                lambda c,
-                k=key,
-                v=value:
-                    c.__setitem__(
-                        k,
-                        v,
-                    ),
-            )
-
-    # --------------------------------------------------------
-    # H4 trend / pullback / structure
-    # --------------------------------------------------------
+        add(
+            "H1_ATR_MAX",
+            f"H1ATR_MAX_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "maximum_h1_atr_ratio",
+                    v,
+                ),
+        )
 
     for length in [
         50,
@@ -3339,12 +2619,11 @@ def single_family_configs():
         200,
     ]:
         add(
-            "H4_TREND",
-            f"H4_CLOSE_GT_EMA{length}",
-            lambda c,
-            v=length:
+            "H4_CLOSE_EMA",
+            f"H4_CLOSE_LT_EMA{length}",
+            lambda c, v=length:
                 c.__setitem__(
-                    "h4_close_above_ema",
+                    "h4_close_below_ema",
                     v,
                 ),
         )
@@ -3354,7 +2633,7 @@ def single_family_configs():
         (50, 100),
         (50, 200),
     ]:
-        def mutate_h4_align(
+        def mutate_h4(
             c,
             f=fast,
             s=slow,
@@ -3364,127 +2643,128 @@ def single_family_configs():
 
         add(
             "H4_ALIGNMENT",
-            f"H4_EMA{fast}_GT_{slow}",
-            mutate_h4_align,
+            f"H4_EMA{fast}_LT_{slow}",
+            mutate_h4,
         )
-
-    for maximum in [
-        -0.25,
-        0.00,
-        0.25,
-        0.50,
-    ]:
-        add(
-            "H4_PULLBACK",
-            f"H4_EMA20_PULLBACK_MAX_{maximum:+.2f}",
-            lambda c,
-            v=maximum:
-                c.__setitem__(
-                    "maximum_h4_pullback_ema20_atr",
-                    v,
-                ),
-        )
-
-    for lb in [
-        10,
-        20,
-    ]:
-        for value in [
-            0.25,
-            0.50,
-            0.75,
-            1.00,
-        ]:
-            key = (
-                f"maximum_h4_low_distance_"
-                f"{lb}_atr"
-            )
-
-            add(
-                "H4_STRUCT_LOW",
-                f"H4_LOW{lb}_DIST_{value:.2f}",
-                lambda c,
-                k=key,
-                v=value:
-                    c.__setitem__(
-                        k,
-                        v,
-                    ),
-            )
-
-    # --------------------------------------------------------
-    # Prior-day state
-    # --------------------------------------------------------
-
-    add(
-        "PRIOR_DAY_STATE",
-        "PRIOR_DAY_BEARISH",
-        lambda c:
-            c.__setitem__(
-                "require_prior_day_bearish",
-                True,
-            ),
-    )
 
     for value in [
-        0.25,
-        0.40,
-        0.50,
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
     ]:
         add(
-            "PRIOR_DAY_STATE",
-            f"PRIOR_DAY_CLOSE_LOC_MAX_{value:.2f}",
-            lambda c,
-            v=value:
+            "H4_ATR_MIN",
+            f"H4ATR_MIN_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "maximum_prior_day_close_location",
+                    "minimum_h4_atr_ratio",
                     v,
                 ),
         )
 
     for value in [
         0.80,
+        0.90,
         1.00,
+        1.10,
         1.20,
-        1.40,
     ]:
         add(
-            "PRIOR_DAY_RANGE_MIN",
-            f"PRIOR_DAY_RANGE_MIN_{value:.2f}",
-            lambda c,
-            v=value:
+            "H4_ATR_MAX",
+            f"H4ATR_MAX_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "minimum_prior_day_range_atr",
+                    "maximum_h4_atr_ratio",
+                    v,
+                ),
+        )
+
+    for length in [
+        40,
+        50,
+        70,
+        85,
+        100,
+        150,
+        200,
+        300,
+    ]:
+        add(
+            "DAILY_CLOSE_EMA",
+            f"D_CLOSE_LT_EMA{length}",
+            lambda c, v=length:
+                c.__setitem__(
+                    "daily_close_below_ema",
+                    v,
+                ),
+        )
+
+    for fast, slow in [
+        (20, 50),
+        (40, 100),
+        (50, 70),
+        (50, 100),
+        (50, 200),
+        (85, 100),
+        (100, 200),
+    ]:
+        def mutate_daily(
+            c,
+            f=fast,
+            s=slow,
+        ):
+            c["daily_fast_ema"] = f
+            c["daily_slow_ema"] = s
+
+        add(
+            "DAILY_ALIGNMENT",
+            f"D_EMA{fast}_LT_{slow}",
+            mutate_daily,
+        )
+
+    for value in [
+        0.70,
+        0.80,
+        0.90,
+        1.00,
+        1.10,
+        1.20,
+    ]:
+        add(
+            "DAILY_ATR_MIN",
+            f"DATR_MIN_{value:.2f}",
+            lambda c, v=value:
+                c.__setitem__(
+                    "minimum_daily_atr_ratio",
                     v,
                 ),
         )
 
     for value in [
         0.80,
+        0.90,
         1.00,
+        1.10,
         1.20,
     ]:
         add(
-            "PRIOR_DAY_RANGE_MAX",
-            f"PRIOR_DAY_RANGE_MAX_{value:.2f}",
-            lambda c,
-            v=value:
+            "DAILY_ATR_MAX",
+            f"DATR_MAX_{value:.2f}",
+            lambda c, v=value:
                 c.__setitem__(
-                    "maximum_prior_day_range_atr",
+                    "maximum_daily_atr_ratio",
                     v,
                 ),
         )
-
-    # --------------------------------------------------------
-    # RR
-    # --------------------------------------------------------
 
     for rr in RR_VALUES:
         add(
             "RR",
             f"RR_{rr:.2f}",
-            lambda c,
-            v=rr:
+            lambda c, v=rr:
                 c.__setitem__(
                     "reward_risk",
                     v,
@@ -3498,30 +2778,15 @@ def single_family_configs():
 # CONTROLLED INTERACTIONS
 # ============================================================
 
-def config_signature(config):
-    return tuple(
-        sorted(
-            (
-                key,
-                tuple(
-                    sorted(value)
-                )
-                if isinstance(value, set)
-                else value,
-            )
-            for key, value in config.items()
-            if key != "label"
-        )
-    )
-
-
 def build_controlled_interactions(
     family_best,
 ):
     pool = []
     seen_families = set()
 
-    for family, config in family_best:
+    for family, config in (
+        family_best
+    ):
         if family in seen_families:
             continue
 
@@ -3552,17 +2817,24 @@ def build_controlled_interactions(
             base["label"],
         )
 
-        for key, value in source.items():
+        for key, value in (
+            source.items()
+        ):
             if key == "label":
                 continue
 
-            baseline_value = BASE_CONFIG.get(
-                key
+            baseline_value = (
+                BASELINE.get(key)
             )
 
             if value != baseline_value:
-                if isinstance(value, set):
-                    result[key] = set(value)
+                if isinstance(
+                    value,
+                    set,
+                ):
+                    result[key] = set(
+                        value
+                    )
                 else:
                     result[key] = value
 
@@ -3573,15 +2845,19 @@ def build_controlled_interactions(
             i + 1,
             len(pool),
         ):
-            family_a, config_a = pool[i]
-            family_b, config_b = pool[j]
+            family_a, config_a = (
+                pool[i]
+            )
+
+            family_b, config_b = (
+                pool[j]
+            )
 
             config = clone_config(
-                BASE_CONFIG,
+                BASELINE,
                 "TEMP",
             )
 
-            # Preserve trigger from first if changed.
             config = overlay(
                 config,
                 config_a,
@@ -3592,8 +2868,10 @@ def build_controlled_interactions(
                 config_b,
             )
 
-            signature = config_signature(
-                config
+            signature = (
+                config_signature(
+                    config
+                )
             )
 
             if signature in seen:
@@ -3623,7 +2901,7 @@ def build_controlled_interactions(
 
 
 # ============================================================
-# VALIDATION WINDOWS
+# VALIDATION
 # ============================================================
 
 def era_windows():
@@ -3758,7 +3036,9 @@ def validation_rows(
                     stats["trades"],
                 "profit_factor":
                     round(
-                        stats["profit_factor"],
+                        stats[
+                            "profit_factor"
+                        ],
                         6,
                     ),
                 "total_r":
@@ -3768,12 +3048,16 @@ def validation_rows(
                     ),
                 "expectancy_r":
                     round(
-                        stats["expectancy_r"],
+                        stats[
+                            "expectancy_r"
+                        ],
                         6,
                     ),
                 "max_drawdown_r":
                     round(
-                        stats["max_drawdown_r"],
+                        stats[
+                            "max_drawdown_r"
+                        ],
                         4,
                     ),
                 "longest_loss_streak":
@@ -3845,7 +3129,9 @@ def monthly_rolling_rows(
                 stats["trades"],
             "profit_factor":
                 round(
-                    stats["profit_factor"],
+                    stats[
+                        "profit_factor"
+                    ],
                     6,
                 ),
             "total_r":
@@ -3855,12 +3141,16 @@ def monthly_rolling_rows(
                 ),
             "expectancy_r":
                 round(
-                    stats["expectancy_r"],
+                    stats[
+                        "expectancy_r"
+                    ],
                     6,
                 ),
             "max_drawdown_r":
                 round(
-                    stats["max_drawdown_r"],
+                    stats[
+                        "max_drawdown_r"
+                    ],
                     4,
                 ),
             "positive":
@@ -3998,7 +3288,7 @@ def run_research():
         h1 = fetch_history(
             "H1",
             RESEARCH_FROM
-            - timedelta(days=500),
+            - timedelta(days=700),
             RESEARCH_TO,
             120,
         )
@@ -4006,7 +3296,7 @@ def run_research():
         h4 = fetch_history(
             "H4",
             RESEARCH_FROM
-            - timedelta(days=1000),
+            - timedelta(days=1200),
             RESEARCH_TO,
             500,
         )
@@ -4014,7 +3304,7 @@ def run_research():
         daily = fetch_history(
             "D",
             RESEARCH_FROM
-            - timedelta(days=1500),
+            - timedelta(days=1800),
             RESEARCH_TO,
             2500,
             daily_alignment=True,
@@ -4026,9 +3316,10 @@ def run_research():
             )
 
         STATUS.update({
-            "state": "precomputing",
+            "state":
+                "precomputing",
             "message":
-                "Building M15 / H1 / H4 / Daily features",
+                "Building corrected M15/H1/H4/Daily features",
             "m15_candles":
                 len(m15),
             "h1_candles":
@@ -4039,33 +3330,26 @@ def run_research():
                 len(daily),
         })
 
-        m15_atr = atr14(m15)
+        m15_atr = atr14(
+            m15
+        )
 
         h1_state = build_htf_state(
             h1,
             H1_EMA_LENGTHS,
-            structural_lookbacks=[
-                20,
-                50,
-            ],
         )
 
         h4_state = build_htf_state(
             h4,
             H4_EMA_LENGTHS,
-            structural_lookbacks=[
-                10,
-                20,
-            ],
         )
 
         daily_state = build_htf_state(
             daily,
             DAILY_EMA_LENGTHS,
-            structural_lookbacks=None,
         )
 
-        signals = build_signal_universe(
+        signals = build_signal_cache(
             m15,
             m15_atr,
             h1_state,
@@ -4074,10 +3358,11 @@ def run_research():
         )
 
         STATUS.update({
-            "state": "precomputing",
+            "state":
+                "precomputing",
             "message":
-                "Caching reusable trade outcomes",
-            "signal_universe":
+                "Caching reusable GBPUSD M15 short outcomes",
+            "engulfing_signals":
                 len(signals),
         })
 
@@ -4086,46 +3371,15 @@ def run_research():
             signals,
         )
 
-        # ----------------------------------------------------
-        # BASELINES
-        # ----------------------------------------------------
-
-        baselines = baseline_configs()
-        baseline_rows = []
-
-        for family, config in baselines:
-            for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    cache,
-                    config,
-                    cost,
-                )
-
-                baseline_rows.append(
-                    result_row(
-                        family,
-                        config,
-                        cost,
-                        trades,
-                    )
-                )
-
-        write_csv(
-            OUTPUT_BASELINES,
-            baseline_rows,
+        singles = (
+            single_family_configs()
         )
 
-        # ----------------------------------------------------
-        # SINGLE FAMILY
-        # ----------------------------------------------------
-
-        singles = single_family_configs()
-
         STATUS.update({
-            "state": "calculating",
+            "state":
+                "calculating",
             "message":
-                "Running Gen2 single-family hypotheses",
+                "Running single-family sweep",
             "single_configs":
                 len(singles),
         })
@@ -4158,10 +3412,12 @@ def run_research():
 
             if number % 25 == 0:
                 STATUS.update({
-                    "state": "calculating",
+                    "state":
+                        "calculating",
                     "message": (
-                        "Gen2 single-family "
-                        f"{number}/{len(singles)}"
+                        "Single-family sweep "
+                        f"{number}/"
+                        f"{len(singles)}"
                     ),
                 })
 
@@ -4193,10 +3449,14 @@ def run_research():
         primary_single.sort(
             key=lambda row: (
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 ),
                 float(
-                    row["expectancy_r"]
+                    row[
+                        "expectancy_r"
+                    ]
                 ),
                 float(
                     row["total_r"]
@@ -4216,19 +3476,24 @@ def run_research():
             for _, config in singles
         }
 
-        # Best result per family only if it shows independent
-        # evidence above a mild floor.
         family_best_rows = {}
 
         for row in primary_single:
-            family = row["family"]
+            family = row[
+                "family"
+            ]
 
-            if family in family_best_rows:
+            if (
+                family
+                in family_best_rows
+            ):
                 continue
 
             if (
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 )
                 >= 1.10
             ):
@@ -4257,10 +3522,6 @@ def run_research():
                 )
             )
 
-        # ----------------------------------------------------
-        # CONTROLLED INTERACTIONS
-        # ----------------------------------------------------
-
         interactions = (
             build_controlled_interactions(
                 family_best
@@ -4268,9 +3529,10 @@ def run_research():
         )
 
         STATUS.update({
-            "state": "calculating",
+            "state":
+                "calculating",
             "message":
-                "Running controlled Gen2 interactions",
+                "Running controlled interactions",
             "interaction_configs":
                 len(interactions),
         })
@@ -4301,45 +3563,40 @@ def run_research():
                     )
                 )
 
-            if number % 20 == 0:
-                STATUS.update({
-                    "state": "calculating",
-                    "message": (
-                        "Gen2 interactions "
-                        f"{number}/{len(interactions)}"
-                    ),
-                })
+            STATUS.update({
+                "state":
+                    "calculating",
+                "message": (
+                    "Controlled interactions "
+                    f"{number}/"
+                    f"{len(interactions)}"
+                ),
+            })
 
         write_csv(
             OUTPUT_INTERACTIONS,
             interaction_rows,
         )
 
-        # ----------------------------------------------------
-        # FINALIST POOL
-        # ----------------------------------------------------
-
-        combined_primary = []
-
-        combined_primary.extend(
-            row
-            for row in baseline_rows
-            if (
-                abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
-                )
-                < 1e-12
-                and
-                int(
-                    row["trades"]
-                )
-                >= MIN_TRADES_PRIMARY
+        baseline_trades = (
+            run_config_cached(
+                signals,
+                cache,
+                BASELINE,
+                PRIMARY_COST_PIPS,
             )
         )
+
+        baseline_row = result_row(
+            "BASELINE",
+            BASELINE,
+            PRIMARY_COST_PIPS,
+            baseline_trades,
+        )
+
+        combined_primary = [
+            baseline_row
+        ]
 
         combined_primary.extend(
             primary_single
@@ -4347,11 +3604,14 @@ def run_research():
 
         combined_primary.extend(
             row
-            for row in interaction_rows
+            for row
+            in interaction_rows
             if (
                 abs(
                     float(
-                        row["cost_pips"]
+                        row[
+                            "cost_pips"
+                        ]
                     )
                     -
                     PRIMARY_COST_PIPS
@@ -4368,10 +3628,14 @@ def run_research():
         combined_primary.sort(
             key=lambda row: (
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 ),
                 float(
-                    row["expectancy_r"]
+                    row[
+                        "expectancy_r"
+                    ]
                 ),
                 float(
                     row["total_r"]
@@ -4380,19 +3644,19 @@ def run_research():
             reverse=True,
         )
 
-        top_rows = combined_primary[:40]
+        top_rows = (
+            combined_primary[:40]
+        )
 
         write_csv(
             OUTPUT_TOP,
             top_rows,
         )
 
-        all_configs = {}
-
-        for _, config in baselines:
-            all_configs[
-                config["label"]
-            ] = config
+        all_configs = {
+            "BASELINE":
+                BASELINE
+        }
 
         for _, config in singles:
             all_configs[
@@ -4408,15 +3672,13 @@ def run_research():
             all_configs[
                 row["candidate"]
             ]
-            for row in top_rows[:15]
+            for row
+            in top_rows[:15]
         ]
 
-        # ----------------------------------------------------
-        # VALIDATION
-        # ----------------------------------------------------
-
         STATUS.update({
-            "state": "validating",
+            "state":
+                "validating",
             "message":
                 "Running 4-era validation",
         })
@@ -4429,29 +3691,35 @@ def run_research():
         )
 
         STATUS.update({
-            "state": "validating",
+            "state":
+                "validating",
             "message":
                 "Running dev / validation split",
         })
 
-        devval_rows = validation_rows(
-            signals,
-            cache,
-            finalists,
-            devval_windows(),
+        devval_rows = (
+            validation_rows(
+                signals,
+                cache,
+                finalists,
+                devval_windows(),
+            )
         )
 
         STATUS.update({
-            "state": "validating",
+            "state":
+                "validating",
             "message":
                 "Running recent 5Y / 2Y validation",
         })
 
-        recent_rows = validation_rows(
-            signals,
-            cache,
-            finalists,
-            recent_windows(),
+        recent_rows = (
+            validation_rows(
+                signals,
+                cache,
+                finalists,
+                recent_windows(),
+            )
         )
 
         write_csv(
@@ -4472,39 +3740,49 @@ def run_research():
         robust = []
 
         for config in finalists:
-            label = config["label"]
+            label = config[
+                "label"
+            ]
 
             base = next(
                 row
                 for row in top_rows
-                if row["candidate"]
-                == label
+                if row[
+                    "candidate"
+                ] == label
             )
 
             eras = [
                 row
                 for row in era_rows
-                if row["candidate"]
-                == label
+                if row[
+                    "candidate"
+                ] == label
             ]
 
             devval = [
                 row
-                for row in devval_rows
-                if row["candidate"]
-                == label
+                for row
+                in devval_rows
+                if row[
+                    "candidate"
+                ] == label
             ]
 
             recent = [
                 row
-                for row in recent_rows
-                if row["candidate"]
-                == label
+                for row
+                in recent_rows
+                if row[
+                    "candidate"
+                ] == label
             ]
 
             era_pfs = [
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 )
                 for row in eras
                 if int(
@@ -4514,7 +3792,9 @@ def run_research():
 
             devval_pfs = [
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 )
                 for row in devval
                 if int(
@@ -4524,7 +3804,9 @@ def run_research():
 
             recent_pfs = [
                 float(
-                    row["profit_factor"]
+                    row[
+                        "profit_factor"
+                    ]
                 )
                 for row in recent
                 if int(
@@ -4567,7 +3849,9 @@ def run_research():
                     ),
                 "full_total_r":
                     float(
-                        base["total_r"]
+                        base[
+                            "total_r"
+                        ]
                     ),
                 "trades":
                     int(
@@ -4605,11 +3889,13 @@ def run_research():
             all_configs[
                 row["candidate"]
             ]
-            for row in robust[:6]
+            for row
+            in robust[:6]
         ]
 
         STATUS.update({
-            "state": "validating",
+            "state":
+                "validating",
             "message":
                 "Running rolling 2Y / 3Y validation",
         })
@@ -4617,22 +3903,30 @@ def run_research():
         rolling_rows = []
         rolling_summary_rows = []
 
-        for config in robust_finalists:
+        for config in (
+            robust_finalists
+        ):
             for months in [
                 24,
                 36,
             ]:
-                rows = monthly_rolling_rows(
-                    signals,
-                    cache,
-                    config,
-                    months,
+                rows = (
+                    monthly_rolling_rows(
+                        signals,
+                        cache,
+                        config,
+                        months,
+                    )
                 )
 
-                rolling_rows.extend(rows)
+                rolling_rows.extend(
+                    rows
+                )
 
                 rolling_summary_rows.append(
-                    rolling_summary(rows)
+                    rolling_summary(
+                        rows
+                    )
                 )
 
         write_csv(
@@ -4650,17 +3944,16 @@ def run_research():
             if robust_finalists
             else finalists[0]
             if finalists
-            else clone_config(
-                BASE_CONFIG,
-                "NO_WINNER",
-            )
+            else BASELINE
         )
 
-        best_trades = run_config_cached(
-            signals,
-            cache,
-            best,
-            PRIMARY_COST_PIPS,
+        best_trades = (
+            run_config_cached(
+                signals,
+                cache,
+                best,
+                PRIMARY_COST_PIPS,
+            )
         )
 
         write_csv(
@@ -4668,9 +3961,9 @@ def run_research():
             best_trades,
         )
 
-
         STATUS.update({
-            "state": "packaging",
+            "state":
+                "packaging",
             "message":
                 "Building single ZIP results bundle",
         })
@@ -4678,9 +3971,10 @@ def run_research():
         build_results_bundle()
 
         STATUS.update({
-            "state": "complete",
+            "state":
+                "complete",
             "message":
-                "GBP/USD M15 Gen2 structural/context research complete",
+                "GBP/USD M15 short exhaustive controlled pass complete",
             "m15_candles":
                 len(m15),
             "h1_candles":
@@ -4689,77 +3983,28 @@ def run_research():
                 len(h4),
             "daily_candles":
                 len(daily),
-            "signal_universe":
+            "engulfing_signals":
                 len(signals),
             "single_configs":
                 len(singles),
             "interaction_configs":
                 len(interactions),
+            "baseline":
+                baseline_row,
             "robust_ranking":
                 robust[:12],
             "selected_best":
                 best,
-            "outputs": {
-                "baselines":
-                    OUTPUT_BASELINES,
-                "single_family":
-                    OUTPUT_SINGLE,
-                "single_top":
-                    OUTPUT_SINGLE_TOP,
-                "interactions":
-                    OUTPUT_INTERACTIONS,
-                "top":
-                    OUTPUT_TOP,
-                "eras":
-                    OUTPUT_ERAS,
-                "dev_validation":
-                    OUTPUT_DEVVAL,
-                "recent":
-                    OUTPUT_RECENT,
-                "rolling":
-                    OUTPUT_ROLLING,
-                "rolling_summary":
-                    OUTPUT_ROLLING_SUMMARY,
-                "best_trades":
-                    OUTPUT_BEST_TRADES,
-                "results_bundle":
-                    OUTPUT_BUNDLE,
-            },
+            "results_bundle":
+                OUTPUT_BUNDLE,
         })
-
-        print()
-        print("=" * 100)
-        print(
-            "GBP/USD M15 LONG GEN2 COMPLETE"
-        )
-        print("=" * 100)
-        print(
-            "Signals:",
-            len(signals),
-        )
-        print(
-            "Single configs:",
-            len(singles),
-        )
-        print(
-            "Interactions:",
-            len(interactions),
-        )
-        print(
-            "Selected best:",
-            best,
-        )
-        print(
-            "Robust ranking:"
-        )
-
-        for row in robust[:12]:
-            print(row)
 
     except Exception as error:
         STATUS.update({
-            "state": "error",
-            "message": str(error),
+            "state":
+                "error",
+            "message":
+                str(error),
         })
 
         print(
@@ -4777,7 +4022,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "GBPUSD M15 Long Gen2 Structural Context CORRECTED",
+            "GBPUSD M15 Short Exhaustive Controlled",
         "status":
             STATUS["state"],
         "instrument":
@@ -4785,31 +4030,20 @@ def root():
         "timeframe":
             "M15",
         "side":
-            "BUY",
+            "SELL",
         "orders_supported":
             False,
         "trading_enabled":
             False,
         "routes": [
-            "/gbpusd-m15-long-gen2/status",
-            "/gbpusd-m15-long-gen2/baselines",
-            "/gbpusd-m15-long-gen2/single-family",
-            "/gbpusd-m15-long-gen2/single-top",
-            "/gbpusd-m15-long-gen2/interactions",
-            "/gbpusd-m15-long-gen2/top",
-            "/gbpusd-m15-long-gen2/eras",
-            "/gbpusd-m15-long-gen2/dev-validation",
-            "/gbpusd-m15-long-gen2/recent",
-            "/gbpusd-m15-long-gen2/rolling",
-            "/gbpusd-m15-long-gen2/rolling-summary",
-            "/gbpusd-m15-long-gen2/best-trades",
-            "/gbpusd-m15-long-gen2/results",
+            "/gbpusd-m15-short/status",
+            "/gbpusd-m15-short/results",
         ],
     })
 
 
 @app.route(
-    "/gbpusd-m15-long-gen2/status"
+    "/gbpusd-m15-short/status"
 )
 def route_status():
     return jsonify(
@@ -4818,106 +4052,7 @@ def route_status():
 
 
 @app.route(
-    "/gbpusd-m15-long-gen2/baselines"
-)
-def route_baselines():
-    return download_file(
-        OUTPUT_BASELINES
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/single-family"
-)
-def route_single_family():
-    return download_file(
-        OUTPUT_SINGLE
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/single-top"
-)
-def route_single_top():
-    return download_file(
-        OUTPUT_SINGLE_TOP
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/interactions"
-)
-def route_interactions():
-    return download_file(
-        OUTPUT_INTERACTIONS
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/top"
-)
-def route_top():
-    return download_file(
-        OUTPUT_TOP
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/eras"
-)
-def route_eras():
-    return download_file(
-        OUTPUT_ERAS
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/dev-validation"
-)
-def route_devval():
-    return download_file(
-        OUTPUT_DEVVAL
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/recent"
-)
-def route_recent():
-    return download_file(
-        OUTPUT_RECENT
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/rolling"
-)
-def route_rolling():
-    return download_file(
-        OUTPUT_ROLLING
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/rolling-summary"
-)
-def route_rolling_summary():
-    return download_file(
-        OUTPUT_ROLLING_SUMMARY
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/best-trades"
-)
-def route_best_trades():
-    return download_file(
-        OUTPUT_BEST_TRADES
-    )
-
-
-@app.route(
-    "/gbpusd-m15-long-gen2/results"
+    "/gbpusd-m15-short/results"
 )
 def route_results():
     return download_file(
@@ -4926,13 +4061,15 @@ def route_results():
 
 
 if __name__ == "__main__":
-    research_thread = threading.Thread(
-        target=run_research,
-        name=(
-            "gbpusd-m15-long-gen2-"
-            "structural-context"
-        ),
-        daemon=True,
+    research_thread = (
+        threading.Thread(
+            target=run_research,
+            name=(
+                "gbpusd-m15-short-"
+                "exhaustive"
+            ),
+            daemon=True,
+        )
     )
 
     research_thread.start()
