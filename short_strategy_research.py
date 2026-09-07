@@ -13,80 +13,64 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/JPY M15 LONG — GEN2 TARGETED SWEEP / DISPLACEMENT SEARCH
+# USD/JPY M15 LONG — GEN2 CORRECTED
+# EXACT ORIGINAL SWEEP_DISPLACEMENT SEED
 #
-# Seed from exhaustive pass:
-#   exact bullish engulfing
-#   large bullish displacement body
-#   sweep / structural-low behaviour
-#   body >= ~1.25 ATR14
+# ORIGINAL SEED RECONSTRUCTED EXACTLY:
+#   - current M15 candle bullish
+#   - body ratio >= 1.00 versus previous candle body
+#   - body >= 1.25 ATR14
+#   - sweep of ANY prior 20/40/60/100-bar low
+#   - close > previous M15 candle HIGH
+#   - NO exact-engulfing requirement
+#   - RR = 3.50
 #
-# Seed result (1.0 pip adverse cost):
+# Original first-pass result at 1.0 pip adverse:
 #   251 trades
-#   PF 1.194
-#   +35.71R
+#   PF 1.194102
+#   +35.7147R
 #
-# Weak eras:
-#   2010-13
-#   2018-21
-#
-# Strong recent:
-#   last 5Y PF ~1.63
-#   last 2Y PF ~2.08
-#
-# Purpose:
-#   Find whether a SIMPLE, economically sensible regime/context
-#   filter can stabilize the setup without fitting dates.
-#
-# Targeted hypotheses:
-#   1) Body ATR neighbourhood 1.10-1.50
-#   2) Structure lookback 60-150
-#   3) Sweep depth / reclaim
-#   4) Prior 4h / 12h selloff
-#   5) M15 volatility regime
-#   6) H1 / H4 / Daily bullish regime
-#   7) H1 / H4 / Daily ATR regime
-#   8) Session / hour effects
-#   9) Weekday exclusions
-#  10) RR neighbourhood
-#  11) Controlled two-family interactions
+# This Gen2 investigates:
+#   - body ATR 1.10-1.50
+#   - body ratio neighbourhood
+#   - which sweep lookbacks matter
+#   - sweep depth / reclaim
+#   - range / close / lower wick
+#   - prior 4h / 12h / 24h momentum
+#   - M15 volatility regime
+#   - session / hour / weekday
+#   - H1/H4/Daily trend + ATR regime
+#   - RR neighbourhood
+#   - controlled interactions
 #
 # Correctness:
-#   - OANDA midpoint M15
-#   - exact bullish engulfing
-#   - signal timestamp = candle OPEN
+#   - OANDA midpoint
+#   - M15 signal timestamp = candle OPEN
 #   - ATR14 Wilder/RMA, SMA seeded
-#   - HTF state uses ONLY completed candles
-#   - H1/H4 completion = next actual OANDA candle open
+#   - HTF only after actual completion
+#   - H1/H4 completion = next actual candle open
 #   - Daily completion = next actual OANDA daily candle open
-#   - dailyAlignment 17 America/New_York
-#   - prior momentum ends at previous completed M15 candle
+#   - dailyAlignment=17 America/New_York
+#   - prior momentum ends on previous M15 candle
 #   - stop = signal low - 10 ticks
-#   - target based on REFERENCE signal close
-#   - adverse historical entry = signal close + cost
+#   - target based on REFERENCE signal-close risk
+#   - adverse historical long fill = signal close + cost
 #   - exits begin NEXT candle
-#   - same-bar long tie:
-#       if high closer to candle open => TARGET first
+#   - exact exit-candle signal eligible
+#   - same-bar LONG tie:
+#       high closer to open => TARGET first
 #       else STOP first
 #   - pyramiding 0
-#   - exact exit-candle signal eligible
 #
-# USDJPY:
+# USDJPY conventions:
 #   tick = 0.001
-#   pip = 0.01
+#   pip  = 0.01
 #
-# Development cost:
+# M15 development cost:
 #   1.0 pip adverse
 #
-# Stress:
+# Cost stress:
 #   0.5 / 1.0 / 1.5 / 2.0 pips
-#
-# Validation:
-#   4 eras
-#   DEV 2010-17 / VALIDATION 2018-now
-#   recent 5Y / 2Y
-#   rolling 2Y / 3Y
-#   overlap against seed
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -103,17 +87,12 @@ OANDA_BASE = os.getenv(
 INSTRUMENT = "USD_JPY"
 
 RESEARCH_FROM = datetime(
-    2010, 1, 1, 0, 0,
-    tzinfo=timezone.utc,
+    2010, 1, 1, tzinfo=timezone.utc
 )
 
 RESEARCH_TO = (
     datetime.now(timezone.utc)
-    .replace(
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
+    .replace(minute=0, second=0, microsecond=0)
 )
 
 NY = ZoneInfo("America/New_York")
@@ -123,12 +102,7 @@ PIP_SIZE = 0.01
 STOP_BUFFER_TICKS = 10
 
 PRIMARY_COST_PIPS = 1.00
-COST_PIPS_GRID = [
-    0.50,
-    1.00,
-    1.50,
-    2.00,
-]
+COST_PIPS_GRID = [0.50, 1.00, 1.50, 2.00]
 
 RR_VALUES = [
     2.75,
@@ -151,20 +125,28 @@ BODY_ATR_VALUES = [
     1.50,
 ]
 
-STRUCTURE_LOOKBACKS = [
-    60,
-    90,
-    120,
-    150,
+BODY_RATIO_VALUES = [
+    0.90,
+    1.00,
+    1.10,
+    1.20,
+    1.30,
 ]
 
-STRUCTURE_DISTANCES = [
-    0.05,
-    0.075,
-    0.10,
-    0.15,
-    0.20,
-    0.30,
+TRIGGER_SWEEP_LOOKBACKS = [
+    20,
+    40,
+    60,
+    100,
+]
+
+ALL_SWEEP_LOOKBACKS = [
+    20,
+    40,
+    60,
+    100,
+    120,
+    150,
 ]
 
 MIN_TRADES_PRIMARY = 50
@@ -174,62 +156,27 @@ MIN_TRADES_PRIMARY = 50
 # OUTPUTS
 # ============================================================
 
-OUTPUT_SEED = (
-    "usdjpy_m15_long_gen2_seed.csv"
-)
-
-OUTPUT_LOCAL = (
-    "usdjpy_m15_long_gen2_local_structure_body_rr.csv"
-)
-
-OUTPUT_SINGLE = (
-    "usdjpy_m15_long_gen2_single_family.csv"
-)
-
-OUTPUT_INTERACTIONS = (
-    "usdjpy_m15_long_gen2_interactions.csv"
-)
-
-OUTPUT_TOP = (
-    "usdjpy_m15_long_gen2_top.csv"
-)
-
-OUTPUT_ERAS = (
-    "usdjpy_m15_long_gen2_eras.csv"
-)
-
-OUTPUT_DEVVAL = (
-    "usdjpy_m15_long_gen2_dev_validation.csv"
-)
-
-OUTPUT_RECENT = (
-    "usdjpy_m15_long_gen2_recent.csv"
-)
-
-OUTPUT_ROLLING = (
-    "usdjpy_m15_long_gen2_rolling.csv"
-)
-
+OUTPUT_SEED = "usdjpy_m15_long_gen2_corrected_seed.csv"
+OUTPUT_LOCAL = "usdjpy_m15_long_gen2_corrected_local.csv"
+OUTPUT_SINGLE = "usdjpy_m15_long_gen2_corrected_single_family.csv"
+OUTPUT_INTERACTIONS = "usdjpy_m15_long_gen2_corrected_interactions.csv"
+OUTPUT_TOP = "usdjpy_m15_long_gen2_corrected_top.csv"
+OUTPUT_ERAS = "usdjpy_m15_long_gen2_corrected_eras.csv"
+OUTPUT_DEVVAL = "usdjpy_m15_long_gen2_corrected_dev_validation.csv"
+OUTPUT_RECENT = "usdjpy_m15_long_gen2_corrected_recent.csv"
+OUTPUT_ROLLING = "usdjpy_m15_long_gen2_corrected_rolling.csv"
 OUTPUT_ROLLING_SUMMARY = (
-    "usdjpy_m15_long_gen2_rolling_summary.csv"
+    "usdjpy_m15_long_gen2_corrected_rolling_summary.csv"
 )
+OUTPUT_OVERLAP = "usdjpy_m15_long_gen2_corrected_overlap.csv"
+OUTPUT_BEST_TRADES = "usdjpy_m15_long_gen2_corrected_best_trades.csv"
 
-OUTPUT_OVERLAP = (
-    "usdjpy_m15_long_gen2_overlap.csv"
-)
-
-OUTPUT_BEST_TRADES = (
-    "usdjpy_m15_long_gen2_best_trades.csv"
-)
-
-OUTPUT_BUNDLE = (
-    "usdjpy_m15_long_gen2_RESULTS.zip"
-)
+OUTPUT_BUNDLE = "usdjpy_m15_long_gen2_CORRECTED_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
-    "message": "USDJPY M15 long Gen2 not started",
-    "service": "USDJPY M15 Long Gen2 Targeted Sweep Displacement",
+    "message": "USDJPY M15 Long Gen2 corrected not started",
+    "service": "USDJPY M15 Long Gen2 Corrected Sweep Displacement",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -259,18 +206,14 @@ def parse_oanda_time(value):
             fraction = fraction[:6].ljust(6, "0")
             value = left + "." + fraction + "+" + offset
 
-    return datetime.fromisoformat(
-        value
-    ).astimezone(
+    return datetime.fromisoformat(value).astimezone(
         timezone.utc
     )
 
 
 def years_ago_safe(dt, years):
     try:
-        return dt.replace(
-            year=dt.year - years
-        )
+        return dt.replace(year=dt.year - years)
     except ValueError:
         return dt.replace(
             month=2,
@@ -289,11 +232,7 @@ def month_start(dt):
 
 
 def add_months(dt, months):
-    total = (
-        dt.year * 12
-        + dt.month - 1
-        + months
-    )
+    total = dt.year * 12 + dt.month - 1 + months
 
     return datetime(
         total // 12,
@@ -309,6 +248,8 @@ def clone_config(base, label):
     for key, value in base.items():
         if isinstance(value, set):
             result[key] = set(value)
+        elif isinstance(value, tuple):
+            result[key] = tuple(value)
         else:
             result[key] = value
 
@@ -318,11 +259,7 @@ def clone_config(base, label):
 
 def write_csv(path, rows):
     if not rows:
-        with open(
-            path,
-            "w",
-            encoding="utf-8",
-        ) as handle:
+        with open(path, "w", encoding="utf-8") as handle:
             handle.write("")
         return
 
@@ -417,8 +354,7 @@ def fetch_chunk(
     daily_alignment=False,
 ):
     url = (
-        f"{OANDA_BASE}"
-        f"/v3/instruments/"
+        f"{OANDA_BASE}/v3/instruments/"
         f"{INSTRUMENT}/candles"
     )
 
@@ -448,28 +384,18 @@ def fetch_chunk(
 
     rows = []
 
-    for item in response.json().get(
-        "candles",
-        [],
-    ):
+    for item in response.json().get("candles", []):
         if not item.get("complete", False):
             continue
 
         mid = item["mid"]
 
         rows.append({
-            "time":
-                parse_oanda_time(
-                    item["time"]
-                ),
-            "open":
-                float(mid["o"]),
-            "high":
-                float(mid["h"]),
-            "low":
-                float(mid["l"]),
-            "close":
-                float(mid["c"]),
+            "time": parse_oanda_time(item["time"]),
+            "open": float(mid["o"]),
+            "high": float(mid["h"]),
+            "low": float(mid["l"]),
+            "close": float(mid["c"]),
         })
 
     return rows
@@ -533,25 +459,15 @@ def true_ranges(candles):
     for i, candle in enumerate(candles):
         if i == 0:
             result[i] = (
-                candle["high"]
-                - candle["low"]
+                candle["high"] - candle["low"]
             )
         else:
-            previous_close = candles[
-                i - 1
-            ]["close"]
+            previous_close = candles[i - 1]["close"]
 
             result[i] = max(
-                candle["high"]
-                - candle["low"],
-                abs(
-                    candle["high"]
-                    - previous_close
-                ),
-                abs(
-                    candle["low"]
-                    - previous_close
-                ),
+                candle["high"] - candle["low"],
+                abs(candle["high"] - previous_close),
+                abs(candle["low"] - previous_close),
             )
 
     return result
@@ -565,20 +481,12 @@ def rma(values, length):
 
     seed = values[:length]
 
-    if any(
-        value is None
-        for value in seed
-    ):
+    if any(value is None for value in seed):
         return result
 
-    result[length - 1] = (
-        sum(seed) / length
-    )
+    result[length - 1] = sum(seed) / length
 
-    for i in range(
-        length,
-        len(values),
-    ):
+    for i in range(length, len(values)):
         if (
             values[i] is None
             or result[i - 1] is None
@@ -586,8 +494,7 @@ def rma(values, length):
             continue
 
         result[i] = (
-            result[i - 1]
-            * (length - 1)
+            result[i - 1] * (length - 1)
             + values[i]
         ) / length
 
@@ -609,19 +516,13 @@ def ema(values, length):
 
     seed = values[:length]
 
-    if any(v is None for v in seed):
+    if any(value is None for value in seed):
         return result
 
-    result[length - 1] = (
-        sum(seed) / length
-    )
-
+    result[length - 1] = sum(seed) / length
     alpha = 2.0 / (length + 1.0)
 
-    for i in range(
-        length,
-        len(values),
-    ):
+    for i in range(length, len(values)):
         if (
             values[i] is None
             or result[i - 1] is None
@@ -630,9 +531,7 @@ def ema(values, length):
 
         result[i] = (
             alpha * values[i]
-            +
-            (1.0 - alpha)
-            * result[i - 1]
+            + (1.0 - alpha) * result[i - 1]
         )
 
     return result
@@ -662,72 +561,18 @@ def sma(values, length):
                 for item in queue
             )
         ):
-            result[i] = (
-                running / length
-            )
+            result[i] = running / length
 
     return result
-
-
-def bullish_engulfing(
-    candles,
-    index,
-):
-    if index < 1:
-        return False
-
-    previous = candles[
-        index - 1
-    ]
-
-    current = candles[
-        index
-    ]
-
-    return (
-        previous["close"]
-        <
-        previous["open"]
-        and
-        current["close"]
-        >
-        current["open"]
-        and
-        current["open"]
-        <=
-        previous["close"]
-        and
-        current["close"]
-        >=
-        previous["open"]
-    )
 
 
 # ============================================================
 # HTF STATE — COMPLETED ONLY
 # ============================================================
 
-H1_EMAS = [
-    20,
-    50,
-    100,
-    200,
-]
-
-H4_EMAS = [
-    20,
-    50,
-    100,
-    200,
-]
-
-DAILY_EMAS = [
-    20,
-    50,
-    100,
-    200,
-    300,
-]
+H1_EMAS = [20, 50, 100, 200]
+H4_EMAS = [20, 50, 100, 200]
+DAILY_EMAS = [20, 50, 100, 200, 300]
 
 
 def build_htf_state(
@@ -740,14 +585,10 @@ def build_htf_state(
     ]
 
     atr = atr14(candles)
-    atr_mean50 = sma(
-        atr,
-        50,
-    )
+    atr_mean50 = sma(atr, 50)
 
     ema_map = {
-        length:
-            ema(closes, length)
+        length: ema(closes, length)
         for length in ema_lengths
     }
 
@@ -764,43 +605,26 @@ def build_htf_state(
 
         if (
             atr[i] is not None
-            and
-            atr_mean50[i] is not None
-            and
-            atr_mean50[i] > 0
+            and atr_mean50[i] is not None
+            and atr_mean50[i] > 0
         ):
             atr_ratio = (
-                atr[i]
-                /
-                atr_mean50[i]
+                atr[i] / atr_mean50[i]
             )
 
         rows.append({
-            "time":
-                candle["time"],
-            "complete_at":
-                complete_at,
-            "open":
-                candle["open"],
-            "high":
-                candle["high"],
-            "low":
-                candle["low"],
-            "close":
-                candle["close"],
-            "atr14":
-                atr[i],
-            "atr_ratio_50":
-                atr_ratio,
-            "emas":
-                {
-                    length:
-                        ema_map[
-                            length
-                        ][i]
-                    for length
-                    in ema_lengths
-                },
+            "time": candle["time"],
+            "complete_at": complete_at,
+            "open": candle["open"],
+            "high": candle["high"],
+            "low": candle["low"],
+            "close": candle["close"],
+            "atr14": atr[i],
+            "atr_ratio_50": atr_ratio,
+            "emas": {
+                length: ema_map[length][i]
+                for length in ema_lengths
+            },
         })
 
     return rows
@@ -874,7 +698,7 @@ def build_signal_cache(
     ]
 
     max_lookback = max(
-        max(STRUCTURE_LOOKBACKS),
+        max(ALL_SWEEP_LOOKBACKS),
         97,
     )
 
@@ -882,14 +706,19 @@ def build_signal_cache(
         max(14, max_lookback),
         len(m15),
     ):
-        if not bullish_engulfing(
-            m15,
-            i,
+        current = m15[i]
+        previous = m15[i - 1]
+
+        # IMPORTANT:
+        # Original SWEEP_DISPLACEMENT does NOT require engulfing.
+        # It only requires a bullish current candle.
+        if not (
+            current["close"]
+            >
+            current["open"]
         ):
             continue
 
-        current = m15[i]
-        previous = m15[i - 1]
         atr = m15_atr[i]
 
         if atr is None or atr <= 0:
@@ -924,11 +753,8 @@ def build_signal_cache(
         close_location = (
             (
                 current["close"]
-                -
-                current["low"]
-            )
-            /
-            candle_range
+                - current["low"]
+            ) / candle_range
             if candle_range > 0
             else 0.0
         )
@@ -938,8 +764,7 @@ def build_signal_cache(
                 current["open"],
                 current["close"],
             )
-            -
-            current["low"]
+            - current["low"]
         )
 
         lower_wick_body = (
@@ -948,18 +773,11 @@ def build_signal_cache(
             else 0.0
         )
 
-        stop = (
-            current["low"]
-            -
-            STOP_BUFFER_TICKS
-            * TICK_SIZE
-        )
-
-        stop_atr = (
+        close_above_prev_high = (
             current["close"]
-            -
-            stop
-        ) / atr
+            >
+            previous["high"]
+        )
 
         m15_atr_ratio = None
 
@@ -970,8 +788,7 @@ def build_signal_cache(
         ):
             m15_atr_ratio = (
                 atr
-                /
-                m15_atr_mean50[i]
+                / m15_atr_mean50[i]
             )
 
         # Strictly PRE-SIGNAL momentum.
@@ -981,91 +798,82 @@ def build_signal_cache(
 
         momentum_4h = (
             prior_close
-            -
-            m15[i - 17]["close"]
+            - m15[i - 17]["close"]
         ) / atr
 
         momentum_12h = (
             prior_close
-            -
-            m15[i - 49]["close"]
+            - m15[i - 49]["close"]
         ) / atr
 
         momentum_24h = (
             prior_close
-            -
-            m15[i - 97]["close"]
+            - m15[i - 97]["close"]
         ) / atr
 
-        structure_distance = {}
-        structure_sweep_depth = {}
-        structure_swept = {}
-        structure_reclaimed = {}
+        sweep_info = {}
 
-        for lookback in STRUCTURE_LOOKBACKS:
+        for lookback in ALL_SWEEP_LOOKBACKS:
             prior_low = min(
                 candle["low"]
-                for candle
-                in m15[
+                for candle in m15[
                     i - lookback:i
                 ]
             )
 
-            distance = (
-                abs(
-                    current["low"]
-                    -
-                    prior_low
-                )
-                /
-                atr
-            )
-
-            sweep_depth = (
-                (
-                    prior_low
-                    -
-                    current["low"]
-                )
-                /
-                atr
-                if current["low"] < prior_low
-                else 0.0
-            )
-
             swept = (
-                current["low"]
-                <
-                prior_low
+                current["low"] < prior_low
             )
 
             reclaimed = (
                 swept
-                and
-                current["close"]
-                >
-                prior_low
+                and current["close"] > prior_low
             )
 
-            structure_distance[
-                lookback
-            ] = distance
+            sweep_depth_atr = (
+                (
+                    prior_low
+                    - current["low"]
+                ) / atr
+                if swept
+                else 0.0
+            )
 
-            structure_sweep_depth[
-                lookback
-            ] = sweep_depth
+            sweep_info[lookback] = {
+                "prior_low": prior_low,
+                "swept": swept,
+                "reclaimed": reclaimed,
+                "sweep_depth_atr":
+                    sweep_depth_atr,
+                "distance_atr": (
+                    abs(
+                        current["low"]
+                        - prior_low
+                    ) / atr
+                ),
+            }
 
-            structure_swept[
-                lookback
-            ] = swept
+        trigger_swept_any = any(
+            sweep_info[lookback]["swept"]
+            for lookback
+            in TRIGGER_SWEEP_LOOKBACKS
+        )
 
-            structure_reclaimed[
-                lookback
-            ] = reclaimed
+        trigger_reclaimed_any = any(
+            sweep_info[lookback]["reclaimed"]
+            for lookback
+            in TRIGGER_SWEEP_LOOKBACKS
+        )
 
-        ny = current[
-            "time"
-        ].astimezone(NY)
+        trigger_sweep_depth_max = max(
+            sweep_info[lookback][
+                "sweep_depth_atr"
+            ]
+            for lookback
+            in TRIGGER_SWEEP_LOOKBACKS
+        )
+
+        ny = current["time"].astimezone(NY)
 
         h1_prev = previous_completed_state(
             h1_rows,
@@ -1086,22 +894,24 @@ def build_signal_cache(
         )
 
         signals.append({
-            "signal_index":
-                i,
-            "time":
-                current["time"],
-            "body_ratio":
-                body_ratio,
-            "body_atr":
-                body_atr,
-            "range_atr":
-                range_atr,
-            "close_location":
-                close_location,
+            "signal_index": i,
+            "time": current["time"],
+            "body_ratio": body_ratio,
+            "body_atr": body_atr,
+            "range_atr": range_atr,
+            "close_location": close_location,
             "lower_wick_body":
                 lower_wick_body,
-            "stop_atr":
-                stop_atr,
+            "close_above_prev_high":
+                close_above_prev_high,
+            "sweep_info":
+                sweep_info,
+            "trigger_swept_any":
+                trigger_swept_any,
+            "trigger_reclaimed_any":
+                trigger_reclaimed_any,
+            "trigger_sweep_depth_max":
+                trigger_sweep_depth_max,
             "m15_atr_ratio":
                 m15_atr_ratio,
             "momentum_4h_atr":
@@ -1110,14 +920,6 @@ def build_signal_cache(
                 momentum_12h,
             "momentum_24h_atr":
                 momentum_24h,
-            "structure_distance_atr":
-                structure_distance,
-            "structure_sweep_depth_atr":
-                structure_sweep_depth,
-            "structure_swept":
-                structure_swept,
-            "structure_reclaimed":
-                structure_reclaimed,
             "ny_hour":
                 ny.hour,
             "ny_weekday":
@@ -1139,21 +941,25 @@ def build_signal_cache(
 
 SEED = {
     "label":
-        "SEED_BODY1.25_SWEEP_DISPLACEMENT",
+        "SEED_SWEEP_DISPLACEMENT_BA1.25",
+
+    # ORIGINAL trigger.
+    "minimum_body_ratio":
+        1.00,
 
     "minimum_body_atr":
         1.25,
 
-    "structure_lookback":
-        90,
-
-    "maximum_structure_distance_atr":
-        999.0,
-
-    "require_structure_sweep":
+    "require_close_above_prev_high":
         True,
 
-    "require_structure_reclaim":
+    "sweep_lookbacks":
+        tuple(TRIGGER_SWEEP_LOOKBACKS),
+
+    "require_any_sweep":
+        True,
+
+    "require_any_reclaim":
         False,
 
     "minimum_sweep_depth_atr":
@@ -1162,6 +968,7 @@ SEED = {
     "maximum_sweep_depth_atr":
         None,
 
+    # Other candle/context filters off.
     "minimum_range_atr":
         None,
 
@@ -1261,14 +1068,11 @@ def state_close_above_ema(
     if state is None:
         return False
 
-    value = state[
-        "emas"
-    ].get(length)
+    value = state["emas"].get(length)
 
     return (
         value is not None
-        and
-        state["close"] > value
+        and state["close"] > value
     )
 
 
@@ -1280,20 +1084,13 @@ def state_bull_alignment(
     if state is None:
         return False
 
-    fast_value = state[
-        "emas"
-    ].get(fast)
-
-    slow_value = state[
-        "emas"
-    ].get(slow)
+    fast_value = state["emas"].get(fast)
+    slow_value = state["emas"].get(slow)
 
     return (
         fast_value is not None
-        and
-        slow_value is not None
-        and
-        fast_value > slow_value
+        and slow_value is not None
+        and fast_value > slow_value
     )
 
 
@@ -1304,23 +1101,17 @@ def state_atr_ratio_passes(
 ):
     if (
         minimum is None
-        and
-        maximum is None
+        and maximum is None
     ):
         return True
 
     if (
         state is None
-        or
-        state[
-            "atr_ratio_50"
-        ] is None
+        or state["atr_ratio_50"] is None
     ):
         return False
 
-    value = state[
-        "atr_ratio_50"
-    ]
+    value = state["atr_ratio_50"]
 
     if (
         minimum is not None
@@ -1341,6 +1132,14 @@ def signal_passes(
     signal,
     config,
 ):
+    # Original SWEEP_DISPLACEMENT geometry.
+    if (
+        signal["body_ratio"]
+        <
+        config["minimum_body_ratio"]
+    ):
+        return False
+
     if (
         signal["body_atr"]
         <
@@ -1348,54 +1147,61 @@ def signal_passes(
     ):
         return False
 
-    lookback = (
+    if (
         config[
-            "structure_lookback"
+            "require_close_above_prev_high"
         ]
+        and
+        not signal[
+            "close_above_prev_high"
+        ]
+    ):
+        return False
+
+    sweep_lookbacks = (
+        config["sweep_lookbacks"]
+    )
+
+    swept_any = any(
+        signal["sweep_info"][
+            lookback
+        ]["swept"]
+        for lookback
+        in sweep_lookbacks
+    )
+
+    reclaimed_any = any(
+        signal["sweep_info"][
+            lookback
+        ]["reclaimed"]
+        for lookback
+        in sweep_lookbacks
+    )
+
+    sweep_depth = max(
+        signal["sweep_info"][
+            lookback
+        ]["sweep_depth_atr"]
+        for lookback
+        in sweep_lookbacks
     )
 
     if (
-        signal[
-            "structure_distance_atr"
-        ][lookback]
-        >
-        config[
-            "maximum_structure_distance_atr"
-        ]
+        config["require_any_sweep"]
+        and not swept_any
     ):
         return False
 
     if (
-        config[
-            "require_structure_sweep"
-        ]
-        and
-        not signal[
-            "structure_swept"
-        ][lookback]
+        config["require_any_reclaim"]
+        and not reclaimed_any
     ):
         return False
-
-    if (
-        config[
-            "require_structure_reclaim"
-        ]
-        and
-        not signal[
-            "structure_reclaimed"
-        ][lookback]
-    ):
-        return False
-
-    sweep_depth = signal[
-        "structure_sweep_depth_atr"
-    ][lookback]
 
     if (
         config[
             "minimum_sweep_depth_atr"
-        ]
-        is not None
+        ] is not None
         and
         sweep_depth
         <
@@ -1408,8 +1214,7 @@ def signal_passes(
     if (
         config[
             "maximum_sweep_depth_atr"
-        ]
-        is not None
+        ] is not None
         and
         sweep_depth
         >
@@ -1420,100 +1225,59 @@ def signal_passes(
         return False
 
     if (
-        config[
-            "minimum_range_atr"
-        ]
-        is not None
+        config["minimum_range_atr"] is not None
         and
-        signal[
-            "range_atr"
-        ]
+        signal["range_atr"]
         <
-        config[
-            "minimum_range_atr"
-        ]
+        config["minimum_range_atr"]
     ):
         return False
 
     if (
-        config[
-            "minimum_close_location"
-        ]
-        is not None
+        config["minimum_close_location"] is not None
         and
-        signal[
-            "close_location"
-        ]
+        signal["close_location"]
         <
-        config[
-            "minimum_close_location"
-        ]
+        config["minimum_close_location"]
     ):
         return False
 
     if (
-        config[
-            "minimum_lower_wick_body"
-        ]
-        is not None
+        config["minimum_lower_wick_body"] is not None
         and
-        signal[
-            "lower_wick_body"
-        ]
+        signal["lower_wick_body"]
         <
-        config[
-            "minimum_lower_wick_body"
-        ]
+        config["minimum_lower_wick_body"]
     ):
         return False
 
     if (
-        config[
-            "minimum_m15_atr_ratio"
-        ]
-        is not None
+        config["minimum_m15_atr_ratio"] is not None
     ):
-        value = signal[
-            "m15_atr_ratio"
-        ]
+        value = signal["m15_atr_ratio"]
 
         if (
             value is None
-            or
-            value
+            or value
             <
-            config[
-                "minimum_m15_atr_ratio"
-            ]
+            config["minimum_m15_atr_ratio"]
         ):
             return False
 
     if (
-        config[
-            "maximum_m15_atr_ratio"
-        ]
-        is not None
+        config["maximum_m15_atr_ratio"] is not None
     ):
-        value = signal[
-            "m15_atr_ratio"
-        ]
+        value = signal["m15_atr_ratio"]
 
         if (
             value is None
-            or
-            value
+            or value
             >
-            config[
-                "maximum_m15_atr_ratio"
-            ]
+            config["maximum_m15_atr_ratio"]
         ):
             return False
 
-    for horizon in [
-        "4h",
-        "12h",
-        "24h",
-    ]:
+    for horizon in ["4h", "12h", "24h"]:
         value = signal[
             f"momentum_{horizon}_atr"
         ]
@@ -1528,145 +1292,95 @@ def signal_passes(
 
         if (
             minimum is not None
-            and
-            value < minimum
+            and value < minimum
         ):
             return False
 
         if (
             maximum is not None
-            and
-            value > maximum
+            and value > maximum
         ):
             return False
 
-    included = config[
-        "included_ny_hours"
-    ]
+    included = config["included_ny_hours"]
 
     if (
         included is not None
-        and
-        signal["ny_hour"]
-        not in included
+        and signal["ny_hour"] not in included
     ):
         return False
 
     if (
         signal["ny_hour"]
-        in config[
-            "excluded_ny_hours"
-        ]
+        in config["excluded_ny_hours"]
     ):
         return False
 
     if (
         signal["ny_weekday"]
-        in config[
-            "excluded_weekdays"
-        ]
+        in config["excluded_weekdays"]
     ):
         return False
 
     h1 = signal["h1_prev"]
 
     if (
-        config[
-            "h1_close_above_ema"
-        ]
-        is not None
-        and
-        not state_close_above_ema(
+        config["h1_close_above_ema"] is not None
+        and not state_close_above_ema(
             h1,
-            config[
-                "h1_close_above_ema"
-            ],
+            config["h1_close_above_ema"],
         )
     ):
         return False
 
     if (
-        config[
-            "h1_fast_ema"
-        ]
-        is not None
+        config["h1_fast_ema"] is not None
         and
-        config[
-            "h1_slow_ema"
-        ]
-        is not None
+        config["h1_slow_ema"] is not None
         and
         not state_bull_alignment(
             h1,
-            config[
-                "h1_fast_ema"
-            ],
-            config[
-                "h1_slow_ema"
-            ],
+            config["h1_fast_ema"],
+            config["h1_slow_ema"],
         )
     ):
         return False
 
     if not state_atr_ratio_passes(
         h1,
-        config[
-            "minimum_h1_atr_ratio"
-        ],
-        config[
-            "maximum_h1_atr_ratio"
-        ],
+        config["minimum_h1_atr_ratio"],
+        config["maximum_h1_atr_ratio"],
     ):
         return False
 
     h4 = signal["h4_prev"]
 
     if (
-        config[
-            "h4_close_above_ema"
-        ]
-        is not None
-        and
-        not state_close_above_ema(
+        config["h4_close_above_ema"] is not None
+        and not state_close_above_ema(
             h4,
-            config[
-                "h4_close_above_ema"
-            ],
+            config["h4_close_above_ema"],
         )
     ):
         return False
 
     if (
-        config[
-            "h4_fast_ema"
-        ]
-        is not None
+        config["h4_fast_ema"] is not None
         and
-        config[
-            "h4_slow_ema"
-        ]
-        is not None
+        config["h4_slow_ema"] is not None
         and
         not state_bull_alignment(
             h4,
-            config[
-                "h4_fast_ema"
-            ],
-            config[
-                "h4_slow_ema"
-            ],
+            config["h4_fast_ema"],
+            config["h4_slow_ema"],
         )
     ):
         return False
 
     if not state_atr_ratio_passes(
         h4,
-        config[
-            "minimum_h4_atr_ratio"
-        ],
-        config[
-            "maximum_h4_atr_ratio"
-        ],
+        config["minimum_h4_atr_ratio"],
+        config["maximum_h4_atr_ratio"],
     ):
         return False
 
@@ -1675,10 +1389,8 @@ def signal_passes(
     if (
         config[
             "daily_close_above_ema"
-        ]
-        is not None
-        and
-        not state_close_above_ema(
+        ] is not None
+        and not state_close_above_ema(
             daily,
             config[
                 "daily_close_above_ema"
@@ -1688,36 +1400,22 @@ def signal_passes(
         return False
 
     if (
-        config[
-            "daily_fast_ema"
-        ]
-        is not None
+        config["daily_fast_ema"] is not None
         and
-        config[
-            "daily_slow_ema"
-        ]
-        is not None
+        config["daily_slow_ema"] is not None
         and
         not state_bull_alignment(
             daily,
-            config[
-                "daily_fast_ema"
-            ],
-            config[
-                "daily_slow_ema"
-            ],
+            config["daily_fast_ema"],
+            config["daily_slow_ema"],
         )
     ):
         return False
 
     if not state_atr_ratio_passes(
         daily,
-        config[
-            "minimum_daily_atr_ratio"
-        ],
-        config[
-            "maximum_daily_atr_ratio"
-        ],
+        config["minimum_daily_atr_ratio"],
+        config["maximum_daily_atr_ratio"],
     ):
         return False
 
@@ -1725,7 +1423,7 @@ def signal_passes(
 
 
 # ============================================================
-# OUTCOME CACHE
+# TRADE OUTCOME CACHE
 # ============================================================
 
 def compute_trade_outcome(
@@ -1734,19 +1432,13 @@ def compute_trade_outcome(
     reward_risk,
     cost_pips,
 ):
-    signal = candles[
-        signal_index
-    ]
+    signal = candles[signal_index]
 
-    reference_entry = (
-        signal["close"]
-    )
+    reference_entry = signal["close"]
 
     stop = (
         signal["low"]
-        -
-        STOP_BUFFER_TICKS
-        * TICK_SIZE
+        - STOP_BUFFER_TICKS * TICK_SIZE
     )
 
     reference_risk = (
@@ -1758,16 +1450,12 @@ def compute_trade_outcome(
 
     target = (
         reference_entry
-        +
-        reward_risk
-        * reference_risk
+        + reward_risk * reference_risk
     )
 
     backtest_entry = (
         reference_entry
-        +
-        cost_pips
-        * PIP_SIZE
+        + cost_pips * PIP_SIZE
     )
 
     actual_risk = (
@@ -1802,11 +1490,7 @@ def compute_trade_outcome(
                 - candle["low"]
             )
 
-            if (
-                distance_high
-                <
-                distance_low
-            ):
+            if distance_high < distance_low:
                 exit_price = target
                 exit_reason = "TARGET"
             else:
@@ -1839,13 +1523,9 @@ def compute_trade_outcome(
             "exit_time":
                 candle["time"],
             "entry_time_utc":
-                iso_utc(
-                    signal["time"]
-                ),
+                iso_utc(signal["time"]),
             "exit_time_utc":
-                iso_utc(
-                    candle["time"]
-                ),
+                iso_utc(candle["time"]),
             "reference_entry":
                 reference_entry,
             "backtest_entry":
@@ -1875,18 +1555,14 @@ def build_outcome_cache(
 
     total = (
         len(signals)
-        *
-        len(RR_VALUES)
-        *
-        len(COST_PIPS_GRID)
+        * len(RR_VALUES)
+        * len(COST_PIPS_GRID)
     )
 
     done = 0
 
     for signal in signals:
-        index = signal[
-            "signal_index"
-        ]
+        index = signal["signal_index"]
 
         for rr in RR_VALUES:
             for cost in COST_PIPS_GRID:
@@ -1907,11 +1583,7 @@ def build_outcome_cache(
                     })
 
                 cache[
-                    (
-                        index,
-                        rr,
-                        cost,
-                    )
+                    (index, rr, cost)
                 ] = compute_trade_outcome(
                     candles,
                     index,
@@ -1933,6 +1605,8 @@ def config_signature(config):
                 key,
                 tuple(sorted(value))
                 if isinstance(value, set)
+                else tuple(value)
+                if isinstance(value, tuple)
                 else value,
             )
             for key, value in config.items()
@@ -1963,6 +1637,7 @@ def qualifying_candidates(
     ]
 
     CANDIDATE_CACHE[key] = candidates
+
     return candidates
 
 
@@ -1981,8 +1656,7 @@ def run_config_cached(
 
     if (
         start is not None
-        or
-        end is not None
+        or end is not None
     ):
         times = [
             signal["time"]
@@ -1992,8 +1666,7 @@ def run_config_cached(
         left = (
             0
             if start is None
-            else
-            bisect.bisect_left(
+            else bisect.bisect_left(
                 times,
                 start,
             )
@@ -2002,8 +1675,7 @@ def run_config_cached(
         right = (
             len(candidates)
             if end is None
-            else
-            bisect.bisect_left(
+            else bisect.bisect_left(
                 times,
                 end,
             )
@@ -2026,12 +1698,8 @@ def run_config_cached(
 
         trade = cache.get(
             (
-                signal[
-                    "signal_index"
-                ],
-                config[
-                    "reward_risk"
-                ],
+                signal["signal_index"],
+                config["reward_risk"],
                 cost_pips,
             )
         )
@@ -2057,27 +1725,27 @@ def run_config_cached(
 
 def stats_from_trades(trades):
     results = [
-        float(
-            trade["result_r"]
-        )
+        float(trade["result_r"])
         for trade in trades
     ]
 
     winners = [
-        r for r in results
-        if r > 0
+        value
+        for value in results
+        if value > 0
     ]
 
     losers = [
-        r for r in results
-        if r < 0
+        value
+        for value in results
+        if value < 0
     ]
 
     gross_profit = sum(winners)
     gross_loss = abs(sum(losers))
     total_r = sum(results)
 
-    pf = (
+    profit_factor = (
         gross_profit / gross_loss
         if gross_loss > 0
         else (
@@ -2095,11 +1763,7 @@ def stats_from_trades(trades):
 
     for result in results:
         equity += result
-
-        peak = max(
-            peak,
-            equity,
-        )
+        peak = max(peak, equity)
 
         max_dd = min(
             max_dd,
@@ -2108,46 +1772,30 @@ def stats_from_trades(trades):
 
         if result < 0:
             streak += 1
-            longest = max(
-                longest,
-                streak,
-            )
+            longest = max(longest, streak)
         else:
             streak = 0
 
     return {
-        "trades":
-            len(results),
-        "winners":
-            len(winners),
-        "losers":
-            len(losers),
-        "win_rate":
-            (
-                len(winners)
-                /
-                len(results)
-                *
-                100.0
-                if results
-                else 0.0
-            ),
-        "profit_factor":
-            pf,
-        "total_r":
-            total_r,
-        "expectancy_r":
-            (
-                total_r
-                /
-                len(results)
-                if results
-                else 0.0
-            ),
-        "max_drawdown_r":
-            max_dd,
-        "longest_loss_streak":
-            longest,
+        "trades": len(results),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": (
+            len(winners)
+            / len(results)
+            * 100.0
+            if results
+            else 0.0
+        ),
+        "profit_factor": profit_factor,
+        "total_r": total_r,
+        "expectancy_r": (
+            total_r / len(results)
+            if results
+            else 0.0
+        ),
+        "max_drawdown_r": max_dd,
+        "longest_loss_streak": longest,
     }
 
 
@@ -2157,48 +1805,25 @@ def result_row(
     cost,
     trades,
 ):
-    stats = stats_from_trades(
-        trades
-    )
+    stats = stats_from_trades(trades)
 
     row = {
-        "family":
-            family,
-        "candidate":
-            config["label"],
-        "cost_pips":
-            cost,
-        "trades":
-            stats["trades"],
-        "winners":
-            stats["winners"],
-        "losers":
-            stats["losers"],
+        "family": family,
+        "candidate": config["label"],
+        "cost_pips": cost,
+        "trades": stats["trades"],
+        "winners": stats["winners"],
+        "losers": stats["losers"],
         "win_rate":
-            round(
-                stats["win_rate"],
-                4,
-            ),
+            round(stats["win_rate"], 4),
         "profit_factor":
-            round(
-                stats["profit_factor"],
-                6,
-            ),
+            round(stats["profit_factor"], 6),
         "total_r":
-            round(
-                stats["total_r"],
-                4,
-            ),
+            round(stats["total_r"], 4),
         "expectancy_r":
-            round(
-                stats["expectancy_r"],
-                6,
-            ),
+            round(stats["expectancy_r"], 6),
         "max_drawdown_r":
-            round(
-                stats["max_drawdown_r"],
-                4,
-            ),
+            round(stats["max_drawdown_r"], 4),
         "longest_loss_streak":
             stats["longest_loss_streak"],
     }
@@ -2212,6 +1837,11 @@ def result_row(
                 str(item)
                 for item in sorted(value)
             )
+        elif isinstance(value, tuple):
+            row[key] = ",".join(
+                str(item)
+                for item in value
+            )
         else:
             row[key] = value
 
@@ -2219,17 +1849,36 @@ def result_row(
 
 
 # ============================================================
-# LOCAL SEED NEIGHBOURHOOD
+# LOCAL GRID — PRESERVES ORIGINAL TRIGGER
 # ============================================================
 
 def local_configs():
     rows = []
-
     counter = 0
 
+    sweep_variants = [
+        (
+            "ANY_20_40_60_100",
+            (20, 40, 60, 100),
+        ),
+        ("ONLY_20", (20,)),
+        ("ONLY_40", (40,)),
+        ("ONLY_60", (60,)),
+        ("ONLY_100", (100,)),
+        ("ANY_20_40", (20, 40)),
+        ("ANY_60_100", (60, 100)),
+        (
+            "ANY_20_40_60_100_120_150",
+            (20, 40, 60, 100, 120, 150),
+        ),
+    ]
+
     for body_atr in BODY_ATR_VALUES:
-        for lookback in STRUCTURE_LOOKBACKS:
-            for distance in STRUCTURE_DISTANCES:
+        for body_ratio in BODY_RATIO_VALUES:
+            for (
+                sweep_name,
+                lookbacks,
+            ) in sweep_variants:
                 for rr in RR_VALUES:
                     counter += 1
 
@@ -2238,8 +1887,8 @@ def local_configs():
                         (
                             f"LOCAL_{counter:04d}_"
                             f"BA{body_atr:.2f}_"
-                            f"S{lookback}_"
-                            f"D{distance:.3f}_"
+                            f"BR{body_ratio:.2f}_"
+                            f"{sweep_name}_"
                             f"RR{rr:.2f}"
                         ),
                     )
@@ -2249,29 +1898,26 @@ def local_configs():
                     ] = body_atr
 
                     config[
-                        "structure_lookback"
-                    ] = lookback
+                        "minimum_body_ratio"
+                    ] = body_ratio
 
                     config[
-                        "maximum_structure_distance_atr"
-                    ] = distance
+                        "sweep_lookbacks"
+                    ] = tuple(lookbacks)
 
                     config[
                         "reward_risk"
                     ] = rr
 
                     rows.append(
-                        (
-                            "LOCAL",
-                            config,
-                        )
+                        ("LOCAL", config)
                     )
 
     return rows
 
 
 # ============================================================
-# TARGETED SINGLE FAMILIES AROUND SEED
+# TARGETED SINGLE FAMILIES AROUND EXACT SEED
 # ============================================================
 
 def single_family_configs():
@@ -2288,25 +1934,18 @@ def single_family_configs():
         )
 
         mutator(config)
-        rows.append(
-            (
-                family,
-                config,
-            )
-        )
+        rows.append((family, config))
 
-    # Reclaim vs sweep-only.
     add(
         "RECLAIM",
-        "REQUIRE_RECLAIM",
+        "REQUIRE_ANY_RECLAIM",
         lambda c:
             c.__setitem__(
-                "require_structure_reclaim",
+                "require_any_reclaim",
                 True,
             ),
     )
 
-    # Sweep depth.
     for value in [
         0.025,
         0.05,
@@ -2345,7 +1984,6 @@ def single_family_configs():
                 ),
         )
 
-    # Range / close / wick.
     for value in [
         1.20,
         1.40,
@@ -2370,6 +2008,7 @@ def single_family_configs():
         0.75,
         0.80,
         0.85,
+        0.90,
     ]:
         add(
             "CLOSE_LOCATION",
@@ -2398,7 +2037,6 @@ def single_family_configs():
                 ),
         )
 
-    # M15 volatility regime.
     for value in [
         0.80,
         0.90,
@@ -2436,11 +2074,7 @@ def single_family_configs():
         )
 
     # Prior selloff / momentum.
-    for horizon in [
-        "4h",
-        "12h",
-        "24h",
-    ]:
+    for horizon in ["4h", "12h", "24h"]:
         for value in [
             -3.0,
             -2.0,
@@ -2455,7 +2089,7 @@ def single_family_configs():
             )
 
             add(
-                f"{horizon}_SELL_OFF_MAX",
+                f"{horizon}_SELL_OFF",
                 (
                     f"{horizon}_MOM_MAX_"
                     f"{value:+.2f}"
@@ -2497,7 +2131,6 @@ def single_family_configs():
                     ),
             )
 
-    # Sessions.
     sessions = {
         "NY_00_04":
             {0, 1, 2, 3, 4},
@@ -2556,222 +2189,122 @@ def single_family_configs():
                 ),
         )
 
-    # H1 trend.
-    for length in [
-        20,
-        50,
-        100,
-        200,
+    # H1/H4/D trend and volatility.
+    for tf, ema_lengths in [
+        ("h1", [20, 50, 100, 200]),
+        ("h4", [20, 50, 100, 200]),
+        ("daily", [20, 50, 100, 200, 300]),
     ]:
-        add(
-            "H1_CLOSE_EMA",
-            f"H1_CLOSE_GT_EMA{length}",
-            lambda c, v=length:
-                c.__setitem__(
-                    "h1_close_above_ema",
-                    v,
+        for length in ema_lengths:
+            key = (
+                f"{tf}_close_above_ema"
+            )
+
+            add(
+                f"{tf.upper()}_CLOSE_EMA",
+                (
+                    f"{tf.upper()}_"
+                    f"CLOSE_GT_EMA{length}"
                 ),
-        )
+                lambda c,
+                k=key,
+                v=length:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
 
-    for fast, slow in [
-        (20, 50),
-        (20, 100),
-        (50, 100),
-        (50, 200),
-    ]:
-        def mutate_h1(
-            c,
-            f=fast,
-            s=slow,
-        ):
-            c["h1_fast_ema"] = f
-            c["h1_slow_ema"] = s
+        alignment_pairs = [
+            (20, 50),
+            (20, 100),
+            (50, 100),
+            (50, 200),
+        ]
 
-        add(
-            "H1_ALIGNMENT",
-            f"H1_EMA{fast}_GT_{slow}",
-            mutate_h1,
-        )
+        for fast, slow in alignment_pairs:
+            if slow not in ema_lengths:
+                continue
 
-    for value in [
-        0.80,
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-    ]:
-        add(
-            "H1_ATR_MIN",
-            f"H1_ATR_MIN_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "minimum_h1_atr_ratio",
-                    v,
+            fast_key = (
+                f"{tf}_fast_ema"
+            )
+
+            slow_key = (
+                f"{tf}_slow_ema"
+            )
+
+            def mutate_alignment(
+                c,
+                fk=fast_key,
+                sk=slow_key,
+                f=fast,
+                s=slow,
+            ):
+                c[fk] = f
+                c[sk] = s
+
+            add(
+                f"{tf.upper()}_ALIGNMENT",
+                (
+                    f"{tf.upper()}_"
+                    f"EMA{fast}_GT_{slow}"
                 ),
-        )
+                mutate_alignment,
+            )
 
-    for value in [
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-        1.30,
-    ]:
-        add(
-            "H1_ATR_MAX",
-            f"H1_ATR_MAX_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "maximum_h1_atr_ratio",
-                    v,
+        for value in [
+            0.80,
+            0.90,
+            1.00,
+            1.10,
+            1.20,
+        ]:
+            key = (
+                f"minimum_{tf}_atr_ratio"
+            )
+
+            add(
+                f"{tf.upper()}_ATR_MIN",
+                (
+                    f"{tf.upper()}_"
+                    f"ATR_MIN_{value:.2f}"
                 ),
-        )
+                lambda c,
+                k=key,
+                v=value:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
 
-    # H4 trend.
-    for length in [
-        20,
-        50,
-        100,
-        200,
-    ]:
-        add(
-            "H4_CLOSE_EMA",
-            f"H4_CLOSE_GT_EMA{length}",
-            lambda c, v=length:
-                c.__setitem__(
-                    "h4_close_above_ema",
-                    v,
+        for value in [
+            0.90,
+            1.00,
+            1.10,
+            1.20,
+            1.30,
+        ]:
+            key = (
+                f"maximum_{tf}_atr_ratio"
+            )
+
+            add(
+                f"{tf.upper()}_ATR_MAX",
+                (
+                    f"{tf.upper()}_"
+                    f"ATR_MAX_{value:.2f}"
                 ),
-        )
+                lambda c,
+                k=key,
+                v=value:
+                    c.__setitem__(
+                        k,
+                        v,
+                    ),
+            )
 
-    for fast, slow in [
-        (20, 50),
-        (20, 100),
-        (50, 100),
-        (50, 200),
-    ]:
-        def mutate_h4(
-            c,
-            f=fast,
-            s=slow,
-        ):
-            c["h4_fast_ema"] = f
-            c["h4_slow_ema"] = s
-
-        add(
-            "H4_ALIGNMENT",
-            f"H4_EMA{fast}_GT_{slow}",
-            mutate_h4,
-        )
-
-    for value in [
-        0.80,
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-    ]:
-        add(
-            "H4_ATR_MIN",
-            f"H4_ATR_MIN_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "minimum_h4_atr_ratio",
-                    v,
-                ),
-        )
-
-    for value in [
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-        1.30,
-    ]:
-        add(
-            "H4_ATR_MAX",
-            f"H4_ATR_MAX_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "maximum_h4_atr_ratio",
-                    v,
-                ),
-        )
-
-    # Daily trend.
-    for length in [
-        20,
-        50,
-        100,
-        200,
-        300,
-    ]:
-        add(
-            "DAILY_CLOSE_EMA",
-            f"D_CLOSE_GT_EMA{length}",
-            lambda c, v=length:
-                c.__setitem__(
-                    "daily_close_above_ema",
-                    v,
-                ),
-        )
-
-    for fast, slow in [
-        (20, 50),
-        (20, 100),
-        (50, 100),
-        (50, 200),
-        (100, 200),
-    ]:
-        def mutate_daily(
-            c,
-            f=fast,
-            s=slow,
-        ):
-            c["daily_fast_ema"] = f
-            c["daily_slow_ema"] = s
-
-        add(
-            "DAILY_ALIGNMENT",
-            f"D_EMA{fast}_GT_{slow}",
-            mutate_daily,
-        )
-
-    for value in [
-        0.80,
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-    ]:
-        add(
-            "DAILY_ATR_MIN",
-            f"D_ATR_MIN_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "minimum_daily_atr_ratio",
-                    v,
-                ),
-        )
-
-    for value in [
-        0.90,
-        1.00,
-        1.10,
-        1.20,
-        1.30,
-    ]:
-        add(
-            "DAILY_ATR_MAX",
-            f"D_ATR_MAX_{value:.2f}",
-            lambda c, v=value:
-                c.__setitem__(
-                    "maximum_daily_atr_ratio",
-                    v,
-                ),
-        )
-
-    # RR.
     for rr in RR_VALUES:
         add(
             "RR",
@@ -2803,32 +2336,22 @@ def build_controlled_interactions(
             continue
 
         if (
-            float(
-                row["profit_factor"]
-            )
+            float(row["profit_factor"])
             >= 1.12
             and
-            int(
-                row["trades"]
-            )
+            int(row["trades"])
             >= MIN_TRADES_PRIMARY
         ):
-            family_best[
-                family
-            ] = row
+            family_best[family] = row
 
     ranked = sorted(
         family_best.items(),
         key=lambda item: (
             float(
-                item[1][
-                    "profit_factor"
-                ]
+                item[1]["profit_factor"]
             ),
             float(
-                item[1][
-                    "expectancy_r"
-                ]
+                item[1]["expectancy_r"]
             ),
         ),
         reverse=True,
@@ -2858,13 +2381,13 @@ def build_controlled_interactions(
             if key == "label":
                 continue
 
-            seed_value = SEED.get(
-                key
-            )
+            seed_value = SEED.get(key)
 
             if value != seed_value:
                 if isinstance(value, set):
                     result[key] = set(value)
+                elif isinstance(value, tuple):
+                    result[key] = tuple(value)
                 else:
                     result[key] = value
 
@@ -2879,13 +2402,8 @@ def build_controlled_interactions(
             i + 1,
             len(pool),
         ):
-            family_a, config_a = (
-                pool[i]
-            )
-
-            family_b, config_b = (
-                pool[j]
-            )
+            family_a, config_a = pool[i]
+            family_b, config_b = pool[j]
 
             config = clone_config(
                 SEED,
@@ -2933,7 +2451,7 @@ def build_controlled_interactions(
 
 
 # ============================================================
-# VALIDATION WINDOWS
+# VALIDATION
 # ============================================================
 
 def era_windows():
@@ -3054,19 +2572,15 @@ def validation_rows(
             )
 
             rows.append({
-                "rank":
-                    rank,
-                "window":
-                    label,
+                "rank": rank,
+                "window": label,
                 "candidate":
                     config["label"],
                 "trades":
                     stats["trades"],
                 "profit_factor":
                     round(
-                        stats[
-                            "profit_factor"
-                        ],
+                        stats["profit_factor"],
                         6,
                     ),
                 "total_r":
@@ -3076,16 +2590,12 @@ def validation_rows(
                     ),
                 "expectancy_r":
                     round(
-                        stats[
-                            "expectancy_r"
-                        ],
+                        stats["expectancy_r"],
                         6,
                     ),
                 "max_drawdown_r":
                     round(
-                        stats[
-                            "max_drawdown_r"
-                        ],
+                        stats["max_drawdown_r"],
                         4,
                     ),
                 "longest_loss_streak":
@@ -3147,46 +2657,34 @@ def monthly_rolling_rows(
                 config["label"],
             "months":
                 months,
-            "window":
-                (
-                    f"{cursor:%Y-%m-%d}"
-                    " -> "
-                    f"{end:%Y-%m-%d}"
-                ),
+            "window": (
+                f"{cursor:%Y-%m-%d}"
+                f" -> {end:%Y-%m-%d}"
+            ),
             "trades":
                 stats["trades"],
             "profit_factor":
                 round(
-                    stats[
-                        "profit_factor"
-                    ],
+                    stats["profit_factor"],
                     6,
                 ),
             "total_r":
                 round(
-                    stats[
-                        "total_r"
-                    ],
+                    stats["total_r"],
                     4,
                 ),
             "expectancy_r":
                 round(
-                    stats[
-                        "expectancy_r"
-                    ],
+                    stats["expectancy_r"],
                     6,
                 ),
             "max_drawdown_r":
                 round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
+                    stats["max_drawdown_r"],
                     4,
                 ),
             "positive":
-                stats[
-                    "total_r"
-                ] > 0,
+                stats["total_r"] > 0,
         })
 
         cursor = add_months(
@@ -3209,8 +2707,7 @@ def median(values):
 
     return (
         ordered[n // 2 - 1]
-        +
-        ordered[n // 2]
+        + ordered[n // 2]
     ) / 2.0
 
 
@@ -3219,16 +2716,12 @@ def rolling_summary(rows):
         return {}
 
     pfs = [
-        float(
-            row["profit_factor"]
-        )
+        float(row["profit_factor"])
         for row in rows
     ]
 
     rs = [
-        float(
-            row["total_r"]
-        )
+        float(row["total_r"])
         for row in rows
     ]
 
@@ -3241,19 +2734,13 @@ def rolling_summary(rows):
     worst_pf = min(
         rows,
         key=lambda row:
-            float(
-                row[
-                    "profit_factor"
-                ]
-            ),
+            float(row["profit_factor"]),
     )
 
     worst_r = min(
         rows,
         key=lambda row:
-            float(
-                row["total_r"]
-            ),
+            float(row["total_r"]),
     )
 
     return {
@@ -3268,31 +2755,18 @@ def rolling_summary(rows):
         "positive_windows_pct":
             round(
                 positive
-                /
-                len(rows)
+                / len(rows)
                 * 100.0,
                 4,
             ),
         "worst_profit_factor":
-            round(
-                min(pfs),
-                6,
-            ),
+            round(min(pfs), 6),
         "median_profit_factor":
-            round(
-                median(pfs),
-                6,
-            ),
+            round(median(pfs), 6),
         "worst_total_r":
-            round(
-                min(rs),
-                4,
-            ),
+            round(min(rs), 4),
         "median_total_r":
-            round(
-                median(rs),
-                4,
-            ),
+            round(median(rs), 4),
         "worst_pf_window":
             worst_pf["window"],
         "worst_r_window":
@@ -3306,12 +2780,8 @@ def rolling_summary(rows):
 
 def trade_key(trade):
     return (
-        trade[
-            "entry_time_utc"
-        ],
-        trade[
-            "exit_time_utc"
-        ],
+        trade["entry_time_utc"],
+        trade["exit_time_utc"],
     )
 
 
@@ -3347,20 +2817,17 @@ def overlap_rows(
 
     shared = (
         reference_keys
-        &
-        finalist_keys
+        & finalist_keys
     )
 
     added = (
         finalist_keys
-        -
-        reference_keys
+        - reference_keys
     )
 
     removed = (
         reference_keys
-        -
-        finalist_keys
+        - finalist_keys
     )
 
     groups = [
@@ -3419,9 +2886,7 @@ def overlap_rows(
                 stats["trades"],
             "profit_factor":
                 round(
-                    stats[
-                        "profit_factor"
-                    ],
+                    stats["profit_factor"],
                     6,
                 ),
             "total_r":
@@ -3431,16 +2896,12 @@ def overlap_rows(
                 ),
             "expectancy_r":
                 round(
-                    stats[
-                        "expectancy_r"
-                    ],
+                    stats["expectancy_r"],
                     6,
                 ),
             "max_drawdown_r":
                 round(
-                    stats[
-                        "max_drawdown_r"
-                    ],
+                    stats["max_drawdown_r"],
                     4,
                 ),
         })
@@ -3492,10 +2953,9 @@ def run_research():
             )
 
         STATUS.update({
-            "state":
-                "precomputing",
+            "state": "precomputing",
             "message":
-                "Building corrected Gen2 features",
+                "Building corrected exact-trigger features",
             "m15_candles":
                 len(m15),
             "h1_candles":
@@ -3532,11 +2992,10 @@ def run_research():
         )
 
         STATUS.update({
-            "state":
-                "precomputing",
+            "state": "precomputing",
             "message":
-                "Caching reusable trade outcomes",
-            "engulfing_signals":
+                "Caching reusable USDJPY outcomes",
+            "bullish_signal_universe":
                 len(signals),
         })
 
@@ -3545,11 +3004,14 @@ def run_research():
             signals,
         )
 
-        # Seed.
+        # --------------------------------------------
+        # Seed — must reproduce original 251-trade run
+        # --------------------------------------------
+
         seed_rows = []
 
         for cost in COST_PIPS_GRID:
-            trades = run_config_cached(
+            seed_trades = run_config_cached(
                 signals,
                 cache,
                 SEED,
@@ -3561,7 +3023,7 @@ def run_research():
                     "SEED",
                     SEED,
                     cost,
-                    trades,
+                    seed_trades,
                 )
             )
 
@@ -3570,14 +3032,43 @@ def run_research():
             seed_rows,
         )
 
-        # Local body / structure / RR grid.
+        seed_primary = next(
+            row
+            for row in seed_rows
+            if (
+                abs(
+                    float(row["cost_pips"])
+                    - PRIMARY_COST_PIPS
+                )
+                < 1e-12
+            )
+        )
+
+        # Hard guardrail:
+        # if we do not approximately reproduce the original
+        # candidate, stop rather than optimize the wrong trigger.
+        if not (
+            240
+            <= int(seed_primary["trades"])
+            <= 265
+        ):
+            raise RuntimeError(
+                "Seed reproduction failed: "
+                f"expected ~251 trades, got "
+                f"{seed_primary['trades']}. "
+                "Do not trust this run."
+            )
+
+        # --------------------------------------------
+        # Local exact-trigger neighbourhood
+        # --------------------------------------------
+
         local = local_configs()
 
         STATUS.update({
-            "state":
-                "calculating",
+            "state": "calculating",
             "message":
-                "Running local body/structure/RR grid",
+                "Running exact-trigger local grid",
             "local_configs":
                 len(local),
         })
@@ -3610,7 +3101,7 @@ def run_research():
 
             if number % 100 == 0:
                 STATUS["message"] = (
-                    "Local grid "
+                    "Exact-trigger local grid "
                     f"{number}/{len(local)}"
                 )
 
@@ -3619,12 +3110,14 @@ def run_research():
             local_rows,
         )
 
-        # Single context families.
+        # --------------------------------------------
+        # Targeted context families
+        # --------------------------------------------
+
         singles = single_family_configs()
 
         STATUS.update({
-            "state":
-                "calculating",
+            "state": "calculating",
             "message":
                 "Running targeted context families",
             "single_configs":
@@ -3668,42 +3161,29 @@ def run_research():
             single_rows,
         )
 
-        # Primary pool.
         primary_rows = [
             row
             for row in (
                 local_rows
-                +
-                single_rows
+                + single_rows
             )
             if (
                 abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
+                    float(row["cost_pips"])
+                    - PRIMARY_COST_PIPS
                 )
                 < 1e-12
                 and
-                int(
-                    row["trades"]
-                )
+                int(row["trades"])
                 >= MIN_TRADES_PRIMARY
             )
         ]
 
         primary_rows.sort(
             key=lambda row: (
-                float(
-                    row["profit_factor"]
-                ),
-                float(
-                    row["expectancy_r"]
-                ),
-                float(
-                    row["total_r"]
-                ),
+                float(row["profit_factor"]),
+                float(row["expectancy_r"]),
+                float(row["total_r"]),
             ),
             reverse=True,
         )
@@ -3711,11 +3191,8 @@ def run_research():
         config_lookup = {
             config["label"]:
                 config
-            for _, config
-            in (
-                local
-                +
-                singles
+            for _, config in (
+                local + singles
             )
         }
 
@@ -3723,7 +3200,10 @@ def run_research():
             SEED["label"]
         ] = SEED
 
-        # Controlled interactions.
+        # --------------------------------------------
+        # Controlled interactions
+        # --------------------------------------------
+
         interactions = (
             build_controlled_interactions(
                 primary_rows,
@@ -3732,8 +3212,7 @@ def run_research():
         )
 
         STATUS.update({
-            "state":
-                "calculating",
+            "state": "calculating",
             "message":
                 "Running controlled interactions",
             "interaction_configs":
@@ -3781,44 +3260,20 @@ def run_research():
                 config["label"]
             ] = config
 
-        # Combined ranking.
-        combined = list(
-            primary_rows
-        )
+        combined = list(primary_rows)
 
         combined.extend(
             row
-            for row
-            in interaction_rows
+            for row in interaction_rows
             if (
                 abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
+                    float(row["cost_pips"])
+                    - PRIMARY_COST_PIPS
                 )
                 < 1e-12
                 and
-                int(
-                    row["trades"]
-                )
+                int(row["trades"])
                 >= MIN_TRADES_PRIMARY
-            )
-        )
-
-        seed_primary = next(
-            row
-            for row in seed_rows
-            if (
-                abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
-                )
-                < 1e-12
             )
         )
 
@@ -3828,22 +3283,14 @@ def run_research():
 
         combined.sort(
             key=lambda row: (
-                float(
-                    row["profit_factor"]
-                ),
-                float(
-                    row["expectancy_r"]
-                ),
-                float(
-                    row["total_r"]
-                ),
+                float(row["profit_factor"]),
+                float(row["expectancy_r"]),
+                float(row["total_r"]),
             ),
             reverse=True,
         )
 
-        top_rows = (
-            combined[:40]
-        )
+        top_rows = combined[:40]
 
         write_csv(
             OUTPUT_TOP,
@@ -3854,14 +3301,15 @@ def run_research():
             config_lookup[
                 row["candidate"]
             ]
-            for row
-            in top_rows[:15]
+            for row in top_rows[:15]
         ]
 
-        # Validation.
+        # --------------------------------------------
+        # Validation
+        # --------------------------------------------
+
         STATUS.update({
-            "state":
-                "validating",
+            "state": "validating",
             "message":
                 "Running 4-era validation",
         })
@@ -3910,32 +3358,23 @@ def run_research():
             recent_rows,
         )
 
-        # Robust ranking.
         robust = []
 
         for config in finalists:
-            label = config[
-                "label"
-            ]
+            label = config["label"]
 
             base = next(
                 row
                 for row in top_rows
-                if row[
-                    "candidate"
-                ] == label
+                if row["candidate"] == label
             )
 
             eras = [
                 row
                 for row in era_rows
                 if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(
-                        row["trades"]
-                    ) > 0
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
                 )
             ]
 
@@ -3943,12 +3382,8 @@ def run_research():
                 row
                 for row in devval_rows
                 if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(
-                        row["trades"]
-                    ) > 0
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
                 )
             ]
 
@@ -3956,33 +3391,23 @@ def run_research():
                 row
                 for row in recent_rows
                 if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(
-                        row["trades"]
-                    ) > 0
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
                 )
             ]
 
             era_pfs = [
-                float(
-                    row["profit_factor"]
-                )
+                float(row["profit_factor"])
                 for row in eras
             ]
 
-            devval_pfs = [
-                float(
-                    row["profit_factor"]
-                )
+            dev_pfs = [
+                float(row["profit_factor"])
                 for row in devval
             ]
 
             recent_pfs = [
-                float(
-                    row["profit_factor"]
-                )
+                float(row["profit_factor"])
                 for row in recent
             ]
 
@@ -3992,9 +3417,9 @@ def run_research():
                 else 0.0
             )
 
-            min_devval = (
-                min(devval_pfs)
-                if devval_pfs
+            min_dev = (
+                min(dev_pfs)
+                if dev_pfs
                 else 0.0
             )
 
@@ -4008,42 +3433,29 @@ def run_research():
                 "candidate":
                     label,
                 "trades":
-                    int(
-                        base["trades"]
-                    ),
+                    int(base["trades"]),
                 "full_pf":
                     float(
-                        base[
-                            "profit_factor"
-                        ]
+                        base["profit_factor"]
                     ),
                 "full_total_r":
-                    float(
-                        base["total_r"]
-                    ),
+                    float(base["total_r"]),
                 "full_expectancy":
                     float(
-                        base[
-                            "expectancy_r"
-                        ]
+                        base["expectancy_r"]
                     ),
                 "minimum_era_pf":
                     min_era,
                 "minimum_devval_pf":
-                    min_devval,
+                    min_dev,
                 "minimum_recent_pf":
                     min_recent,
                 "score": (
                     min_era * 3.0
-                    +
-                    min_devval * 2.0
-                    +
-                    min_recent * 2.0
-                    +
-                    float(
-                        base[
-                            "profit_factor"
-                        ]
+                    + min_dev * 2.0
+                    + min_recent * 2.0
+                    + float(
+                        base["profit_factor"]
                     )
                 ),
             })
@@ -4058,11 +3470,9 @@ def run_research():
             config_lookup[
                 row["candidate"]
             ]
-            for row
-            in robust[:6]
+            for row in robust[:6]
         ]
 
-        # Rolling.
         STATUS["message"] = (
             "Running rolling 2Y / 3Y"
         )
@@ -4071,10 +3481,7 @@ def run_research():
         rolling_summary_rows = []
 
         for config in robust_finalists:
-            for months in [
-                24,
-                36,
-            ]:
+            for months in [24, 36]:
                 rows = monthly_rolling_rows(
                     signals,
                     cache,
@@ -4082,14 +3489,10 @@ def run_research():
                     months,
                 )
 
-                rolling_rows.extend(
-                    rows
-                )
+                rolling_rows.extend(rows)
 
                 rolling_summary_rows.append(
-                    rolling_summary(
-                        rows
-                    )
+                    rolling_summary(rows)
                 )
 
         write_csv(
@@ -4102,9 +3505,8 @@ def run_research():
             rolling_summary_rows,
         )
 
-        # Overlap against seed.
         STATUS["message"] = (
-            "Running overlap vs seed"
+            "Running overlap vs exact original seed"
         )
 
         overlap = []
@@ -4143,8 +3545,7 @@ def run_research():
         )
 
         STATUS.update({
-            "state":
-                "packaging",
+            "state": "packaging",
             "message":
                 "Building single ZIP results bundle",
         })
@@ -4152,19 +3553,14 @@ def run_research():
         build_results_bundle()
 
         STATUS.update({
-            "state":
-                "complete",
+            "state": "complete",
             "message":
-                "USDJPY M15 long Gen2 complete",
-            "m15_candles":
-                len(m15),
-            "h1_candles":
-                len(h1),
-            "h4_candles":
-                len(h4),
-            "daily_candles":
-                len(daily),
-            "engulfing_signals":
+                "USDJPY M15 Long Gen2 corrected complete",
+            "seed_reproduced":
+                True,
+            "seed_primary":
+                seed_primary,
+            "bullish_signal_universe":
                 len(signals),
             "local_configs":
                 len(local),
@@ -4172,15 +3568,6 @@ def run_research():
                 len(singles),
             "interaction_configs":
                 len(interactions),
-            "seed_stats":
-                stats_from_trades(
-                    run_config_cached(
-                        signals,
-                        cache,
-                        SEED,
-                        PRIMARY_COST_PIPS,
-                    )
-                ),
             "robust_ranking":
                 robust[:12],
             "selected_best":
@@ -4191,10 +3578,8 @@ def run_research():
 
     except Exception as error:
         STATUS.update({
-            "state":
-                "error",
-            "message":
-                str(error),
+            "state": "error",
+            "message": str(error),
         })
 
         print(
@@ -4212,7 +3597,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDJPY M15 Long Gen2 Targeted Sweep Displacement",
+            "USDJPY M15 Long Gen2 Corrected Sweep Displacement",
         "status":
             STATUS["state"],
         "instrument":
@@ -4226,23 +3611,21 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/usdjpy-m15-long-gen2/status",
-            "/usdjpy-m15-long-gen2/results",
+            "/usdjpy-m15-long-gen2-corrected/status",
+            "/usdjpy-m15-long-gen2-corrected/results",
         ],
     })
 
 
 @app.route(
-    "/usdjpy-m15-long-gen2/status"
+    "/usdjpy-m15-long-gen2-corrected/status"
 )
 def route_status():
-    return jsonify(
-        STATUS
-    )
+    return jsonify(STATUS)
 
 
 @app.route(
-    "/usdjpy-m15-long-gen2/results"
+    "/usdjpy-m15-long-gen2-corrected/results"
 )
 def route_results():
     return download_file(
@@ -4253,17 +3636,14 @@ def route_results():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="usdjpy-m15-long-gen2",
+        name="usdjpy-m15-long-gen2-corrected",
         daemon=True,
     )
 
     research_thread.start()
 
     port = int(
-        os.getenv(
-            "PORT",
-            5000,
-        )
+        os.getenv("PORT", 5000)
     )
 
     app.run(
