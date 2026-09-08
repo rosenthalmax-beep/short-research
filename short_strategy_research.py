@@ -13,7 +13,7 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/CAD M15 LONG — FINAL LOCAL CONFIRMATION
+# USD/CAD M15 LONG — FINAL LOCAL CONFIRMATION — FIXED
 #
 #
 # LOCAL PLATEAU
@@ -908,7 +908,7 @@ def build_signal_cache(
         lows = {}
         highs = {}
 
-        for lb in [10, 20, 40, 60, 100]:
+        for lb in [8, 10, 12, 15, 20, 40, 60, 100]:
             lows[lb] = min(
                 c["low"]
                 for c in m15[
@@ -1171,13 +1171,19 @@ def build_signal_cache(
             "dist_prev_ema20": dist_prev_ema20,
             "dist_prev_ema50": dist_prev_ema50,
 
+            "low8": lows[8],
             "low10": lows[10],
+            "low12": lows[12],
+            "low15": lows[15],
             "low20": lows[20],
             "low40": lows[40],
             "low60": lows[60],
             "low100": lows[100],
 
+            "high8": highs[8],
             "high10": highs[10],
+            "high12": highs[12],
+            "high15": highs[15],
             "high20": highs[20],
             "high40": highs[40],
             "high60": highs[60],
