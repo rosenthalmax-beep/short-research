@@ -13,7 +13,7 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/CAD M15 LONG — FINAL BOUNDARY / PLATEAU CONFIRMATION
+# USD/CAD M15 LONG — FREQUENCY FINALIST VERIFICATION
 #
 #
 # LOCAL PLATEAU
@@ -39,20 +39,33 @@ from flask import Flask, jsonify, send_file
 #
 # FINAL QUESTION
 # --------------
-# Does the candidate remain robust when:
+# Does increasing frequency materially reduce flat/negative years
+# enough to justify giving up some headline PF?
 #
-#   compression 0.70 is examined at 0.01 increments,
-#   body is extended beyond 1.10 to 1.20/1.30,
-#   range is extended beyond 1.50 to 1.60/1.70?
+# This is a verification comparison only.
+# There is NO parameter search in this script.
 #
-# Everything else is frozen.
+# Measures exported for all six fixed finalists:
+#   - full-history stats
+#   - 0.5 / 1.0 / 1.5 / 2.0 pip stress
+#   - four eras
+#   - dev / validation
+#   - last 5Y / 2Y
+#   - rolling 12M / 24M / 36M
+#   - positive rolling windows
+#   - positive ACTIVE rolling windows
+#   - completed calendar years
+#   - zero-trade calendar years
+#   - negative calendar years
+#   - trades per calendar year
+#   - pairwise overlap / incremental-trade quality
+#   - prior-result parity check
 #
-# Railway-safe changes:
-#   - H1 and Daily data are not fetched (unused)
-#   - minimal M15 feature cache only
-#   - no global all-RR/all-cost precomputation
-#   - cost stress only on finalists
-#   - rolling only on finalists
+# Railway-safe:
+#   - six configs only
+#   - M15 + H4 only
+#   - minimal feature cache
+#   - lazy trade outcomes
 #
 # WHY THIS EXISTS
 # ---------------
@@ -145,7 +158,7 @@ from flask import Flask, jsonify, send_file
 # OUTPUT
 # ------
 # One ZIP route:
-#   /usdcad-m15-long-boundary/results
+#   /usdcad-m15-long-frequency/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -196,104 +209,131 @@ FINALIST_COUNT = 10
 ROLLING_FINALISTS = 6
 
 # ============================================================
-# FINAL BOUNDARY / PLATEAU GRID
+# FREQUENCY FINALISTS — FIXED, NO OPTIMIZATION
 # ============================================================
 #
-# Current best from the previous local pass:
-#
-#   compression ATR20 ratio <= 0.70
-#   body >= 1.10 ATR14
-#   range >= 1.50 ATR14
+# All candidates share:
+#   trigger = COMPRESSION_BREAKOUT
+#   compression metric = prior ATR14 / prior 20-bar ATR mean
+#   signal bullish
 #   close > previous 10-bar high
 #   previous COMPLETED H4 close > EMA100
-#   RR 4.00
-#
-# This final pass changes ONLY the three unresolved boundaries.
-#
-# Compression cliff:
-#   0.68 / 0.69 / 0.70 / 0.71 / 0.72 / 0.73 / 0.74
-#
-# Body extension:
-#   1.00 / 1.10 / 1.20 / 1.30 ATR
-#
-# Range extension:
-#   1.40 / 1.50 / 1.60 / 1.70 ATR
-#
-# Fixed:
-#   breakout lookback = 10
-#   previous completed H4 close > EMA100
 #   RR = 4.00
+#   stop = signal low - 10 ticks
+#   1.0 pip primary adverse fill
 #
-# Total = 7 * 4 * 4 = 112 configurations.
+# Candidate ladder from the completed boundary surface:
 #
-# No session filters.
-# No weekday filters.
-# No additional HTF filters.
-# No new trigger families.
-# No H4/RR optimization.
+# QUALITY_37
+#   compression <= 0.70
+#   body >= 1.10 ATR
+#   range >= 1.60 ATR
+#   prior result: 37 trades, PF 2.394
 #
-FINAL_COMPRESSION = [
-    0.68,
-    0.69,
-    0.70,
-    0.71,
-    0.72,
-    0.73,
-    0.74,
-]
-
-FINAL_BODY_ATR = [
-    1.00,
-    1.10,
-    1.20,
-    1.30,
-]
-
-FINAL_RANGE_ATR = [
-    1.40,
-    1.50,
-    1.60,
-    1.70,
-]
-
+# MID_46
+#   compression <= 0.71
+#   body >= 1.30 ATR
+#   range >= 1.60 ATR
+#   prior result: 46 trades, PF 2.062
+#
+# MID_50
+#   compression <= 0.72
+#   body >= 1.30 ATR
+#   range >= 1.60 ATR
+#   prior result: 50 trades, PF 1.981
+#
+# BALANCED_68
+#   compression <= 0.73
+#   body >= 1.30 ATR
+#   range >= 1.60 ATR
+#   prior result: 68 trades, PF 1.809
+#
+# HIGH_FREQ_79
+#   compression <= 0.73
+#   body >= 1.10 ATR
+#   range >= 1.60 ATR
+#   prior result: 79 trades, PF 1.730
+#
+# AGGRESSIVE_98
+#   compression <= 0.73
+#   body >= 1.10 ATR
+#   range >= 1.50 ATR
+#   prior result: 98 trades, PF 1.634
+#
+# This script does NOT search surrounding parameters.
+#
 FIXED_BREAKOUT_LB = 10
 FIXED_H4_EMA = 100
 FIXED_RR = 4.00
 
-ANCHOR_COMPRESSION = 0.70
-ANCHOR_BODY_ATR = 1.10
-ANCHOR_RANGE_ATR = 1.50
-
-ANCHOR_LABEL = (
-    "ANCHOR_CB_A0.70_B1.10_R1.50_"
-    "LB10_H4EMA100_RR4.00"
-)
-
-FINAL_COST_KEEP = 8
-FINAL_ROLLING_KEEP = 6
+FINALISTS = [
+    {
+        "name": "QUALITY_37",
+        "compression": 0.70,
+        "body_atr": 1.10,
+        "range_atr": 1.60,
+        "expected_prior_trades": 37,
+    },
+    {
+        "name": "MID_46",
+        "compression": 0.71,
+        "body_atr": 1.30,
+        "range_atr": 1.60,
+        "expected_prior_trades": 46,
+    },
+    {
+        "name": "MID_50",
+        "compression": 0.72,
+        "body_atr": 1.30,
+        "range_atr": 1.60,
+        "expected_prior_trades": 50,
+    },
+    {
+        "name": "BALANCED_68",
+        "compression": 0.73,
+        "body_atr": 1.30,
+        "range_atr": 1.60,
+        "expected_prior_trades": 68,
+    },
+    {
+        "name": "HIGH_FREQ_79",
+        "compression": 0.73,
+        "body_atr": 1.10,
+        "range_atr": 1.60,
+        "expected_prior_trades": 79,
+    },
+    {
+        "name": "AGGRESSIVE_98",
+        "compression": 0.73,
+        "body_atr": 1.10,
+        "range_atr": 1.50,
+        "expected_prior_trades": 98,
+    },
+]
 
 
 # ============================================================
 # OUTPUTS
 # ============================================================
 
-OUTPUT_BASELINES = "usdcad_m15_long_boundary_surface.csv"
-OUTPUT_CONTEXT = "usdcad_m15_long_boundary_anchor_slices.csv"
-OUTPUT_INTERACTIONS = "usdcad_m15_long_boundary_cost_stress.csv"
-OUTPUT_TOP = "usdcad_m15_long_boundary_robust_ranking.csv"
-OUTPUT_ERAS = "usdcad_m15_long_boundary_eras.csv"
-OUTPUT_DEVVAL = "usdcad_m15_long_boundary_dev_validation.csv"
-OUTPUT_RECENT = "usdcad_m15_long_boundary_recent.csv"
-OUTPUT_ROLLING = "usdcad_m15_long_boundary_rolling.csv"
-OUTPUT_ROLLING_SUMMARY = "usdcad_m15_long_boundary_rolling_summary.csv"
-OUTPUT_OVERLAP = "usdcad_m15_long_boundary_overlap.csv"
-OUTPUT_BEST_TRADES = "usdcad_m15_long_boundary_best_trades.csv"
-OUTPUT_BUNDLE = "usdcad_m15_long_FINAL_boundary_confirmation_RESULTS.zip"
+OUTPUT_BASELINES = "usdcad_m15_long_frequency_full_history.csv"
+OUTPUT_CONTEXT = "usdcad_m15_long_frequency_calendar_years.csv"
+OUTPUT_INTERACTIONS = "usdcad_m15_long_frequency_cost_stress.csv"
+OUTPUT_TOP = "usdcad_m15_long_frequency_calendar_summary.csv"
+OUTPUT_ERAS = "usdcad_m15_long_frequency_eras.csv"
+OUTPUT_DEVVAL = "usdcad_m15_long_frequency_dev_validation.csv"
+OUTPUT_RECENT = "usdcad_m15_long_frequency_recent.csv"
+OUTPUT_ROLLING = "usdcad_m15_long_frequency_rolling.csv"
+OUTPUT_ROLLING_SUMMARY = "usdcad_m15_long_frequency_rolling_summary.csv"
+OUTPUT_OVERLAP = "usdcad_m15_long_frequency_overlap.csv"
+OUTPUT_BEST_TRADES = "usdcad_m15_long_frequency_all_trades.csv"
+OUTPUT_PARITY = "usdcad_m15_long_frequency_parity.csv"
+OUTPUT_BUNDLE = "usdcad_m15_long_FREQUENCY_finalists_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
     "message": "USD/CAD M15 LONG Gen3 not started",
-    "service": "USDCAD M15 Long Final Boundary Confirmation",
+    "service": "USDCAD M15 Long Frequency Finalist Verification",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -413,6 +453,7 @@ def build_bundle():
         OUTPUT_ROLLING_SUMMARY,
         OUTPUT_OVERLAP,
         OUTPUT_BEST_TRADES,
+        OUTPUT_PARITY,
     ]
 
     with zipfile.ZipFile(
@@ -1910,117 +1951,35 @@ def clone_config(
 
 def build_baselines():
     """
-    Final 112-config boundary surface.
-
-    Only compression/body/range move.
-    LB10, completed H4 EMA100 and RR4.00 stay fixed.
+    Construct the six fixed frequency finalists only.
     """
     configs = []
 
-    for compression in FINAL_COMPRESSION:
-        for body in FINAL_BODY_ATR:
-            for signal_range in FINAL_RANGE_ATR:
-                label = (
-                    f"CB_A{compression:.2f}_"
-                    f"B{body:.2f}_"
-                    f"R{signal_range:.2f}_"
-                    f"LB{FIXED_BREAKOUT_LB}_"
-                    f"H4EMA{FIXED_H4_EMA}_"
-                    f"RR{FIXED_RR:.2f}"
-                )
+    for spec in FINALISTS:
+        c = base_config(
+            spec["name"],
+            "COMPRESSION_BREAKOUT",
+            FIXED_RR,
+        )
 
-                if (
-                    abs(compression - ANCHOR_COMPRESSION) < 1e-12
-                    and abs(body - ANCHOR_BODY_ATR) < 1e-12
-                    and abs(signal_range - ANCHOR_RANGE_ATR) < 1e-12
-                ):
-                    label = ANCHOR_LABEL
+        c["compression_metric"] = "ATR20"
+        c["maximum_compression_ratio"] = spec["compression"]
+        c["minimum_body_atr"] = spec["body_atr"]
+        c["minimum_range_atr"] = spec["range_atr"]
+        c["breakout_lookback"] = FIXED_BREAKOUT_LB
+        c["h4_close_above_ema"] = FIXED_H4_EMA
 
-                c = base_config(
-                    label,
-                    "COMPRESSION_BREAKOUT",
-                    FIXED_RR,
-                )
-
-                c["compression_metric"] = "ATR20"
-                c["maximum_compression_ratio"] = compression
-                c["minimum_body_atr"] = body
-                c["minimum_range_atr"] = signal_range
-                c["breakout_lookback"] = FIXED_BREAKOUT_LB
-
-                # Strictly previous COMPLETED H4 state.
-                c["h4_close_above_ema"] = FIXED_H4_EMA
-
-                configs.append(c)
+        configs.append(c)
 
     return configs
 
 
-def build_anchor_slice_rows(surface_rows):
-    """
-    Export true one-factor slices through the current anchor so
-    the cliff/plateau can be inspected without marginal averaging.
+def finalist_spec(name):
+    for spec in FINALISTS:
+        if spec["name"] == name:
+            return spec
 
-    Compression slice:
-      body 1.10, range 1.50
-
-    Body slice:
-      compression 0.70, range 1.50
-
-    Range slice:
-      compression 0.70, body 1.10
-    """
-    rows = []
-
-    for row in surface_rows:
-        label = row["candidate"]
-
-        # Pull values back from the stable candidate label.
-        if label == ANCHOR_LABEL:
-            compression = ANCHOR_COMPRESSION
-            body = ANCHOR_BODY_ATR
-            signal_range = ANCHOR_RANGE_ATR
-        else:
-            parts = label.split("_")
-            compression = float(parts[1][1:])
-            body = float(parts[2][1:])
-            signal_range = float(parts[3][1:])
-
-        if (
-            abs(body - ANCHOR_BODY_ATR) < 1e-12
-            and abs(signal_range - ANCHOR_RANGE_ATR) < 1e-12
-        ):
-            out = dict(row)
-            out["slice"] = "COMPRESSION"
-            out["parameter_value"] = compression
-            rows.append(out)
-
-        if (
-            abs(compression - ANCHOR_COMPRESSION) < 1e-12
-            and abs(signal_range - ANCHOR_RANGE_ATR) < 1e-12
-        ):
-            out = dict(row)
-            out["slice"] = "BODY_ATR"
-            out["parameter_value"] = body
-            rows.append(out)
-
-        if (
-            abs(compression - ANCHOR_COMPRESSION) < 1e-12
-            and abs(body - ANCHOR_BODY_ATR) < 1e-12
-        ):
-            out = dict(row)
-            out["slice"] = "RANGE_ATR"
-            out["parameter_value"] = signal_range
-            rows.append(out)
-
-    rows.sort(
-        key=lambda row: (
-            row["slice"],
-            float(row["parameter_value"]),
-        )
-    )
-
-    return rows
+    raise KeyError(name)
 
 
 def build_context_variants(seed_configs):
@@ -2905,6 +2864,401 @@ def rolling_summary(rows):
     }
 
 
+
+def calendar_year_rows(
+    signals,
+    candles,
+    config,
+    first_year=2010,
+):
+    """
+    Completed calendar years only.
+    The current partial year is deliberately excluded.
+    """
+    rows = []
+
+    current_year = RESEARCH_TO.year
+    last_completed_year = current_year - 1
+
+    for year in range(
+        first_year,
+        last_completed_year + 1,
+    ):
+        start = datetime(
+            year, 1, 1,
+            tzinfo=timezone.utc,
+        )
+
+        end = datetime(
+            year + 1, 1, 1,
+            tzinfo=timezone.utc,
+        )
+
+        trades = run_config_cached(
+            signals,
+            candles,
+            None,
+            config,
+            PRIMARY_COST_PIPS,
+            start=start,
+            end=end,
+        )
+
+        stats = stats_from_trades(trades)
+
+        rows.append({
+            "candidate": config["label"],
+            "year": year,
+            "trades": stats["trades"],
+            "winners": stats["winners"],
+            "losers": stats["losers"],
+            "win_rate": round(
+                stats["win_rate"],
+                4,
+            ),
+            "profit_factor": round(
+                stats["profit_factor"],
+                6,
+            ),
+            "total_r": round(
+                stats["total_r"],
+                4,
+            ),
+            "expectancy_r": round(
+                stats["expectancy_r"],
+                6,
+            ),
+            "max_drawdown_r": round(
+                stats["max_drawdown_r"],
+                4,
+            ),
+            "positive_year": (
+                stats["total_r"] > 0
+            ),
+            "negative_year": (
+                stats["total_r"] < 0
+            ),
+            "flat_year": (
+                abs(stats["total_r"]) < 1e-12
+            ),
+            "zero_trade_year": (
+                stats["trades"] == 0
+            ),
+        })
+
+    return rows
+
+
+def calendar_summary(rows):
+    if not rows:
+        return {}
+
+    active = [
+        row
+        for row in rows
+        if int(row["trades"]) > 0
+    ]
+
+    positive_all = sum(
+        1
+        for row in rows
+        if bool(row["positive_year"])
+    )
+
+    negative_all = sum(
+        1
+        for row in rows
+        if bool(row["negative_year"])
+    )
+
+    zero_trade = sum(
+        1
+        for row in rows
+        if bool(row["zero_trade_year"])
+    )
+
+    positive_active = sum(
+        1
+        for row in active
+        if bool(row["positive_year"])
+    )
+
+    negative_active = sum(
+        1
+        for row in active
+        if bool(row["negative_year"])
+    )
+
+    trade_counts = [
+        int(row["trades"])
+        for row in rows
+    ]
+
+    active_trade_counts = [
+        int(row["trades"])
+        for row in active
+    ]
+
+    rs = [
+        float(row["total_r"])
+        for row in rows
+    ]
+
+    return {
+        "candidate": rows[0]["candidate"],
+        "completed_years": len(rows),
+        "active_years": len(active),
+        "zero_trade_years": zero_trade,
+        "positive_years_all": positive_all,
+        "negative_years_all": negative_all,
+        "positive_years_all_pct": round(
+            positive_all / len(rows) * 100.0,
+            4,
+        ),
+        "positive_active_years": positive_active,
+        "negative_active_years": negative_active,
+        "positive_active_years_pct": round(
+            positive_active / len(active) * 100.0,
+            4,
+        ) if active else 0.0,
+        "median_trades_per_year": round(
+            median(trade_counts),
+            4,
+        ),
+        "median_trades_per_active_year": round(
+            median(active_trade_counts),
+            4,
+        ) if active_trade_counts else 0.0,
+        "min_trades_in_year": min(
+            trade_counts
+        ),
+        "max_trades_in_year": max(
+            trade_counts
+        ),
+        "median_calendar_r": round(
+            median(rs),
+            4,
+        ),
+        "worst_calendar_r": round(
+            min(rs),
+            4,
+        ),
+        "best_calendar_r": round(
+            max(rs),
+            4,
+        ),
+    }
+
+
+def richer_rolling_summary(rows):
+    if not rows:
+        return {}
+
+    active = [
+        row
+        for row in rows
+        if int(row["trades"]) > 0
+    ]
+
+    positive_all = sum(
+        1
+        for row in rows
+        if bool(row["positive"])
+    )
+
+    positive_active = sum(
+        1
+        for row in active
+        if bool(row["positive"])
+    )
+
+    all_pfs = [
+        float(row["profit_factor"])
+        for row in rows
+    ]
+
+    active_pfs = [
+        float(row["profit_factor"])
+        for row in active
+    ]
+
+    all_rs = [
+        float(row["total_r"])
+        for row in rows
+    ]
+
+    active_rs = [
+        float(row["total_r"])
+        for row in active
+    ]
+
+    return {
+        "candidate": rows[0]["candidate"],
+        "months": rows[0]["months"],
+        "windows": len(rows),
+        "active_windows": len(active),
+        "zero_trade_windows": (
+            len(rows) - len(active)
+        ),
+        "positive_windows_pct": round(
+            positive_all / len(rows) * 100.0,
+            4,
+        ),
+        "positive_active_windows_pct": round(
+            positive_active / len(active) * 100.0,
+            4,
+        ) if active else 0.0,
+        "median_profit_factor_all": round(
+            median(all_pfs),
+            6,
+        ),
+        "median_profit_factor_active": round(
+            median(active_pfs),
+            6,
+        ) if active_pfs else 0.0,
+        "worst_total_r": round(
+            min(all_rs),
+            4,
+        ),
+        "median_total_r_all": round(
+            median(all_rs),
+            4,
+        ),
+        "median_total_r_active": round(
+            median(active_rs),
+            4,
+        ) if active_rs else 0.0,
+    }
+
+
+def pairwise_overlap_rows(
+    signals,
+    candles,
+    configs,
+):
+    """
+    Pairwise signal/trade overlap at primary 1-pip cost.
+    Shows whether frequency gains are mostly incremental trades
+    or a materially different trade set.
+    """
+    trades_by_name = {
+        config["label"]: run_config_cached(
+            signals,
+            candles,
+            None,
+            config,
+            PRIMARY_COST_PIPS,
+        )
+        for config in configs
+    }
+
+    rows = []
+
+    for i in range(len(configs)):
+        for j in range(i + 1, len(configs)):
+            a = configs[i]["label"]
+            b = configs[j]["label"]
+
+            ta = trades_by_name[a]
+            tb = trades_by_name[b]
+
+            keys_a = {
+                trade_key(t)
+                for t in ta
+            }
+
+            keys_b = {
+                trade_key(t)
+                for t in tb
+            }
+
+            shared = (
+                keys_a & keys_b
+            )
+
+            only_a = (
+                keys_a - keys_b
+            )
+
+            only_b = (
+                keys_b - keys_a
+            )
+
+            union = (
+                keys_a | keys_b
+            )
+
+            shared_b_trades = [
+                t
+                for t in tb
+                if trade_key(t) in shared
+            ]
+
+            added_b_trades = [
+                t
+                for t in tb
+                if trade_key(t) in only_b
+            ]
+
+            removed_a_trades = [
+                t
+                for t in ta
+                if trade_key(t) in only_a
+            ]
+
+            shared_stats = stats_from_trades(
+                shared_b_trades
+            )
+
+            added_stats = stats_from_trades(
+                added_b_trades
+            )
+
+            removed_stats = stats_from_trades(
+                removed_a_trades
+            )
+
+            rows.append({
+                "candidate_a": a,
+                "candidate_b": b,
+                "trades_a": len(ta),
+                "trades_b": len(tb),
+                "shared_trades": len(shared),
+                "only_a_trades": len(only_a),
+                "only_b_trades": len(only_b),
+                "jaccard_pct": round(
+                    len(shared) / len(union) * 100.0,
+                    4,
+                ) if union else 0.0,
+                "shared_pf": round(
+                    shared_stats["profit_factor"],
+                    6,
+                ),
+                "shared_total_r": round(
+                    shared_stats["total_r"],
+                    4,
+                ),
+                "added_b_pf": round(
+                    added_stats["profit_factor"],
+                    6,
+                ),
+                "added_b_total_r": round(
+                    added_stats["total_r"],
+                    4,
+                ),
+                "removed_a_pf": round(
+                    removed_stats["profit_factor"],
+                    6,
+                ),
+                "removed_a_total_r": round(
+                    removed_stats["total_r"],
+                    4,
+                ),
+            })
+
+    return rows
+
+
 # ============================================================
 # OVERLAP
 # ============================================================
@@ -3039,7 +3393,7 @@ def run_research():
 
     try:
         # ----------------------------------------------------
-        # DATA
+        # DATA — only M15 + H4 are needed.
         # ----------------------------------------------------
         m15 = fetch_history(
             "M15",
@@ -3050,8 +3404,6 @@ def run_research():
 
         m15_global = m15
 
-        # Only H4 is needed now. 180 warm-up days is far more
-        # than required for EMA100 on H4 and keeps Railway light.
         h4 = fetch_history(
             "H4",
             RESEARCH_FROM - timedelta(days=180),
@@ -3067,7 +3419,7 @@ def run_research():
         STATUS.update({
             "state": "precomputing",
             "message": (
-                "Building focused boundary feature cache"
+                "Building focused frequency-finalist feature cache"
             ),
             "m15_candles": len(m15),
         })
@@ -3092,44 +3444,32 @@ def run_research():
             for i in range(len(m15))
         }
 
-        # ----------------------------------------------------
-        # STAGE 1 — COMPLETE 112-CONFIG SURFACE
-        # ----------------------------------------------------
         configs = build_baselines()
 
-        if len(configs) != 112:
+        if len(configs) != len(FINALISTS):
             raise RuntimeError(
-                f"Expected 112 boundary configs, got {len(configs)}"
+                "Finalist config count mismatch"
             )
 
         for config in configs:
             config["_atr_lookup"] = atr_lookup
 
-        config_lookup = {
-            config["label"]: config
-            for config in configs
-        }
-
-        if ANCHOR_LABEL not in config_lookup:
-            raise RuntimeError(
-                "Current-best anchor missing from final grid"
-            )
-
+        # ----------------------------------------------------
+        # FULL HISTORY — PRIMARY 1 PIP
+        # ----------------------------------------------------
         STATUS.update({
             "state": "calculating",
             "message": (
-                "Stage 1: full 112-config boundary surface "
-                "@ RR4.00 / 1 pip"
+                "Full-history verification of six fixed finalists"
             ),
-            "boundary_configs": len(configs),
+            "finalists": len(configs),
         })
 
-        surface_rows = []
+        full_rows = []
+        all_trade_rows = []
+        parity_rows = []
 
-        for number, config in enumerate(
-            configs,
-            start=1,
-        ):
+        for config in configs:
             trades = run_config_cached(
                 signals,
                 m15,
@@ -3138,46 +3478,97 @@ def run_research():
                 PRIMARY_COST_PIPS,
             )
 
-            surface_rows.append(
+            full_rows.append(
                 result_row(
-                    "BOUNDARY_SURFACE",
+                    "FREQUENCY_FINALIST",
                     config,
                     PRIMARY_COST_PIPS,
                     trades,
                 )
             )
 
-            if number % 20 == 0:
-                STATUS["message"] = (
-                    f"Stage 1 boundary "
-                    f"{number}/{len(configs)}"
-                )
+            for trade in trades:
+                out = dict(trade)
+                out["candidate"] = config["label"]
+                all_trade_rows.append(out)
+
+            spec = finalist_spec(
+                config["label"]
+            )
+
+            observed = len(trades)
+            expected = spec[
+                "expected_prior_trades"
+            ]
+
+            parity_rows.append({
+                "candidate": config["label"],
+                "expected_prior_trades": expected,
+                "observed_trades": observed,
+                "difference": observed - expected,
+                "exact_prior_parity": (
+                    observed == expected
+                ),
+                "note": (
+                    "Exact parity expected for the same history end; "
+                    "small positive differences are possible if new "
+                    "completed M15 data has been added since the prior run."
+                ),
+            })
 
         write_csv(
             OUTPUT_BASELINES,
-            surface_rows,
-        )
-
-        # True one-factor curves through current best.
-        slice_rows = build_anchor_slice_rows(
-            surface_rows
+            full_rows,
         )
 
         write_csv(
-            OUTPUT_CONTEXT,
-            slice_rows,
+            OUTPUT_BEST_TRADES,
+            all_trade_rows,
+        )
+
+        write_csv(
+            OUTPUT_PARITY,
+            parity_rows,
         )
 
         # ----------------------------------------------------
-        # STAGE 2 — VALIDATE THE ENTIRE SURFACE
-        #
-        # This is still light because qualifying signal lists
-        # are already cached. We avoid selecting only on full
-        # history before checking eras.
+        # COST STRESS
         # ----------------------------------------------------
         STATUS["message"] = (
-            "Stage 2: validating all 112 configs "
-            "across eras/dev-validation/recent"
+            "Running 0.5/1.0/1.5/2.0-pip cost stress"
+        )
+
+        cost_rows = []
+
+        for config in configs:
+            for cost in COST_PIPS_GRID:
+                trades = run_config_cached(
+                    signals,
+                    m15,
+                    None,
+                    config,
+                    cost,
+                )
+
+                cost_rows.append(
+                    result_row(
+                        "COST_STRESS",
+                        config,
+                        cost,
+                        trades,
+                    )
+                )
+
+        write_csv(
+            OUTPUT_INTERACTIONS,
+            cost_rows,
+        )
+
+        # ----------------------------------------------------
+        # ERA / DEV-VALIDATION / RECENT
+        # ----------------------------------------------------
+        STATUS["message"] = (
+            "Running eras / dev-validation / recent"
         )
 
         era_rows = validation_rows(
@@ -3220,200 +3611,17 @@ def run_research():
         )
 
         # ----------------------------------------------------
-        # ROBUST RANKING
+        # ROLLING 12M / 24M / 36M
+        # Includes all windows and active-window profitability.
         # ----------------------------------------------------
-        robust = []
-
-        for config in configs:
-            label = config["label"]
-
-            full = next(
-                row
-                for row in surface_rows
-                if row["candidate"] == label
-            )
-
-            eras = [
-                row
-                for row in era_rows
-                if (
-                    row["candidate"] == label
-                    and int(row["trades"]) > 0
-                )
-            ]
-
-            devval = [
-                row
-                for row in devval_rows
-                if (
-                    row["candidate"] == label
-                    and int(row["trades"]) > 0
-                )
-            ]
-
-            recent = [
-                row
-                for row in recent_rows
-                if (
-                    row["candidate"] == label
-                    and int(row["trades"]) > 0
-                )
-            ]
-
-            min_era_pf = min(
-                (
-                    float(row["profit_factor"])
-                    for row in eras
-                ),
-                default=0.0,
-            )
-
-            min_devval_pf = min(
-                (
-                    float(row["profit_factor"])
-                    for row in devval
-                ),
-                default=0.0,
-            )
-
-            min_recent_pf = min(
-                (
-                    float(row["profit_factor"])
-                    for row in recent
-                ),
-                default=0.0,
-            )
-
-            # Require a sensible amount of evidence in ranking.
-            trade_count = int(full["trades"])
-
-            score = (
-                min_era_pf * 5.0
-                + min_devval_pf * 2.0
-                + min_recent_pf * 2.0
-                + float(full["profit_factor"])
-                + float(full["total_r"]) / 50.0
-            )
-
-            if trade_count < 30:
-                score -= 2.0
-
-            robust.append({
-                "candidate": label,
-                "trades": trade_count,
-                "winners": int(full["winners"]),
-                "losers": int(full["losers"]),
-                "win_rate": float(full["win_rate"]),
-                "full_pf": float(
-                    full["profit_factor"]
-                ),
-                "full_total_r": float(
-                    full["total_r"]
-                ),
-                "full_expectancy_r": float(
-                    full["expectancy_r"]
-                ),
-                "full_max_drawdown_r": float(
-                    full["max_drawdown_r"]
-                ),
-                "longest_loss_streak": int(
-                    full["longest_loss_streak"]
-                ),
-                "minimum_era_pf": min_era_pf,
-                "minimum_devval_pf": min_devval_pf,
-                "minimum_recent_pf": min_recent_pf,
-                "score": score,
-            })
-
-        robust.sort(
-            key=lambda row: (
-                row["score"],
-                row["full_pf"],
-                row["full_total_r"],
-            ),
-            reverse=True,
-        )
-
-        write_csv(
-            OUTPUT_TOP,
-            robust,
-        )
-
-        robust_configs = [
-            config_lookup[row["candidate"]]
-            for row in robust
-        ]
-
-        # ----------------------------------------------------
-        # STAGE 3 — COST STRESS ONLY TOP FEW + ANCHOR
-        # ----------------------------------------------------
-        cost_configs = robust_configs[
-            :FINAL_COST_KEEP
-        ]
-
-        anchor = config_lookup[
-            ANCHOR_LABEL
-        ]
-
-        if ANCHOR_LABEL not in [
-            config["label"]
-            for config in cost_configs
-        ]:
-            cost_configs.append(anchor)
-
         STATUS["message"] = (
-            f"Stage 3: cost stress on "
-            f"{len(cost_configs)} finalists"
-        )
-
-        cost_rows = []
-
-        for config in cost_configs:
-            for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    m15,
-                    None,
-                    config,
-                    cost,
-                )
-
-                cost_rows.append(
-                    result_row(
-                        "BOUNDARY_COST_STRESS",
-                        config,
-                        cost,
-                        trades,
-                    )
-                )
-
-        write_csv(
-            OUTPUT_INTERACTIONS,
-            cost_rows,
-        )
-
-        # ----------------------------------------------------
-        # STAGE 4 — 12M / 24M / 36M ROLLING
-        # ----------------------------------------------------
-        rolling_configs = robust_configs[
-            :FINAL_ROLLING_KEEP
-        ]
-
-        if ANCHOR_LABEL not in [
-            config["label"]
-            for config in rolling_configs
-        ]:
-            rolling_configs.append(anchor)
-
-        STATUS["message"] = (
-            f"Stage 4: rolling 12M/24M/36M on "
-            f"{len(rolling_configs)} finalists"
+            "Running rolling 12M / 24M / 36M"
         )
 
         rolling_rows = []
         rolling_summary_rows = []
 
-        for config in rolling_configs:
+        for config in configs:
             for months in [
                 12,
                 24,
@@ -3432,7 +3640,7 @@ def run_research():
                 )
 
                 rolling_summary_rows.append(
-                    rolling_summary(
+                    richer_rolling_summary(
                         rows
                     )
                 )
@@ -3448,46 +3656,65 @@ def run_research():
         )
 
         # ----------------------------------------------------
-        # FINAL BEST / ANCHOR OVERLAP / TRADE LIST
+        # COMPLETED CALENDAR YEARS
+        # Directly answers flat / negative year concern.
         # ----------------------------------------------------
-        best = (
-            robust_configs[0]
-            if robust_configs
-            else None
+        STATUS["message"] = (
+            "Running completed calendar-year analysis"
         )
 
-        overlap = []
+        calendar_rows = []
+        calendar_summary_rows = []
 
-        if best is not None:
-            overlap = overlap_rows(
+        for config in configs:
+            rows = calendar_year_rows(
                 signals,
                 m15,
-                None,
-                anchor,
-                best,
+                config,
+                first_year=2010,
             )
+
+            calendar_rows.extend(
+                rows
+            )
+
+            calendar_summary_rows.append(
+                calendar_summary(
+                    rows
+                )
+            )
+
+        write_csv(
+            OUTPUT_CONTEXT,
+            calendar_rows,
+        )
+
+        write_csv(
+            OUTPUT_TOP,
+            calendar_summary_rows,
+        )
+
+        # ----------------------------------------------------
+        # PAIRWISE OVERLAP
+        # ----------------------------------------------------
+        STATUS["message"] = (
+            "Running pairwise finalist overlap"
+        )
+
+        overlap = pairwise_overlap_rows(
+            signals,
+            m15,
+            configs,
+        )
 
         write_csv(
             OUTPUT_OVERLAP,
             overlap,
         )
 
-        if best is not None:
-            best_trades = run_config_cached(
-                signals,
-                m15,
-                None,
-                best,
-                PRIMARY_COST_PIPS,
-            )
-        else:
-            best_trades = []
-
-        write_csv(
-            OUTPUT_BEST_TRADES,
-            best_trades,
-        )
-
+        # ----------------------------------------------------
+        # PACKAGE
+        # ----------------------------------------------------
         STATUS.update({
             "state": "packaging",
             "message": "Building single ZIP bundle",
@@ -3498,14 +3725,13 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "USD/CAD M15 LONG final boundary "
-                "confirmation complete"
+                "USD/CAD M15 LONG frequency-finalist "
+                "verification complete"
             ),
-            "boundary_configs": len(configs),
-            "focused_signals": len(signals),
-            "selected_best": best,
-            "anchor": anchor,
-            "robust_ranking": robust[:15],
+            "finalists": [
+                spec["name"]
+                for spec in FINALISTS
+            ],
             "results_bundle": OUTPUT_BUNDLE,
         })
 
@@ -3530,7 +3756,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDCAD M15 Long Final Boundary Confirmation",
+            "USDCAD M15 Long Frequency Finalist Verification",
         "status":
             STATUS["state"],
         "instrument":
@@ -3544,14 +3770,14 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/usdcad-m15-long-boundary/status",
-            "/usdcad-m15-long-boundary/results",
+            "/usdcad-m15-long-frequency/status",
+            "/usdcad-m15-long-frequency/results",
         ],
     })
 
 
 @app.route(
-    "/usdcad-m15-long-boundary/status"
+    "/usdcad-m15-long-frequency/status"
 )
 def route_status():
     return jsonify(
@@ -3560,7 +3786,7 @@ def route_status():
 
 
 @app.route(
-    "/usdcad-m15-long-boundary/results"
+    "/usdcad-m15-long-frequency/results"
 )
 def route_results():
     return download_file(
@@ -3571,7 +3797,7 @@ def route_results():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="usdcad-m15-long-boundary",
+        name="usdcad-m15-long-frequency",
         daemon=True,
     )
 
