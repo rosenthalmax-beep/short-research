@@ -17,63 +17,103 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# GBP/USD M15 SHORT — FULL-HISTORY RE-EXAMINATION
+# GBP/USD M15 SHORT — FINALIST CONFIRMATION
 #
 # PURPOSE
 # -------
-# Fresh full-history re-examination of GBP/USD M15 SHORT from
-# earliest available OANDA M15 history (~May 2002) to present.
+# Confirm the strict bearish-engulf + structure candidate found
+# in the full-history 2002-present re-examination.
 #
-# The existing 2010+ locked short is preserved UNCHANGED as a
-# benchmark/parity control. It is not automatically assumed to
-# be the final full-history solution because pre-2010 was poor.
+# THIS IS NOT ANOTHER BROAD ARCHETYPE SEARCH.
 #
-# EXISTING FROZEN BENCHMARK
-# -------------------------
+# ANCHOR CANDIDATE
+# ----------------
 # exact bearish engulf
-# body >= 1.00 ATR14
-# structure = previous 180 M15 bars, current excluded
-# signal high within 0.05 ATR14 of prior 180-bar high
-# exclude NY signal-open hours 06 and 07
-# no weekday exclusion
-# RR 3.00
+# BR >= 1.20
+# bearish body >= 1.20 ATR14
+# candle range >= 1.50 ATR14
+# previous 180-bar high structure
+# signal high within 0.075 ATR14 of prior 180-bar high
+# NO NY time filter
+# NO weekday filter
+# RR 2.50
 # stop = signal high + 10 ticks
-# historical adverse cost = 1.0 pip
-# pyramiding = 0
 #
-# Prior benchmark reference:
-#   2010+ : 53 trades, PF ~2.3036, +37.804R
-#   pre10 : 10 trades, PF ~0.2957, -6.339R
-#   full  : 63 trades, PF ~1.828, +31.465R
+# PRIOR ANCHOR REFERENCE
+# ----------------------
+# ~54 trades
+# ~6 pre-2010
+# ~48 post-2010
+# full PF ~1.713
+# total ~+22.09R
 #
-# FULL-HISTORY SHORT FAMILIES
-# ---------------------------
-# 1) BEAR_ENGULF_STRUCTURE
-# 2) HIGH_SWEEP_DISPLACEMENT
-# 3) FAILED_BREAKOUT_REJECTION
-# 4) BEAR_OUTSIDE_REVERSAL
-# 5) COMPRESSION_BREAKDOWN
-# 6) BLOWOFF_REJECTION
+# KEY QUESTION
+# ------------
+# Can we widen this into roughly the 70-100 trade region while
+# keeping:
+#   - positive pre-2010
+#   - positive 2010+
+#   - all/most long eras positive
+#   - acceptable costs / rolling consistency
 #
-# STAGED PROCESS
-# --------------
-# STAGE 1:
-#   controlled raw geometry templates.
+# CONFIRMATION TESTS
+# ------------------
+# 1) Anchor parity.
 #
-# STAGE 2:
-#   broad context hypotheses:
-#     H1/H4/D bearish trend
-#     H1/H4/D volatility regime
-#     broad NY time blocks
-#     weekday exclusions
+# 2) Frozen 2010+ benchmark parity:
+#       exact bearish engulf
+#       body >= 1.00 ATR14
+#       structure 180 / 0.05 ATR
+#       exclude NY hours 06 and 07
+#       RR 3.00
 #
-# STAGE 3:
-#   local one-at-a-time perturbations
-#   + RR sweep:
-#     2.50 / 2.75 / 3.00 / 3.25 / 3.50 / 3.75 / 4.00
+# 3) One-at-a-time slices around anchor:
+#
+#    BR:
+#      1.00 / 1.10 / 1.20 / 1.30 / 1.40
+#
+#    Body ATR:
+#      1.00 / 1.10 / 1.20 / 1.30 / 1.40
+#
+#    Range ATR:
+#      1.30 / 1.40 / 1.50 / 1.60 / 1.70
+#
+#    Structure lookback:
+#      120 / 165 / 180 / 200
+#
+#    Structure distance:
+#      0.05 / 0.075 / 0.10 / 0.125 / 0.15
+#
+#    RR:
+#      2.00 / 2.25 / 2.50 / 2.75 /
+#      3.00 / 3.25 / 3.50
+#
+# 4) Focused local interaction grid:
+#
+#    BR:
+#      1.10 / 1.20 / 1.30
+#
+#    Body:
+#      1.10 / 1.20 / 1.30
+#
+#    Range:
+#      1.40 / 1.50 / 1.60
+#
+#    Structure LB:
+#      165 / 180 / 200
+#
+#    Structure distance:
+#      0.075 / 0.10 / 0.125 / 0.15
+#
+#    RR:
+#      2.00 / 2.25 / 2.50 / 2.75 / 3.00
+#
+# Total grid:
+#   1620 configurations
 #
 # FINAL ROBUSTNESS
 # ----------------
+# For anchor + selected finalists:
 # - full history
 # - pre-2010
 # - 2010+
@@ -83,50 +123,33 @@ from flask import Flask, jsonify, send_file
 # - 2020-now
 # - 2002-17 vs 2018+
 # - last 5Y / 2Y
-# - 0.5 / 1 / 1.5 / 2 pip adverse cost
+# - 0.5 / 1 / 1.5 / 2 pip adverse costs
 # - rolling 12 / 24 / 36M
 # - completed calendar years
-# - context ablation
-# - local plateau
 #
-# M15 HISTORICAL CONVENTIONS
-# --------------------------
+# HISTORICAL SHORT CONVENTIONS
+# ----------------------------
 # OANDA midpoint.
-# ATR14 = Wilder/RMA, SMA seeded.
+# ATR14 Wilder/RMA, SMA seeded.
 # Signal timestamp = M15 candle OPEN.
-# Time filters = America/New_York.
+# Time conversion = America/New_York where needed.
 #
-# Historical short:
-#   reference entry = signal close
-#   fill = signal close - adverse cost
-#   stop = signal high + 10 ticks
-#   target based on REFERENCE signal-close risk
+# reference entry = signal close
+# historical fill = signal close - adverse cost
+# stop = signal high + 10 ticks
+# target based on REFERENCE signal-close risk
 #
-# Exit testing begins next candle.
+# Exit begins next candle.
 # Pyramiding = 0.
 # Exact exit-candle signal eligible.
 #
-# SHORT SAME-BAR TIE:
+# Short same-bar tie:
 #   if high is closer to candle open => STOP first
 #   otherwise TARGET first.
 #
-# HTF NO LOOKAHEAD
-# ----------------
-# complete_at = next ACTUAL HTF candle OPEN
-# lookup = bisect_right(completion_times, signal_time) - 1
-#
-# Last HTF row without a next-open completion marker is not
-# exposed.
-#
-# DAILY
-# -----
-# OANDA D
-# dailyAlignment=17
-# alignmentTimezone=America/New_York
-#
 # ONE ZIP
 # -------
-# /gbpusd-m15-short-full-history/results
+# /gbpusd-m15-short-final-confirmation/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -134,66 +157,70 @@ from flask import Flask, jsonify, send_file
 
 app = Flask(__name__)
 
-OANDA_TOKEN = os.getenv("OANDA_TOKEN")
-OANDA_BASE = os.getenv(
+TOKEN = os.getenv("OANDA_TOKEN")
+BASE = os.getenv(
     "OANDA_API_URL",
     "https://api-fxtrade.oanda.com",
 )
 
-INSTRUMENT = "GBP_USD"
+PAIR = "GBP_USD"
 
-REQUESTED_FROM = datetime(
+START = datetime(
     2002, 5, 6, 20, 0,
     tzinfo=timezone.utc,
 )
 
-RESEARCH_TO = (
+NOW = (
     datetime.now(timezone.utc)
     .replace(second=0, microsecond=0)
-)
-
-HTF_WARMUP_FROM = (
-    REQUESTED_FROM
-    - timedelta(days=900)
 )
 
 NY = ZoneInfo("America/New_York")
 
 TICK_SIZE = 0.00001
 PIP_SIZE = 0.0001
+
 STOP_BUFFER_TICKS = 10
-
 PRIMARY_COST_PIPS = 1.00
-COST_GRID = [0.50, 1.00, 1.50, 2.00]
 
-STAGE1_KEEP = 14
-STAGE2_BASE_KEEP = 8
-STAGE2_KEEP = 10
-STAGE3_BASE_KEEP = 5
-FINALIST_KEEP = 10
-
-MIN_STAGE1_TRADES = 50
-MIN_FINAL_TRADES = 60
-
-STAGE1_RR = 3.00
+COST_GRID = [
+    0.50,
+    1.00,
+    1.50,
+    2.00,
+]
 
 
-# ============================================================
-# FROZEN EXISTING BENCHMARK
-# ============================================================
-
-BENCHMARK = {
+ANCHOR = {
     "config_id":
-        "BENCHMARK_LOCKED_2010_PLUS",
+        "ANCHOR_ENG_BR1.20_BODY1.20_RANGE1.50_S180_D0.075_RR2.50",
 
-    "family":
-        "BEAR_ENGULF_STRUCTURE",
+    "br_min":
+        1.20,
+
+    "body_atr_min":
+        1.20,
+
+    "range_atr_min":
+        1.50,
+
+    "structure_lb":
+        180,
+
+    "structure_dist_atr_max":
+        0.075,
 
     "rr":
-        3.00,
+        2.50,
 
-    "require_exact_bear_engulf":
-        True,
+    "exclude_ny_hours":
+        set(),
+}
+
+
+OLD_BENCHMARK = {
+    "config_id":
+        "OLD_LOCKED_2010_PLUS_BODY1.00_S180_D0.05_EXCL06_07_RR3.00",
 
     "br_min":
         None,
@@ -204,41 +231,17 @@ BENCHMARK = {
     "range_atr_min":
         None,
 
-    "close_loc_max":
-        None,
-
-    "upper_wick_body_min":
-        None,
-
     "structure_lb":
         180,
 
     "structure_dist_atr_max":
         0.05,
 
-    "sweep_lb":
-        None,
+    "rr":
+        3.00,
 
-    "breakdown_lb":
-        None,
-
-    "compression_max":
-        None,
-
-    "mom4_min":
-        None,
-
-    "context":
-        "NONE",
-
-    "included_ny_hours":
-        None,
-
-    "excluded_ny_hours":
+    "exclude_ny_hours":
         {6, 7},
-
-    "excluded_weekdays":
-        set(),
 }
 
 
@@ -247,71 +250,59 @@ BENCHMARK = {
 # ============================================================
 
 OUTPUT_COVERAGE = (
-    "gbpusd_m15_short_full_history_coverage.csv"
+    "gbpusd_m15_short_final_confirmation_coverage.csv"
 )
 
-OUTPUT_BENCHMARK = (
-    "gbpusd_m15_short_full_history_benchmark.csv"
+OUTPUT_PARITY = (
+    "gbpusd_m15_short_final_confirmation_parity.csv"
 )
 
-OUTPUT_STAGE1 = (
-    "gbpusd_m15_short_full_history_stage1_raw.csv"
+OUTPUT_COMPARISON = (
+    "gbpusd_m15_short_final_confirmation_anchor_vs_old.csv"
 )
 
-OUTPUT_STAGE2 = (
-    "gbpusd_m15_short_full_history_stage2_context.csv"
+OUTPUT_SLICES = (
+    "gbpusd_m15_short_final_confirmation_one_way_slices.csv"
 )
 
-OUTPUT_STAGE3 = (
-    "gbpusd_m15_short_full_history_stage3_local_rr.csv"
+OUTPUT_GRID = (
+    "gbpusd_m15_short_final_confirmation_local_grid.csv"
 )
 
-OUTPUT_FINAL = (
-    "gbpusd_m15_short_full_history_finalists.csv"
+OUTPUT_FINALISTS = (
+    "gbpusd_m15_short_final_confirmation_finalists.csv"
 )
 
 OUTPUT_PERIODS = (
-    "gbpusd_m15_short_full_history_periods.csv"
+    "gbpusd_m15_short_final_confirmation_periods.csv"
 )
 
 OUTPUT_COST = (
-    "gbpusd_m15_short_full_history_cost_stress.csv"
+    "gbpusd_m15_short_final_confirmation_cost_stress.csv"
 )
 
 OUTPUT_ROLLING = (
-    "gbpusd_m15_short_full_history_rolling.csv"
+    "gbpusd_m15_short_final_confirmation_rolling.csv"
 )
 
 OUTPUT_ROLLING_SUMMARY = (
-    "gbpusd_m15_short_full_history_rolling_summary.csv"
+    "gbpusd_m15_short_final_confirmation_rolling_summary.csv"
 )
 
 OUTPUT_CALENDAR = (
-    "gbpusd_m15_short_full_history_calendar_years.csv"
+    "gbpusd_m15_short_final_confirmation_calendar_years.csv"
 )
 
 OUTPUT_CALENDAR_SUMMARY = (
-    "gbpusd_m15_short_full_history_calendar_summary.csv"
-)
-
-OUTPUT_ABLATION = (
-    "gbpusd_m15_short_full_history_ablation.csv"
-)
-
-OUTPUT_PLATEAU = (
-    "gbpusd_m15_short_full_history_plateau.csv"
+    "gbpusd_m15_short_final_confirmation_calendar_summary.csv"
 )
 
 OUTPUT_TRADES = (
-    "gbpusd_m15_short_full_history_finalist_trades.csv"
-)
-
-OUTPUT_NOTES = (
-    "gbpusd_m15_short_full_history_notes.csv"
+    "gbpusd_m15_short_final_confirmation_trades.csv"
 )
 
 OUTPUT_BUNDLE = (
-    "GBPUSD_M15_SHORT_FULL_HISTORY_REEXAMINATION_RESULTS.zip"
+    "GBPUSD_M15_SHORT_FINALIST_CONFIRMATION_RESULTS.zip"
 )
 
 STATUS = {
@@ -319,7 +310,7 @@ STATUS = {
         "not_started",
 
     "message":
-        "GBP/USD M15 SHORT full-history re-examination not started",
+        "GBP/USD M15 SHORT finalist confirmation not started",
 
     "orders_supported":
         False,
@@ -374,7 +365,10 @@ def parse_oanda_time(value):
         )
 
         if sign is not None:
-            value += sign + offset
+            value += (
+                sign
+                + offset
+            )
 
     return (
         datetime.fromisoformat(value)
@@ -390,7 +384,6 @@ def write_csv(path, rows):
             encoding="utf-8",
         ) as handle:
             handle.write("")
-
         return
 
     fields = []
@@ -412,7 +405,6 @@ def write_csv(path, rows):
             handle,
             fieldnames=fields,
         )
-
         writer.writeheader()
         writer.writerows(rows)
 
@@ -434,21 +426,18 @@ def download_file(path):
 def build_bundle():
     files = [
         OUTPUT_COVERAGE,
-        OUTPUT_BENCHMARK,
-        OUTPUT_STAGE1,
-        OUTPUT_STAGE2,
-        OUTPUT_STAGE3,
-        OUTPUT_FINAL,
+        OUTPUT_PARITY,
+        OUTPUT_COMPARISON,
+        OUTPUT_SLICES,
+        OUTPUT_GRID,
+        OUTPUT_FINALISTS,
         OUTPUT_PERIODS,
         OUTPUT_COST,
         OUTPUT_ROLLING,
         OUTPUT_ROLLING_SUMMARY,
         OUTPUT_CALENDAR,
         OUTPUT_CALENDAR_SUMMARY,
-        OUTPUT_ABLATION,
-        OUTPUT_PLATEAU,
         OUTPUT_TRADES,
-        OUTPUT_NOTES,
     ]
 
     with zipfile.ZipFile(
@@ -466,11 +455,7 @@ def build_bundle():
 
 def safe_median(values):
     values = list(values)
-
-    if not values:
-        return 0.0
-
-    return median(values)
+    return median(values) if values else 0.0
 
 
 def add_months(dt, months):
@@ -502,8 +487,8 @@ def month_floor(dt):
 # OANDA
 # ============================================================
 
-def oanda_headers():
-    if not OANDA_TOKEN:
+def headers():
+    if not TOKEN:
         raise RuntimeError(
             "OANDA_TOKEN is not configured"
         )
@@ -511,18 +496,14 @@ def oanda_headers():
     return {
         "Authorization":
             "Bearer "
-            + OANDA_TOKEN.strip(),
+            + TOKEN.strip(),
     }
 
 
-def fetch_chunk(
-    granularity,
-    start,
-    end,
-):
+def fetch_chunk(start, end):
     url = (
-        f"{OANDA_BASE}/v3/instruments/"
-        f"{INSTRUMENT}/candles"
+        f"{BASE}/v3/instruments/"
+        f"{PAIR}/candles"
     )
 
     params = {
@@ -530,7 +511,7 @@ def fetch_chunk(
             "M",
 
         "granularity":
-            granularity,
+            "M15",
 
         "smooth":
             "false",
@@ -545,18 +526,9 @@ def fetch_chunk(
             "true",
     }
 
-    if granularity == "D":
-        params[
-            "dailyAlignment"
-        ] = 17
-
-        params[
-            "alignmentTimezone"
-        ] = "America/New_York"
-
     response = requests.get(
         url,
-        headers=oanda_headers(),
+        headers=headers(),
         params=params,
         timeout=60,
     )
@@ -599,23 +571,18 @@ def fetch_chunk(
     return rows
 
 
-def fetch_history(
-    granularity,
-    start,
-    end,
-    chunk_days,
-):
-    cursor = start
+def fetch_history():
+    cursor = START
     by_time = {}
-    chunk_number = 0
+    chunk_no = 0
 
-    while cursor < end:
-        chunk_number += 1
+    while cursor < NOW:
+        chunk_no += 1
 
         chunk_end = min(
             cursor
-            + timedelta(days=chunk_days),
-            end,
+            + timedelta(days=35),
+            NOW,
         )
 
         STATUS.update({
@@ -623,8 +590,7 @@ def fetch_history(
                 "fetching",
 
             "message": (
-                f"Fetching {granularity} "
-                f"chunk {chunk_number}: "
+                f"M15 chunk {chunk_no}: "
                 f"{iso_utc(cursor)} -> "
                 f"{iso_utc(chunk_end)}"
             ),
@@ -632,7 +598,6 @@ def fetch_history(
 
         try:
             rows = fetch_chunk(
-                granularity,
                 cursor,
                 chunk_end,
             )
@@ -649,7 +614,6 @@ def fetch_history(
                 404,
             ):
                 rows = []
-
             else:
                 raise
 
@@ -690,7 +654,6 @@ def true_ranges(candles):
                 candle["high"]
                 - candle["low"]
             )
-
         else:
             previous_close = (
                 candles[
@@ -739,23 +702,15 @@ def rma(values, length):
         length,
         len(values),
     ):
-        if (
-            np.isfinite(values[i])
-            and np.isfinite(
-                result[
-                    i - 1
-                ]
+        result[i] = (
+            result[
+                i - 1
+            ]
+            * (
+                length - 1
             )
-        ):
-            result[i] = (
-                result[
-                    i - 1
-                ]
-                * (
-                    length - 1
-                )
-                + values[i]
-            ) / length
+            + values[i]
+        ) / length
 
     return result
 
@@ -767,92 +722,9 @@ def atr14(candles):
     )
 
 
-def sma_np(values, length):
-    result = np.full(
-        len(values),
-        np.nan,
-        dtype=float,
-    )
-
-    vals = np.nan_to_num(
-        values,
-        nan=0.0,
-    )
-
-    valid = np.isfinite(
-        values
-    ).astype(int)
-
-    csum = np.cumsum(vals)
-    ccount = np.cumsum(valid)
-
-    for i in range(
-        length - 1,
-        len(values),
-    ):
-        total = csum[i]
-        count = ccount[i]
-
-        if i >= length:
-            total -= csum[
-                i - length
-            ]
-
-            count -= ccount[
-                i - length
-            ]
-
-        if count == length:
-            result[i] = (
-                total / length
-            )
-
-    return result
-
-
-def ema_list(values, length):
-    result = [
-        None
-    ] * len(values)
-
-    if len(values) < length:
-        return result
-
-    result[
-        length - 1
-    ] = (
-        sum(values[:length])
-        / length
-    )
-
-    alpha = (
-        2.0
-        / (
-            length + 1.0
-        )
-    )
-
-    for i in range(
-        length,
-        len(values),
-    ):
-        result[i] = (
-            alpha * values[i]
-            + (
-                1.0 - alpha
-            )
-            * result[
-                i - 1
-            ]
-        )
-
-    return result
-
-
-def rolling_previous_extreme(
+def rolling_previous_high(
     values,
     lookback,
-    mode,
 ):
     result = np.full(
         len(values),
@@ -862,7 +734,9 @@ def rolling_previous_extreme(
 
     dq = deque()
 
-    for i in range(len(values)):
+    for i in range(
+        len(values)
+    ):
         oldest = (
             i - lookback
         )
@@ -883,180 +757,15 @@ def rolling_previous_extreme(
                 ]
             )
 
-        if mode == "min":
-            while (
-                dq
-                and values[
-                    dq[-1]
-                ] >= values[i]
-            ):
-                dq.pop()
-
-        else:
-            while (
-                dq
-                and values[
-                    dq[-1]
-                ] <= values[i]
-            ):
-                dq.pop()
+        while (
+            dq
+            and values[
+                dq[-1]
+            ] <= values[i]
+        ):
+            dq.pop()
 
         dq.append(i)
-
-    return result
-
-
-# ============================================================
-# HTF COMPLETION
-# ============================================================
-
-def build_htf_state(candles):
-    closes = [
-        candle["close"]
-        for candle in candles
-    ]
-
-    ema50 = ema_list(
-        closes,
-        50,
-    )
-
-    ema100 = ema_list(
-        closes,
-        100,
-    )
-
-    ema200 = ema_list(
-        closes,
-        200,
-    )
-
-    atr_values = atr14(
-        candles
-    )
-
-    atr_mean50 = sma_np(
-        atr_values,
-        50,
-    )
-
-    rows = []
-
-    for i, candle in enumerate(
-        candles
-    ):
-        complete_at = (
-            candles[
-                i + 1
-            ]["time"]
-            if i + 1
-            < len(candles)
-            else None
-        )
-
-        atr_ratio50 = None
-
-        if (
-            np.isfinite(
-                atr_values[i]
-            )
-            and np.isfinite(
-                atr_mean50[i]
-            )
-            and atr_mean50[i] > 0
-        ):
-            atr_ratio50 = (
-                atr_values[i]
-                / atr_mean50[i]
-            )
-
-        rows.append({
-            "complete_at":
-                complete_at,
-
-            "close":
-                candle["close"],
-
-            "ema50":
-                ema50[i],
-
-            "ema100":
-                ema100[i],
-
-            "ema200":
-                ema200[i],
-
-            "atr_ratio50":
-                atr_ratio50,
-        })
-
-    return rows
-
-
-def align_htf_to_m15(
-    m15_times,
-    state,
-):
-    eligible = [
-        row
-        for row in state
-        if row[
-            "complete_at"
-        ] is not None
-    ]
-
-    completion_times = [
-        row[
-            "complete_at"
-        ]
-        for row in eligible
-    ]
-
-    keys = [
-        "close",
-        "ema50",
-        "ema100",
-        "ema200",
-        "atr_ratio50",
-    ]
-
-    result = {
-        key:
-            np.full(
-                len(m15_times),
-                np.nan,
-                dtype=float,
-            )
-        for key in keys
-    }
-
-    for i, signal_time in enumerate(
-        m15_times
-    ):
-        position = (
-            bisect.bisect_right(
-                completion_times,
-                signal_time,
-            )
-            - 1
-        )
-
-        if position < 0:
-            continue
-
-        row = eligible[
-            position
-        ]
-
-        for key in keys:
-            value = row[
-                key
-            ]
-
-            if value is not None:
-                result[
-                    key
-                ][i] = value
 
     return result
 
@@ -1065,23 +774,13 @@ def align_htf_to_m15(
 # FEATURE CACHE
 # ============================================================
 
-def build_feature_cache(
-    m15,
-    h1,
-    h4,
-    daily,
-):
-    n = len(m15)
-
-    times = [
-        candle["time"]
-        for candle in m15
-    ]
+def build_features(candles):
+    n = len(candles)
 
     opens = np.array(
         [
             candle["open"]
-            for candle in m15
+            for candle in candles
         ],
         dtype=float,
     )
@@ -1089,7 +788,7 @@ def build_feature_cache(
     highs = np.array(
         [
             candle["high"]
-            for candle in m15
+            for candle in candles
         ],
         dtype=float,
     )
@@ -1097,7 +796,7 @@ def build_feature_cache(
     lows = np.array(
         [
             candle["low"]
-            for candle in m15
+            for candle in candles
         ],
         dtype=float,
     )
@@ -1105,30 +804,19 @@ def build_feature_cache(
     closes = np.array(
         [
             candle["close"]
-            for candle in m15
+            for candle in candles
         ],
         dtype=float,
     )
 
-    atr = atr14(m15)
+    atr = atr14(candles)
 
-    atr_mean20 = sma_np(
-        atr,
-        20,
+    exact_bear = np.zeros(
+        n,
+        dtype=bool,
     )
 
-    bearish = (
-        closes < opens
-    )
-
-    exact_bear_engulf = (
-        np.zeros(
-            n,
-            dtype=bool,
-        )
-    )
-
-    exact_bear_engulf[
+    exact_bear[
         1:
     ] = (
         (
@@ -1149,7 +837,7 @@ def build_feature_cache(
         )
     )
 
-    bearish_body = (
+    current_body = (
         opens - closes
     )
 
@@ -1172,18 +860,18 @@ def build_feature_cache(
         dtype=float,
     )
 
-    valid_previous_body = (
+    valid_prev_body = (
         previous_body > 0
     )
 
     body_ratio[
-        valid_previous_body
+        valid_prev_body
     ] = (
-        bearish_body[
-            valid_previous_body
+        current_body[
+            valid_prev_body
         ]
         / previous_body[
-            valid_previous_body
+            valid_prev_body
         ]
     )
 
@@ -1203,7 +891,7 @@ def build_feature_cache(
     body_atr[
         valid_atr
     ] = (
-        bearish_body[
+        current_body[
             valid_atr
         ]
         / atr[
@@ -1232,148 +920,24 @@ def build_feature_cache(
         ]
     )
 
-    close_loc = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
+    previous_high = {}
 
-    valid_range = (
-        candle_range > 0
-    )
-
-    close_loc[
-        valid_range
-    ] = (
-        closes[
-            valid_range
-        ]
-        - lows[
-            valid_range
-        ]
-    ) / candle_range[
-        valid_range
-    ]
-
-    upper_wick = (
-        highs
-        - np.maximum(
-            opens,
-            closes,
-        )
-    )
-
-    upper_wick_body = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
-
-    valid_bear_body = (
-        bearish_body > 0
-    )
-
-    upper_wick_body[
-        valid_bear_body
-    ] = (
-        upper_wick[
-            valid_bear_body
-        ]
-        / bearish_body[
-            valid_bear_body
-        ]
-    )
-
-    compression = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
-
-    previous_atr = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
-
-    previous_atr_mean20 = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
-
-    previous_atr[
-        1:
-    ] = atr[:-1]
-
-    previous_atr_mean20[
-        1:
-    ] = atr_mean20[:-1]
-
-    valid_comp = (
-        np.isfinite(
-            previous_atr
-        )
-        & np.isfinite(
-            previous_atr_mean20
-        )
-        & (
-            previous_atr_mean20
-            > 0
-        )
-    )
-
-    compression[
-        valid_comp
-    ] = (
-        previous_atr[
-            valid_comp
-        ]
-        / previous_atr_mean20[
-            valid_comp
-        ]
-    )
-
-    lookbacks = [
-        10,
-        20,
-        40,
-        60,
-        80,
-        100,
+    for lookback in [
         120,
         165,
         180,
         200,
-    ]
-
-    previous_low = {}
-    previous_high = {}
-
-    for lookback in lookbacks:
-        previous_low[
-            lookback
-        ] = rolling_previous_extreme(
-            lows,
-            lookback,
-            "min",
-        )
-
+    ]:
         previous_high[
             lookback
-        ] = rolling_previous_extreme(
+        ] = rolling_previous_high(
             highs,
             lookback,
-            "max",
         )
 
     structure_distance = {}
 
     for lookback in [
-        40,
-        60,
-        80,
-        100,
         120,
         165,
         180,
@@ -1416,82 +980,30 @@ def build_feature_cache(
             lookback
         ] = distance
 
-    # Strictly prior 4h upward momentum.
-    mom4 = np.full(
-        n,
-        np.nan,
-        dtype=float,
-    )
-
-    for i in range(
-        17,
-        n,
-    ):
-        if valid_atr[i]:
-            mom4[i] = (
-                closes[
-                    i - 1
-                ]
-                - closes[
-                    i - 17
-                ]
-            ) / atr[i]
-
     ny_hour = np.zeros(
         n,
         dtype=np.int16,
     )
 
-    ny_weekday = np.zeros(
-        n,
-        dtype=np.int16,
-    )
-
-    for i, timestamp in enumerate(
-        times
+    for i, candle in enumerate(
+        candles
     ):
-        local = timestamp.astimezone(
-            NY
-        )
-
         ny_hour[i] = (
-            local.hour
-        )
-
-        ny_weekday[i] = (
-            local.weekday()
+            candle[
+                "time"
+            ]
+            .astimezone(
+                NY
+            )
+            .hour
         )
 
     return {
         "n":
             n,
 
-        "times":
-            times,
-
-        "open":
-            opens,
-
-        "high":
-            highs,
-
-        "low":
-            lows,
-
-        "close":
-            closes,
-
-        "atr":
-            atr,
-
-        "valid_atr":
-            valid_atr,
-
-        "bearish":
-            bearish,
-
-        "exact_bear_engulf":
-            exact_bear_engulf,
+        "exact_bear":
+            exact_bear,
 
         "body_ratio":
             body_ratio,
@@ -1502,911 +1014,90 @@ def build_feature_cache(
         "range_atr":
             range_atr,
 
-        "close_loc":
-            close_loc,
-
-        "upper_wick_body":
-            upper_wick_body,
-
-        "compression":
-            compression,
-
-        "previous_low":
-            previous_low,
-
-        "previous_high":
-            previous_high,
-
         "structure_distance":
             structure_distance,
 
-        "mom4":
-            mom4,
-
         "ny_hour":
             ny_hour,
-
-        "ny_weekday":
-            ny_weekday,
-
-        "h1_close":
-            h1["close"],
-
-        "h1_ema50":
-            h1["ema50"],
-
-        "h1_ema100":
-            h1["ema100"],
-
-        "h1_ema200":
-            h1["ema200"],
-
-        "h1_atr_ratio50":
-            h1["atr_ratio50"],
-
-        "h4_close":
-            h4["close"],
-
-        "h4_ema50":
-            h4["ema50"],
-
-        "h4_ema100":
-            h4["ema100"],
-
-        "h4_ema200":
-            h4["ema200"],
-
-        "h4_atr_ratio50":
-            h4["atr_ratio50"],
-
-        "d_close":
-            daily["close"],
-
-        "d_ema50":
-            daily["ema50"],
-
-        "d_ema100":
-            daily["ema100"],
-
-        "d_ema200":
-            daily["ema200"],
-
-        "d_atr_ratio50":
-            daily["atr_ratio50"],
     }
 
 
 # ============================================================
-# CONFIG BUILDERS
+# SIGNALS
 # ============================================================
 
-def base_config(
-    config_id,
-    family,
-    rr=STAGE1_RR,
-):
-    return {
-        "config_id":
-            config_id,
-
-        "family":
-            family,
-
-        "rr":
-            rr,
-
-        "require_exact_bear_engulf":
-            False,
-
-        "br_min":
-            None,
-
-        "body_atr_min":
-            None,
-
-        "range_atr_min":
-            None,
-
-        "close_loc_max":
-            None,
-
-        "upper_wick_body_min":
-            None,
-
-        "structure_lb":
-            None,
-
-        "structure_dist_atr_max":
-            None,
-
-        "sweep_lb":
-            None,
-
-        "breakdown_lb":
-            None,
-
-        "compression_max":
-            None,
-
-        "mom4_min":
-            None,
-
-        "context":
-            "NONE",
-
-        "included_ny_hours":
-            None,
-
-        "excluded_ny_hours":
-            set(),
-
-        "excluded_weekdays":
-            set(),
-    }
-
-
-def build_stage1_configs():
-    configs = []
-
-    # --------------------------------------------------------
-    # 1) BEAR ENGULF + STRUCTURE
-    # --------------------------------------------------------
-    templates = [
-        (None, 0.75, None, 80, 0.10),
-        (None, 1.00, None, 120, 0.10),
-        (None, 1.00, None, 165, 0.075),
-        (None, 1.00, None, 180, 0.05),
-        (1.00, 1.00, 1.20, 120, 0.10),
-        (1.10, 1.00, 1.30, 165, 0.10),
-        (1.20, 1.00, 1.40, 165, 0.075),
-        (1.20, 1.20, 1.50, 180, 0.075),
-        (1.35, 1.00, 1.50, 180, 0.05),
-        (1.35, 1.20, 1.60, 200, 0.05),
-        (1.50, 1.20, 1.70, 200, 0.05),
-    ]
-
-    for i, (
-        br,
-        body,
-        range_atr,
-        lookback,
-        distance,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_ENG_{i:02d}",
-            "BEAR_ENGULF_STRUCTURE",
-        )
-
-        cfg.update({
-            "require_exact_bear_engulf":
-                True,
-
-            "br_min":
-                br,
-
-            "body_atr_min":
-                body,
-
-            "range_atr_min":
-                range_atr,
-
-            "structure_lb":
-                lookback,
-
-            "structure_dist_atr_max":
-                distance,
-        })
-
-        configs.append(cfg)
-
-    # --------------------------------------------------------
-    # 2) HIGH SWEEP + DISPLACEMENT
-    # --------------------------------------------------------
-    templates = [
-        (20, 0.75, 0.15, 0.50),
-        (20, 1.00, 0.25, 1.00),
-        (40, 0.75, 0.25, 0.50),
-        (40, 1.00, 0.25, 1.00),
-        (40, 1.25, 0.25, 1.25),
-        (60, 0.75, 0.25, 0.75),
-        (60, 1.00, 0.35, 1.00),
-        (60, 1.25, 0.25, 1.50),
-        (100, 1.00, 0.35, 1.25),
-        (100, 1.25, 0.35, 1.50),
-        (120, 1.25, 0.25, 1.75),
-    ]
-
-    for i, (
-        sweep_lb,
-        body,
-        wick,
-        mom4,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_SWEEP_{i:02d}",
-            "HIGH_SWEEP_DISPLACEMENT",
-        )
-
-        cfg.update({
-            "sweep_lb":
-                sweep_lb,
-
-            "body_atr_min":
-                body,
-
-            "upper_wick_body_min":
-                wick,
-
-            "mom4_min":
-                mom4,
-        })
-
-        configs.append(cfg)
-
-    # --------------------------------------------------------
-    # 3) FAILED BREAKOUT + REJECTION
-    # --------------------------------------------------------
-    templates = [
-        (20, 0.50, 0.40),
-        (20, 0.75, 0.30),
-        (40, 0.50, 0.40),
-        (40, 0.75, 0.30),
-        (40, 1.00, 0.25),
-        (60, 0.50, 0.35),
-        (60, 0.75, 0.30),
-        (60, 1.00, 0.25),
-        (100, 0.75, 0.30),
-        (100, 1.00, 0.20),
-        (165, 1.00, 0.25),
-    ]
-
-    for i, (
-        sweep_lb,
-        body,
-        close_loc,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_FAIL_{i:02d}",
-            "FAILED_BREAKOUT_REJECTION",
-        )
-
-        cfg.update({
-            "sweep_lb":
-                sweep_lb,
-
-            "body_atr_min":
-                body,
-
-            "close_loc_max":
-                close_loc,
-        })
-
-        configs.append(cfg)
-
-    # --------------------------------------------------------
-    # 4) BEAR OUTSIDE REVERSAL
-    # --------------------------------------------------------
-    templates = [
-        (0.50, 0.40, 40, 0.20),
-        (0.75, 0.35, 40, 0.15),
-        (0.75, 0.30, 60, 0.20),
-        (1.00, 0.35, 60, 0.15),
-        (1.00, 0.25, 80, 0.20),
-        (1.25, 0.30, 80, 0.15),
-        (1.25, 0.25, 100, 0.20),
-        (1.50, 0.25, 100, 0.15),
-        (1.00, 0.20, 120, 0.20),
-    ]
-
-    for i, (
-        body,
-        close_loc,
-        lookback,
-        distance,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_OUT_{i:02d}",
-            "BEAR_OUTSIDE_REVERSAL",
-        )
-
-        cfg.update({
-            "body_atr_min":
-                body,
-
-            "close_loc_max":
-                close_loc,
-
-            "structure_lb":
-                lookback,
-
-            "structure_dist_atr_max":
-                distance,
-        })
-
-        configs.append(cfg)
-
-    # --------------------------------------------------------
-    # 5) COMPRESSION BREAKDOWN
-    # --------------------------------------------------------
-    templates = [
-        (0.60, 0.75, 1.20, 10),
-        (0.65, 0.75, 1.30, 10),
-        (0.65, 1.00, 1.40, 10),
-        (0.70, 0.75, 1.30, 10),
-        (0.70, 1.00, 1.40, 10),
-        (0.70, 1.25, 1.50, 10),
-        (0.75, 0.75, 1.30, 10),
-        (0.75, 1.00, 1.40, 10),
-        (0.75, 1.25, 1.50, 20),
-        (0.80, 1.00, 1.50, 20),
-        (0.80, 1.25, 1.60, 20),
-    ]
-
-    for i, (
-        compression,
-        body,
-        range_atr,
-        breakdown_lb,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_COMP_{i:02d}",
-            "COMPRESSION_BREAKDOWN",
-        )
-
-        cfg.update({
-            "compression_max":
-                compression,
-
-            "body_atr_min":
-                body,
-
-            "range_atr_min":
-                range_atr,
-
-            "breakdown_lb":
-                breakdown_lb,
-        })
-
-        configs.append(cfg)
-
-    # --------------------------------------------------------
-    # 6) BLOWOFF + REJECTION
-    # --------------------------------------------------------
-    templates = [
-        (20, 0.50, 0.75, 0.35),
-        (20, 0.75, 1.00, 0.30),
-        (40, 0.50, 1.00, 0.35),
-        (40, 0.75, 1.25, 0.30),
-        (40, 1.00, 1.50, 0.25),
-        (60, 0.75, 1.25, 0.30),
-        (60, 1.00, 1.50, 0.25),
-        (100, 1.00, 1.50, 0.25),
-        (120, 1.25, 1.75, 0.20),
-    ]
-
-    for i, (
-        sweep_lb,
-        body,
-        mom4,
-        close_loc,
-    ) in enumerate(
-        templates
-    ):
-        cfg = base_config(
-            f"S1_BLOW_{i:02d}",
-            "BLOWOFF_REJECTION",
-        )
-
-        cfg.update({
-            "sweep_lb":
-                sweep_lb,
-
-            "body_atr_min":
-                body,
-
-            "mom4_min":
-                mom4,
-
-            "close_loc_max":
-                close_loc,
-        })
-
-        configs.append(cfg)
-
-    return configs
-
-
-# ============================================================
-# CONTEXTS
-# ============================================================
-
-CONTEXTS = [
-    "NONE",
-
-    "H1_CLOSE_LT_EMA100",
-    "H1_CLOSE_LT_EMA200",
-    "H1_EMA50_LT_EMA200",
-
-    "H4_CLOSE_LT_EMA100",
-    "H4_CLOSE_LT_EMA200",
-
-    "D_CLOSE_LT_EMA200",
-    "D_EMA50_LT_EMA200",
-
-    "H1_ATR_GE_080",
-    "H4_ATR_GE_080",
-    "D_ATR_GE_080",
-
-    "NY_BLOCK_00-03",
-    "NY_BLOCK_04-07",
-    "NY_BLOCK_08-11",
-    "NY_BLOCK_12-15",
-    "NY_BLOCK_16-19",
-    "NY_BLOCK_20-23",
-
-    "EXCLUDE_WEEKDAY_0",
-    "EXCLUDE_WEEKDAY_1",
-    "EXCLUDE_WEEKDAY_2",
-    "EXCLUDE_WEEKDAY_3",
-    "EXCLUDE_WEEKDAY_4",
-]
-
-
-def apply_context_mask(
-    mask,
+def signal_indices(
     config,
-    f,
-):
-    context = config.get(
-        "context",
-        "NONE",
-    )
-
-    if context == "H1_CLOSE_LT_EMA100":
-        mask &= (
-            f["h1_close"]
-            < f["h1_ema100"]
-        )
-
-    elif context == "H1_CLOSE_LT_EMA200":
-        mask &= (
-            f["h1_close"]
-            < f["h1_ema200"]
-        )
-
-    elif context == "H1_EMA50_LT_EMA200":
-        mask &= (
-            f["h1_ema50"]
-            < f["h1_ema200"]
-        )
-
-    elif context == "H4_CLOSE_LT_EMA100":
-        mask &= (
-            f["h4_close"]
-            < f["h4_ema100"]
-        )
-
-    elif context == "H4_CLOSE_LT_EMA200":
-        mask &= (
-            f["h4_close"]
-            < f["h4_ema200"]
-        )
-
-    elif context == "D_CLOSE_LT_EMA200":
-        mask &= (
-            f["d_close"]
-            < f["d_ema200"]
-        )
-
-    elif context == "D_EMA50_LT_EMA200":
-        mask &= (
-            f["d_ema50"]
-            < f["d_ema200"]
-        )
-
-    elif context == "H1_ATR_GE_080":
-        mask &= (
-            f["h1_atr_ratio50"]
-            >= 0.80
-        )
-
-    elif context == "H4_ATR_GE_080":
-        mask &= (
-            f["h4_atr_ratio50"]
-            >= 0.80
-        )
-
-    elif context == "D_ATR_GE_080":
-        mask &= (
-            f["d_atr_ratio50"]
-            >= 0.80
-        )
-
-    elif context.startswith(
-        "NY_BLOCK_"
-    ):
-        block = context.split(
-            "_"
-        )[-1]
-
-        start_hour, end_hour = map(
-            int,
-            block.split("-"),
-        )
-
-        mask &= (
-            (
-                f["ny_hour"]
-                >= start_hour
-            )
-            & (
-                f["ny_hour"]
-                <= end_hour
-            )
-        )
-
-    elif context.startswith(
-        "EXCLUDE_WEEKDAY_"
-    ):
-        weekday = int(
-            context.split(
-                "_"
-            )[-1]
-        )
-
-        mask &= (
-            f["ny_weekday"]
-            != weekday
-        )
-
-    included = config.get(
-        "included_ny_hours"
-    )
-
-    if included is not None:
-        allowed = np.zeros(
-            f["n"],
-            dtype=bool,
-        )
-
-        for hour in included:
-            allowed |= (
-                f["ny_hour"]
-                == hour
-            )
-
-        mask &= allowed
-
-    for hour in config.get(
-        "excluded_ny_hours",
-        set(),
-    ):
-        mask &= (
-            f["ny_hour"]
-            != hour
-        )
-
-    for weekday in config.get(
-        "excluded_weekdays",
-        set(),
-    ):
-        mask &= (
-            f["ny_weekday"]
-            != weekday
-        )
-
-    return mask
-
-
-# ============================================================
-# SIGNAL MASK
-# ============================================================
-
-def signal_indices_for_config(
-    config,
-    f,
+    features,
 ):
     mask = (
-        f["valid_atr"].copy()
-        & f["bearish"]
+        features[
+            "exact_bear"
+        ].copy()
     )
 
-    family = config[
-        "family"
-    ]
-
-    if family == "BEAR_ENGULF_STRUCTURE":
-        if config.get(
-            "require_exact_bear_engulf",
-            False,
-        ):
-            mask &= (
-                f[
-                    "exact_bear_engulf"
-                ]
-            )
-
-        if config.get(
-            "br_min"
-        ) is not None:
-            mask &= (
-                f["body_ratio"]
-                >= config[
-                    "br_min"
-                ]
-            )
-
-        if config.get(
-            "body_atr_min"
-        ) is not None:
-            mask &= (
-                f["body_atr"]
-                >= config[
-                    "body_atr_min"
-                ]
-            )
-
-        if config.get(
-            "range_atr_min"
-        ) is not None:
-            mask &= (
-                f["range_atr"]
-                >= config[
-                    "range_atr_min"
-                ]
-            )
-
+    if config.get(
+        "br_min"
+    ) is not None:
         mask &= (
-            f[
-                "structure_distance"
-            ][
-                config[
-                    "structure_lb"
-                ]
+            features[
+                "body_ratio"
             ]
-            <= config[
-                "structure_dist_atr_max"
+            >= config[
+                "br_min"
             ]
         )
 
-    elif family == "HIGH_SWEEP_DISPLACEMENT":
-        lookback = config[
-            "sweep_lb"
-        ]
-
+    if config.get(
+        "body_atr_min"
+    ) is not None:
         mask &= (
-            f["high"]
-            > f[
-                "previous_high"
-            ][
-                lookback
+            features[
+                "body_atr"
             ]
-        )
-
-        previous_low = np.roll(
-            f["low"],
-            1,
-        )
-
-        mask[0] = False
-
-        mask &= (
-            f["close"]
-            < previous_low
-        )
-
-        mask &= (
-            f["body_atr"]
             >= config[
                 "body_atr_min"
             ]
         )
 
+    if config.get(
+        "range_atr_min"
+    ) is not None:
         mask &= (
-            f[
-                "upper_wick_body"
+            features[
+                "range_atr"
             ]
-            >= config[
-                "upper_wick_body_min"
-            ]
-        )
-
-        mask &= (
-            f["mom4"]
-            >= config[
-                "mom4_min"
-            ]
-        )
-
-    elif family == "FAILED_BREAKOUT_REJECTION":
-        lookback = config[
-            "sweep_lb"
-        ]
-
-        prior_high = (
-            f[
-                "previous_high"
-            ][
-                lookback
-            ]
-        )
-
-        mask &= (
-            f["high"]
-            > prior_high
-        )
-
-        mask &= (
-            f["close"]
-            < prior_high
-        )
-
-        mask &= (
-            f["body_atr"]
-            >= config[
-                "body_atr_min"
-            ]
-        )
-
-        mask &= (
-            f["close_loc"]
-            <= config[
-                "close_loc_max"
-            ]
-        )
-
-    elif family == "BEAR_OUTSIDE_REVERSAL":
-        previous_high = np.roll(
-            f["high"],
-            1,
-        )
-
-        previous_low = np.roll(
-            f["low"],
-            1,
-        )
-
-        mask[0] = False
-
-        mask &= (
-            f["high"]
-            > previous_high
-        )
-
-        mask &= (
-            f["low"]
-            < previous_low
-        )
-
-        mask &= (
-            f["body_atr"]
-            >= config[
-                "body_atr_min"
-            ]
-        )
-
-        mask &= (
-            f["close_loc"]
-            <= config[
-                "close_loc_max"
-            ]
-        )
-
-        mask &= (
-            f[
-                "structure_distance"
-            ][
-                config[
-                    "structure_lb"
-                ]
-            ]
-            <= config[
-                "structure_dist_atr_max"
-            ]
-        )
-
-    elif family == "COMPRESSION_BREAKDOWN":
-        mask &= (
-            f["compression"]
-            <= config[
-                "compression_max"
-            ]
-        )
-
-        mask &= (
-            f["body_atr"]
-            >= config[
-                "body_atr_min"
-            ]
-        )
-
-        mask &= (
-            f["range_atr"]
             >= config[
                 "range_atr_min"
             ]
         )
 
-        mask &= (
-            f["close"]
-            < f[
-                "previous_low"
-            ][
-                config[
-                    "breakdown_lb"
-                ]
+    mask &= (
+        features[
+            "structure_distance"
+        ][
+            config[
+                "structure_lb"
             ]
-        )
-
-    elif family == "BLOWOFF_REJECTION":
-        lookback = config[
-            "sweep_lb"
         ]
-
-        prior_high = (
-            f[
-                "previous_high"
-            ][
-                lookback
-            ]
-        )
-
-        mask &= (
-            f["high"]
-            > prior_high
-        )
-
-        mask &= (
-            f["close"]
-            < f[
-                "previous_high"
-            ][10]
-        )
-
-        mask &= (
-            f["body_atr"]
-            >= config[
-                "body_atr_min"
-            ]
-        )
-
-        mask &= (
-            f["mom4"]
-            >= config[
-                "mom4_min"
-            ]
-        )
-
-        mask &= (
-            f["close_loc"]
-            <= config[
-                "close_loc_max"
-            ]
-        )
-
-    else:
-        raise RuntimeError(
-            f"Unknown family: {family}"
-        )
-
-    mask = apply_context_mask(
-        mask,
-        config,
-        f,
+        <= config[
+            "structure_dist_atr_max"
+        ]
     )
 
+    for hour in config.get(
+        "exclude_ny_hours",
+        set(),
+    ):
+        mask &= (
+            features[
+                "ny_hour"
+            ]
+            != hour
+        )
+
     mask[
-        :200
+        :220
     ] = False
 
     return np.flatnonzero(
@@ -2415,13 +1106,13 @@ def signal_indices_for_config(
 
 
 # ============================================================
-# TRADE ENGINE
+# HISTORICAL SHORT ENGINE
 # ============================================================
 
 OUTCOME_CACHE = {}
 
 
-def compute_short_outcome(
+def compute_outcome(
     candles,
     signal_index,
     rr,
@@ -2464,8 +1155,7 @@ def compute_short_outcome(
     )
 
     actual_risk = (
-        stop
-        - fill
+        stop - fill
     )
 
     if actual_risk <= 0:
@@ -2508,19 +1198,18 @@ def compute_short_outcome(
                 < low_distance
             ):
                 exit_price = stop
-                exit_reason = "STOP"
-
+                reason = "STOP"
             else:
                 exit_price = target
-                exit_reason = "TARGET"
+                reason = "TARGET"
 
         elif hit_target:
             exit_price = target
-            exit_reason = "TARGET"
+            reason = "TARGET"
 
         elif hit_stop:
             exit_price = stop
-            exit_reason = "STOP"
+            reason = "STOP"
 
         else:
             continue
@@ -2557,7 +1246,7 @@ def compute_short_outcome(
                 result_r,
 
             "exit_reason":
-                exit_reason,
+                reason,
 
             "rr":
                 rr,
@@ -2584,7 +1273,7 @@ def get_outcome(
     if key not in OUTCOME_CACHE:
         OUTCOME_CACHE[
             key
-        ] = compute_short_outcome(
+        ] = compute_outcome(
             candles,
             signal_index,
             rr,
@@ -2598,13 +1287,13 @@ def get_outcome(
 
 def run_backtest(
     candles,
-    signal_indices,
+    indices,
     rr,
     cost_pips,
     start=None,
     end=None,
 ):
-    use = signal_indices
+    use = indices
 
     if (
         start is not None
@@ -2614,7 +1303,7 @@ def run_backtest(
             candles[
                 index
             ]["time"]
-            for index in signal_indices
+            for index in indices
         ]
 
         left = (
@@ -2627,7 +1316,7 @@ def run_backtest(
         )
 
         right = (
-            len(signal_indices)
+            len(indices)
             if end is None
             else bisect.bisect_left(
                 times,
@@ -2636,7 +1325,7 @@ def run_backtest(
         )
 
         use = (
-            signal_indices[
+            indices[
                 left:right
             ]
         )
@@ -2678,26 +1367,28 @@ def run_backtest(
 
 
 # ============================================================
-# STATS / EVALUATION
+# STATS
 # ============================================================
 
 def stats_from_trades(trades):
-    results = [
+    values = [
         float(
-            trade["result_r"]
+            trade[
+                "result_r"
+            ]
         )
         for trade in trades
     ]
 
     winners = [
         value
-        for value in results
+        for value in values
         if value > 0
     ]
 
     losers = [
         value
-        for value in results
+        for value in values
         if value < 0
     ]
 
@@ -2705,53 +1396,48 @@ def stats_from_trades(trades):
     gross_loss = abs(sum(losers))
 
     if gross_loss > 0:
-        profit_factor = (
+        pf = (
             gross_profit
             / gross_loss
         )
-
     elif gross_profit > 0:
-        profit_factor = 999.0
-
+        pf = 999.0
     else:
-        profit_factor = 0.0
+        pf = 0.0
 
-    total_r = sum(results)
+    total_r = sum(values)
 
     equity = 0.0
     peak = 0.0
-    max_drawdown = 0.0
+    max_dd = 0.0
 
     streak = 0
-    longest_streak = 0
+    max_streak = 0
 
-    for result in results:
-        equity += result
-
+    for value in values:
+        equity += value
         peak = max(
             peak,
             equity,
         )
 
-        max_drawdown = min(
-            max_drawdown,
+        max_dd = min(
+            max_dd,
             equity - peak,
         )
 
-        if result < 0:
+        if value < 0:
             streak += 1
-
-            longest_streak = max(
-                longest_streak,
+            max_streak = max(
+                max_streak,
                 streak,
             )
-
         else:
             streak = 0
 
     return {
         "trades":
-            len(results),
+            len(values),
 
         "winners":
             len(winners),
@@ -2762,14 +1448,14 @@ def stats_from_trades(trades):
         "win_rate":
             (
                 len(winners)
-                / len(results)
+                / len(values)
                 * 100.0
-                if results
+                if values
                 else 0.0
             ),
 
         "profit_factor":
-            profit_factor,
+            pf,
 
         "total_r":
             total_r,
@@ -2777,23 +1463,23 @@ def stats_from_trades(trades):
         "expectancy_r":
             (
                 total_r
-                / len(results)
-                if results
+                / len(values)
+                if values
                 else 0.0
             ),
 
         "max_drawdown_r":
-            max_drawdown,
+            max_dd,
 
         "longest_loss_streak":
-            longest_streak,
+            max_streak,
     }
 
 
 ERAS = [
     (
         "ERA_2002_2007",
-        REQUESTED_FROM,
+        START,
         datetime(
             2008, 1, 1,
             tzinfo=timezone.utc,
@@ -2830,88 +1516,31 @@ ERAS = [
             2020, 1, 1,
             tzinfo=timezone.utc,
         ),
-        RESEARCH_TO,
+        NOW,
     ),
 ]
-
-
-def config_fields(config):
-    return {
-        "br_min":
-            config.get("br_min"),
-
-        "body_atr_min":
-            config.get(
-                "body_atr_min"
-            ),
-
-        "range_atr_min":
-            config.get(
-                "range_atr_min"
-            ),
-
-        "close_loc_max":
-            config.get(
-                "close_loc_max"
-            ),
-
-        "upper_wick_body_min":
-            config.get(
-                "upper_wick_body_min"
-            ),
-
-        "structure_lb":
-            config.get(
-                "structure_lb"
-            ),
-
-        "structure_dist_atr_max":
-            config.get(
-                "structure_dist_atr_max"
-            ),
-
-        "sweep_lb":
-            config.get(
-                "sweep_lb"
-            ),
-
-        "breakdown_lb":
-            config.get(
-                "breakdown_lb"
-            ),
-
-        "compression_max":
-            config.get(
-                "compression_max"
-            ),
-
-        "mom4_min":
-            config.get(
-                "mom4_min"
-            ),
-    }
 
 
 def evaluation_row(
     config,
     candles,
-    signal_indices,
+    indices,
 ):
     full = stats_from_trades(
         run_backtest(
             candles,
-            signal_indices,
+            indices,
             config["rr"],
             PRIMARY_COST_PIPS,
             candles[0]["time"],
-            RESEARCH_TO,
+            NOW,
         )
     )
 
     pre = stats_from_trades(
         run_backtest(
             candles,
-            signal_indices,
+            indices,
             config["rr"],
             PRIMARY_COST_PIPS,
             candles[0]["time"],
@@ -2925,14 +1554,14 @@ def evaluation_row(
     post = stats_from_trades(
         run_backtest(
             candles,
-            signal_indices,
+            indices,
             config["rr"],
             PRIMARY_COST_PIPS,
             datetime(
                 2010, 1, 1,
                 tzinfo=timezone.utc,
             ),
-            RESEARCH_TO,
+            NOW,
         )
     )
 
@@ -2943,7 +1572,7 @@ def evaluation_row(
             stats_from_trades(
                 run_backtest(
                     candles,
-                    signal_indices,
+                    indices,
                     config["rr"],
                     PRIMARY_COST_PIPS,
                     start,
@@ -2963,26 +1592,20 @@ def evaluation_row(
         for s in era_stats
     )
 
-    robust_score = (
+    score = (
         1.5
         * min(
-            full[
-                "profit_factor"
-            ],
+            full["profit_factor"],
             3.0,
         )
         + 0.8
         * min(
-            pre[
-                "profit_factor"
-            ],
+            pre["profit_factor"],
             2.5,
         )
         + 0.8
         * min(
-            post[
-                "profit_factor"
-            ],
+            post["profit_factor"],
             2.5,
         )
         + 0.40
@@ -3007,26 +1630,51 @@ def evaluation_row(
         "config_id":
             config["config_id"],
 
-        "family":
-            config["family"],
-
-        "context":
+        "br_min":
             config.get(
-                "context",
-                "NONE",
+                "br_min"
             ),
+
+        "body_atr_min":
+            config.get(
+                "body_atr_min"
+            ),
+
+        "range_atr_min":
+            config.get(
+                "range_atr_min"
+            ),
+
+        "structure_lb":
+            config[
+                "structure_lb"
+            ],
+
+        "structure_dist_atr_max":
+            config[
+                "structure_dist_atr_max"
+            ],
 
         "rr":
             config["rr"],
+
+        "excluded_ny_hours":
+            ",".join(
+                str(x)
+                for x in sorted(
+                    config.get(
+                        "exclude_ny_hours",
+                        set(),
+                    )
+                )
+            ),
 
         "full_trades":
             full["trades"],
 
         "full_pf":
             round(
-                full[
-                    "profit_factor"
-                ],
+                full["profit_factor"],
                 6,
             ),
 
@@ -3038,17 +1686,13 @@ def evaluation_row(
 
         "full_exp":
             round(
-                full[
-                    "expectancy_r"
-                ],
+                full["expectancy_r"],
                 6,
             ),
 
         "full_dd":
             round(
-                full[
-                    "max_drawdown_r"
-                ],
+                full["max_drawdown_r"],
                 4,
             ),
 
@@ -3057,9 +1701,7 @@ def evaluation_row(
 
         "pre2010_pf":
             round(
-                pre[
-                    "profit_factor"
-                ],
+                pre["profit_factor"],
                 6,
             ),
 
@@ -3074,9 +1716,7 @@ def evaluation_row(
 
         "post2010_pf":
             round(
-                post[
-                    "profit_factor"
-                ],
+                post["profit_factor"],
                 6,
             ),
 
@@ -3097,7 +1737,7 @@ def evaluation_row(
 
         "robust_score":
             round(
-                robust_score,
+                score,
                 6,
             ),
     }
@@ -3113,9 +1753,7 @@ def evaluation_row(
         row[
             f"era{i}_pf"
         ] = round(
-            s[
-                "profit_factor"
-            ],
+            s["profit_factor"],
             6,
         )
 
@@ -3126,341 +1764,191 @@ def evaluation_row(
             4,
         )
 
-    row.update(
-        config_fields(
-            config
-        )
-    )
-
     return row
 
 
-def sort_evaluation_rows(rows):
+def sort_rows(rows):
     return sorted(
         rows,
         key=lambda row: (
-            row[
-                "positive_eras"
-            ],
-
-            row[
-                "pre2010_r"
-            ] > 0,
-
-            row[
-                "post2010_r"
-            ] > 0,
-
-            row[
-                "robust_score"
-            ],
-
-            row[
-                "full_r"
-            ],
+            row["positive_eras"],
+            row["pre2010_r"] > 0,
+            row["post2010_r"] > 0,
+            row["robust_score"],
+            row["full_r"],
         ),
         reverse=True,
     )
 
 
 # ============================================================
-# STAGE 2
+# CONFIG GENERATION
 # ============================================================
 
-def build_stage2_configs(
-    stage1_by_id,
-    top_stage1_rows,
-):
+def clone_anchor(config_id):
+    config = deepcopy(
+        ANCHOR
+    )
+
+    config[
+        "config_id"
+    ] = config_id
+
+    return config
+
+
+def one_way_configs():
     configs = []
 
-    for rank, row in enumerate(
-        top_stage1_rows[
-            :STAGE2_BASE_KEEP
-        ]
-    ):
-        base = deepcopy(
-            stage1_by_id[
-                row[
-                    "config_id"
-                ]
-            ]
+    for value in [
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+        1.40,
+    ]:
+        cfg = clone_anchor(
+            f"SLICE_BR_{value:.2f}"
         )
+        cfg["br_min"] = value
+        cfg["slice"] = "BR"
+        configs.append(cfg)
 
-        for context in CONTEXTS:
-            cfg = deepcopy(base)
+    for value in [
+        1.00,
+        1.10,
+        1.20,
+        1.30,
+        1.40,
+    ]:
+        cfg = clone_anchor(
+            f"SLICE_BODY_{value:.2f}"
+        )
+        cfg["body_atr_min"] = value
+        cfg["slice"] = "BODY_ATR"
+        configs.append(cfg)
 
-            cfg["config_id"] = (
-                f"S2_{rank:02d}_"
-                f"{context}"
-            )
+    for value in [
+        1.30,
+        1.40,
+        1.50,
+        1.60,
+        1.70,
+    ]:
+        cfg = clone_anchor(
+            f"SLICE_RANGE_{value:.2f}"
+        )
+        cfg["range_atr_min"] = value
+        cfg["slice"] = "RANGE_ATR"
+        configs.append(cfg)
 
-            cfg["context"] = (
-                context
-            )
+    for value in [
+        120,
+        165,
+        180,
+        200,
+    ]:
+        cfg = clone_anchor(
+            f"SLICE_LB_{value}"
+        )
+        cfg["structure_lb"] = value
+        cfg["slice"] = "STRUCTURE_LOOKBACK"
+        configs.append(cfg)
 
-            configs.append(cfg)
+    for value in [
+        0.05,
+        0.075,
+        0.10,
+        0.125,
+        0.15,
+    ]:
+        cfg = clone_anchor(
+            f"SLICE_DIST_{value}"
+        )
+        cfg[
+            "structure_dist_atr_max"
+        ] = value
+        cfg["slice"] = "STRUCTURE_DISTANCE"
+        configs.append(cfg)
 
-    return configs
-
-
-# ============================================================
-# STAGE 3
-# ============================================================
-
-def local_variants(
-    base,
-    rank,
-):
-    configs = []
-
-    for rr in [
+    for value in [
+        2.00,
+        2.25,
         2.50,
         2.75,
         3.00,
         3.25,
         3.50,
-        3.75,
-        4.00,
     ]:
-        cfg = deepcopy(base)
-
-        cfg["rr"] = rr
-
-        cfg["config_id"] = (
-            f"S3_{rank:02d}_"
-            f"RR_{rr:.2f}"
+        cfg = clone_anchor(
+            f"SLICE_RR_{value:.2f}"
         )
-
+        cfg["rr"] = value
+        cfg["slice"] = "RR"
         configs.append(cfg)
-
-    perturbations = {
-        "br_min":
-            [
-                -0.15,
-                -0.05,
-                0.05,
-                0.15,
-            ],
-
-        "body_atr_min":
-            [
-                -0.20,
-                -0.10,
-                0.10,
-                0.20,
-            ],
-
-        "range_atr_min":
-            [
-                -0.20,
-                -0.10,
-                0.10,
-                0.20,
-            ],
-
-        "close_loc_max":
-            [
-                -0.10,
-                -0.05,
-                0.05,
-                0.10,
-            ],
-
-        "upper_wick_body_min":
-            [
-                -0.10,
-                -0.05,
-                0.05,
-                0.10,
-            ],
-
-        "structure_dist_atr_max":
-            [
-                -0.05,
-                -0.025,
-                0.025,
-                0.05,
-            ],
-
-        "compression_max":
-            [
-                -0.05,
-                -0.025,
-                0.025,
-                0.05,
-            ],
-
-        "mom4_min":
-            [
-                -0.50,
-                -0.25,
-                0.25,
-                0.50,
-            ],
-    }
-
-    for field, deltas in (
-        perturbations.items()
-    ):
-        value = base.get(field)
-
-        if value is None:
-            continue
-
-        for delta in deltas:
-            new_value = round(
-                value + delta,
-                4,
-            )
-
-            if (
-                field != "mom4_min"
-                and new_value <= 0
-            ):
-                continue
-
-            if (
-                field == "close_loc_max"
-                and not (
-                    0 < new_value < 1
-                )
-            ):
-                continue
-
-            cfg = deepcopy(base)
-
-            cfg[field] = (
-                new_value
-            )
-
-            cfg["config_id"] = (
-                f"S3_{rank:02d}_"
-                f"{field}_{new_value}"
-            )
-
-            configs.append(cfg)
-
-    allowed_lookbacks = [
-        10,
-        20,
-        40,
-        60,
-        80,
-        100,
-        120,
-        165,
-        180,
-        200,
-    ]
-
-    for field in [
-        "structure_lb",
-        "sweep_lb",
-        "breakdown_lb",
-    ]:
-        value = base.get(field)
-
-        if value not in allowed_lookbacks:
-            continue
-
-        position = (
-            allowed_lookbacks.index(
-                value
-            )
-        )
-
-        neighbours = []
-
-        if position > 0:
-            neighbours.append(
-                allowed_lookbacks[
-                    position - 1
-                ]
-            )
-
-        if position + 1 < len(
-            allowed_lookbacks
-        ):
-            neighbours.append(
-                allowed_lookbacks[
-                    position + 1
-                ]
-            )
-
-        for new_value in neighbours:
-            cfg = deepcopy(base)
-
-            cfg[field] = (
-                new_value
-            )
-
-            cfg["config_id"] = (
-                f"S3_{rank:02d}_"
-                f"{field}_{new_value}"
-            )
-
-            configs.append(cfg)
 
     return configs
 
 
-def build_stage3_configs(
-    stage2_by_id,
-    top_stage2_rows,
-):
+def local_grid_configs():
     configs = []
-    seen = set()
+    counter = 0
 
-    for rank, row in enumerate(
-        top_stage2_rows[
-            :STAGE3_BASE_KEEP
-        ]
-    ):
-        base = deepcopy(
-            stage2_by_id[
-                row[
-                    "config_id"
-                ]
-            ]
-        )
+    for br in [
+        1.10,
+        1.20,
+        1.30,
+    ]:
+        for body in [
+            1.10,
+            1.20,
+            1.30,
+        ]:
+            for range_atr in [
+                1.40,
+                1.50,
+                1.60,
+            ]:
+                for structure_lb in [
+                    165,
+                    180,
+                    200,
+                ]:
+                    for distance in [
+                        0.075,
+                        0.10,
+                        0.125,
+                        0.15,
+                    ]:
+                        for rr in [
+                            2.00,
+                            2.25,
+                            2.50,
+                            2.75,
+                            3.00,
+                        ]:
+                            counter += 1
 
-        for cfg in local_variants(
-            base,
-            rank,
-        ):
-            signature = tuple(
-                str(
-                    cfg.get(field)
-                )
-                for field in [
-                    "family",
-                    "br_min",
-                    "body_atr_min",
-                    "range_atr_min",
-                    "close_loc_max",
-                    "upper_wick_body_min",
-                    "structure_lb",
-                    "structure_dist_atr_max",
-                    "sweep_lb",
-                    "breakdown_lb",
-                    "compression_max",
-                    "mom4_min",
-                    "context",
-                    "rr",
-                ]
-            )
+                            cfg = clone_anchor(
+                                f"GRID_{counter:04d}"
+                            )
 
-            if signature in seen:
-                continue
+                            cfg["br_min"] = br
+                            cfg["body_atr_min"] = body
+                            cfg["range_atr_min"] = range_atr
+                            cfg["structure_lb"] = structure_lb
+                            cfg[
+                                "structure_dist_atr_max"
+                            ] = distance
+                            cfg["rr"] = rr
 
-            seen.add(signature)
-            configs.append(cfg)
+                            configs.append(cfg)
 
     return configs
 
 
 # ============================================================
-# FINAL ROBUSTNESS
+# DEEP VALIDATION
 # ============================================================
 
 def stats_row(
@@ -3475,18 +1963,6 @@ def stats_row(
     return {
         "config_id":
             config["config_id"],
-
-        "family":
-            config["family"],
-
-        "context":
-            config.get(
-                "context",
-                "NONE",
-            ),
-
-        "rr":
-            config["rr"],
 
         "period":
             label,
@@ -3508,9 +1984,7 @@ def stats_row(
 
         "profit_factor":
             round(
-                s[
-                    "profit_factor"
-                ],
+                s["profit_factor"],
                 6,
             ),
 
@@ -3522,24 +1996,18 @@ def stats_row(
 
         "expectancy_r":
             round(
-                s[
-                    "expectancy_r"
-                ],
+                s["expectancy_r"],
                 6,
             ),
 
         "max_drawdown_r":
             round(
-                s[
-                    "max_drawdown_r"
-                ],
+                s["max_drawdown_r"],
                 4,
             ),
 
         "longest_loss_streak":
-            s[
-                "longest_loss_streak"
-            ],
+            s["longest_loss_streak"],
     }
 
 
@@ -3552,7 +2020,7 @@ def period_rows(
         (
             "FULL_HISTORY",
             candles[0]["time"],
-            RESEARCH_TO,
+            NOW,
         ),
 
         (
@@ -3570,7 +2038,7 @@ def period_rows(
                 2010, 1, 1,
                 tzinfo=timezone.utc,
             ),
-            RESEARCH_TO,
+            NOW,
         ),
 
         *ERAS,
@@ -3590,25 +2058,25 @@ def period_rows(
                 2018, 1, 1,
                 tzinfo=timezone.utc,
             ),
-            RESEARCH_TO,
+            NOW,
         ),
 
         (
             "LAST_5Y",
-            RESEARCH_TO
+            NOW
             - timedelta(
                 days=365.2425 * 5
             ),
-            RESEARCH_TO,
+            NOW,
         ),
 
         (
             "LAST_2Y",
-            RESEARCH_TO
+            NOW
             - timedelta(
                 days=365.2425 * 2
             ),
-            RESEARCH_TO,
+            NOW,
         ),
     ]
 
@@ -3634,13 +2102,13 @@ def period_rows(
             trades,
         )
 
-        row["start_utc"] = (
-            iso_utc(start)
-        )
+        row[
+            "start_utc"
+        ] = iso_utc(start)
 
-        row["end_utc"] = (
-            iso_utc(end)
-        )
+        row[
+            "end_utc"
+        ] = iso_utc(end)
 
         rows.append(row)
 
@@ -3654,11 +2122,15 @@ def cost_rows(
 ):
     rows = []
 
-    periods = [
+    for (
+        label,
+        start,
+        end,
+    ) in [
         (
             "FULL_HISTORY",
             candles[0]["time"],
-            RESEARCH_TO,
+            NOW,
         ),
 
         (
@@ -3676,15 +2148,9 @@ def cost_rows(
                 2010, 1, 1,
                 tzinfo=timezone.utc,
             ),
-            RESEARCH_TO,
+            NOW,
         ),
-    ]
-
-    for (
-        label,
-        start,
-        end,
-    ) in periods:
+    ]:
         for cost in COST_GRID:
             trades = run_backtest(
                 candles,
@@ -3701,9 +2167,9 @@ def cost_rows(
                 trades,
             )
 
-            row["cost_pips"] = (
-                cost
-            )
+            row[
+                "cost_pips"
+            ] = cost
 
             rows.append(row)
 
@@ -3720,12 +2186,12 @@ def rolling_rows(
     first_month = month_floor(
         max(
             candles[0]["time"],
-            REQUESTED_FROM,
+            START,
         )
     )
 
     last_month = month_floor(
-        RESEARCH_TO
+        NOW
     )
 
     for months in [
@@ -3776,9 +2242,7 @@ def rolling_rows(
 
                 "profit_factor":
                     round(
-                        s[
-                            "profit_factor"
-                        ],
+                        s["profit_factor"],
                         6,
                     ),
 
@@ -3851,10 +2315,6 @@ def rolling_summary_rows(rows):
             "active_windows":
                 len(active),
 
-            "zero_trade_windows":
-                len(subset)
-                - len(active),
-
             "positive_windows_pct":
                 round(
                     100.0
@@ -3868,23 +2328,12 @@ def rolling_summary_rows(rows):
             "positive_active_windows_pct":
                 round(
                     100.0
-                    * len(
-                        positive_active
-                    )
+                    * len(positive_active)
                     / len(active),
                     4,
                 )
                 if active
                 else 0.0,
-
-            "median_r_all":
-                round(
-                    safe_median([
-                        row["total_r"]
-                        for row in subset
-                    ]),
-                    4,
-                ),
 
             "median_r_active":
                 round(
@@ -3898,9 +2347,7 @@ def rolling_summary_rows(rows):
             "median_pf_active":
                 round(
                     safe_median([
-                        row[
-                            "profit_factor"
-                        ]
+                        row["profit_factor"]
                         for row in active
                     ]),
                     6,
@@ -3937,12 +2384,11 @@ def calendar_rows(
 
     first_year = max(
         candles[0]["time"].year,
-        REQUESTED_FROM.year,
+        START.year,
     )
 
     last_completed_year = (
-        RESEARCH_TO.year
-        - 1
+        NOW.year - 1
     )
 
     for year in range(
@@ -3986,9 +2432,7 @@ def calendar_rows(
 
             "profit_factor":
                 round(
-                    s[
-                        "profit_factor"
-                    ],
+                    s["profit_factor"],
                     6,
                 ),
 
@@ -4021,20 +2465,11 @@ def calendar_summary_rows(rows):
 
     output = []
 
-    for (
-        config_id,
-        subset,
-    ) in grouped.items():
+    for config_id, subset in grouped.items():
         active = [
             row
             for row in subset
             if row["trades"] > 0
-        ]
-
-        positive = [
-            row
-            for row in subset
-            if row["positive"]
         ]
 
         positive_active = [
@@ -4059,37 +2494,18 @@ def calendar_summary_rows(rows):
             "active_years":
                 len(active),
 
-            "positive_years":
-                len(positive),
-
-            "negative_years":
-                len(negative),
-
-            "zero_trade_years":
-                len(subset)
-                - len(active),
-
-            "positive_years_pct":
-                round(
-                    100.0
-                    * len(positive)
-                    / len(subset),
-                    4,
-                )
-                if subset
-                else 0.0,
-
             "positive_active_years_pct":
                 round(
                     100.0
-                    * len(
-                        positive_active
-                    )
+                    * len(positive_active)
                     / len(active),
                     4,
                 )
                 if active
                 else 0.0,
+
+            "negative_years":
+                len(negative),
 
             "median_trades_year":
                 round(
@@ -4132,169 +2548,39 @@ def calendar_summary_rows(rows):
 
 
 # ============================================================
-# ABLATION / PLATEAU
-# ============================================================
-
-def ablation_configs(finalist):
-    configs = []
-
-    if finalist.get(
-        "context",
-        "NONE",
-    ) != "NONE":
-        cfg = deepcopy(finalist)
-
-        cfg[
-            "config_id"
-        ] = (
-            finalist["config_id"]
-            + "_ABLATE_CONTEXT"
-        )
-
-        cfg["context"] = (
-            "NONE"
-        )
-
-        configs.append(
-            (
-                "REMOVE_CONTEXT",
-                cfg,
-            )
-        )
-
-    removable = [
-        "br_min",
-        "body_atr_min",
-        "range_atr_min",
-        "close_loc_max",
-        "upper_wick_body_min",
-        "mom4_min",
-    ]
-
-    for field in removable:
-        if finalist.get(
-            field
-        ) is None:
-            continue
-
-        cfg = deepcopy(finalist)
-
-        cfg["config_id"] = (
-            finalist["config_id"]
-            + "_ABLATE_"
-            + field
-        )
-
-        cfg[field] = None
-
-        configs.append(
-            (
-                "REMOVE_"
-                + field,
-                cfg,
-            )
-        )
-
-    return configs
-
-
-def plateau_configs(finalist):
-    configs = local_variants(
-        finalist,
-        99,
-    )
-
-    for cfg in configs:
-        # Preserve the finalist RR for geometry plateau.
-        cfg["rr"] = (
-            finalist["rr"]
-        )
-
-        cfg["config_id"] = (
-            finalist["config_id"]
-            + "_PLATEAU_"
-            + cfg["config_id"]
-        )
-
-    return configs
-
-
-# ============================================================
 # MAIN
 # ============================================================
 
 def run_research():
     try:
-        m15 = fetch_history(
-            "M15",
-            REQUESTED_FROM,
-            RESEARCH_TO,
-            35,
-        )
+        candles = fetch_history()
 
-        h1 = fetch_history(
-            "H1",
-            HTF_WARMUP_FROM,
-            RESEARCH_TO,
-            180,
-        )
-
-        h4 = fetch_history(
-            "H4",
-            HTF_WARMUP_FROM,
-            RESEARCH_TO,
-            700,
-        )
-
-        daily = fetch_history(
-            "D",
-            HTF_WARMUP_FROM,
-            RESEARCH_TO,
-            3500,
-        )
-
-        if not all([
-            m15,
-            h1,
-            h4,
-            daily,
-        ]):
+        if not candles:
             raise RuntimeError(
-                "Missing required GBP_USD history"
+                "No GBP_USD M15 history returned"
             )
 
         write_csv(
             OUTPUT_COVERAGE,
             [{
                 "instrument":
-                    INSTRUMENT,
+                    PAIR,
 
                 "requested_start_utc":
-                    iso_utc(
-                        REQUESTED_FROM
-                    ),
+                    iso_utc(START),
 
                 "actual_first_m15_utc":
                     iso_utc(
-                        m15[0]["time"]
+                        candles[0]["time"]
                     ),
 
                 "actual_last_m15_utc":
                     iso_utc(
-                        m15[-1]["time"]
+                        candles[-1]["time"]
                     ),
 
                 "m15_candles":
-                    len(m15),
-
-                "h1_candles":
-                    len(h1),
-
-                "h4_candles":
-                    len(h4),
-
-                "daily_candles":
-                    len(daily),
+                    len(candles),
             }],
         )
 
@@ -4303,341 +2589,242 @@ def run_research():
                 "precomputing",
 
             "message":
-                "Building no-lookahead H1/H4/D state",
+                "Building GBP/USD M15 SHORT finalist feature cache",
         })
 
-        m15_times = [
-            candle["time"]
-            for candle in m15
-        ]
-
-        h1_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(
-                    h1
-                ),
-            )
-        )
-
-        h4_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(
-                    h4
-                ),
-            )
-        )
-
-        daily_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(
-                    daily
-                ),
-            )
-        )
-
-        STATUS.update({
-            "state":
-                "precomputing",
-
-            "message":
-                "Building GBP/USD M15 SHORT feature cache",
-        })
-
-        features = (
-            build_feature_cache(
-                m15,
-                h1_aligned,
-                h4_aligned,
-                daily_aligned,
-            )
+        features = build_features(
+            candles
         )
 
         # ----------------------------------------------------
-        # Existing benchmark parity
+        # Anchor and old benchmark parity
         # ----------------------------------------------------
-        STATUS.update({
-            "state":
-                "benchmark",
+        comparison_rows = []
 
-            "message":
-                "Running frozen GBP/USD M15 SHORT benchmark",
-        })
-
-        benchmark_indices = (
-            signal_indices_for_config(
-                BENCHMARK,
+        for config in [
+            OLD_BENCHMARK,
+            ANCHOR,
+        ]:
+            idx = signal_indices(
+                config,
                 features,
             )
-        )
 
-        benchmark_rows = (
-            period_rows(
-                BENCHMARK,
-                m15,
-                benchmark_indices,
+            comparison_rows.append(
+                evaluation_row(
+                    config,
+                    candles,
+                    idx,
+                )
             )
+
+        write_csv(
+            OUTPUT_COMPARISON,
+            comparison_rows,
         )
 
-        benchmark_2010_plus = (
-            len(
-                run_backtest(
-                    m15,
-                    benchmark_indices,
-                    BENCHMARK["rr"],
-                    PRIMARY_COST_PIPS,
-                    datetime(
-                        2010, 1, 1,
-                        tzinfo=timezone.utc,
+        anchor_row = next(
+            row
+            for row in comparison_rows
+            if row[
+                "config_id"
+            ] == ANCHOR[
+                "config_id"
+            ]
+        )
+
+        old_row = next(
+            row
+            for row in comparison_rows
+            if row[
+                "config_id"
+            ] == OLD_BENCHMARK[
+                "config_id"
+            ]
+        )
+
+        write_csv(
+            OUTPUT_PARITY,
+            [{
+                "config_id":
+                    ANCHOR[
+                        "config_id"
+                    ],
+
+                "expected_full_trades":
+                    54,
+
+                "actual_full_trades":
+                    anchor_row[
+                        "full_trades"
+                    ],
+
+                "expected_pre2010_trades":
+                    6,
+
+                "actual_pre2010_trades":
+                    anchor_row[
+                        "pre2010_trades"
+                    ],
+
+                "expected_post2010_trades":
+                    48,
+
+                "actual_post2010_trades":
+                    anchor_row[
+                        "post2010_trades"
+                    ],
+
+                "status":
+                    (
+                        "MATCH"
+                        if (
+                            anchor_row[
+                                "full_trades"
+                            ] == 54
+                            and anchor_row[
+                                "pre2010_trades"
+                            ] == 6
+                            and anchor_row[
+                                "post2010_trades"
+                            ] == 48
+                        )
+                        else "CHECK_OR_NEWER_COMPLETED_TRADES"
                     ),
-                    RESEARCH_TO,
-                )
-            )
-        )
+            }, {
+                "config_id":
+                    OLD_BENCHMARK[
+                        "config_id"
+                    ],
 
-        for row in benchmark_rows:
-            row[
-                "locked_2010_reference_trades"
-            ] = 53
+                "expected_post2010_trades":
+                    53,
 
-            row[
-                "current_2010_plus_trades"
-            ] = benchmark_2010_plus
+                "actual_post2010_trades":
+                    old_row[
+                        "post2010_trades"
+                    ],
 
-            row[
-                "parity_status"
-            ] = (
-                "MATCH"
-                if benchmark_2010_plus == 53
-                else (
-                    "CURRENT_RUN_HAS_NEWER_TRADES"
-                    if benchmark_2010_plus > 53
-                    else "CHECK_PARITY"
-                )
-            )
-
-        write_csv(
-            OUTPUT_BENCHMARK,
-            benchmark_rows,
+                "status":
+                    (
+                        "MATCH"
+                        if old_row[
+                            "post2010_trades"
+                        ] == 53
+                        else "CHECK_OR_NEWER_COMPLETED_TRADES"
+                    ),
+            }],
         )
 
         # ----------------------------------------------------
-        # Stage 1
+        # One-way slices
         # ----------------------------------------------------
-        stage1_configs = (
-            build_stage1_configs()
+        slice_configs = (
+            one_way_configs()
         )
 
-        stage1_by_id = {
-            cfg["config_id"]:
-                cfg
-            for cfg in stage1_configs
-        }
+        slice_rows = []
 
-        stage1_rows = []
-
-        for i, cfg in enumerate(
-            stage1_configs,
+        for i, config in enumerate(
+            slice_configs,
             1,
         ):
             STATUS.update({
                 "state":
-                    "stage1",
+                    "slices",
 
                 "message": (
-                    f"Stage 1 "
-                    f"{i}/{len(stage1_configs)} "
-                    f"{cfg['config_id']}"
+                    f"Slice {i}/{len(slice_configs)} "
+                    f"{config['config_id']}"
                 ),
             })
 
-            indices = (
-                signal_indices_for_config(
-                    cfg,
-                    features,
-                )
+            idx = signal_indices(
+                config,
+                features,
             )
 
-            stage1_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
+            row = evaluation_row(
+                config,
+                candles,
+                idx,
             )
 
-        stage1_rows = (
-            sort_evaluation_rows(
-                stage1_rows
-            )
-        )
+            row[
+                "slice"
+            ] = config[
+                "slice"
+            ]
+
+            slice_rows.append(row)
 
         write_csv(
-            OUTPUT_STAGE1,
-            stage1_rows,
+            OUTPUT_SLICES,
+            slice_rows,
         )
 
-        top_stage1 = [
-            row
-            for row in stage1_rows
-            if row[
-                "full_trades"
-            ] >= MIN_STAGE1_TRADES
-        ][
-            :STAGE1_KEEP
-        ]
-
-        if len(top_stage1) < STAGE1_KEEP:
-            top_stage1 = (
-                stage1_rows[
-                    :STAGE1_KEEP
-                ]
-            )
-
         # ----------------------------------------------------
-        # Stage 2
+        # Local grid
         # ----------------------------------------------------
-        stage2_configs = (
-            build_stage2_configs(
-                stage1_by_id,
-                top_stage1,
-            )
+        grid_configs = (
+            local_grid_configs()
         )
 
-        stage2_by_id = {
+        grid_by_id = {
             cfg["config_id"]:
                 cfg
-            for cfg in stage2_configs
+            for cfg in grid_configs
         }
 
-        stage2_rows = []
+        grid_rows = []
 
-        for i, cfg in enumerate(
-            stage2_configs,
+        for i, config in enumerate(
+            grid_configs,
             1,
         ):
             STATUS.update({
                 "state":
-                    "stage2",
+                    "local_grid",
 
                 "message": (
-                    f"Stage 2 "
-                    f"{i}/{len(stage2_configs)} "
-                    f"{cfg['config_id']}"
+                    f"Grid {i}/{len(grid_configs)} "
+                    f"{config['config_id']}"
                 ),
             })
 
-            indices = (
-                signal_indices_for_config(
-                    cfg,
-                    features,
-                )
+            idx = signal_indices(
+                config,
+                features,
             )
 
-            stage2_rows.append(
+            grid_rows.append(
                 evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
+                    config,
+                    candles,
+                    idx,
                 )
             )
 
-        stage2_rows = (
-            sort_evaluation_rows(
-                stage2_rows
-            )
+        grid_rows = sort_rows(
+            grid_rows
         )
 
         write_csv(
-            OUTPUT_STAGE2,
-            stage2_rows,
+            OUTPUT_GRID,
+            grid_rows,
         )
 
-        top_stage2 = [
-            row
-            for row in stage2_rows
-            if row[
-                "full_trades"
-            ] >= MIN_STAGE1_TRADES
-        ][
-            :STAGE2_KEEP
-        ]
-
-        if len(top_stage2) < STAGE2_KEEP:
-            top_stage2 = (
-                stage2_rows[
-                    :STAGE2_KEEP
-                ]
-            )
-
-        # ----------------------------------------------------
-        # Stage 3
-        # ----------------------------------------------------
-        stage3_configs = (
-            build_stage3_configs(
-                stage2_by_id,
-                top_stage2,
-            )
-        )
-
-        stage3_by_id = {
-            cfg["config_id"]:
-                cfg
-            for cfg in stage3_configs
-        }
-
-        stage3_rows = []
-
-        for i, cfg in enumerate(
-            stage3_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "stage3",
-
-                "message": (
-                    f"Stage 3 "
-                    f"{i}/{len(stage3_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = (
-                signal_indices_for_config(
-                    cfg,
-                    features,
-                )
-            )
-
-            stage3_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        stage3_rows = (
-            sort_evaluation_rows(
-                stage3_rows
-            )
-        )
-
-        write_csv(
-            OUTPUT_STAGE3,
-            stage3_rows,
-        )
-
+        # Prefer candidates with useful trade count and
+        # positive pre/post history.
         eligible = [
             row
-            for row in stage3_rows
+            for row in grid_rows
             if (
-                row[
+                65
+                <= row[
                     "full_trades"
-                ] >= MIN_FINAL_TRADES
+                ]
+                <= 120
                 and row[
                     "pre2010_r"
                 ] > 0
@@ -4650,28 +2837,80 @@ def run_research():
             )
         ]
 
-        finalist_rows = (
-            eligible
-            if eligible
-            else stage3_rows
-        )[
-            :FINALIST_KEEP
+        selected_rows = [
+            anchor_row
         ]
 
-        finalist_configs = [
-            stage3_by_id[
-                row["config_id"]
+        existing = {
+            anchor_row[
+                "config_id"
             ]
-            for row in finalist_rows
-        ]
+        }
+
+        for row in eligible:
+            if row[
+                "config_id"
+            ] in existing:
+                continue
+
+            selected_rows.append(row)
+            existing.add(
+                row[
+                    "config_id"
+                ]
+            )
+
+            if len(
+                selected_rows
+            ) >= 10:
+                break
+
+        if len(
+            selected_rows
+        ) < 10:
+            for row in grid_rows:
+                if row[
+                    "config_id"
+                ] in existing:
+                    continue
+
+                selected_rows.append(row)
+                existing.add(
+                    row[
+                        "config_id"
+                    ]
+                )
+
+                if len(
+                    selected_rows
+                ) >= 10:
+                    break
 
         write_csv(
-            OUTPUT_FINAL,
-            finalist_rows,
+            OUTPUT_FINALISTS,
+            selected_rows,
         )
 
+        selected_configs = [
+            ANCHOR
+        ]
+
+        for row in selected_rows[
+            1:
+        ]:
+            cfg = grid_by_id.get(
+                row[
+                    "config_id"
+                ]
+            )
+
+            if cfg is not None:
+                selected_configs.append(
+                    cfg
+                )
+
         # ----------------------------------------------------
-        # Deep robustness
+        # Deep validation
         # ----------------------------------------------------
         period_output = []
         cost_output = []
@@ -4679,67 +2918,65 @@ def run_research():
         calendar_output = []
         trade_output = []
 
-        for i, cfg in enumerate(
-            finalist_configs,
+        for i, config in enumerate(
+            selected_configs,
             1,
         ):
             STATUS.update({
                 "state":
-                    "final_validation",
+                    "deep_validation",
 
                 "message": (
-                    f"Final validation "
-                    f"{i}/{len(finalist_configs)} "
-                    f"{cfg['config_id']}"
+                    f"Deep validation "
+                    f"{i}/{len(selected_configs)} "
+                    f"{config['config_id']}"
                 ),
             })
 
-            indices = (
-                signal_indices_for_config(
-                    cfg,
-                    features,
-                )
+            idx = signal_indices(
+                config,
+                features,
             )
 
             period_output.extend(
                 period_rows(
-                    cfg,
-                    m15,
-                    indices,
+                    config,
+                    candles,
+                    idx,
                 )
             )
 
             cost_output.extend(
                 cost_rows(
-                    cfg,
-                    m15,
-                    indices,
+                    config,
+                    candles,
+                    idx,
                 )
             )
 
             rolling_output.extend(
                 rolling_rows(
-                    cfg,
-                    m15,
-                    indices,
+                    config,
+                    candles,
+                    idx,
                 )
             )
 
             calendar_output.extend(
                 calendar_rows(
-                    cfg,
-                    m15,
-                    indices,
+                    config,
+                    candles,
+                    idx,
                 )
             )
 
             full_trades = run_backtest(
-                m15,
-                indices,
-                cfg["rr"],
+                candles,
+                idx,
+                config["rr"],
                 PRIMARY_COST_PIPS,
-                m15[0]["time"],
-                RESEARCH_TO,
+                candles[0]["time"],
+                NOW,
             )
 
             for trade in full_trades:
@@ -4747,22 +2984,9 @@ def run_research():
 
                 row[
                     "config_id"
-                ] = cfg[
+                ] = config[
                     "config_id"
                 ]
-
-                row[
-                    "family"
-                ] = cfg[
-                    "family"
-                ]
-
-                row[
-                    "context"
-                ] = cfg.get(
-                    "context",
-                    "NONE",
-                )
 
                 trade_output.append(
                     row
@@ -4807,177 +3031,6 @@ def run_research():
             trade_output,
         )
 
-        # ----------------------------------------------------
-        # Top-finalist ablation / plateau
-        # ----------------------------------------------------
-        if finalist_configs:
-            top = finalist_configs[0]
-
-            ablation_rows = []
-
-            for label, cfg in (
-                ablation_configs(
-                    top
-                )
-            ):
-                try:
-                    indices = (
-                        signal_indices_for_config(
-                            cfg,
-                            features,
-                        )
-                    )
-
-                    row = evaluation_row(
-                        cfg,
-                        m15,
-                        indices,
-                    )
-
-                    row[
-                        "ablation"
-                    ] = label
-
-                    ablation_rows.append(
-                        row
-                    )
-
-                except Exception:
-                    pass
-
-            write_csv(
-                OUTPUT_ABLATION,
-                sort_evaluation_rows(
-                    ablation_rows
-                ),
-            )
-
-            plateau_rows = []
-            seen = set()
-
-            for cfg in plateau_configs(
-                top
-            ):
-                signature = tuple(
-                    str(
-                        cfg.get(field)
-                    )
-                    for field in [
-                        "family",
-                        "br_min",
-                        "body_atr_min",
-                        "range_atr_min",
-                        "close_loc_max",
-                        "upper_wick_body_min",
-                        "structure_lb",
-                        "structure_dist_atr_max",
-                        "sweep_lb",
-                        "breakdown_lb",
-                        "compression_max",
-                        "mom4_min",
-                        "context",
-                        "rr",
-                    ]
-                )
-
-                if signature in seen:
-                    continue
-
-                seen.add(signature)
-
-                try:
-                    indices = (
-                        signal_indices_for_config(
-                            cfg,
-                            features,
-                        )
-                    )
-
-                    plateau_rows.append(
-                        evaluation_row(
-                            cfg,
-                            m15,
-                            indices,
-                        )
-                    )
-
-                except Exception:
-                    pass
-
-            write_csv(
-                OUTPUT_PLATEAU,
-                sort_evaluation_rows(
-                    plateau_rows
-                ),
-            )
-
-        else:
-            write_csv(
-                OUTPUT_ABLATION,
-                [],
-            )
-
-            write_csv(
-                OUTPUT_PLATEAU,
-                [],
-            )
-
-        # ----------------------------------------------------
-        # Notes
-        # ----------------------------------------------------
-        write_csv(
-            OUTPUT_NOTES,
-            [{
-                "item":
-                    "Research standard",
-
-                "value": (
-                    "Fresh full-history GBP/USD M15 SHORT "
-                    "re-examination from earliest available "
-                    "OANDA history. Existing 2010+ locked short "
-                    "retained unchanged as benchmark only."
-                ),
-            }, {
-                "item":
-                    "Benchmark",
-
-                "value": (
-                    "Exact bearish engulf; body>=1ATR14; "
-                    "structure180 within0.05ATR; exclude NY06/07; "
-                    "RR3.00; stop high+10 ticks."
-                ),
-            }, {
-                "item":
-                    "Historical cost",
-
-                "value":
-                    "1.0 pip adverse baseline; 0.5/1/1.5/2 stress.",
-            }, {
-                "item":
-                    "HTF completion",
-
-                "value": (
-                    "H1/H4/D exposed only after next actual HTF "
-                    "candle open via bisect_right."
-                ),
-            }, {
-                "item":
-                    "Daily alignment",
-
-                "value":
-                    "OANDA D dailyAlignment=17 America/New_York.",
-            }, {
-                "item":
-                    "Selection warning",
-
-                "value": (
-                    "Do not auto-lock the top row. Review era, "
-                    "rolling, calendar, cost, ablation and local "
-                    "parameter behaviour first."
-                ),
-            }],
-        )
-
         STATUS.update({
             "state":
                 "packaging",
@@ -4992,28 +3045,22 @@ def run_research():
             "state":
                 "complete",
 
-            "message": (
-                "GBP/USD M15 SHORT full-history "
-                "re-examination complete"
-            ),
+            "message":
+                "GBP/USD M15 SHORT finalist confirmation complete",
 
             "m15_candles":
-                len(m15),
+                len(candles),
 
-            "stage1_configs":
-                len(stage1_configs),
+            "slice_configs":
+                len(slice_configs),
 
-            "stage2_configs":
-                len(stage2_configs),
+            "grid_configs":
+                len(grid_configs),
 
-            "stage3_configs":
-                len(stage3_configs),
-
-            "finalists":
-                len(finalist_configs),
-
-            "benchmark_2010_plus_trades":
-                benchmark_2010_plus,
+            "deep_finalists":
+                len(
+                    selected_configs
+                ),
 
             "results_bundle":
                 OUTPUT_BUNDLE,
@@ -5043,13 +3090,13 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "GBPUSD M15 SHORT Full-History Re-examination",
+            "GBPUSD M15 SHORT Finalist Confirmation",
 
         "status":
             STATUS["state"],
 
         "instrument":
-            INSTRUMENT,
+            PAIR,
 
         "timeframe":
             "M15",
@@ -5057,41 +3104,33 @@ def root():
         "side":
             "SELL",
 
-        "requested_start_utc":
-            iso_utc(
-                REQUESTED_FROM
-            ),
-
-        "primary_cost_pips":
-            PRIMARY_COST_PIPS,
-
-        "families": [
-            "BEAR_ENGULF_STRUCTURE",
-            "HIGH_SWEEP_DISPLACEMENT",
-            "FAILED_BREAKOUT_REJECTION",
-            "BEAR_OUTSIDE_REVERSAL",
-            "COMPRESSION_BREAKDOWN",
-            "BLOWOFF_REJECTION",
-        ],
-
-        "benchmark": {
+        "anchor": {
             "exact_bearish_engulf":
                 True,
 
+            "br_min":
+                1.20,
+
             "body_atr_min":
-                1.00,
+                1.20,
+
+            "range_atr_min":
+                1.50,
 
             "structure_lb":
                 180,
 
             "structure_dist_atr_max":
-                0.05,
+                0.075,
 
-            "excluded_ny_hours":
-                [6, 7],
+            "time_filter":
+                None,
+
+            "weekday_filter":
+                None,
 
             "rr":
-                3.00,
+                2.50,
         },
 
         "orders_supported":
@@ -5101,14 +3140,14 @@ def root():
             False,
 
         "routes": [
-            "/gbpusd-m15-short-full-history/status",
-            "/gbpusd-m15-short-full-history/results",
+            "/gbpusd-m15-short-final-confirmation/status",
+            "/gbpusd-m15-short-final-confirmation/results",
         ],
     })
 
 
 @app.route(
-    "/gbpusd-m15-short-full-history/status"
+    "/gbpusd-m15-short-final-confirmation/status"
 )
 def route_status():
     return jsonify(
@@ -5117,7 +3156,7 @@ def route_status():
 
 
 @app.route(
-    "/gbpusd-m15-short-full-history/results"
+    "/gbpusd-m15-short-final-confirmation/results"
 )
 def route_results():
     return download_file(
@@ -5130,7 +3169,7 @@ if __name__ == "__main__":
         target=run_research,
         name=(
             "gbpusd-m15-short-"
-            "full-history"
+            "final-confirmation"
         ),
         daemon=True,
     )
