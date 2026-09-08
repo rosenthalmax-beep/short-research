@@ -13,7 +13,29 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/CAD M15 LONG — GEN3 FAST / RAILWAY-SAFE
+# USD/CAD M15 LONG — FINAL LOCAL CONFIRMATION
+#
+#
+# LOCAL PLATEAU
+# -------------
+# Geometry:
+#   compression <= 0.60/0.65/0.70/0.75/0.80 of ATR20 mean
+#   body >= 0.90/1.00/1.10 ATR14
+#   range >= 1.30/1.40/1.50 ATR14
+#   breakout lookback = 8/10/12/15
+#
+# Higher-timeframe:
+#   previous COMPLETED H4 close > EMA85/100/115/130
+#
+# RR:
+#   3.50 / 3.75 / 4.00 / 4.25
+#
+# Anchor:
+#   A0.70 / B1.00 / R1.40 / LB10 / H4EMA100 / RR4.00
+#
+# Railway-safe staging:
+#   180 geometry tests -> top 24 -> H4/RR sweep ->
+#   validation -> cost stress -> rolling.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -106,7 +128,7 @@ from flask import Flask, jsonify, send_file
 # OUTPUT
 # ------
 # One ZIP route:
-#   /usdcad-m15-long-gen3-fast/results
+#   /usdcad-m15-long-final/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -154,30 +176,58 @@ STAGE2_MIN_PF = 1.08
 STAGE2_KEEP_PER_TRIGGER = 3
 STAGE2_GLOBAL_KEEP = 24
 FINALIST_COUNT = 10
-ROLLING_FINALISTS = 5
+ROLLING_FINALISTS = 6
+
+# ============================================================
+# LOCAL CONFIRMATION GRID
+# ============================================================
+#
+# Anchor discovered in Gen3 FAST:
+#   compression ATR20 <= 0.70
+#   body >= 1.00 ATR14
+#   range >= 1.40 ATR14
+#   close > prior 10-bar high
+#   previous completed H4 close > EMA100
+#   RR 4.00
+#
+# Tight plateau only — no broad new hypothesis search.
+LOCAL_COMPRESSION = [0.60, 0.65, 0.70, 0.75, 0.80]
+LOCAL_BODY_ATR = [0.90, 1.00, 1.10]
+LOCAL_RANGE_ATR = [1.30, 1.40, 1.50]
+LOCAL_BREAKOUT_LB = [8, 10, 12, 15]
+LOCAL_H4_EMA = [85, 100, 115, 130]
+LOCAL_RR = [3.50, 3.75, 4.00, 4.25]
+
+ANCHOR_LABEL = (
+    "ANCHOR_CB_A0.70_B1.00_R1.40_LB10_H4EMA100_RR4.00"
+)
+
+LOCAL_STAGE1_KEEP = 24
+LOCAL_VALIDATION_KEEP = 20
+LOCAL_COST_KEEP = 10
 
 
 # ============================================================
 # OUTPUTS
 # ============================================================
 
-OUTPUT_BASELINES = "usdcad_m15_long_gen3_baselines.csv"
-OUTPUT_CONTEXT = "usdcad_m15_long_gen3_context.csv"
-OUTPUT_INTERACTIONS = "usdcad_m15_long_gen3_interactions.csv"
-OUTPUT_TOP = "usdcad_m15_long_gen3_top.csv"
-OUTPUT_ERAS = "usdcad_m15_long_gen3_eras.csv"
-OUTPUT_DEVVAL = "usdcad_m15_long_gen3_dev_validation.csv"
-OUTPUT_RECENT = "usdcad_m15_long_gen3_recent.csv"
-OUTPUT_ROLLING = "usdcad_m15_long_gen3_rolling.csv"
-OUTPUT_ROLLING_SUMMARY = "usdcad_m15_long_gen3_rolling_summary.csv"
-OUTPUT_OVERLAP = "usdcad_m15_long_gen3_overlap.csv"
-OUTPUT_BEST_TRADES = "usdcad_m15_long_gen3_best_trades.csv"
-OUTPUT_BUNDLE = "usdcad_m15_long_GEN3_FAST_RESULTS.zip"
+OUTPUT_BASELINES = "usdcad_m15_long_local_geometry.csv"
+OUTPUT_CONTEXT = "usdcad_m15_long_local_h4_rr.csv"
+OUTPUT_INTERACTIONS = "usdcad_m15_long_local_cost_stress.csv"
+OUTPUT_TOP = "usdcad_m15_long_local_top.csv"
+OUTPUT_ERAS = "usdcad_m15_long_local_eras.csv"
+OUTPUT_DEVVAL = "usdcad_m15_long_local_dev_validation.csv"
+OUTPUT_RECENT = "usdcad_m15_long_local_recent.csv"
+OUTPUT_ROLLING = "usdcad_m15_long_local_rolling.csv"
+OUTPUT_ROLLING_SUMMARY = "usdcad_m15_long_local_rolling_summary.csv"
+OUTPUT_OVERLAP = "usdcad_m15_long_local_overlap.csv"
+OUTPUT_BEST_TRADES = "usdcad_m15_long_local_best_trades.csv"
+OUTPUT_BUNDLE = "usdcad_m15_long_FINAL_local_confirmation_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
     "message": "USD/CAD M15 LONG Gen3 not started",
-    "service": "USDCAD M15 Long Gen3 FAST Railway-Safe",
+    "service": "USDCAD M15 Long Final Local Confirmation",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -544,7 +594,7 @@ def sma(values, length):
 # ============================================================
 
 H1_EMAS = [20, 50, 100, 200]
-H4_EMAS = [20, 50, 100, 200]
+H4_EMAS = [20, 50, 85, 100, 115, 130, 200]
 D_EMAS = [20, 50, 100, 200, 300]
 
 
@@ -1677,204 +1727,94 @@ def clone_config(
 
 
 def build_baselines():
+    """
+    Stage 1 local geometry plateau.
+
+    H4 trend and RR are held at the discovered anchor values:
+        previous completed H4 close > EMA100
+        RR 4.00
+
+    Only the four compression-breakout geometry dimensions move.
+    """
     configs = []
 
-    # 1) Multi-bar washout reclaim.
-    for rr in [3.0, 3.5]:
-        for washout_bars in [2, 3]:
-            for bearish_needed in (
-                [2]
-                if washout_bars == 2
-                else [2, 3]
-            ):
-                for lb in [20, 40, 60]:
-                    for close_loc in [0.60, 0.70, 0.80]:
-                        c = base_config(
-                            (
-                                f"MWR_B{washout_bars}_"
-                                f"N{bearish_needed}_"
-                                f"LB{lb}_"
-                                f"C{close_loc}_RR{rr}"
-                            ),
-                            "MULTI_BAR_WASHOUT_RECLAIM",
-                            rr,
-                        )
-                        c["washout_bars"] = washout_bars
-                        c["bearish_needed"] = bearish_needed
-                        c["lookback"] = lb
-                        c["minimum_close_location"] = close_loc
-                        configs.append(c)
-
-    # 2) Outside bar reversal.
-    for rr in [2.75, 3.0, 3.25, 3.5]:
-        for scope in [1, 3]:
-            for close_loc in [0.60, 0.70, 0.80]:
-                for wick in [0.00, 0.10, 0.20]:
-                    c = base_config(
-                        (
-                            f"OBR_S{scope}_"
-                            f"C{close_loc}_W{wick}_RR{rr}"
-                        ),
-                        "OUTSIDE_BAR_REVERSAL",
-                        rr,
+    for compression in LOCAL_COMPRESSION:
+        for body in LOCAL_BODY_ATR:
+            for signal_range in LOCAL_RANGE_ATR:
+                for lookback in LOCAL_BREAKOUT_LB:
+                    label = (
+                        f"CB_A{compression:.2f}_"
+                        f"B{body:.2f}_"
+                        f"R{signal_range:.2f}_"
+                        f"LB{lookback}_"
+                        f"H4EMA100_RR4.00"
                     )
-                    c["outside_scope"] = scope
-                    c["minimum_close_location"] = close_loc
-                    c["minimum_lower_wick_body"] = wick
-                    configs.append(c)
 
-    # 3) Trend pullback resumption.
-    for rr in [3.0, 3.5, 4.0]:
-        for ema_len in [20, 50]:
-            for distance in [0.10, 0.20, 0.30, 0.40]:
-                for body in [0.40, 0.60, 0.80]:
+                    if (
+                        compression == 0.70
+                        and body == 1.00
+                        and signal_range == 1.40
+                        and lookback == 10
+                    ):
+                        label = ANCHOR_LABEL
+
                     c = base_config(
-                        (
-                            f"TPR_EMA{ema_len}_"
-                            f"D{distance}_B{body}_RR{rr}"
-                        ),
-                        "TREND_PULLBACK_RESUMPTION",
-                        rr,
+                        label,
+                        "COMPRESSION_BREAKOUT",
+                        4.00,
                     )
-                    c["ema_length"] = ema_len
-                    c["maximum_touch_distance_atr"] = distance
+
+                    c["compression_metric"] = "ATR20"
+                    c["maximum_compression_ratio"] = compression
                     c["minimum_body_atr"] = body
+                    c["minimum_range_atr"] = signal_range
+                    c["breakout_lookback"] = lookback
+
+                    # Discovered coherent HTF filter.
+                    c["h4_close_above_ema"] = 100
+
                     configs.append(c)
-
-    # 4) Extreme mean reversion.
-    for rr in [2.75, 3.0, 3.25, 3.5]:
-        for ema_len in [20, 50]:
-            for dist in [-0.75, -1.00, -1.25, -1.50, -2.00]:
-                for close_loc in [0.60, 0.70, 0.80]:
-                    c = base_config(
-                        (
-                            f"EMR_EMA{ema_len}_"
-                            f"D{dist}_C{close_loc}_RR{rr}"
-                        ),
-                        "EXTREME_MEAN_REVERSION",
-                        rr,
-                    )
-                    c["ema_length"] = ema_len
-                    c["maximum_prev_distance_atr"] = dist
-                    c["minimum_close_location"] = close_loc
-                    configs.append(c)
-
-    # 5) Compression breakout.
-    for rr in [3.0, 3.5, 4.0]:
-        for metric in ["ATR20", "RANGE20"]:
-            for comp in [0.60, 0.70, 0.80, 0.90]:
-                for body in [0.60, 0.80, 1.00]:
-                    for rng in [1.00, 1.20, 1.40]:
-                        for lb in [10, 20]:
-                            c = base_config(
-                                (
-                                    f"CB_{metric}_"
-                                    f"C{comp}_B{body}_"
-                                    f"R{rng}_LB{lb}_RR{rr}"
-                                ),
-                                "COMPRESSION_BREAKOUT",
-                                rr,
-                            )
-                            c["compression_metric"] = metric
-                            c["maximum_compression_ratio"] = comp
-                            c["minimum_body_atr"] = body
-                            c["minimum_range_atr"] = rng
-                            c["breakout_lookback"] = lb
-                            configs.append(c)
-
-    # 6) Session sweep reclaim.
-    for rr in [3.0, 3.5, 4.0]:
-        for session in ["ASIA", "LONDON"]:
-            for close_loc in [0.60, 0.70, 0.80]:
-                c = base_config(
-                    (
-                        f"SSR_{session}_"
-                        f"C{close_loc}_RR{rr}"
-                    ),
-                    "SESSION_RANGE_SWEEP_RECLAIM",
-                    rr,
-                )
-                c["session"] = session
-                c["minimum_close_location"] = close_loc
-                configs.append(c)
-
-    # 7) Failed downside momentum.
-    for rr in [3.0, 3.5, 4.0]:
-        for horizon in [4, 8, 12]:
-            for mom in [-0.75, -1.00, -1.25, -1.50, -2.00]:
-                for decel in [0.25, 0.50, 0.75, 1.00]:
-                    for close_loc in [0.60, 0.70, 0.80]:
-                        c = base_config(
-                            (
-                                f"FDM_{horizon}H_"
-                                f"M{mom}_D{decel}_"
-                                f"C{close_loc}_RR{rr}"
-                            ),
-                            "FAILED_DOWNSIDE_MOMENTUM",
-                            rr,
-                        )
-                        c["momentum_horizon"] = horizon
-                        c["maximum_long_momentum_atr"] = mom
-                        c["minimum_deceleration"] = decel
-                        c["minimum_close_location"] = close_loc
-                        configs.append(c)
-
-    # 8) Double sweep hold.
-    for rr in [3.0, 3.5]:
-        for lb in [20, 40, 60]:
-            for tol in [0.10, 0.20, 0.30, 0.40]:
-                c = base_config(
-                    (
-                        f"DSH_LB{lb}_"
-                        f"T{tol}_RR{rr}"
-                    ),
-                    "DOUBLE_SWEEP_HOLD",
-                    rr,
-                )
-                c["lookback"] = lb
-                c["hold_tolerance_atr"] = tol
-                configs.append(c)
-
-    # 9) First reclaim after extreme.
-    for rr in [3.0, 3.5, 4.0]:
-        for lb in [20, 40, 60]:
-            for maxbars in [0, 1, 2, 3, 5]:
-                for body in [0.40, 0.60, 0.80]:
-                    c = base_config(
-                        (
-                            f"FRAE_LB{lb}_"
-                            f"MB{maxbars}_B{body}_RR{rr}"
-                        ),
-                        "FIRST_RECLAIM_AFTER_EXTREME",
-                        rr,
-                    )
-                    c["lookback"] = lb
-                    c["maximum_bars_since_extreme"] = maxbars
-                    c["minimum_body_atr"] = body
-                    configs.append(c)
-
-    # 10) Vol contraction reversal.
-    for rr in [3.0, 3.5, 4.0]:
-        for atr_ratio in [0.60, 0.70, 0.80, 0.90]:
-            for signal_range in [1.00, 1.20, 1.40]:
-                for wick in [0.10, 0.20, 0.30]:
-                    for close_loc in [0.65, 0.75, 0.85]:
-                        c = base_config(
-                            (
-                                f"VCR_A{atr_ratio}_"
-                                f"R{signal_range}_"
-                                f"W{wick}_C{close_loc}_RR{rr}"
-                            ),
-                            "VOL_CONTRACTION_REVERSAL",
-                            rr,
-                        )
-                        c["maximum_atr_ratio"] = atr_ratio
-                        c["minimum_signal_range_atr"] = signal_range
-                        c["minimum_lower_wick_body"] = wick
-                        c["minimum_close_location"] = close_loc
-                        configs.append(c)
 
     return configs
+
+
+def build_h4_rr_variants(stage1_configs):
+    """
+    Stage 2 plateau:
+      - preserve each surviving geometry
+      - vary completed-H4 close > EMA
+      - vary RR
+
+    This covers the requested 85/100/115/130 H4 EMA and
+    3.50/3.75/4.00/4.25 RR neighborhood without running the
+    full 2,880-config cartesian grid on Railway.
+    """
+    rows = []
+    seen = set()
+
+    for seed in stage1_configs:
+        for h4_ema in LOCAL_H4_EMA:
+            for rr in LOCAL_RR:
+                c = clone_config(
+                    seed,
+                    (
+                        f"{seed['label']}__"
+                        f"H4EMA{h4_ema}__RR{rr:.2f}"
+                    ),
+                )
+
+                c["h4_close_above_ema"] = h4_ema
+                c["reward_risk"] = rr
+
+                signature = config_signature(c)
+
+                if signature in seen:
+                    continue
+
+                seen.add(signature)
+                rows.append(c)
+
+    return rows
 
 
 def build_context_variants(seed_configs):
@@ -2892,6 +2832,9 @@ def run_research():
     global m15_global
 
     try:
+        # ----------------------------------------------------
+        # DATA
+        # ----------------------------------------------------
         m15 = fetch_history(
             "M15",
             RESEARCH_FROM,
@@ -2903,24 +2846,21 @@ def run_research():
 
         h1 = fetch_history(
             "H1",
-            RESEARCH_FROM
-            - timedelta(days=700),
+            RESEARCH_FROM - timedelta(days=700),
             RESEARCH_TO,
             120,
         )
 
         h4 = fetch_history(
             "H4",
-            RESEARCH_FROM
-            - timedelta(days=1200),
+            RESEARCH_FROM - timedelta(days=1200),
             RESEARCH_TO,
             500,
         )
 
         daily = fetch_history(
             "D",
-            RESEARCH_FROM
-            - timedelta(days=1800),
+            RESEARCH_FROM - timedelta(days=1800),
             RESEARCH_TO,
             2500,
             daily_alignment=True,
@@ -2932,17 +2872,12 @@ def run_research():
             )
 
         STATUS.update({
-            "state":
-                "precomputing",
-            "message":
-                "Building Gen3 feature cache",
-            "m15_candles":
-                len(m15),
+            "state": "precomputing",
+            "message": "Building local-confirmation feature cache",
+            "m15_candles": len(m15),
         })
 
-        m15_atr = atr14(
-            m15
-        )
+        m15_atr = atr14(m15)
 
         h1_state = build_htf_state(
             h1,
@@ -2969,175 +2904,607 @@ def run_research():
 
         atr_lookup = {
             i: m15_atr[i]
-            for i in range(
-                len(m15)
-            )
+            for i in range(len(m15))
         }
 
-        baselines = build_baselines()
-        for config in baselines:
-            config["_atr_lookup"] = atr_lookup
-            config["reward_risk"] = STAGE1_RR
+        # ----------------------------------------------------
+        # STAGE 1 — GEOMETRY PLATEAU
+        # 5 x 3 x 3 x 4 = 180 configs.
+        # H4 EMA100 / RR4.00 held fixed.
+        # ----------------------------------------------------
+        geometry = build_baselines()
 
-        STATUS.update({"state":"calculating","message":f"Stage 1: {len(baselines)} baselines @ {STAGE1_RR}R / 1 pip","baseline_configs":len(baselines)})
-        baseline_rows=[]
-        for n,config in enumerate(baselines,1):
-            trades=run_config_cached(signals,m15,None,config,PRIMARY_COST_PIPS)
-            baseline_rows.append(result_row("STAGE1_BASELINE",config,PRIMARY_COST_PIPS,trades))
-            if n%100==0: STATUS["message"]=f"Stage 1 {n}/{len(baselines)}"
-        write_csv(OUTPUT_BASELINES,baseline_rows)
+        for c in geometry:
+            c["_atr_lookup"] = atr_lookup
 
-        config_lookup={c["label"]:c for c in baselines}
-        stage1_pool=[r for r in baseline_rows if int(r["trades"])>=STAGE1_MIN_TRADES and float(r["profit_factor"])>=STAGE1_MIN_PF]
-        stage1_pool.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
-        counts={}; survivor_rows=[]
-        for r in stage1_pool:
-            t=r["trigger"]
-            if counts.get(t,0)>=STAGE1_KEEP_PER_TRIGGER: continue
-            counts[t]=counts.get(t,0)+1; survivor_rows.append(r)
-            if len(survivor_rows)>=STAGE1_GLOBAL_KEEP: break
-        stage1=[config_lookup[r["candidate"]] for r in survivor_rows]
-        STATUS["stage1_survivors"]=len(stage1)
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+        STATUS.update({
+            "state": "calculating",
+            "message": (
+                f"Stage 1 geometry plateau: "
+                f"{len(geometry)} configs @ 1 pip"
+            ),
+            "geometry_configs": len(geometry),
+        })
 
-        # Stage 2: context only on survivors.
-        context_variants=build_context_variants(stage1)
-        for _,c in context_variants:
-            c["_atr_lookup"]=atr_lookup; c["reward_risk"]=STAGE1_RR; config_lookup[c["label"]]=c
-        STATUS["message"]=f"Stage 2: {len(context_variants)} context variants"
-        context_rows=[]
-        for n,(family,c) in enumerate(context_variants,1):
-            trades=run_config_cached(signals,m15,None,c,PRIMARY_COST_PIPS)
-            context_rows.append(result_row(family,c,PRIMARY_COST_PIPS,trades))
-            if n%100==0: STATUS["message"]=f"Stage 2 {n}/{len(context_variants)}"
-        write_csv(OUTPUT_CONTEXT,context_rows)
+        geometry_rows = []
 
-        stage2_pool=[r for r in context_rows if int(r["trades"])>=STAGE2_MIN_TRADES and float(r["profit_factor"])>=STAGE2_MIN_PF]
-        stage2_pool += [r for r in survivor_rows if int(r["trades"])>=STAGE2_MIN_TRADES and float(r["profit_factor"])>=STAGE2_MIN_PF]
-        stage2_pool.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
-        counts={}; stage2_rows=[]
-        for r in stage2_pool:
-            t=r["trigger"]
-            if counts.get(t,0)>=STAGE2_KEEP_PER_TRIGGER: continue
-            counts[t]=counts.get(t,0)+1; stage2_rows.append(r)
-            if len(stage2_rows)>=STAGE2_GLOBAL_KEEP: break
-        stage2=[config_lookup[r["candidate"]] for r in stage2_rows]
-        STATUS["stage2_survivors"]=len(stage2)
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+        for n, c in enumerate(geometry, start=1):
+            trades = run_config_cached(
+                signals,
+                m15,
+                None,
+                c,
+                PRIMARY_COST_PIPS,
+            )
 
-        # Stage 3: RR optimization only on survivors.
-        STATUS["message"]=f"Stage 3: RR optimization on {len(stage2)} survivors"
-        rr_rows=[]; rr_lookup={}
-        for base in stage2:
-            for rr in FINAL_RR_VALUES:
-                c=clone_config(base,f"{base['label']}__RR{rr}")
-                c["_atr_lookup"]=atr_lookup; c["reward_risk"]=rr; rr_lookup[c["label"]]=c
-                trades=run_config_cached(signals,m15,None,c,PRIMARY_COST_PIPS)
-                rr_rows.append(result_row("RR_OPT",c,PRIMARY_COST_PIPS,trades))
-        rr_rows=[r for r in rr_rows if int(r["trades"])>=40]
-        rr_rows.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
-        best_by_base={}
-        for r in rr_rows:
-            base=r["candidate"].rsplit("__RR",1)[0]
-            if base not in best_by_base: best_by_base[base]=r
-        finalist_rows=sorted(best_by_base.values(),key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)[:20]
-        finalists=[rr_lookup[r["candidate"]] for r in finalist_rows]
-        write_csv(OUTPUT_TOP,finalist_rows)
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+            geometry_rows.append(
+                result_row(
+                    "LOCAL_GEOMETRY",
+                    c,
+                    PRIMARY_COST_PIPS,
+                    trades,
+                )
+            )
 
-        # Stage 4: validation only on finalists.
-        STATUS["message"]=f"Stage 4: validating {len(finalists)} finalists"
-        era_rows=validation_rows(signals,m15,None,finalists,era_windows())
-        devval_rows=validation_rows(signals,m15,None,finalists,devval_windows())
-        recent_rows=validation_rows(signals,m15,None,finalists,recent_windows())
-        write_csv(OUTPUT_ERAS,era_rows); write_csv(OUTPUT_DEVVAL,devval_rows); write_csv(OUTPUT_RECENT,recent_rows)
+            if n % 30 == 0:
+                STATUS["message"] = (
+                    f"Stage 1 geometry "
+                    f"{n}/{len(geometry)}"
+                )
 
-        robust=[]
+        write_csv(
+            OUTPUT_BASELINES,
+            geometry_rows,
+        )
+
+        config_lookup = {
+            c["label"]: c
+            for c in geometry
+        }
+
+        # Anchor must be present so the original discovered candidate
+        # is always revalidated even if today's extended history
+        # slightly changes rankings.
+        anchor_config = config_lookup.get(
+            ANCHOR_LABEL
+        )
+
+        if anchor_config is None:
+            raise RuntimeError(
+                "Anchor candidate missing from geometry grid"
+            )
+
+        ranked_geometry = [
+            row
+            for row in geometry_rows
+            if int(row["trades"]) >= 35
+        ]
+
+        ranked_geometry.sort(
+            key=lambda row: (
+                float(row["profit_factor"]),
+                float(row["expectancy_r"]),
+                float(row["total_r"]),
+            ),
+            reverse=True,
+        )
+
+        survivor_labels = []
+
+        for row in ranked_geometry:
+            label = row["candidate"]
+
+            if label not in survivor_labels:
+                survivor_labels.append(label)
+
+            if len(survivor_labels) >= LOCAL_STAGE1_KEEP:
+                break
+
+        if ANCHOR_LABEL not in survivor_labels:
+            survivor_labels.append(
+                ANCHOR_LABEL
+            )
+
+        stage1_survivors = [
+            config_lookup[label]
+            for label in survivor_labels
+        ]
+
+        STATUS["stage1_survivors"] = (
+            len(stage1_survivors)
+        )
+
+        clear_lazy_outcomes()
+        CANDIDATE_CACHE.clear()
+
+        # ----------------------------------------------------
+        # STAGE 2 — H4 EMA / RR PLATEAU
+        # Maximum ~25 x 4 x 4 = 400.
+        # ----------------------------------------------------
+        variants = build_h4_rr_variants(
+            stage1_survivors
+        )
+
+        variant_lookup = {}
+
+        for c in variants:
+            c["_atr_lookup"] = atr_lookup
+            variant_lookup[c["label"]] = c
+
+        STATUS["message"] = (
+            f"Stage 2 H4/RR plateau: "
+            f"{len(variants)} configs"
+        )
+
+        local_rows = []
+
+        for n, c in enumerate(
+            variants,
+            start=1,
+        ):
+            trades = run_config_cached(
+                signals,
+                m15,
+                None,
+                c,
+                PRIMARY_COST_PIPS,
+            )
+
+            local_rows.append(
+                result_row(
+                    "LOCAL_H4_RR",
+                    c,
+                    PRIMARY_COST_PIPS,
+                    trades,
+                )
+            )
+
+            if n % 50 == 0:
+                STATUS["message"] = (
+                    f"Stage 2 H4/RR "
+                    f"{n}/{len(variants)}"
+                )
+
+        write_csv(
+            OUTPUT_CONTEXT,
+            local_rows,
+        )
+
+        # One best H4/RR setting per geometry.
+        local_rows = [
+            row
+            for row in local_rows
+            if int(row["trades"]) >= 35
+        ]
+
+        local_rows.sort(
+            key=lambda row: (
+                float(row["profit_factor"]),
+                float(row["expectancy_r"]),
+                float(row["total_r"]),
+            ),
+            reverse=True,
+        )
+
+        best_by_geometry = {}
+
+        for row in local_rows:
+            # Remove the appended H4/RR suffix.
+            base = row["candidate"].rsplit(
+                "__H4EMA",
+                1,
+            )[0]
+
+            if base not in best_by_geometry:
+                best_by_geometry[base] = row
+
+        shortlist_rows = list(
+            best_by_geometry.values()
+        )
+
+        shortlist_rows.sort(
+            key=lambda row: (
+                float(row["profit_factor"]),
+                float(row["expectancy_r"]),
+                float(row["total_r"]),
+            ),
+            reverse=True,
+        )
+
+        # Always include the exact anchor variant.
+        anchor_variant = None
+
+        for c in variants:
+            if (
+                c["label"].startswith(
+                    ANCHOR_LABEL
+                )
+                and c["h4_close_above_ema"] == 100
+                and abs(
+                    c["reward_risk"] - 4.00
+                ) < 1e-12
+            ):
+                anchor_variant = c
+                break
+
+        finalist_labels = [
+            row["candidate"]
+            for row in shortlist_rows[
+                :LOCAL_VALIDATION_KEEP
+            ]
+        ]
+
+        if (
+            anchor_variant is not None
+            and anchor_variant["label"]
+            not in finalist_labels
+        ):
+            finalist_labels.append(
+                anchor_variant["label"]
+            )
+
+        finalists = [
+            variant_lookup[label]
+            for label in finalist_labels
+        ]
+
+        # Preserve the full local ranking.
+        write_csv(
+            OUTPUT_TOP,
+            shortlist_rows,
+        )
+
+        clear_lazy_outcomes()
+        CANDIDATE_CACHE.clear()
+
+        # ----------------------------------------------------
+        # STAGE 3 — ROBUSTNESS VALIDATION
+        # ----------------------------------------------------
+        STATUS["message"] = (
+            f"Stage 3 validation: "
+            f"{len(finalists)} finalists"
+        )
+
+        era_rows = validation_rows(
+            signals,
+            m15,
+            None,
+            finalists,
+            era_windows(),
+        )
+
+        devval_rows = validation_rows(
+            signals,
+            m15,
+            None,
+            finalists,
+            devval_windows(),
+        )
+
+        recent_rows = validation_rows(
+            signals,
+            m15,
+            None,
+            finalists,
+            recent_windows(),
+        )
+
+        write_csv(
+            OUTPUT_ERAS,
+            era_rows,
+        )
+
+        write_csv(
+            OUTPUT_DEVVAL,
+            devval_rows,
+        )
+
+        write_csv(
+            OUTPUT_RECENT,
+            recent_rows,
+        )
+
+        robust = []
+
         for c in finalists:
-            label=c["label"]
-            base=next(r for r in finalist_rows if r["candidate"]==label)
-            eras=[r for r in era_rows if r["candidate"]==label and int(r["trades"])>0]
-            dvs=[r for r in devval_rows if r["candidate"]==label and int(r["trades"])>0]
-            rec=[r for r in recent_rows if r["candidate"]==label and int(r["trades"])>0]
-            min_era=min((float(r["profit_factor"]) for r in eras),default=0.0)
-            min_dv=min((float(r["profit_factor"]) for r in dvs),default=0.0)
-            min_rec=min((float(r["profit_factor"]) for r in rec),default=0.0)
-            robust.append({"candidate":label,"trades":int(base["trades"]),"full_pf":float(base["profit_factor"]),"full_total_r":float(base["total_r"]),"minimum_era_pf":min_era,"minimum_devval_pf":min_dv,"minimum_recent_pf":min_rec,"score":min_era*4+min_dv*2+min_rec*2+float(base["profit_factor"])+float(base["total_r"])/50})
-        robust.sort(key=lambda r:r["score"],reverse=True)
-        robust_finalists=[rr_lookup[r["candidate"]] for r in robust[:FINALIST_COUNT]]
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+            label = c["label"]
 
-        # Stage 5: cost stress only on robust finalists.
-        STATUS["message"]=f"Stage 5: cost stress on {len(robust_finalists)} finalists"
-        cost_rows=[]
+            base = next(
+                row
+                for row in local_rows
+                if row["candidate"] == label
+            )
+
+            eras = [
+                row
+                for row in era_rows
+                if (
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
+                )
+            ]
+
+            dvs = [
+                row
+                for row in devval_rows
+                if (
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
+                )
+            ]
+
+            rec = [
+                row
+                for row in recent_rows
+                if (
+                    row["candidate"] == label
+                    and int(row["trades"]) > 0
+                )
+            ]
+
+            min_era = min(
+                (
+                    float(row["profit_factor"])
+                    for row in eras
+                ),
+                default=0.0,
+            )
+
+            min_dv = min(
+                (
+                    float(row["profit_factor"])
+                    for row in dvs
+                ),
+                default=0.0,
+            )
+
+            min_rec = min(
+                (
+                    float(row["profit_factor"])
+                    for row in rec
+                ),
+                default=0.0,
+            )
+
+            # Plateau-focused ranking: weakest eras matter most.
+            robust.append({
+                "candidate": label,
+                "trades": int(base["trades"]),
+                "full_pf": float(
+                    base["profit_factor"]
+                ),
+                "full_total_r": float(
+                    base["total_r"]
+                ),
+                "minimum_era_pf": min_era,
+                "minimum_devval_pf": min_dv,
+                "minimum_recent_pf": min_rec,
+                "score": (
+                    min_era * 5.0
+                    + min_dv * 2.0
+                    + min_rec * 2.0
+                    + float(
+                        base["profit_factor"]
+                    )
+                    + float(
+                        base["total_r"]
+                    ) / 50.0
+                ),
+            })
+
+        robust.sort(
+            key=lambda row: row["score"],
+            reverse=True,
+        )
+
+        robust_labels = [
+            row["candidate"]
+            for row in robust
+        ]
+
+        robust_finalists = [
+            variant_lookup[label]
+            for label in robust_labels[
+                :LOCAL_COST_KEEP
+            ]
+        ]
+
+        if (
+            anchor_variant is not None
+            and anchor_variant["label"]
+            not in [
+                c["label"]
+                for c in robust_finalists
+            ]
+        ):
+            robust_finalists.append(
+                anchor_variant
+            )
+
+        clear_lazy_outcomes()
+        CANDIDATE_CACHE.clear()
+
+        # ----------------------------------------------------
+        # STAGE 4 — COST STRESS
+        # ----------------------------------------------------
+        STATUS["message"] = (
+            f"Stage 4 cost stress: "
+            f"{len(robust_finalists)} finalists"
+        )
+
+        cost_rows = []
+
         for c in robust_finalists:
             for cost in COST_PIPS_GRID:
-                trades=run_config_cached(signals,m15,None,c,cost)
-                cost_rows.append(result_row("FINAL_COST_STRESS",c,cost,trades))
-        write_csv(OUTPUT_INTERACTIONS,cost_rows)
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+                trades = run_config_cached(
+                    signals,
+                    m15,
+                    None,
+                    c,
+                    cost,
+                )
 
-        # Stage 6: rolling only strongest few.
-        rolling_configs=robust_finalists[:ROLLING_FINALISTS]
-        STATUS["message"]=f"Stage 6: rolling on {len(rolling_configs)} finalists"
-        rolling_rows=[]; rolling_summary_rows=[]
+                cost_rows.append(
+                    result_row(
+                        "LOCAL_COST_STRESS",
+                        c,
+                        cost,
+                        trades,
+                    )
+                )
+
+        write_csv(
+            OUTPUT_INTERACTIONS,
+            cost_rows,
+        )
+
+        clear_lazy_outcomes()
+        CANDIDATE_CACHE.clear()
+
+        # ----------------------------------------------------
+        # STAGE 5 — ROLLING 2Y / 3Y
+        # ----------------------------------------------------
+        rolling_configs = [
+            variant_lookup[
+                row["candidate"]
+            ]
+            for row in robust[
+                :ROLLING_FINALISTS
+            ]
+        ]
+
+        if (
+            anchor_variant is not None
+            and anchor_variant["label"]
+            not in [
+                c["label"]
+                for c in rolling_configs
+            ]
+        ):
+            rolling_configs.append(
+                anchor_variant
+            )
+
+        STATUS["message"] = (
+            f"Stage 5 rolling: "
+            f"{len(rolling_configs)} finalists"
+        )
+
+        rolling_rows = []
+        rolling_summary_rows = []
+
         for c in rolling_configs:
-            for months in [24,36]:
-                rows=monthly_rolling_rows(signals,m15,None,c,months)
-                rolling_rows.extend(rows); rolling_summary_rows.append(rolling_summary(rows))
-        write_csv(OUTPUT_ROLLING,rolling_rows); write_csv(OUTPUT_ROLLING_SUMMARY,rolling_summary_rows)
-        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+            for months in [24, 36]:
+                rows = monthly_rolling_rows(
+                    signals,
+                    m15,
+                    None,
+                    c,
+                    months,
+                )
 
-        overlap=[]
-        if robust_finalists:
-            best=robust_finalists[0]
-            same=[r for r in baseline_rows if r["trigger"]==best["trigger"]]
-            same.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"])),reverse=True)
-            if same:
-                ref=clone_config(config_lookup[same[0]["candidate"]],same[0]["candidate"]+"__MATCHED_RR")
-                ref["_atr_lookup"]=atr_lookup; ref["reward_risk"]=best["reward_risk"]
-                overlap=overlap_rows(signals,m15,None,ref,best)
-            best_trades=run_config_cached(signals,m15,None,best,PRIMARY_COST_PIPS)
+                rolling_rows.extend(
+                    rows
+                )
+
+                rolling_summary_rows.append(
+                    rolling_summary(
+                        rows
+                    )
+                )
+
+        write_csv(
+            OUTPUT_ROLLING,
+            rolling_rows,
+        )
+
+        write_csv(
+            OUTPUT_ROLLING_SUMMARY,
+            rolling_summary_rows,
+        )
+
+        clear_lazy_outcomes()
+        CANDIDATE_CACHE.clear()
+
+        # ----------------------------------------------------
+        # FINAL / OVERLAP
+        # ----------------------------------------------------
+        best = (
+            variant_lookup[
+                robust[0]["candidate"]
+            ]
+            if robust
+            else None
+        )
+
+        overlap = []
+
+        if (
+            best is not None
+            and anchor_variant is not None
+        ):
+            overlap = overlap_rows(
+                signals,
+                m15,
+                None,
+                anchor_variant,
+                best,
+            )
+
+        write_csv(
+            OUTPUT_OVERLAP,
+            overlap,
+        )
+
+        if best is not None:
+            best_trades = run_config_cached(
+                signals,
+                m15,
+                None,
+                best,
+                PRIMARY_COST_PIPS,
+            )
         else:
-            best=None; best_trades=[]
-        write_csv(OUTPUT_OVERLAP,overlap); write_csv(OUTPUT_BEST_TRADES,best_trades)
-        STATUS["selected_best"]=best; STATUS["robust_ranking"]=robust[:12]
+            best_trades = []
+
+        write_csv(
+            OUTPUT_BEST_TRADES,
+            best_trades,
+        )
+
         STATUS.update({
-            "state":
-                "packaging",
-            "message":
-                "Building single ZIP bundle",
+            "state": "packaging",
+            "message": "Building single ZIP bundle",
         })
 
         build_bundle()
 
         STATUS.update({
-            "state":
-                "complete",
+            "state": "complete",
             "message":
-                "USD/CAD M15 LONG Gen3 FAST research complete",
-            "baseline_configs":
-                len(baselines),
+                "USD/CAD M15 LONG final local confirmation complete",
+            "geometry_configs":
+                len(geometry),
             "stage1_survivors":
-                STATUS.get("stage1_survivors", 0),
-            "stage2_survivors":
-                STATUS.get("stage2_survivors", 0),
-            "context_variants":
-                len(context_variants),
+                len(stage1_survivors),
+            "h4_rr_configs":
+                len(variants),
+            "validated_finalists":
+                len(finalists),
             "selected_best":
                 best,
+            "anchor":
+                anchor_variant,
             "robust_ranking":
-                robust[:12],
+                robust[:15],
             "results_bundle":
                 OUTPUT_BUNDLE,
         })
 
     except Exception as error:
         STATUS.update({
-            "state":
-                "error",
-            "message":
-                str(error),
+            "state": "error",
+            "message": str(error),
         })
 
         print(
@@ -3155,7 +3522,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDCAD M15 Long Gen3 FAST Railway-Safe",
+            "USDCAD M15 Long Final Local Confirmation",
         "status":
             STATUS["state"],
         "instrument":
@@ -3169,14 +3536,14 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/usdcad-m15-long-gen3-fast/status",
-            "/usdcad-m15-long-gen3-fast/results",
+            "/usdcad-m15-long-final/status",
+            "/usdcad-m15-long-final/results",
         ],
     })
 
 
 @app.route(
-    "/usdcad-m15-long-gen3-fast/status"
+    "/usdcad-m15-long-final/status"
 )
 def route_status():
     return jsonify(
@@ -3185,7 +3552,7 @@ def route_status():
 
 
 @app.route(
-    "/usdcad-m15-long-gen3-fast/results"
+    "/usdcad-m15-long-final/results"
 )
 def route_results():
     return download_file(
@@ -3196,7 +3563,7 @@ def route_results():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="usdcad-m15-long-gen3-fast",
+        name="usdcad-m15-long-final",
         daemon=True,
     )
 
