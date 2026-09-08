@@ -13,7 +13,7 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/CAD M15 LONG — GEN3 DEEPER ARCHETYPES
+# USD/CAD M15 LONG — GEN3 FAST / RAILWAY-SAFE
 #
 # WHY THIS EXISTS
 # ---------------
@@ -64,6 +64,16 @@ from flask import Flask, jsonify, send_file
 #      - prior contraction regime
 #      - bullish rejection/reversal candle
 #
+# RAILWAY-SAFE EXECUTION
+# ----------------------
+# Stage 1: all archetypes at 3.5R / 1 pip only
+# Stage 2: context only around Stage-1 survivors
+# Stage 3: RR optimization only on survivors
+# Stage 4: eras/dev-validation/recent only on finalists
+# Stage 5: cost stress only on robust finalists
+# Stage 6: rolling windows only on strongest few
+# Huge all-signal x all-RR x all-cost cache removed.
+#
 # SEARCH PHILOSOPHY
 # -----------------
 # - test broad trigger families independently first
@@ -96,7 +106,7 @@ from flask import Flask, jsonify, send_file
 # OUTPUT
 # ------
 # One ZIP route:
-#   /usdcad-m15-long-gen3/results
+#   /usdcad-m15-long-gen3-fast/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -130,18 +140,21 @@ STOP_BUFFER_TICKS = 10
 PRIMARY_COST_PIPS = 1.00
 COST_PIPS_GRID = [0.50, 1.00, 1.50, 2.00]
 
-RR_VALUES = [
-    2.50,
-    2.75,
-    3.00,
-    3.25,
-    3.50,
-    3.75,
-    4.00,
-]
+STAGE1_RR = 3.50
+FINAL_RR_VALUES = [2.75, 3.00, 3.25, 3.50, 3.75, 4.00]
 
 MIN_TRADES_BASELINE = 40
 MIN_TRADES_CONTEXT = 50
+STAGE1_MIN_TRADES = 40
+STAGE1_MIN_PF = 1.02
+STAGE1_KEEP_PER_TRIGGER = 6
+STAGE1_GLOBAL_KEEP = 60
+STAGE2_MIN_TRADES = 45
+STAGE2_MIN_PF = 1.08
+STAGE2_KEEP_PER_TRIGGER = 3
+STAGE2_GLOBAL_KEEP = 24
+FINALIST_COUNT = 10
+ROLLING_FINALISTS = 5
 
 
 # ============================================================
@@ -159,12 +172,12 @@ OUTPUT_ROLLING = "usdcad_m15_long_gen3_rolling.csv"
 OUTPUT_ROLLING_SUMMARY = "usdcad_m15_long_gen3_rolling_summary.csv"
 OUTPUT_OVERLAP = "usdcad_m15_long_gen3_overlap.csv"
 OUTPUT_BEST_TRADES = "usdcad_m15_long_gen3_best_trades.csv"
-OUTPUT_BUNDLE = "usdcad_m15_long_GEN3_deeper_archetypes_RESULTS.zip"
+OUTPUT_BUNDLE = "usdcad_m15_long_GEN3_FAST_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
     "message": "USD/CAD M15 LONG Gen3 not started",
-    "service": "USDCAD M15 Long Gen3 Deeper Archetypes",
+    "service": "USDCAD M15 Long Gen3 FAST Railway-Safe",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -2132,47 +2145,16 @@ def compute_trade_outcome(
     return None
 
 
-def build_outcome_cache(
-    candles,
-    signals,
-):
-    cache = {}
+LAZY_OUTCOME_CACHE = {}
 
-    total = (
-        len(signals)
-        * len(RR_VALUES)
-        * len(COST_PIPS_GRID)
-    )
+def get_trade_outcome_cached(candles, signal_index, reward_risk, cost_pips):
+    key=(signal_index,reward_risk,cost_pips)
+    if key not in LAZY_OUTCOME_CACHE:
+        LAZY_OUTCOME_CACHE[key]=compute_trade_outcome(candles,signal_index,reward_risk,cost_pips)
+    return LAZY_OUTCOME_CACHE[key]
 
-    done = 0
-
-    for signal in signals:
-        index = signal["signal_index"]
-
-        for rr in RR_VALUES:
-            for cost in COST_PIPS_GRID:
-                done += 1
-
-                if done % 2500 == 0:
-                    STATUS.update({
-                        "state":
-                            "precomputing",
-                        "message": (
-                            f"Caching outcomes "
-                            f"{done}/{total}"
-                        ),
-                    })
-
-                cache[
-                    (index, rr, cost)
-                ] = compute_trade_outcome(
-                    candles,
-                    index,
-                    rr,
-                    cost,
-                )
-
-    return cache
+def clear_lazy_outcomes():
+    LAZY_OUTCOME_CACHE.clear()
 
 
 # ============================================================
@@ -2284,12 +2266,11 @@ def run_config_cached(
     while position < len(candidates):
         signal = candidates[position]
 
-        trade = outcome_cache.get(
-            (
-                signal["signal_index"],
-                config["reward_risk"],
-                cost_pips,
-            )
+        trade = get_trade_outcome_cached(
+            candles,
+            signal["signal_index"],
+            config["reward_risk"],
+            cost_pips,
         )
 
         if trade is None:
@@ -2986,11 +2967,6 @@ def run_research():
             d_state,
         )
 
-        outcome_cache = build_outcome_cache(
-            m15,
-            signals,
-        )
-
         atr_lookup = {
             i: m15_atr[i]
             for i in range(
@@ -2999,705 +2975,133 @@ def run_research():
         }
 
         baselines = build_baselines()
-
         for config in baselines:
             config["_atr_lookup"] = atr_lookup
+            config["reward_risk"] = STAGE1_RR
 
-        STATUS.update({
-            "state":
-                "calculating",
-            "message": (
-                f"Running {len(baselines)} Gen3 baselines"
-            ),
-            "baseline_configs":
-                len(baselines),
-        })
+        STATUS.update({"state":"calculating","message":f"Stage 1: {len(baselines)} baselines @ {STAGE1_RR}R / 1 pip","baseline_configs":len(baselines)})
+        baseline_rows=[]
+        for n,config in enumerate(baselines,1):
+            trades=run_config_cached(signals,m15,None,config,PRIMARY_COST_PIPS)
+            baseline_rows.append(result_row("STAGE1_BASELINE",config,PRIMARY_COST_PIPS,trades))
+            if n%100==0: STATUS["message"]=f"Stage 1 {n}/{len(baselines)}"
+        write_csv(OUTPUT_BASELINES,baseline_rows)
 
-        baseline_rows = []
+        config_lookup={c["label"]:c for c in baselines}
+        stage1_pool=[r for r in baseline_rows if int(r["trades"])>=STAGE1_MIN_TRADES and float(r["profit_factor"])>=STAGE1_MIN_PF]
+        stage1_pool.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
+        counts={}; survivor_rows=[]
+        for r in stage1_pool:
+            t=r["trigger"]
+            if counts.get(t,0)>=STAGE1_KEEP_PER_TRIGGER: continue
+            counts[t]=counts.get(t,0)+1; survivor_rows.append(r)
+            if len(survivor_rows)>=STAGE1_GLOBAL_KEEP: break
+        stage1=[config_lookup[r["candidate"]] for r in survivor_rows]
+        STATUS["stage1_survivors"]=len(stage1)
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
 
-        for number, config in enumerate(
-            baselines,
-            start=1,
-        ):
+        # Stage 2: context only on survivors.
+        context_variants=build_context_variants(stage1)
+        for _,c in context_variants:
+            c["_atr_lookup"]=atr_lookup; c["reward_risk"]=STAGE1_RR; config_lookup[c["label"]]=c
+        STATUS["message"]=f"Stage 2: {len(context_variants)} context variants"
+        context_rows=[]
+        for n,(family,c) in enumerate(context_variants,1):
+            trades=run_config_cached(signals,m15,None,c,PRIMARY_COST_PIPS)
+            context_rows.append(result_row(family,c,PRIMARY_COST_PIPS,trades))
+            if n%100==0: STATUS["message"]=f"Stage 2 {n}/{len(context_variants)}"
+        write_csv(OUTPUT_CONTEXT,context_rows)
+
+        stage2_pool=[r for r in context_rows if int(r["trades"])>=STAGE2_MIN_TRADES and float(r["profit_factor"])>=STAGE2_MIN_PF]
+        stage2_pool += [r for r in survivor_rows if int(r["trades"])>=STAGE2_MIN_TRADES and float(r["profit_factor"])>=STAGE2_MIN_PF]
+        stage2_pool.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
+        counts={}; stage2_rows=[]
+        for r in stage2_pool:
+            t=r["trigger"]
+            if counts.get(t,0)>=STAGE2_KEEP_PER_TRIGGER: continue
+            counts[t]=counts.get(t,0)+1; stage2_rows.append(r)
+            if len(stage2_rows)>=STAGE2_GLOBAL_KEEP: break
+        stage2=[config_lookup[r["candidate"]] for r in stage2_rows]
+        STATUS["stage2_survivors"]=len(stage2)
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+
+        # Stage 3: RR optimization only on survivors.
+        STATUS["message"]=f"Stage 3: RR optimization on {len(stage2)} survivors"
+        rr_rows=[]; rr_lookup={}
+        for base in stage2:
+            for rr in FINAL_RR_VALUES:
+                c=clone_config(base,f"{base['label']}__RR{rr}")
+                c["_atr_lookup"]=atr_lookup; c["reward_risk"]=rr; rr_lookup[c["label"]]=c
+                trades=run_config_cached(signals,m15,None,c,PRIMARY_COST_PIPS)
+                rr_rows.append(result_row("RR_OPT",c,PRIMARY_COST_PIPS,trades))
+        rr_rows=[r for r in rr_rows if int(r["trades"])>=40]
+        rr_rows.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)
+        best_by_base={}
+        for r in rr_rows:
+            base=r["candidate"].rsplit("__RR",1)[0]
+            if base not in best_by_base: best_by_base[base]=r
+        finalist_rows=sorted(best_by_base.values(),key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"]),float(r["total_r"])),reverse=True)[:20]
+        finalists=[rr_lookup[r["candidate"]] for r in finalist_rows]
+        write_csv(OUTPUT_TOP,finalist_rows)
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+
+        # Stage 4: validation only on finalists.
+        STATUS["message"]=f"Stage 4: validating {len(finalists)} finalists"
+        era_rows=validation_rows(signals,m15,None,finalists,era_windows())
+        devval_rows=validation_rows(signals,m15,None,finalists,devval_windows())
+        recent_rows=validation_rows(signals,m15,None,finalists,recent_windows())
+        write_csv(OUTPUT_ERAS,era_rows); write_csv(OUTPUT_DEVVAL,devval_rows); write_csv(OUTPUT_RECENT,recent_rows)
+
+        robust=[]
+        for c in finalists:
+            label=c["label"]
+            base=next(r for r in finalist_rows if r["candidate"]==label)
+            eras=[r for r in era_rows if r["candidate"]==label and int(r["trades"])>0]
+            dvs=[r for r in devval_rows if r["candidate"]==label and int(r["trades"])>0]
+            rec=[r for r in recent_rows if r["candidate"]==label and int(r["trades"])>0]
+            min_era=min((float(r["profit_factor"]) for r in eras),default=0.0)
+            min_dv=min((float(r["profit_factor"]) for r in dvs),default=0.0)
+            min_rec=min((float(r["profit_factor"]) for r in rec),default=0.0)
+            robust.append({"candidate":label,"trades":int(base["trades"]),"full_pf":float(base["profit_factor"]),"full_total_r":float(base["total_r"]),"minimum_era_pf":min_era,"minimum_devval_pf":min_dv,"minimum_recent_pf":min_rec,"score":min_era*4+min_dv*2+min_rec*2+float(base["profit_factor"])+float(base["total_r"])/50})
+        robust.sort(key=lambda r:r["score"],reverse=True)
+        robust_finalists=[rr_lookup[r["candidate"]] for r in robust[:FINALIST_COUNT]]
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+
+        # Stage 5: cost stress only on robust finalists.
+        STATUS["message"]=f"Stage 5: cost stress on {len(robust_finalists)} finalists"
+        cost_rows=[]
+        for c in robust_finalists:
             for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    m15,
-                    outcome_cache,
-                    config,
-                    cost,
-                )
-
-                baseline_rows.append(
-                    result_row(
-                        "BASELINE",
-                        config,
-                        cost,
-                        trades,
-                    )
-                )
-
-            if number % 100 == 0:
-                STATUS["message"] = (
-                    f"Gen3 baselines "
-                    f"{number}/{len(baselines)}"
-                )
-
-        write_csv(
-            OUTPUT_BASELINES,
-            baseline_rows,
-        )
-
-        primary_baselines = [
-            row
-            for row in baseline_rows
-            if (
-                abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
-                ) < 1e-12
-                and
-                int(row["trades"])
-                >= MIN_TRADES_BASELINE
-            )
-        ]
-
-        primary_baselines.sort(
-            key=lambda row: (
-                float(
-                    row["profit_factor"]
-                ),
-                float(
-                    row["expectancy_r"]
-                ),
-                float(
-                    row["total_r"]
-                ),
-            ),
-            reverse=True,
-        )
-
-        config_lookup = {
-            config["label"]:
-                config
-            for config in baselines
-        }
-
-        # Best distinct seed per trigger family.
-        best_by_trigger = {}
-
-        for row in primary_baselines:
-            trigger = row["trigger"]
-
-            if trigger not in best_by_trigger:
-                best_by_trigger[
-                    trigger
-                ] = row
-
-        seed_configs = [
-            config_lookup[
-                row["candidate"]
-            ]
-            for row
-            in best_by_trigger.values()
-        ]
-
-        context_variants = (
-            build_context_variants(
-                seed_configs
-            )
-        )
-
-        for _, config in context_variants:
-            config["_atr_lookup"] = atr_lookup
-            config_lookup[
-                config["label"]
-            ] = config
-
-        STATUS.update({
-            "state":
-                "calculating",
-            "message": (
-                f"Running {len(context_variants)} "
-                f"Gen3 context variants"
-            ),
-            "context_variants":
-                len(context_variants),
-        })
-
-        context_rows = []
-
-        for number, (
-            family,
-            config,
-        ) in enumerate(
-            context_variants,
-            start=1,
-        ):
-            for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    m15,
-                    outcome_cache,
-                    config,
-                    cost,
-                )
-
-                context_rows.append(
-                    result_row(
-                        family,
-                        config,
-                        cost,
-                        trades,
-                    )
-                )
-
-            if number % 100 == 0:
-                STATUS["message"] = (
-                    f"Gen3 context "
-                    f"{number}/"
-                    f"{len(context_variants)}"
-                )
-
-        write_csv(
-            OUTPUT_CONTEXT,
-            context_rows,
-        )
-
-        context_primary = [
-            row
-            for row in context_rows
-            if (
-                abs(
-                    float(
-                        row["cost_pips"]
-                    )
-                    -
-                    PRIMARY_COST_PIPS
-                ) < 1e-12
-                and
-                int(row["trades"])
-                >= MIN_TRADES_CONTEXT
-            )
-        ]
-
-        # Controlled interactions only around independently
-        # promising context filters.
-        promising = [
-            row
-            for row in context_primary
-            if float(
-                row["profit_factor"]
-            ) >= 1.12
-        ]
-
-        promising.sort(
-            key=lambda row: (
-                float(
-                    row["profit_factor"]
-                ),
-                float(
-                    row["expectancy_r"]
-                ),
-            ),
-            reverse=True,
-        )
-
-        # Max 2 per family / 12 total.
-        family_counts = {}
-        selected = []
-
-        for row in promising:
-            family = row["family"]
-            count = family_counts.get(
-                family,
-                0,
-            )
-
-            if count >= 2:
-                continue
-
-            family_counts[
-                family
-            ] = count + 1
-
-            selected.append(row)
-
-            if len(selected) >= 12:
-                break
-
-        interaction_configs = []
-        seen = set()
-        counter = 0
-
-        def overlay(base, source):
-            result = clone_config(
-                base,
-                base["label"],
-            )
-
-            for key, value in source.items():
-                if key in (
-                    "label",
-                    "_atr_lookup",
-                    "_m15",
-                ):
-                    continue
-
-                if isinstance(value, set):
-                    result[key] = set(value)
-                else:
-                    result[key] = value
-
-            return result
-
-        for i in range(
-            len(selected)
-        ):
-            for j in range(
-                i + 1,
-                len(selected),
-            ):
-                a = selected[i]
-                b = selected[j]
-
-                ca = config_lookup[
-                    a["candidate"]
-                ]
-
-                cb = config_lookup[
-                    b["candidate"]
-                ]
-
-                if (
-                    ca["trigger"]
-                    != cb["trigger"]
-                ):
-                    continue
-
-                config = clone_config(
-                    ca,
-                    "TEMP",
-                )
-
-                config = overlay(
-                    config,
-                    cb,
-                )
-
-                sig = config_signature(
-                    config
-                )
-
-                if sig in seen:
-                    continue
-
-                seen.add(sig)
-                counter += 1
-
-                config["label"] = (
-                    f"INT{counter:03d}_"
-                    f"{a['family']}_"
-                    f"{b['family']}"
-                )
-
-                config["_atr_lookup"] = (
-                    atr_lookup
-                )
-
-                interaction_configs.append(
-                    (
-                        (
-                            f"INTERACTION_"
-                            f"{a['family']}_"
-                            f"{b['family']}"
-                        ),
-                        config,
-                    )
-                )
-
-                config_lookup[
-                    config["label"]
-                ] = config
-
-        STATUS.update({
-            "state":
-                "calculating",
-            "message": (
-                f"Running {len(interaction_configs)} "
-                f"controlled interactions"
-            ),
-        })
-
-        interaction_rows = []
-
-        for family, config in (
-            interaction_configs
-        ):
-            for cost in COST_PIPS_GRID:
-                trades = run_config_cached(
-                    signals,
-                    m15,
-                    outcome_cache,
-                    config,
-                    cost,
-                )
-
-                interaction_rows.append(
-                    result_row(
-                        family,
-                        config,
-                        cost,
-                        trades,
-                    )
-                )
-
-        write_csv(
-            OUTPUT_INTERACTIONS,
-            interaction_rows,
-        )
-
-        combined_primary = (
-            primary_baselines
-            +
-            context_primary
-            +
-            [
-                row
-                for row in interaction_rows
-                if (
-                    abs(
-                        float(
-                            row["cost_pips"]
-                        )
-                        -
-                        PRIMARY_COST_PIPS
-                    ) < 1e-12
-                    and
-                    int(row["trades"])
-                    >= 40
-                )
-            ]
-        )
-
-        combined_primary.sort(
-            key=lambda row: (
-                float(
-                    row["profit_factor"]
-                ),
-                float(
-                    row["expectancy_r"]
-                ),
-                float(
-                    row["total_r"]
-                ),
-            ),
-            reverse=True,
-        )
-
-        top_rows = (
-            combined_primary[:40]
-        )
-
-        write_csv(
-            OUTPUT_TOP,
-            top_rows,
-        )
-
-        finalists = [
-            config_lookup[
-                row["candidate"]
-            ]
-            for row in top_rows[:15]
-        ]
-
-        STATUS[
-            "message"
-        ] = "Running era validation"
-
-        era_rows = validation_rows(
-            signals,
-            m15,
-            outcome_cache,
-            finalists,
-            era_windows(),
-        )
-
-        STATUS[
-            "message"
-        ] = "Running dev / validation"
-
-        devval_rows = validation_rows(
-            signals,
-            m15,
-            outcome_cache,
-            finalists,
-            devval_windows(),
-        )
-
-        STATUS[
-            "message"
-        ] = "Running recent windows"
-
-        recent_rows = validation_rows(
-            signals,
-            m15,
-            outcome_cache,
-            finalists,
-            recent_windows(),
-        )
-
-        write_csv(
-            OUTPUT_ERAS,
-            era_rows,
-        )
-
-        write_csv(
-            OUTPUT_DEVVAL,
-            devval_rows,
-        )
-
-        write_csv(
-            OUTPUT_RECENT,
-            recent_rows,
-        )
-
-        robust = []
-
-        for config in finalists:
-            label = config["label"]
-
-            base = next(
-                row
-                for row in top_rows
-                if row["candidate"]
-                == label
-            )
-
-            eras = [
-                row
-                for row in era_rows
-                if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(row["trades"])
-                    > 0
-                )
-            ]
-
-            devval = [
-                row
-                for row in devval_rows
-                if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(row["trades"])
-                    > 0
-                )
-            ]
-
-            recent = [
-                row
-                for row in recent_rows
-                if (
-                    row["candidate"]
-                    == label
-                    and
-                    int(row["trades"])
-                    > 0
-                )
-            ]
-
-            min_era = (
-                min(
-                    float(
-                        row["profit_factor"]
-                    )
-                    for row in eras
-                )
-                if eras
-                else 0.0
-            )
-
-            min_dev = (
-                min(
-                    float(
-                        row["profit_factor"]
-                    )
-                    for row in devval
-                )
-                if devval
-                else 0.0
-            )
-
-            min_recent = (
-                min(
-                    float(
-                        row["profit_factor"]
-                    )
-                    for row in recent
-                )
-                if recent
-                else 0.0
-            )
-
-            robust.append({
-                "candidate":
-                    label,
-                "trades":
-                    int(base["trades"]),
-                "full_pf":
-                    float(
-                        base[
-                            "profit_factor"
-                        ]
-                    ),
-                "full_total_r":
-                    float(
-                        base["total_r"]
-                    ),
-                "minimum_era_pf":
-                    min_era,
-                "minimum_devval_pf":
-                    min_dev,
-                "minimum_recent_pf":
-                    min_recent,
-                "score": (
-                    min_era * 4.0
-                    +
-                    min_dev * 2.0
-                    +
-                    min_recent * 2.0
-                    +
-                    float(
-                        base[
-                            "profit_factor"
-                        ]
-                    )
-                    +
-                    float(
-                        base["total_r"]
-                    ) / 50.0
-                ),
-            })
-
-        robust.sort(
-            key=lambda row:
-                row["score"],
-            reverse=True,
-        )
-
-        robust_finalists = [
-            config_lookup[
-                row["candidate"]
-            ]
-            for row
-            in robust[:6]
-        ]
-
-        STATUS[
-            "message"
-        ] = "Running rolling 2Y / 3Y"
-
-        rolling_rows = []
-        rolling_summary_rows = []
-
-        for config in (
-            robust_finalists
-        ):
-            for months in [
-                24,
-                36,
-            ]:
-                rows = monthly_rolling_rows(
-                    signals,
-                    m15,
-                    outcome_cache,
-                    config,
-                    months,
-                )
-
-                rolling_rows.extend(
-                    rows
-                )
-
-                rolling_summary_rows.append(
-                    rolling_summary(
-                        rows
-                    )
-                )
-
-        write_csv(
-            OUTPUT_ROLLING,
-            rolling_rows,
-        )
-
-        write_csv(
-            OUTPUT_ROLLING_SUMMARY,
-            rolling_summary_rows,
-        )
-
-        overlap = []
-
+                trades=run_config_cached(signals,m15,None,c,cost)
+                cost_rows.append(result_row("FINAL_COST_STRESS",c,cost,trades))
+        write_csv(OUTPUT_INTERACTIONS,cost_rows)
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+
+        # Stage 6: rolling only strongest few.
+        rolling_configs=robust_finalists[:ROLLING_FINALISTS]
+        STATUS["message"]=f"Stage 6: rolling on {len(rolling_configs)} finalists"
+        rolling_rows=[]; rolling_summary_rows=[]
+        for c in rolling_configs:
+            for months in [24,36]:
+                rows=monthly_rolling_rows(signals,m15,None,c,months)
+                rolling_rows.extend(rows); rolling_summary_rows.append(rolling_summary(rows))
+        write_csv(OUTPUT_ROLLING,rolling_rows); write_csv(OUTPUT_ROLLING_SUMMARY,rolling_summary_rows)
+        clear_lazy_outcomes(); CANDIDATE_CACHE.clear()
+
+        overlap=[]
         if robust_finalists:
-            best = (
-                robust_finalists[0]
-            )
-
-            same_trigger_baselines = [
-                row
-                for row
-                in primary_baselines
-                if row["trigger"]
-                ==
-                best["trigger"]
-            ]
-
-            if same_trigger_baselines:
-                reference = (
-                    config_lookup[
-                        same_trigger_baselines[
-                            0
-                        ]["candidate"]
-                    ]
-                )
-
-                overlap.extend(
-                    overlap_rows(
-                        signals,
-                        m15,
-                        outcome_cache,
-                        reference,
-                        best,
-                    )
-                )
-
-            best_trades = run_config_cached(
-                signals,
-                m15,
-                outcome_cache,
-                best,
-                PRIMARY_COST_PIPS,
-            )
+            best=robust_finalists[0]
+            same=[r for r in baseline_rows if r["trigger"]==best["trigger"]]
+            same.sort(key=lambda r:(float(r["profit_factor"]),float(r["expectancy_r"])),reverse=True)
+            if same:
+                ref=clone_config(config_lookup[same[0]["candidate"]],same[0]["candidate"]+"__MATCHED_RR")
+                ref["_atr_lookup"]=atr_lookup; ref["reward_risk"]=best["reward_risk"]
+                overlap=overlap_rows(signals,m15,None,ref,best)
+            best_trades=run_config_cached(signals,m15,None,best,PRIMARY_COST_PIPS)
         else:
-            best = None
-            best_trades = []
-
-        write_csv(
-            OUTPUT_OVERLAP,
-            overlap,
-        )
-
-        write_csv(
-            OUTPUT_BEST_TRADES,
-            best_trades,
-        )
-
+            best=None; best_trades=[]
+        write_csv(OUTPUT_OVERLAP,overlap); write_csv(OUTPUT_BEST_TRADES,best_trades)
+        STATUS["selected_best"]=best; STATUS["robust_ranking"]=robust[:12]
         STATUS.update({
             "state":
                 "packaging",
@@ -3711,15 +3115,15 @@ def run_research():
             "state":
                 "complete",
             "message":
-                "USD/CAD M15 LONG Gen3 deeper-archetype research complete",
+                "USD/CAD M15 LONG Gen3 FAST research complete",
             "baseline_configs":
                 len(baselines),
-            "seed_trigger_families":
-                len(seed_configs),
+            "stage1_survivors":
+                STATUS.get("stage1_survivors", 0),
+            "stage2_survivors":
+                STATUS.get("stage2_survivors", 0),
             "context_variants":
                 len(context_variants),
-            "interaction_configs":
-                len(interaction_configs),
             "selected_best":
                 best,
             "robust_ranking":
@@ -3751,7 +3155,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDCAD M15 Long Gen3 Deeper Archetypes",
+            "USDCAD M15 Long Gen3 FAST Railway-Safe",
         "status":
             STATUS["state"],
         "instrument":
@@ -3765,14 +3169,14 @@ def root():
         "trading_enabled":
             False,
         "routes": [
-            "/usdcad-m15-long-gen3/status",
-            "/usdcad-m15-long-gen3/results",
+            "/usdcad-m15-long-gen3-fast/status",
+            "/usdcad-m15-long-gen3-fast/results",
         ],
     })
 
 
 @app.route(
-    "/usdcad-m15-long-gen3/status"
+    "/usdcad-m15-long-gen3-fast/status"
 )
 def route_status():
     return jsonify(
@@ -3781,7 +3185,7 @@ def route_status():
 
 
 @app.route(
-    "/usdcad-m15-long-gen3/results"
+    "/usdcad-m15-long-gen3-fast/results"
 )
 def route_results():
     return download_file(
@@ -3792,7 +3196,7 @@ def route_results():
 if __name__ == "__main__":
     research_thread = threading.Thread(
         target=run_research,
-        name="usdcad-m15-long-gen3",
+        name="usdcad-m15-long-gen3-fast",
         daemon=True,
     )
 
