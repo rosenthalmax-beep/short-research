@@ -1154,8 +1154,11 @@ def build_features(
     )
 
     lookbacks = [
+        5,
         10,
+        15,
         20,
+        30,
         40,
         60,
         80,
