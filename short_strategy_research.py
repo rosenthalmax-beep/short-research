@@ -5,7 +5,6 @@ import time
 import bisect
 import zipfile
 import threading
-from copy import deepcopy
 from collections import deque, defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
@@ -16,115 +15,37 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# USD/CAD M15 LONG — FINALIST CONFIRMATION
+# USD/CAD M15 LONG — FINAL HEAD-TO-HEAD
 #
 # PURPOSE
 # -------
-# Focused confirmation of the full-history bullish-engulfing
-# structure edge discovered in the broad USD/CAD M15 LONG run.
+# FINAL comparison only.
 #
-# This is NOT a fresh archetype search.
+# No fresh archetype search.
+# No broad optimisation.
 #
-# Broad-run anchor:
+# Compare the two remaining regime variants:
 #
-#   exact bullish engulf
-#   BR >= 1.40
-#   body >= 1.25 ATR14
-#   range >= 1.50 ATR14
-#   structure lookback 165
-#   signal low within 0.15 ATR14 of previous 165-bar low
-#   previous COMPLETED daily EMA50 > EMA200
-#   no session filter
-#   no weekday filter
-#   RR 5.00
+# A) EMA50 > EMA200 regime
+#    body >= 1.25 ATR
+#    range >= 1.50 ATR
+#    structure LB165 / distance 0.175 ATR
+#    RR 5.00
 #
-# Broad-run anchor result on dataset ending
-# 2026-09-09 16:15 UTC:
+# B) Daily close > EMA200 regime
+#    body >= 1.25 ATR
+#    range >= 1.30 ATR
+#    structure LB165 / distance 0.175 ATR
+#    RR 4.75
 #
-#   71 trades
-#   9 pre-2010
-#   62 2010+
+# For each:
+#    BR 1.60 / 1.70 / 1.80 / 1.90
 #
-# Strong tighter-BR control:
-#
-#   same rules but BR >= 1.60, RR 5.00
-#
-#   64 trades
-#   7 pre-2010
-#   57 2010+
+# Total exact configs:
+#    8
 #
 # ============================================================
-# WHY THIS SCRIPT EXISTS
-# ============================================================
-#
-# Broad research showed:
-#
-# - BR 1.50 and 1.60 improved the system.
-# - 1.60 was the highest BR tested.
-# - RR 5.00 was the highest RR tested.
-#
-# Therefore both apparent optima were on search boundaries.
-# This script extends those boundaries in a controlled way.
-#
-# ============================================================
-# STAGED CONFIRMATION
-# ============================================================
-#
-# STAGE A — ONE-WAY SLICES AROUND THE ANCHOR
-#
-# BR:
-#   1.30 / 1.40 / 1.50 / 1.60 / 1.70
-#
-# RR:
-#   4.00 / 4.25 / 4.50 / 4.75 / 5.00 /
-#   5.25 / 5.50 / 5.75 / 6.00
-#
-# Structure lookback:
-#   120 / 165 / 200
-#
-# Structure distance:
-#   0.125 / 0.150 / 0.175 / 0.200 ATR
-#
-# Body:
-#   1.15 / 1.25 / 1.35 ATR
-#
-# Range:
-#   1.30 / 1.50 / 1.70 ATR
-#
-# Daily context:
-#   EMA50 > EMA200             [primary hypothesis]
-#   daily close > EMA200       [control]
-#
-# ------------------------------------------------------------
-# STAGE B — STRUCTURE / BR / RR INTERACTION GRID
-#
-#   5 BR
-# x 9 RR
-# x 3 structure lookbacks
-# x 4 structure distances
-#
-# = 540 configs
-#
-# Body remains 1.25 ATR
-# Range remains 1.50 ATR
-# Context remains daily EMA50 > EMA200
-#
-# ------------------------------------------------------------
-# STAGE C — LOCAL BODY / RANGE / CONTEXT CONFIRMATION
-#
-# Take the best Stage-B geometries and test:
-#
-#   body 1.15 / 1.25 / 1.35
-#   range 1.30 / 1.50 / 1.70
-#   context:
-#       EMA50 > EMA200
-#       daily close > EMA200
-#
-# This is intentionally staged rather than a giant combinatorial
-# search across every filter at once.
-#
-# ============================================================
-# DEEP FINALIST VALIDATION
+# DECISION OUTPUTS
 # ============================================================
 #
 # - full history
@@ -140,17 +61,45 @@ from flask import Flask, jsonify, send_file
 # - last 2Y
 #
 # Costs:
-#   0.5 / 1.0 / 1.5 / 2.0 pips
+#   0.5 / 1.0 / 1.5 / 2.0 pip
 #   full / pre / post
 #
 # Rolling:
 #   12 / 24 / 36 months
 #
 # Calendar:
-#   completed years
-#   no-trade years
+#   active years
 #   positive active years
 #   losing years
+#   no-trade years
+#
+# ============================================================
+# PARITY
+# ============================================================
+#
+# Original confirmation dataset:
+#   through 2026-09-09 16:15 UTC M15 open
+#
+# Broad anchor:
+#   BR1.40 / body1.25 / range1.50 /
+#   LB165 / dist0.150 / EMA50>EMA200 / RR5
+#   expected 71 / 9 / 62
+#
+# Tight-BR control:
+#   same but BR1.60
+#   expected 64 / 7 / 57
+#
+# Head-to-head reference counts:
+#
+# EMA50 winner geometry:
+#   BR1.70 / body1.25 / range1.50 /
+#   LB165 / dist0.175 / RR5
+#   expected ~70 full trades
+#
+# Daily-close candidate:
+#   BR1.70 / body1.25 / range1.30 /
+#   LB165 / dist0.175 / close>EMA200 / RR4.75
+#   expected ~61 full trades
 #
 # ============================================================
 # NO LOOKAHEAD
@@ -160,67 +109,64 @@ from flask import Flask, jsonify, send_file
 #   complete_at = next ACTUAL OANDA daily candle OPEN
 #   lookup = bisect_right(completion_times, signal_time) - 1
 #
-# OANDA daily:
+# Daily:
 #   dailyAlignment=17
 #   alignmentTimezone=America/New_York
 #
 # Signal timestamp:
-#   M15 candle OPEN.
+#   M15 candle OPEN
 #
 # ============================================================
 # M15 LONG HISTORICAL CONVENTIONS
 # ============================================================
 #
-# OANDA midpoint.
-# ATR14 = Wilder/RMA, SMA seeded.
+# OANDA midpoint
+# ATR14 Wilder/RMA, SMA seeded
 #
 # USD/CAD:
 #   tick = 0.00001
 #   pip  = 0.0001
 #
 # Exact bullish engulf:
-#   previous candle bearish
-#   current candle bullish
+#   previous bearish
+#   current bullish
 #   current open <= previous close
 #   current close >= previous open
 #
 # Doji convention:
-#   previous body == 0 => body_ratio = 999
+#   previous body == 0 => BR = 999
 #
-# Structure:
-#   previous N completed M15 bars only
-#   current signal candle excluded
+# Reference entry:
+#   signal close
 #
-# Reference entry = signal close.
-# Historical long fill = close + adverse cost.
-# Stop = signal low - 10 ticks.
-# Target based on REFERENCE signal-close risk.
-# Actual R based on adverse fill.
+# Historical long adverse fill:
+#   close + adverse cost
 #
-# Baseline cost = 1.0 pip adverse.
-# Stress = 0.5 / 1.0 / 1.5 / 2.0 pips.
+# Stop:
+#   signal low - 10 ticks
 #
-# Pyramiding = 0.
-# Exit checking starts next M15 candle.
-# Exact exit-candle signal eligible.
+# Target:
+#   based on REFERENCE close risk
 #
-# Same-bar LONG tie:
-#   if high is closer to candle open => TARGET first
-#   otherwise STOP first.
+# Actual R:
+#   based on adverse fill
 #
-# ============================================================
-# HISTORICAL INTERPRETATION
-# ============================================================
+# Pyramiding:
+#   0
 #
-# Full history has already been used for research.
-# Results are robust in-sample / temporal validation,
-# not pristine untouched OOS.
+# Exit:
+#   begins next candle
+#   exact exit-candle signal eligible
+#
+# Same-bar LONG:
+#   high closer to candle open => TARGET first
+#   otherwise STOP first
 #
 # ============================================================
 # ONE ZIP
 # ============================================================
 #
-# /usdcad-m15-long-final-confirmation/results
+# /usdcad-m15-long-final-head-to-head/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -246,7 +192,6 @@ NOW = (
     .replace(second=0, microsecond=0)
 )
 
-# Broad-run dataset endpoint used for exact parity.
 PARITY_LAST_M15_OPEN = datetime(
     2026, 9, 9, 16, 15,
     tzinfo=timezone.utc,
@@ -271,12 +216,12 @@ COST_GRID = [
 
 
 # ============================================================
-# ANCHORS
+# PARITY CONTROLS
 # ============================================================
 
-ANCHOR = {
+PARITY_ANCHOR = {
     "config_id":
-        "ANCHOR_BR140_RR500",
+        "PARITY_ANCHOR",
 
     "br_min":
         1.40,
@@ -301,9 +246,9 @@ ANCHOR = {
 }
 
 
-TIGHT_BR_CONTROL = {
+PARITY_TIGHT = {
     "config_id":
-        "CONTROL_BR160_RR500",
+        "PARITY_TIGHT_BR160",
 
     "br_min":
         1.60,
@@ -329,62 +274,80 @@ TIGHT_BR_CONTROL = {
 
 
 # ============================================================
-# SEARCH VALUES
+# FINAL 8 CONFIGS
 # ============================================================
 
-BR_VALUES = [
-    1.30,
-    1.40,
-    1.50,
+FINAL_CONFIGS = []
+
+for br in [
     1.60,
     1.70,
-]
+    1.80,
+    1.90,
+]:
+    FINAL_CONFIGS.append({
+        "config_id":
+            f"EMA50_REGIME_BR{int(br * 100):03d}",
 
-RR_VALUES = [
-    4.00,
-    4.25,
-    4.50,
-    4.75,
-    5.00,
-    5.25,
-    5.50,
-    5.75,
-    6.00,
-]
+        "family":
+            "EMA50_GT_EMA200",
 
-STRUCTURE_LBS = [
-    120,
-    165,
-    200,
-]
+        "br_min":
+            br,
 
-STRUCTURE_DISTANCES = [
-    0.125,
-    0.150,
-    0.175,
-    0.200,
-]
+        "body_atr_min":
+            1.25,
 
-BODY_VALUES = [
-    1.15,
-    1.25,
-    1.35,
-]
+        "range_atr_min":
+            1.50,
 
-RANGE_VALUES = [
-    1.30,
-    1.50,
+        "structure_lb":
+            165,
+
+        "structure_dist_atr_max":
+            0.175,
+
+        "context":
+            "D_EMA50_GT_EMA200",
+
+        "rr":
+            5.00,
+    })
+
+for br in [
+    1.60,
     1.70,
-]
+    1.80,
+    1.90,
+]:
+    FINAL_CONFIGS.append({
+        "config_id":
+            f"DAILY_CLOSE_REGIME_BR{int(br * 100):03d}",
 
-CONTEXT_VALUES = [
-    "D_EMA50_GT_EMA200",
-    "D_CLOSE_GT_EMA200",
-]
+        "family":
+            "D_CLOSE_GT_EMA200",
 
-STAGE_B_KEEP = 12
-STAGE_C_BASE_KEEP = 8
-FINALIST_KEEP = 10
+        "br_min":
+            br,
+
+        "body_atr_min":
+            1.25,
+
+        "range_atr_min":
+            1.30,
+
+        "structure_lb":
+            165,
+
+        "structure_dist_atr_max":
+            0.175,
+
+        "context":
+            "D_CLOSE_GT_EMA200",
+
+        "rr":
+            4.75,
+    })
 
 
 # ============================================================
@@ -392,63 +355,51 @@ FINALIST_KEEP = 10
 # ============================================================
 
 OUT_COVERAGE = (
-    "usdcad_m15_long_final_confirmation_coverage.csv"
+    "usdcad_m15_long_final_head_to_head_coverage.csv"
 )
 
 OUT_PARITY = (
-    "usdcad_m15_long_final_confirmation_parity.csv"
+    "usdcad_m15_long_final_head_to_head_parity.csv"
 )
 
-OUT_SLICES = (
-    "usdcad_m15_long_final_confirmation_one_way_slices.csv"
-)
-
-OUT_STRUCTURAL_GRID = (
-    "usdcad_m15_long_final_confirmation_structural_rr_grid.csv"
-)
-
-OUT_LOCAL_GRID = (
-    "usdcad_m15_long_final_confirmation_local_geometry_grid.csv"
-)
-
-OUT_FINALISTS = (
-    "usdcad_m15_long_final_confirmation_finalists.csv"
+OUT_EXACT = (
+    "usdcad_m15_long_final_head_to_head_exact.csv"
 )
 
 OUT_PERIODS = (
-    "usdcad_m15_long_final_confirmation_periods.csv"
+    "usdcad_m15_long_final_head_to_head_periods.csv"
 )
 
 OUT_COST = (
-    "usdcad_m15_long_final_confirmation_cost_stress.csv"
+    "usdcad_m15_long_final_head_to_head_cost_stress.csv"
 )
 
 OUT_ROLLING = (
-    "usdcad_m15_long_final_confirmation_rolling.csv"
+    "usdcad_m15_long_final_head_to_head_rolling.csv"
 )
 
 OUT_ROLLING_SUMMARY = (
-    "usdcad_m15_long_final_confirmation_rolling_summary.csv"
+    "usdcad_m15_long_final_head_to_head_rolling_summary.csv"
 )
 
 OUT_CALENDAR = (
-    "usdcad_m15_long_final_confirmation_calendar_years.csv"
+    "usdcad_m15_long_final_head_to_head_calendar_years.csv"
 )
 
 OUT_CALENDAR_SUMMARY = (
-    "usdcad_m15_long_final_confirmation_calendar_summary.csv"
+    "usdcad_m15_long_final_head_to_head_calendar_summary.csv"
 )
 
 OUT_TRADES = (
-    "usdcad_m15_long_final_confirmation_trades.csv"
+    "usdcad_m15_long_final_head_to_head_trades.csv"
 )
 
 OUT_NOTES = (
-    "usdcad_m15_long_final_confirmation_notes.csv"
+    "usdcad_m15_long_final_head_to_head_notes.csv"
 )
 
 OUT_BUNDLE = (
-    "USDCAD_M15_LONG_FINAL_CONFIRMATION_RESULTS.zip"
+    "USDCAD_M15_LONG_FINAL_HEAD_TO_HEAD_RESULTS.zip"
 )
 
 STATUS = {
@@ -456,7 +407,7 @@ STATUS = {
         "not_started",
 
     "message":
-        "USD/CAD M15 LONG final confirmation not started",
+        "USD/CAD M15 LONG final head-to-head not started",
 
     "orders_supported":
         False,
@@ -548,10 +499,7 @@ def build_bundle():
     files = [
         OUT_COVERAGE,
         OUT_PARITY,
-        OUT_SLICES,
-        OUT_STRUCTURAL_GRID,
-        OUT_LOCAL_GRID,
-        OUT_FINALISTS,
+        OUT_EXACT,
         OUT_PERIODS,
         OUT_COST,
         OUT_ROLLING,
@@ -577,6 +525,7 @@ def build_bundle():
 
 def safe_median(values):
     values = list(values)
+
     return (
         median(values)
         if values
@@ -1227,7 +1176,7 @@ def align_daily_to_m15(
 
 
 # ============================================================
-# FEATURE CACHE
+# FEATURES
 # ============================================================
 
 def build_features(
@@ -1297,11 +1246,6 @@ def build_features(
             atr
             > 0
         )
-    )
-
-    bullish = (
-        closes
-        > opens
     )
 
     exact_bull_engulf = np.zeros(
@@ -1374,23 +1318,23 @@ def build_features(
         dtype=float,
     )
 
-    positive_prev_body = (
+    valid_previous_body = (
         previous_body
         > 0
     )
 
     body_ratio[
-        positive_prev_body
+        valid_previous_body
     ] = (
         current_body[
-            positive_prev_body
+            valid_previous_body
         ]
         / previous_body[
-            positive_prev_body
+            valid_previous_body
         ]
     )
 
-    # Locked project doji convention.
+    # Project-standard doji convention.
     body_ratio[
         previous_body
         == 0
@@ -1435,54 +1379,41 @@ def build_features(
         ]
     )
 
-    previous_lows = {}
-
-    structure_distance = {}
-
-    for lookback in STRUCTURE_LBS:
-        previous_low = (
-            rolling_previous_low(
-                lows,
-                lookback,
-            )
+    previous_low165 = (
+        rolling_previous_low(
+            lows,
+            165,
         )
+    )
 
-        previous_lows[
-            lookback
-        ] = previous_low
+    structure_distance165 = np.full(
+        n,
+        np.nan,
+        dtype=float,
+    )
 
-        distance = np.full(
-            n,
-            np.nan,
-            dtype=float,
+    valid_structure = (
+        valid_atr
+        & np.isfinite(
+            previous_low165
         )
+    )
 
-        valid = (
-            valid_atr
-            & np.isfinite(
-                previous_low
-            )
-        )
-
-        distance[
-            valid
-        ] = (
-            np.abs(
-                lows[
-                    valid
-                ]
-                - previous_low[
-                    valid
-                ]
-            )
-            / atr[
-                valid
+    structure_distance165[
+        valid_structure
+    ] = (
+        np.abs(
+            lows[
+                valid_structure
+            ]
+            - previous_low165[
+                valid_structure
             ]
         )
-
-        structure_distance[
-            lookback
-        ] = distance
+        / atr[
+            valid_structure
+        ]
+    )
 
     return {
         "times":
@@ -1506,9 +1437,6 @@ def build_features(
         "valid_atr":
             valid_atr,
 
-        "bullish":
-            bullish,
-
         "exact_bull_engulf":
             exact_bull_engulf,
 
@@ -1521,11 +1449,11 @@ def build_features(
         "range_atr":
             range_atr,
 
-        "previous_lows":
-            previous_lows,
+        "previous_low165":
+            previous_low165,
 
-        "structure_distance":
-            structure_distance,
+        "structure_distance165":
+            structure_distance165,
 
         "d_close":
             daily_aligned[
@@ -1590,23 +1518,17 @@ def signal_indices(
 
     mask &= (
         f[
-            "structure_distance"
-        ][
-            cfg[
-                "structure_lb"
-            ]
+            "structure_distance165"
         ]
         <= cfg[
             "structure_dist_atr_max"
         ]
     )
 
-    context = cfg[
-        "context"
-    ]
-
     if (
-        context
+        cfg[
+            "context"
+        ]
         == "D_EMA50_GT_EMA200"
     ):
         mask &= (
@@ -1619,7 +1541,9 @@ def signal_indices(
         )
 
     elif (
-        context
+        cfg[
+            "context"
+        ]
         == "D_CLOSE_GT_EMA200"
     ):
         mask &= (
@@ -1633,7 +1557,7 @@ def signal_indices(
 
     else:
         raise RuntimeError(
-            f"Unknown context: {context}"
+            "Unknown context"
         )
 
     mask[
@@ -1646,7 +1570,7 @@ def signal_indices(
 
 
 # ============================================================
-# LONG BACKTEST
+# LONG BACKTEST ENGINE
 # ============================================================
 
 OUTCOME_CACHE = {}
@@ -1756,6 +1680,7 @@ def compute_outcome(
             ):
                 exit_price = target
                 reason = "TARGET"
+
             else:
                 exit_price = stop
                 reason = "STOP"
@@ -1938,6 +1863,7 @@ def run_backtest(
             )
         )
 
+        # Exact exit-candle signal eligible.
         position = bisect.bisect_left(
             use,
             trade[
@@ -2007,8 +1933,8 @@ def stats_from_trades(
     peak = 0.0
     max_dd = 0.0
 
-    loss_streak = 0
-    longest_loss_streak = 0
+    streak = 0
+    longest = 0
 
     for value in values:
         equity += value
@@ -2025,14 +1951,15 @@ def stats_from_trades(
         )
 
         if value < 0:
-            loss_streak += 1
+            streak += 1
 
-            longest_loss_streak = max(
-                longest_loss_streak,
-                loss_streak,
+            longest = max(
+                longest,
+                streak,
             )
+
         else:
-            loss_streak = 0
+            streak = 0
 
     return {
         "trades":
@@ -2083,7 +2010,7 @@ def stats_from_trades(
             max_dd,
 
         "longest_loss_streak":
-            longest_loss_streak,
+            longest,
     }
 
 
@@ -2144,690 +2071,23 @@ ERAS = [
 ]
 
 
-def evaluation_row(
-    cfg,
-    candles,
-    indices,
-):
-    full = stats_from_trades(
-        run_backtest(
-            candles,
-            indices,
-            cfg[
-                "rr"
-            ],
-            PRIMARY_COST_PIPS,
-            START,
-            NOW,
-        )
-    )
-
-    pre = stats_from_trades(
-        run_backtest(
-            candles,
-            indices,
-            cfg[
-                "rr"
-            ],
-            PRIMARY_COST_PIPS,
-            START,
-            datetime(
-                2010,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-        )
-    )
-
-    post = stats_from_trades(
-        run_backtest(
-            candles,
-            indices,
-            cfg[
-                "rr"
-            ],
-            PRIMARY_COST_PIPS,
-            datetime(
-                2010,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-            NOW,
-        )
-    )
-
-    era_stats = []
-
-    for (
-        _,
-        start,
-        end,
-    ) in ERAS:
-        era_stats.append(
-            stats_from_trades(
-                run_backtest(
-                    candles,
-                    indices,
-                    cfg[
-                        "rr"
-                    ],
-                    PRIMARY_COST_PIPS,
-                    start,
-                    end,
-                )
-            )
-        )
-
-    positive_eras = sum(
-        1
-        for s in era_stats
-        if s[
-            "total_r"
-        ] > 0
-    )
-
-    min_era_pf = min(
-        s[
-            "profit_factor"
-        ]
-        for s in era_stats
-    )
-
-    # Balanced score: rewards full/pre/post edge and long-era
-    # stability without selecting solely on headline PF.
-    score = (
-        1.40
-        * min(
-            full[
-                "profit_factor"
-            ],
-            3.0,
-        )
-        + 0.90
-        * min(
-            pre[
-                "profit_factor"
-            ],
-            3.0,
-        )
-        + 0.90
-        * min(
-            post[
-                "profit_factor"
-            ],
-            3.0,
-        )
-        + 0.45
-        * positive_eras
-        + 0.30
-        * min(
-            max(
-                min_era_pf,
-                0.0,
-            ),
-            2.5,
-        )
-        + 0.20
-        * min(
-            full[
-                "trades"
-            ]
-            / 80.0,
-            1.5,
-        )
-        + 0.15
-        * max(
-            full[
-                "expectancy_r"
-            ],
-            -1.0,
-        )
-    )
-
-    row = {
-        "config_id":
-            cfg[
-                "config_id"
-            ],
-
-        "br_min":
-            cfg[
-                "br_min"
-            ],
-
-        "body_atr_min":
-            cfg[
-                "body_atr_min"
-            ],
-
-        "range_atr_min":
-            cfg[
-                "range_atr_min"
-            ],
-
-        "structure_lb":
-            cfg[
-                "structure_lb"
-            ],
-
-        "structure_dist_atr_max":
-            cfg[
-                "structure_dist_atr_max"
-            ],
-
-        "context":
-            cfg[
-                "context"
-            ],
-
-        "rr":
-            cfg[
-                "rr"
-            ],
-
-        "full_trades":
-            full[
-                "trades"
-            ],
-
-        "full_pf":
-            round(
-                full[
-                    "profit_factor"
-                ],
-                6,
-            ),
-
-        "full_r":
-            round(
-                full[
-                    "total_r"
-                ],
-                4,
-            ),
-
-        "full_exp":
-            round(
-                full[
-                    "expectancy_r"
-                ],
-                6,
-            ),
-
-        "full_dd":
-            round(
-                full[
-                    "max_drawdown_r"
-                ],
-                4,
-            ),
-
-        "pre2010_trades":
-            pre[
-                "trades"
-            ],
-
-        "pre2010_pf":
-            round(
-                pre[
-                    "profit_factor"
-                ],
-                6,
-            ),
-
-        "pre2010_r":
-            round(
-                pre[
-                    "total_r"
-                ],
-                4,
-            ),
-
-        "post2010_trades":
-            post[
-                "trades"
-            ],
-
-        "post2010_pf":
-            round(
-                post[
-                    "profit_factor"
-                ],
-                6,
-            ),
-
-        "post2010_r":
-            round(
-                post[
-                    "total_r"
-                ],
-                4,
-            ),
-
-        "positive_eras":
-            positive_eras,
-
-        "min_era_pf":
-            round(
-                min_era_pf,
-                6,
-            ),
-
-        "robust_score":
-            round(
-                score,
-                6,
-            ),
-    }
-
-    for i, s in enumerate(
-        era_stats,
-        1,
-    ):
-        row[
-            f"era{i}_trades"
-        ] = s[
-            "trades"
-        ]
-
-        row[
-            f"era{i}_pf"
-        ] = round(
-            s[
-                "profit_factor"
-            ],
-            6,
-        )
-
-        row[
-            f"era{i}_r"
-        ] = round(
-            s[
-                "total_r"
-            ],
-            4,
-        )
-
-    return row
-
-
-def sort_rows(
-    rows,
-):
-    return sorted(
-        rows,
-        key=lambda row: (
-            row[
-                "positive_eras"
-            ],
-            row[
-                "pre2010_r"
-            ] > 0,
-            row[
-                "post2010_r"
-            ] > 0,
-            row[
-                "robust_score"
-            ],
-            row[
-                "full_r"
-            ],
-        ),
-        reverse=True,
-    )
-
-
-# ============================================================
-# CONFIG GENERATION
-# ============================================================
-
-def clone_anchor(
-    config_id,
-):
-    cfg = deepcopy(
-        ANCHOR
-    )
-
-    cfg[
-        "config_id"
-    ] = config_id
-
-    return cfg
-
-
-def build_one_way_slices():
-    configs = []
-
-    for value in BR_VALUES:
-        cfg = clone_anchor(
-            f"SLICE_BR_{value:.2f}"
-        )
-
-        cfg[
-            "br_min"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "BR"
-
-        configs.append(
-            cfg
-        )
-
-    for value in RR_VALUES:
-        cfg = clone_anchor(
-            f"SLICE_RR_{value:.2f}"
-        )
-
-        cfg[
-            "rr"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "RR"
-
-        configs.append(
-            cfg
-        )
-
-    for value in STRUCTURE_LBS:
-        cfg = clone_anchor(
-            f"SLICE_LB_{value}"
-        )
-
-        cfg[
-            "structure_lb"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "STRUCTURE_LB"
-
-        configs.append(
-            cfg
-        )
-
-    for value in STRUCTURE_DISTANCES:
-        cfg = clone_anchor(
-            f"SLICE_DIST_{value:.3f}"
-        )
-
-        cfg[
-            "structure_dist_atr_max"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "STRUCTURE_DISTANCE"
-
-        configs.append(
-            cfg
-        )
-
-    for value in BODY_VALUES:
-        cfg = clone_anchor(
-            f"SLICE_BODY_{value:.2f}"
-        )
-
-        cfg[
-            "body_atr_min"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "BODY"
-
-        configs.append(
-            cfg
-        )
-
-    for value in RANGE_VALUES:
-        cfg = clone_anchor(
-            f"SLICE_RANGE_{value:.2f}"
-        )
-
-        cfg[
-            "range_atr_min"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "RANGE"
-
-        configs.append(
-            cfg
-        )
-
-    for value in CONTEXT_VALUES:
-        cfg = clone_anchor(
-            f"SLICE_CONTEXT_{value}"
-        )
-
-        cfg[
-            "context"
-        ] = value
-
-        cfg[
-            "slice"
-        ] = "CONTEXT"
-
-        configs.append(
-            cfg
-        )
-
-    return configs
-
-
-def build_structural_rr_grid():
-    configs = []
-    counter = 0
-
-    for br in BR_VALUES:
-        for rr in RR_VALUES:
-            for structure_lb in STRUCTURE_LBS:
-                for distance in STRUCTURE_DISTANCES:
-                    counter += 1
-
-                    cfg = clone_anchor(
-                        f"STRUCT_{counter:04d}"
-                    )
-
-                    cfg[
-                        "br_min"
-                    ] = br
-
-                    cfg[
-                        "rr"
-                    ] = rr
-
-                    cfg[
-                        "structure_lb"
-                    ] = structure_lb
-
-                    cfg[
-                        "structure_dist_atr_max"
-                    ] = distance
-
-                    configs.append(
-                        cfg
-                    )
-
-    return configs
-
-
-def build_local_geometry_grid(
-    structural_by_id,
-    top_rows,
-):
-    configs = []
-    seen = set()
-    counter = 0
-
-    for rank, row in enumerate(
-        top_rows[
-            :STAGE_C_BASE_KEEP
-        ]
-    ):
-        base = deepcopy(
-            structural_by_id[
-                row[
-                    "config_id"
-                ]
-            ]
-        )
-
-        for body in BODY_VALUES:
-            for rng in RANGE_VALUES:
-                for context in CONTEXT_VALUES:
-                    cfg = deepcopy(
-                        base
-                    )
-
-                    cfg[
-                        "body_atr_min"
-                    ] = body
-
-                    cfg[
-                        "range_atr_min"
-                    ] = rng
-
-                    cfg[
-                        "context"
-                    ] = context
-
-                    signature = (
-                        cfg[
-                            "br_min"
-                        ],
-                        cfg[
-                            "rr"
-                        ],
-                        cfg[
-                            "structure_lb"
-                        ],
-                        cfg[
-                            "structure_dist_atr_max"
-                        ],
-                        cfg[
-                            "body_atr_min"
-                        ],
-                        cfg[
-                            "range_atr_min"
-                        ],
-                        cfg[
-                            "context"
-                        ],
-                    )
-
-                    if signature in seen:
-                        continue
-
-                    seen.add(
-                        signature
-                    )
-
-                    counter += 1
-
-                    cfg[
-                        "config_id"
-                    ] = (
-                        f"LOCAL_{counter:04d}_"
-                        f"B{rank:02d}"
-                    )
-
-                    configs.append(
-                        cfg
-                    )
-
-    return configs
-
-
-# ============================================================
-# DEEP OUTPUTS
-# ============================================================
-
-def result_row(
-    cfg,
-    label,
+def filter_trades(
     trades,
+    start,
+    end,
 ):
-    s = stats_from_trades(
-        trades
-    )
-
-    return {
-        "config_id":
-            cfg[
-                "config_id"
-            ],
-
-        "period":
-            label,
-
-        "trades":
-            s[
-                "trades"
-            ],
-
-        "winners":
-            s[
-                "winners"
-            ],
-
-        "losers":
-            s[
-                "losers"
-            ],
-
-        "win_rate":
-            round(
-                s[
-                    "win_rate"
-                ],
-                4,
-            ),
-
-        "profit_factor":
-            round(
-                s[
-                    "profit_factor"
-                ],
-                6,
-            ),
-
-        "total_r":
-            round(
-                s[
-                    "total_r"
-                ],
-                4,
-            ),
-
-        "expectancy_r":
-            round(
-                s[
-                    "expectancy_r"
-                ],
-                6,
-            ),
-
-        "max_drawdown_r":
-            round(
-                s[
-                    "max_drawdown_r"
-                ],
-                4,
-            ),
-
-        "longest_loss_streak":
-            s[
-                "longest_loss_streak"
-            ],
-    }
+    return [
+        trade
+        for trade in trades
+        if (
+            trade[
+                "entry_time"
+            ] >= start
+            and trade[
+                "entry_time"
+            ] < end
+        )
+    ]
 
 
 def period_definitions():
@@ -2906,138 +2166,142 @@ def period_definitions():
     ]
 
 
-def period_rows(
+def result_row(
     cfg,
-    candles,
-    indices,
+    period,
+    trades,
 ):
-    rows = []
+    s = stats_from_trades(
+        trades
+    )
 
-    for (
-        label,
-        start,
-        end,
-    ) in period_definitions():
-        trades = run_backtest(
-            candles,
-            indices,
+    return {
+        "config_id":
+            cfg[
+                "config_id"
+            ],
+
+        "family":
+            cfg[
+                "family"
+            ],
+
+        "br_min":
+            cfg[
+                "br_min"
+            ],
+
+        "body_atr_min":
+            cfg[
+                "body_atr_min"
+            ],
+
+        "range_atr_min":
+            cfg[
+                "range_atr_min"
+            ],
+
+        "structure_lb":
+            cfg[
+                "structure_lb"
+            ],
+
+        "structure_dist_atr_max":
+            cfg[
+                "structure_dist_atr_max"
+            ],
+
+        "context":
+            cfg[
+                "context"
+            ],
+
+        "rr":
             cfg[
                 "rr"
             ],
-            PRIMARY_COST_PIPS,
-            start,
-            end,
-        )
 
-        row = result_row(
-            cfg,
-            label,
-            trades,
-        )
+        "period":
+            period,
 
-        row[
-            "start_utc"
-        ] = iso_utc(
-            start
-        )
+        "trades":
+            s[
+                "trades"
+            ],
 
-        row[
-            "end_utc"
-        ] = iso_utc(
-            end
-        )
+        "winners":
+            s[
+                "winners"
+            ],
 
-        rows.append(
-            row
-        )
+        "losers":
+            s[
+                "losers"
+            ],
 
-    return rows
-
-
-def cost_rows(
-    cfg,
-    candles,
-    indices,
-):
-    rows = []
-
-    periods = [
-        (
-            "FULL_HISTORY",
-            START,
-            NOW,
-        ),
-
-        (
-            "PRE_2010",
-            START,
-            datetime(
-                2010,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-        ),
-
-        (
-            "2010_PLUS",
-            datetime(
-                2010,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ),
-            NOW,
-        ),
-    ]
-
-    for (
-        label,
-        start,
-        end,
-    ) in periods:
-        for cost in COST_GRID:
-            trades = run_backtest(
-                candles,
-                indices,
-                cfg[
-                    "rr"
+        "win_rate":
+            round(
+                s[
+                    "win_rate"
                 ],
-                cost,
-                start,
-                end,
-            )
+                4,
+            ),
 
-            row = result_row(
-                cfg,
-                label,
-                trades,
-            )
+        "profit_factor":
+            round(
+                s[
+                    "profit_factor"
+                ],
+                6,
+            ),
 
-            row[
-                "cost_pips"
-            ] = cost
+        "total_r":
+            round(
+                s[
+                    "total_r"
+                ],
+                4,
+            ),
 
-            rows.append(
-                row
-            )
+        "expectancy_r":
+            round(
+                s[
+                    "expectancy_r"
+                ],
+                6,
+            ),
 
-    return rows
+        "max_drawdown_r":
+            round(
+                s[
+                    "max_drawdown_r"
+                ],
+                4,
+            ),
+
+        "longest_loss_streak":
+            s[
+                "longest_loss_streak"
+            ],
+    }
 
 
-def rolling_rows(
+def rolling_rows_for_trades(
     cfg,
-    candles,
-    indices,
+    trades,
 ):
     rows = []
 
-    first_month = month_floor(
-        START
+    first_month = (
+        month_floor(
+            START
+        )
     )
 
-    last_month = month_floor(
-        NOW
+    last_month = (
+        month_floor(
+            NOW
+        )
     )
 
     for months in [
@@ -3045,7 +2309,9 @@ def rolling_rows(
         24,
         36,
     ]:
-        start = first_month
+        start = (
+            first_month
+        )
 
         while (
             add_months(
@@ -3059,17 +2325,14 @@ def rolling_rows(
                 months,
             )
 
+            subset = filter_trades(
+                trades,
+                start,
+                end,
+            )
+
             s = stats_from_trades(
-                run_backtest(
-                    candles,
-                    indices,
-                    cfg[
-                        "rr"
-                    ],
-                    PRIMARY_COST_PIPS,
-                    start,
-                    end,
-                )
+                subset
             )
 
             rows.append({
@@ -3287,10 +2550,9 @@ def rolling_summary_rows(
     return output
 
 
-def calendar_rows(
+def calendar_rows_for_trades(
     cfg,
-    candles,
-    indices,
+    trades,
 ):
     rows = []
 
@@ -3312,17 +2574,14 @@ def calendar_rows(
             tzinfo=timezone.utc,
         )
 
+        subset = filter_trades(
+            trades,
+            start,
+            end,
+        )
+
         s = stats_from_trades(
-            run_backtest(
-                candles,
-                indices,
-                cfg[
-                    "rr"
-                ],
-                PRIMARY_COST_PIPS,
-                start,
-                end,
-            )
+            subset
         )
 
         rows.append({
@@ -3609,7 +2868,7 @@ def run_research():
                 "precomputing",
 
             "message":
-                "Building completed daily state and M15 finalist feature cache",
+                "Building completed daily state and exact 8-config feature cache",
         })
 
         m15_times = [
@@ -3634,7 +2893,7 @@ def run_research():
         )
 
         # ----------------------------------------------------
-        # PARITY AGAINST BROAD RUN
+        # HARD PARITY
         # ----------------------------------------------------
         parity_count = (
             bisect.bisect_right(
@@ -3657,8 +2916,7 @@ def run_research():
         )
 
         parity_rows = []
-
-        parity_ok = True
+        hard_parity_ok = True
 
         for (
             cfg,
@@ -3667,13 +2925,13 @@ def run_research():
             expected_post,
         ) in [
             (
-                ANCHOR,
+                PARITY_ANCHOR,
                 71,
                 9,
                 62,
             ),
             (
-                TIGHT_BR_CONTROL,
+                PARITY_TIGHT,
                 64,
                 7,
                 57,
@@ -3701,7 +2959,7 @@ def run_research():
                 parity_end,
             )
 
-            pre = stats_from_trades([
+            pre = [
                 trade
                 for trade in trades
                 if trade[
@@ -3712,9 +2970,9 @@ def run_research():
                     1,
                     tzinfo=timezone.utc,
                 )
-            ])
+            ]
 
-            post = stats_from_trades([
+            post = [
                 trade
                 for trade in trades
                 if trade[
@@ -3725,22 +2983,22 @@ def run_research():
                     1,
                     tzinfo=timezone.utc,
                 )
-            ])
+            ]
 
             match = (
                 len(
                     trades
                 ) == expected_full
-                and pre[
-                    "trades"
-                ] == expected_pre
-                and post[
-                    "trades"
-                ] == expected_post
+                and len(
+                    pre
+                ) == expected_pre
+                and len(
+                    post
+                ) == expected_post
             )
 
-            parity_ok = (
-                parity_ok
+            hard_parity_ok = (
+                hard_parity_ok
                 and match
             )
 
@@ -3762,17 +3020,17 @@ def run_research():
                     expected_pre,
 
                 "actual_pre2010":
-                    pre[
-                        "trades"
-                    ],
+                    len(
+                        pre
+                    ),
 
                 "expected_post2010":
                     expected_post,
 
                 "actual_post2010":
-                    post[
-                        "trades"
-                    ],
+                    len(
+                        post
+                    ),
 
                 "status":
                     (
@@ -3782,439 +3040,95 @@ def run_research():
                     ),
             })
 
+        if not hard_parity_ok:
+            write_csv(
+                OUT_PARITY,
+                parity_rows,
+            )
+
+            raise RuntimeError(
+                "Hard parity failed. "
+                "Do not trust final head-to-head results."
+            )
+
+        # Soft reference counts for the two headline BR1.70 configs.
+        for cfg, expected_full in [
+            (
+                next(
+                    c
+                    for c in FINAL_CONFIGS
+                    if c[
+                        "config_id"
+                    ] == "EMA50_REGIME_BR170"
+                ),
+                70,
+            ),
+            (
+                next(
+                    c
+                    for c in FINAL_CONFIGS
+                    if c[
+                        "config_id"
+                    ] == "DAILY_CLOSE_REGIME_BR170"
+                ),
+                61,
+            ),
+        ]:
+            indices = signal_indices(
+                cfg,
+                features,
+            )
+
+            parity_indices = [
+                index
+                for index in indices
+                if index < parity_count
+            ]
+
+            trades = run_backtest(
+                parity_candles,
+                parity_indices,
+                cfg[
+                    "rr"
+                ],
+                PRIMARY_COST_PIPS,
+                START,
+                parity_end,
+            )
+
+            parity_rows.append({
+                "config_id":
+                    cfg[
+                        "config_id"
+                    ],
+
+                "expected_full":
+                    expected_full,
+
+                "actual_full":
+                    len(
+                        trades
+                    ),
+
+                "status":
+                    (
+                        "MATCH"
+                        if len(
+                            trades
+                        ) == expected_full
+                        else "CHECK"
+                    ),
+            })
+
         write_csv(
             OUT_PARITY,
             parity_rows,
         )
 
-        if not parity_ok:
-            raise RuntimeError(
-                "Broad-run parity failed. "
-                "Do not trust USD/CAD M15 LONG confirmation results."
-            )
-
         # ----------------------------------------------------
-        # STAGE A — ONE-WAY SLICES
+        # EXACT 8-CONFIG DEEP VALIDATION
         # ----------------------------------------------------
-        slice_configs = (
-            build_one_way_slices()
-        )
-
-        slice_rows = []
-
-        for i, cfg in enumerate(
-            slice_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "one_way_slices",
-
-                "message": (
-                    f"Slice "
-                    f"{i}/{len(slice_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            row = evaluation_row(
-                cfg,
-                m15,
-                indices,
-            )
-
-            row[
-                "slice"
-            ] = cfg[
-                "slice"
-            ]
-
-            slice_rows.append(
-                row
-            )
-
-        write_csv(
-            OUT_SLICES,
-            slice_rows,
-        )
-
-        # ----------------------------------------------------
-        # STAGE B — BR / RR / STRUCTURE GRID
-        # ----------------------------------------------------
-        structural_configs = (
-            build_structural_rr_grid()
-        )
-
-        structural_by_id = {
-            cfg[
-                "config_id"
-            ]:
-                cfg
-            for cfg in structural_configs
-        }
-
-        structural_rows = []
-
-        for i, cfg in enumerate(
-            structural_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "structural_rr_grid",
-
-                "message": (
-                    f"Structural grid "
-                    f"{i}/{len(structural_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            structural_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        structural_rows = sort_rows(
-            structural_rows
-        )
-
-        write_csv(
-            OUT_STRUCTURAL_GRID,
-            structural_rows,
-        )
-
-        structural_eligible = [
-            row
-            for row in structural_rows
-            if (
-                row[
-                    "full_trades"
-                ] >= 55
-                and row[
-                    "pre2010_trades"
-                ] >= 6
-                and row[
-                    "pre2010_r"
-                ] > 0
-                and row[
-                    "post2010_r"
-                ] > 0
-                and row[
-                    "positive_eras"
-                ] == 4
-            )
-        ]
-
-        top_structural = (
-            structural_eligible[
-                :STAGE_B_KEEP
-            ]
-        )
-
-        if len(
-            top_structural
-        ) < STAGE_B_KEEP:
-            selected_ids = {
-                row[
-                    "config_id"
-                ]
-                for row in top_structural
-            }
-
-            for row in structural_rows:
-                if row[
-                    "config_id"
-                ] in selected_ids:
-                    continue
-
-                top_structural.append(
-                    row
-                )
-
-                selected_ids.add(
-                    row[
-                        "config_id"
-                    ]
-                )
-
-                if len(
-                    top_structural
-                ) >= STAGE_B_KEEP:
-                    break
-
-        # ----------------------------------------------------
-        # STAGE C — LOCAL BODY / RANGE / CONTEXT
-        # ----------------------------------------------------
-        local_configs = (
-            build_local_geometry_grid(
-                structural_by_id,
-                top_structural,
-            )
-        )
-
-        local_by_id = {
-            cfg[
-                "config_id"
-            ]:
-                cfg
-            for cfg in local_configs
-        }
-
-        local_rows = []
-
-        for i, cfg in enumerate(
-            local_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "local_geometry_grid",
-
-                "message": (
-                    f"Local grid "
-                    f"{i}/{len(local_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            local_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        local_rows = sort_rows(
-            local_rows
-        )
-
-        write_csv(
-            OUT_LOCAL_GRID,
-            local_rows,
-        )
-
-        # ----------------------------------------------------
-        # FINALISTS
-        #
-        # Always deep-test:
-        #   - original anchor
-        #   - BR1.60 / RR5 control
-        #
-        # Then add best local configs.
-        # ----------------------------------------------------
-        finalist_configs = [
-            deepcopy(
-                ANCHOR
-            ),
-            deepcopy(
-                TIGHT_BR_CONTROL
-            ),
-        ]
-
-        finalist_rows = []
-
-        for cfg in finalist_configs:
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            finalist_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        selected_signatures = {
-            (
-                cfg[
-                    "br_min"
-                ],
-                cfg[
-                    "rr"
-                ],
-                cfg[
-                    "structure_lb"
-                ],
-                cfg[
-                    "structure_dist_atr_max"
-                ],
-                cfg[
-                    "body_atr_min"
-                ],
-                cfg[
-                    "range_atr_min"
-                ],
-                cfg[
-                    "context"
-                ],
-            )
-            for cfg in finalist_configs
-        }
-
-        eligible_local = [
-            row
-            for row in local_rows
-            if (
-                row[
-                    "full_trades"
-                ] >= 50
-                and row[
-                    "pre2010_trades"
-                ] >= 5
-                and row[
-                    "pre2010_r"
-                ] > 0
-                and row[
-                    "post2010_r"
-                ] > 0
-                and row[
-                    "positive_eras"
-                ] == 4
-            )
-        ]
-
-        for row in eligible_local:
-            cfg = local_by_id[
-                row[
-                    "config_id"
-                ]
-            ]
-
-            signature = (
-                cfg[
-                    "br_min"
-                ],
-                cfg[
-                    "rr"
-                ],
-                cfg[
-                    "structure_lb"
-                ],
-                cfg[
-                    "structure_dist_atr_max"
-                ],
-                cfg[
-                    "body_atr_min"
-                ],
-                cfg[
-                    "range_atr_min"
-                ],
-                cfg[
-                    "context"
-                ],
-            )
-
-            if signature in selected_signatures:
-                continue
-
-            finalist_configs.append(
-                deepcopy(
-                    cfg
-                )
-            )
-
-            finalist_rows.append(
-                row
-            )
-
-            selected_signatures.add(
-                signature
-            )
-
-            if len(
-                finalist_configs
-            ) >= FINALIST_KEEP:
-                break
-
-        if len(
-            finalist_configs
-        ) < FINALIST_KEEP:
-            for row in local_rows:
-                cfg = local_by_id[
-                    row[
-                        "config_id"
-                    ]
-                ]
-
-                signature = (
-                    cfg[
-                        "br_min"
-                    ],
-                    cfg[
-                        "rr"
-                    ],
-                    cfg[
-                        "structure_lb"
-                    ],
-                    cfg[
-                        "structure_dist_atr_max"
-                    ],
-                    cfg[
-                        "body_atr_min"
-                    ],
-                    cfg[
-                        "range_atr_min"
-                    ],
-                    cfg[
-                        "context"
-                    ],
-                )
-
-                if signature in selected_signatures:
-                    continue
-
-                finalist_configs.append(
-                    deepcopy(
-                        cfg
-                    )
-                )
-
-                finalist_rows.append(
-                    row
-                )
-
-                selected_signatures.add(
-                    signature
-                )
-
-                if len(
-                    finalist_configs
-                ) >= FINALIST_KEEP:
-                    break
-
-        write_csv(
-            OUT_FINALISTS,
-            sort_rows(
-                finalist_rows
-            ),
-        )
-
-        # ----------------------------------------------------
-        # DEEP VALIDATION
-        # ----------------------------------------------------
+        exact_rows = []
         period_output = []
         cost_output = []
         rolling_output = []
@@ -4222,7 +3136,7 @@ def run_research():
         trade_output = []
 
         for i, cfg in enumerate(
-            finalist_configs,
+            FINAL_CONFIGS,
             1,
         ):
             STATUS.update({
@@ -4231,7 +3145,7 @@ def run_research():
 
                 "message": (
                     f"Deep validation "
-                    f"{i}/{len(finalist_configs)} "
+                    f"{i}/{len(FINAL_CONFIGS)} "
                     f"{cfg['config_id']}"
                 ),
             })
@@ -4239,38 +3153,6 @@ def run_research():
             indices = signal_indices(
                 cfg,
                 features,
-            )
-
-            period_output.extend(
-                period_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-            cost_output.extend(
-                cost_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-            rolling_output.extend(
-                rolling_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-            calendar_output.extend(
-                calendar_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
             )
 
             full_trades = run_backtest(
@@ -4284,6 +3166,309 @@ def run_research():
                 NOW,
             )
 
+            full_stats = stats_from_trades(
+                full_trades
+            )
+
+            era_stats = []
+
+            for (
+                _,
+                era_start,
+                era_end,
+            ) in ERAS:
+                era_stats.append(
+                    stats_from_trades(
+                        filter_trades(
+                            full_trades,
+                            era_start,
+                            era_end,
+                        )
+                    )
+                )
+
+            exact_rows.append({
+                "config_id":
+                    cfg[
+                        "config_id"
+                    ],
+
+                "family":
+                    cfg[
+                        "family"
+                    ],
+
+                "br_min":
+                    cfg[
+                        "br_min"
+                    ],
+
+                "body_atr_min":
+                    cfg[
+                        "body_atr_min"
+                    ],
+
+                "range_atr_min":
+                    cfg[
+                        "range_atr_min"
+                    ],
+
+                "structure_lb":
+                    cfg[
+                        "structure_lb"
+                    ],
+
+                "structure_dist_atr_max":
+                    cfg[
+                        "structure_dist_atr_max"
+                    ],
+
+                "context":
+                    cfg[
+                        "context"
+                    ],
+
+                "rr":
+                    cfg[
+                        "rr"
+                    ],
+
+                "trades":
+                    full_stats[
+                        "trades"
+                    ],
+
+                "profit_factor":
+                    round(
+                        full_stats[
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+
+                "total_r":
+                    round(
+                        full_stats[
+                            "total_r"
+                        ],
+                        4,
+                    ),
+
+                "expectancy_r":
+                    round(
+                        full_stats[
+                            "expectancy_r"
+                        ],
+                        6,
+                    ),
+
+                "max_drawdown_r":
+                    round(
+                        full_stats[
+                            "max_drawdown_r"
+                        ],
+                        4,
+                    ),
+
+                "positive_eras":
+                    sum(
+                        1
+                        for s in era_stats
+                        if s[
+                            "total_r"
+                        ] > 0
+                    ),
+
+                "min_era_pf":
+                    round(
+                        min(
+                            s[
+                                "profit_factor"
+                            ]
+                            for s in era_stats
+                        ),
+                        6,
+                    ),
+
+                "era1_pf":
+                    round(
+                        era_stats[
+                            0
+                        ][
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+
+                "era2_pf":
+                    round(
+                        era_stats[
+                            1
+                        ][
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+
+                "era3_pf":
+                    round(
+                        era_stats[
+                            2
+                        ][
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+
+                "era4_pf":
+                    round(
+                        era_stats[
+                            3
+                        ][
+                            "profit_factor"
+                        ],
+                        6,
+                    ),
+            })
+
+            for (
+                label,
+                period_start,
+                period_end,
+            ) in period_definitions():
+                subset = filter_trades(
+                    full_trades,
+                    period_start,
+                    period_end,
+                )
+
+                row = result_row(
+                    cfg,
+                    label,
+                    subset,
+                )
+
+                row[
+                    "start_utc"
+                ] = iso_utc(
+                    period_start
+                )
+
+                row[
+                    "end_utc"
+                ] = iso_utc(
+                    period_end
+                )
+
+                period_output.append(
+                    row
+                )
+
+            # Cost stress is re-run because adverse cost can affect
+            # actual R even when stop/target geometry is unchanged.
+            for (
+                period_label,
+                period_start,
+                period_end,
+            ) in [
+                (
+                    "FULL_HISTORY",
+                    START,
+                    NOW,
+                ),
+                (
+                    "PRE_2010",
+                    START,
+                    datetime(
+                        2010,
+                        1,
+                        1,
+                        tzinfo=timezone.utc,
+                    ),
+                ),
+                (
+                    "2010_PLUS",
+                    datetime(
+                        2010,
+                        1,
+                        1,
+                        tzinfo=timezone.utc,
+                    ),
+                    NOW,
+                ),
+            ]:
+                for cost in COST_GRID:
+                    cost_trades = run_backtest(
+                        m15,
+                        indices,
+                        cfg[
+                            "rr"
+                        ],
+                        cost,
+                        period_start,
+                        period_end,
+                    )
+
+                    s = stats_from_trades(
+                        cost_trades
+                    )
+
+                    cost_output.append({
+                        "config_id":
+                            cfg[
+                                "config_id"
+                            ],
+
+                        "period":
+                            period_label,
+
+                        "cost_pips":
+                            cost,
+
+                        "trades":
+                            s[
+                                "trades"
+                            ],
+
+                        "profit_factor":
+                            round(
+                                s[
+                                    "profit_factor"
+                                ],
+                                6,
+                            ),
+
+                        "total_r":
+                            round(
+                                s[
+                                    "total_r"
+                                ],
+                                4,
+                            ),
+
+                        "max_drawdown_r":
+                            round(
+                                s[
+                                    "max_drawdown_r"
+                                ],
+                                4,
+                            ),
+                    })
+
+            rolling_output.extend(
+                rolling_rows_for_trades(
+                    cfg,
+                    full_trades,
+                )
+            )
+
+            calendar_output.extend(
+                calendar_rows_for_trades(
+                    cfg,
+                    full_trades,
+                )
+            )
+
             for trade in full_trades:
                 row = dict(
                     trade
@@ -4295,9 +3480,20 @@ def run_research():
                     "config_id"
                 ]
 
+                row[
+                    "family"
+                ] = cfg[
+                    "family"
+                ]
+
                 trade_output.append(
                     row
                 )
+
+        write_csv(
+            OUT_EXACT,
+            exact_rows,
+        )
 
         write_csv(
             OUT_PERIODS,
@@ -4345,43 +3541,31 @@ def run_research():
                     "Purpose",
 
                 "value":
-                    "Focused USD/CAD M15 LONG confirmation of the bullish-engulfing structure edge; no fresh archetype search.",
+                    "Final USD/CAD M15 LONG head-to-head only. No new broad optimisation.",
             }, {
                 "item":
-                    "Boundary extension",
+                    "EMA50 regime",
 
                 "value":
-                    "BR extended through 1.70 and RR through 6.00 because broad-run optima BR1.60 and RR5.00 were search-boundary values.",
+                    "BR1.60/1.70/1.80/1.90, body1.25, range1.50, LB165, distance0.175ATR, prior completed daily EMA50>EMA200, RR5.00.",
             }, {
                 "item":
-                    "Staged method",
+                    "Daily-close regime",
 
                 "value":
-                    "One-way slices -> 540-config BR/RR/structure grid -> local body/range/context confirmation around top structural candidates.",
+                    "BR1.60/1.70/1.80/1.90, body1.25, range1.30, LB165, distance0.175ATR, prior completed daily close>EMA200, RR4.75.",
             }, {
                 "item":
-                    "Primary regime hypothesis",
+                    "Decision",
 
                 "value":
-                    "Previous completed daily EMA50 > EMA200.",
-            }, {
-                "item":
-                    "Regime control",
-
-                "value":
-                    "Previous completed daily close > EMA200.",
+                    "Prefer the version with the best balance of full/pre/post edge, era balance, 2-pip cost survival, recent 2Y/5Y behaviour, rolling consistency, calendar consistency, drawdown and an interior/non-fragile BR threshold.",
             }, {
                 "item":
                     "Historical holdout",
 
                 "value":
-                    "No pristine historical holdout remains because full history is already part of the research universe.",
-            }, {
-                "item":
-                    "Decision rule",
-
-                "value":
-                    "Do not lock solely on maximum PF or R. Prefer interior/plateau parameters, cost survival, long-era balance, recent 2Y/5Y behaviour, rolling consistency, calendar consistency and sane trade count.",
+                    "No pristine historical holdout remains because full history has already been used in development.",
             }],
         )
 
@@ -4400,29 +3584,14 @@ def run_research():
                 "complete",
 
             "message":
-                "USD/CAD M15 LONG final confirmation complete",
+                "USD/CAD M15 LONG final head-to-head complete",
 
-            "parity":
+            "hard_parity":
                 "MATCH",
 
-            "one_way_configs":
+            "configs":
                 len(
-                    slice_configs
-                ),
-
-            "structural_rr_configs":
-                len(
-                    structural_configs
-                ),
-
-            "local_geometry_configs":
-                len(
-                    local_configs
-                ),
-
-            "deep_finalists":
-                len(
-                    finalist_configs
+                    FINAL_CONFIGS
                 ),
 
             "results_bundle":
@@ -4455,7 +3624,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDCAD M15 LONG Finalist Confirmation",
+            "USDCAD M15 LONG Final Head-to-Head",
 
         "status":
             STATUS[
@@ -4471,39 +3640,13 @@ def root():
         "side":
             "BUY",
 
-        "anchor": {
-            "exact_bullish_engulf":
-                True,
+        "configs":
+            8,
 
-            "br_min":
-                1.40,
-
-            "body_atr_min":
-                1.25,
-
-            "range_atr_min":
-                1.50,
-
-            "structure_lb":
-                165,
-
-            "structure_dist_atr_max":
-                0.150,
-
-            "context":
-                "previous completed daily EMA50 > EMA200",
-
-            "rr":
-                5.00,
-        },
-
-        "boundary_extension": {
-            "br":
-                BR_VALUES,
-
-            "rr":
-                RR_VALUES,
-        },
+        "comparison": [
+            "EMA50>EMA200 regime at BR1.60/1.70/1.80/1.90",
+            "Daily close>EMA200 regime at BR1.60/1.70/1.80/1.90",
+        ],
 
         "orders_supported":
             False,
@@ -4512,14 +3655,14 @@ def root():
             False,
 
         "routes": [
-            "/usdcad-m15-long-final-confirmation/status",
-            "/usdcad-m15-long-final-confirmation/results",
+            "/usdcad-m15-long-final-head-to-head/status",
+            "/usdcad-m15-long-final-head-to-head/results",
         ],
     })
 
 
 @app.route(
-    "/usdcad-m15-long-final-confirmation/status"
+    "/usdcad-m15-long-final-head-to-head/status"
 )
 def route_status():
     return jsonify(
@@ -4528,7 +3671,7 @@ def route_status():
 
 
 @app.route(
-    "/usdcad-m15-long-final-confirmation/results"
+    "/usdcad-m15-long-final-head-to-head/results"
 )
 def route_results():
     if not os.path.exists(
@@ -4553,7 +3696,7 @@ if __name__ == "__main__":
         target=run_research,
         name=(
             "usdcad-m15-long-"
-            "final-confirmation"
+            "final-head-to-head"
         ),
         daemon=True,
     )
