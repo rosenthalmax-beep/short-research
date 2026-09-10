@@ -1275,12 +1275,29 @@ def calendar_summary(rows):
 def run_research():
     try:
         STATUS.update({"state": "download", "message": "Downloading EUR/GBP full history"})
-        m15 = fetch("M15", START, NOW, 60)
-        h1 = fetch("H1", WARMUP, NOW, 300)
-        h4 = fetch("H4", WARMUP, NOW, 900)
-        daily = fetch("D", WARMUP, NOW, 3500)
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        daily = fetch("D", WARMUP, NOW, 3000)
         if not all([m15, h1, h4, daily]):
             raise RuntimeError("Missing required EUR_GBP history")
+
+        # Hard coverage guard.  OANDA caps candles returned per request; if a
+        # future edit makes a chunk too large, the fetch loop can otherwise
+        # skip 400 responses and leave only a recent tail.  This guard makes
+        # that failure explicit before any parity/strategy logic runs.
+        if (
+            len(m15) < 500000
+            or m15[0]["time"] > datetime(2002, 6, 1, tzinfo=timezone.utc)
+            or len(h1) < 100000
+            or len(h4) < 25000
+        ):
+            raise RuntimeError(
+                "Incomplete OANDA history: "
+                f"M15={len(m15)} first={iso(m15[0]['time']) if m15 else 'NONE'}; "
+                f"H1={len(h1)}; H4={len(h4)}. "
+                "Check candle chunk sizes / OANDA download coverage."
+            )
 
         write_csv(OUTS["coverage"], [{
             "instrument": PAIR,
