@@ -180,7 +180,7 @@ from flask import Flask, jsonify, send_file
 # ONE ZIP
 # ============================================================
 #
-# /usdcad-m15-short-complementary-frequency/results
+# /usdcad-m15-short-complement-final-local/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -211,6 +211,11 @@ PARITY_LAST_M15_OPEN = datetime(
     tzinfo=timezone.utc,
 )
 
+ANCHOR_LAST_M15_OPEN = datetime(
+    2026, 9, 9, 21, 15,
+    tzinfo=timezone.utc,
+)
+
 HTF_WARMUP_START = (
     START - timedelta(days=900)
 )
@@ -228,14 +233,13 @@ COST_GRID = [
     2.00,
 ]
 
-STAGE1_RR = 4.00
+STAGE1_RR = 3.50
 
 RR_VALUES = [
-    3.00,
+    3.25,
     3.50,
+    3.75,
     4.00,
-    4.50,
-    5.00,
 ]
 
 MEANINGFUL_CORE_INACTIVE_YEARS = {
@@ -244,12 +248,13 @@ MEANINGFUL_CORE_INACTIVE_YEARS = {
     2014,
 }
 
-STAGE1_KEEP = 20
-FINALIST_KEEP = 12
+STAGE1_KEEP = 30
+FINALIST_KEEP = 16
 
 ALL_LOOKBACKS = [
     5,
     10,
+    15,
     20,
     30,
     40,
@@ -286,72 +291,86 @@ CORE = {
 }
 
 
+# Frozen reference from the completed complementary-frequency run.
+# This is S2_0022 exactly and is used only as a parity/control anchor.
+ANCHOR = {
+    "config_id": "ANCHOR_S2_0022",
+    "family": "HIGH_SWEEP_REJECTION",
+    "context": "H1_CLOSE_LT_EMA100",
+    "sweep_lb": 20,
+    "body_atr_min": 1.25,
+    "close_loc_max": 0.40,
+    "upper_wick_body_min": 0.25,
+    "rr": 3.50,
+}
+
+
 # ============================================================
 # OUTPUTS
 # ============================================================
 
 OUT_COVERAGE = (
-    "usdcad_m15_short_complementary_frequency_coverage.csv"
+    "usdcad_m15_short_complement_final_local_coverage.csv"
 )
 
 OUT_PARITY = (
-    "usdcad_m15_short_complementary_frequency_parity.csv"
+    "usdcad_m15_short_complement_final_local_parity.csv"
 )
 
 OUT_CORE = (
-    "usdcad_m15_short_complementary_frequency_core_baseline.csv"
+    "usdcad_m15_short_complement_final_local_core_baseline.csv"
 )
 
 OUT_STAGE1 = (
-    "usdcad_m15_short_complementary_frequency_stage1.csv"
+    "usdcad_m15_short_complement_final_local_stage1_geometry.csv"
 )
 
 OUT_STAGE2 = (
-    "usdcad_m15_short_complementary_frequency_stage2_rr.csv"
+    "usdcad_m15_short_complement_final_local_stage2_rr.csv"
 )
 
 OUT_FINALISTS = (
-    "usdcad_m15_short_complementary_frequency_finalists.csv"
+    "usdcad_m15_short_complement_final_local_finalists.csv"
 )
 
 OUT_PERIODS = (
-    "usdcad_m15_short_complementary_frequency_periods.csv"
+    "usdcad_m15_short_complement_final_local_periods.csv"
 )
 
 OUT_COST = (
-    "usdcad_m15_short_complementary_frequency_cost_stress.csv"
+    "usdcad_m15_short_complement_final_local_cost_stress.csv"
 )
 
 OUT_ROLLING = (
-    "usdcad_m15_short_complementary_frequency_rolling.csv"
+    "usdcad_m15_short_complement_final_local_rolling.csv"
 )
 
 OUT_ROLLING_SUMMARY = (
-    "usdcad_m15_short_complementary_frequency_rolling_summary.csv"
+    "usdcad_m15_short_complement_final_local_rolling_summary.csv"
 )
 
 OUT_CALENDAR = (
-    "usdcad_m15_short_complementary_frequency_calendar_years.csv"
+    "usdcad_m15_short_complement_final_local_calendar_years.csv"
 )
 
 OUT_CALENDAR_SUMMARY = (
-    "usdcad_m15_short_complementary_frequency_calendar_summary.csv"
+    "usdcad_m15_short_complement_final_local_calendar_summary.csv"
 )
 
 OUT_OVERLAP = (
-    "usdcad_m15_short_complementary_frequency_overlap.csv"
+    "usdcad_m15_short_complement_final_local_overlap.csv"
 )
 
 OUT_TRADES = (
-    "usdcad_m15_short_complementary_frequency_finalist_trades.csv"
+    "usdcad_m15_short_complement_final_local_finalist_trades.csv"
 )
 
 OUT_NOTES = (
-    "usdcad_m15_short_complementary_frequency_notes.csv"
+    "usdcad_m15_short_complement_final_local_notes.csv"
 )
 
 OUT_BUNDLE = (
-    "USDCAD_M15_SHORT_COMPLEMENTARY_FREQUENCY_RESULTS.zip"
+    "USDCAD_M15_SHORT_COMPLEMENT_FINAL_LOCAL_RESULTS.zip"
 )
 
 STATUS = {
@@ -359,7 +378,7 @@ STATUS = {
         "not_started",
 
     "message":
-        "USD/CAD M15 SHORT complementary frequency search not started",
+        "USD/CAD M15 SHORT complement final local confirmation not started",
 
     "orders_supported":
         False,
@@ -1662,228 +1681,67 @@ def core_signal_indices(f):
 # ============================================================
 
 def build_stage1_configs():
+    """
+    Final local geometry confirmation around S2_0022 only.
+
+    Frozen hypothesis:
+      HIGH_SWEEP_REJECTION + H1 close < EMA100.
+
+    Stage 1 varies only the four unresolved geometry boundaries at
+    RR3.50. Stage 2 then RR-confirms the strongest Stage-1 rows.
+    """
     configs = []
     counter = 0
 
-    # --------------------------------------------------------
-    # A) COMPRESSION_BREAKDOWN
-    # --------------------------------------------------------
-    for compression in [
-        0.65,
-        0.75,
-        0.85,
-    ]:
-        for body in [
-            0.90,
-            1.10,
-            1.30,
-        ]:
-            for rng in [
-                1.20,
-                1.40,
-                1.60,
-            ]:
-                for lb in [
-                    5,
-                    10,
-                    20,
-                ]:
-                    for context in [
-                        "H1_CLOSE_LT_EMA100",
-                        "H4_CLOSE_LT_EMA100",
-                    ]:
-                        counter += 1
-
-                        configs.append({
-                            "config_id":
-                                f"S1_COMP_{counter:04d}",
-
-                            "family":
-                                "COMPRESSION_BREAKDOWN",
-
-                            "compression_max":
-                                compression,
-
-                            "body_atr_min":
-                                body,
-
-                            "range_atr_min":
-                                rng,
-
-                            "breakout_lb":
-                                lb,
-
-                            "context":
-                                context,
-
-                            "rr":
-                                STAGE1_RR,
-                        })
-
-    # --------------------------------------------------------
-    # B) BEAR_ENGULF_STRUCTURE
-    # --------------------------------------------------------
-    for br in [
-        1.00,
-        1.20,
-        1.40,
-    ]:
-        for body in [
-            0.75,
-            1.00,
-            1.25,
-        ]:
-            for lb in [
-                60,
-                100,
-                165,
-            ]:
-                for distance in [
-                    0.10,
-                    0.20,
-                    0.30,
-                ]:
-                    for context in [
-                        "H1_CLOSE_LT_EMA100",
-                        "H4_CLOSE_LT_EMA100",
-                    ]:
-                        counter += 1
-
-                        configs.append({
-                            "config_id":
-                                f"S1_ENG_{counter:04d}",
-
-                            "family":
-                                "BEAR_ENGULF_STRUCTURE",
-
-                            "br_min":
-                                br,
-
-                            "body_atr_min":
-                                body,
-
-                            "structure_lb":
-                                lb,
-
-                            "structure_dist_atr_max":
-                                distance,
-
-                            "context":
-                                context,
-
-                            "rr":
-                                STAGE1_RR,
-                        })
-
-    # --------------------------------------------------------
-    # C) HIGH_SWEEP_REJECTION
-    # --------------------------------------------------------
     for sweep_lb in [
+        10,
+        15,
         20,
+        30,
         40,
-        60,
-        100,
     ]:
         for body in [
-            0.75,
-            1.00,
+            1.15,
             1.25,
+            1.35,
         ]:
             for close_loc in [
-                0.20,
-                0.30,
+                0.35,
                 0.40,
+                0.45,
             ]:
                 for wick in [
-                    0.10,
+                    0.20,
                     0.25,
+                    0.30,
                 ]:
-                    for context in [
-                        "H1_CLOSE_LT_EMA100",
-                        "H4_CLOSE_LT_EMA100",
-                    ]:
-                        counter += 1
+                    counter += 1
 
-                        configs.append({
-                            "config_id":
-                                f"S1_SWEEP_{counter:04d}",
+                    configs.append({
+                        "config_id":
+                            f"L1_SWEEP_{counter:04d}",
 
-                            "family":
-                                "HIGH_SWEEP_REJECTION",
+                        "family":
+                            "HIGH_SWEEP_REJECTION",
 
-                            "sweep_lb":
-                                sweep_lb,
+                        "sweep_lb":
+                            sweep_lb,
 
-                            "body_atr_min":
-                                body,
+                        "body_atr_min":
+                            body,
 
-                            "close_loc_max":
-                                close_loc,
+                        "close_loc_max":
+                            close_loc,
 
-                            "upper_wick_body_min":
-                                wick,
+                        "upper_wick_body_min":
+                            wick,
 
-                            "context":
-                                context,
+                        "context":
+                            "H1_CLOSE_LT_EMA100",
 
-                            "rr":
-                                STAGE1_RR,
-                        })
-
-    # --------------------------------------------------------
-    # D) RALLY_FAILURE_BREAKDOWN
-    # --------------------------------------------------------
-    for rally in [
-        0.50,
-        1.00,
-        1.50,
-        2.00,
-    ]:
-        for body in [
-            0.90,
-            1.10,
-            1.30,
-        ]:
-            for lb in [
-                5,
-                10,
-                20,
-            ]:
-                for close_loc in [
-                    0.25,
-                    0.35,
-                ]:
-                    for context in [
-                        "H1_CLOSE_LT_EMA100",
-                        "H4_CLOSE_LT_EMA100",
-                    ]:
-                        counter += 1
-
-                        configs.append({
-                            "config_id":
-                                f"S1_RALLY_{counter:04d}",
-
-                            "family":
-                                "RALLY_FAILURE_BREAKDOWN",
-
-                            "rally_12h_min":
-                                rally,
-
-                            "body_atr_min":
-                                body,
-
-                            "breakout_lb":
-                                lb,
-
-                            "close_loc_max":
-                                close_loc,
-
-                            "context":
-                                context,
-
-                            "rr":
-                                STAGE1_RR,
-                        })
+                        "rr":
+                            STAGE1_RR,
+                    })
 
     return configs
 
@@ -3682,7 +3540,7 @@ def run_research():
                 "precomputing",
 
             "message":
-                "Building frozen-core and complementary feature cache",
+                "Building frozen-core and S2_0022 local feature cache",
         })
 
         m15_times = [
@@ -3769,36 +3627,113 @@ def run_research():
             == 54
         )
 
+        # ----------------------------------------------------
+        # HARD S2_0022 ANCHOR PARITY
+        # ----------------------------------------------------
+        anchor_count = bisect.bisect_right(
+            m15_times,
+            ANCHOR_LAST_M15_OPEN,
+        )
+
+        anchor_m15 = m15[:anchor_count]
+        anchor_end = (
+            ANCHOR_LAST_M15_OPEN
+            + timedelta(minutes=15)
+        )
+
+        anchor_indices_all = candidate_signal_indices(
+            ANCHOR,
+            features,
+        )
+        anchor_indices = [
+            index
+            for index in anchor_indices_all
+            if index < anchor_count
+        ]
+
+        anchor_candidate = run_backtest(
+            anchor_m15,
+            anchor_indices,
+            ANCHOR["rr"],
+            PRIMARY_COST_PIPS,
+            START,
+            anchor_end,
+        )
+
+        # Use the already-validated frozen core trades whose signals are
+        # within the same historical cutoff. All historical exits for the
+        # reference S2_0022 sample occurred before this cutoff.
+        anchor_core_indices = [
+            index
+            for index in core_indices
+            if index < anchor_count
+        ]
+        anchor_core = run_backtest(
+            anchor_m15,
+            anchor_core_indices,
+            CORE["rr"],
+            PRIMARY_COST_PIPS,
+            START,
+            anchor_end,
+        )
+
+        (
+            anchor_combined,
+            anchor_accepted,
+            anchor_rejected,
+        ) = nonoverlap_overlay(
+            anchor_core,
+            anchor_candidate,
+        )
+
+        anchor_match = (
+            len(anchor_candidate) == 130
+            and len(anchor_accepted) == 128
+            and len(anchor_rejected) == 2
+            and len(anchor_combined) == 182
+        )
+
         write_csv(
             OUT_PARITY,
             [{
-                "config_id":
-                    CORE[
-                        "config_id"
-                    ],
-
-                "expected_trades":
-                    54,
-
-                "actual_trades":
-                    len(
-                        parity_core
-                    ),
-
-                "status":
-                    (
-                        "MATCH"
-                        if parity_match
-                        else "FAIL"
-                    ),
+                "config_id": CORE["config_id"],
+                "parity_cutoff_m15_open_utc":
+                    iso_utc(PARITY_LAST_M15_OPEN),
+                "expected_candidate_trades": None,
+                "actual_candidate_trades": None,
+                "expected_accepted_nonoverlap": None,
+                "actual_accepted_nonoverlap": None,
+                "expected_combined_trades": 54,
+                "actual_combined_trades": len(parity_core),
+                "status": "MATCH" if parity_match else "FAIL",
+            }, {
+                "config_id": ANCHOR["config_id"],
+                "parity_cutoff_m15_open_utc":
+                    iso_utc(ANCHOR_LAST_M15_OPEN),
+                "expected_candidate_trades": 130,
+                "actual_candidate_trades": len(anchor_candidate),
+                "expected_accepted_nonoverlap": 128,
+                "actual_accepted_nonoverlap": len(anchor_accepted),
+                "expected_combined_trades": 182,
+                "actual_combined_trades": len(anchor_combined),
+                "rejected_overlap": len(anchor_rejected),
+                "status": "MATCH" if anchor_match else "FAIL",
             }],
         )
 
         if not parity_match:
             raise RuntimeError(
                 "Frozen core parity failed: "
-                f"expected 54 trades, got "
-                f"{len(parity_core)}."
+                f"expected 54 trades, got {len(parity_core)}."
+            )
+
+        if not anchor_match:
+            raise RuntimeError(
+                "S2_0022 anchor parity failed: expected "
+                "130 candidate / 128 accepted / 2 overlap / "
+                "182 combined, got "
+                f"{len(anchor_candidate)} / {len(anchor_accepted)} / "
+                f"{len(anchor_rejected)} / {len(anchor_combined)}."
             )
 
         core_trades = run_backtest(
@@ -3894,7 +3829,7 @@ def run_research():
                     "stage1",
 
                 "message": (
-                    f"Complement Stage 1 "
+                    f"Final-local geometry Stage 1 "
                     f"{i}/{len(stage1_configs)} "
                     f"{cfg['config_id']}"
                 ),
@@ -4086,7 +4021,7 @@ def run_research():
                     "stage2",
 
                 "message": (
-                    f"Complement RR confirmation "
+                    f"Final-local RR confirmation "
                     f"{i}/{len(stage2_configs)} "
                     f"{cfg['config_id']}"
                 ),
@@ -4161,6 +4096,34 @@ def run_research():
             ]
         )
 
+        # Always deep-test the exact S2_0022 geometry at RR3.50, even if
+        # the ranking changes slightly because a new final candle appears.
+        anchor_stage2_row = next(
+            (
+                row
+                for row in stage2_rows
+                if (
+                    row.get("family") == "HIGH_SWEEP_REJECTION"
+                    and row.get("context") == "H1_CLOSE_LT_EMA100"
+                    and row.get("sweep_lb") == 20
+                    and row.get("body_atr_min") == 1.25
+                    and row.get("close_loc_max") == 0.40
+                    and row.get("upper_wick_body_min") == 0.25
+                    and row.get("rr") == 3.50
+                )
+            ),
+            None,
+        )
+
+        if (
+            anchor_stage2_row is not None
+            and anchor_stage2_row not in finalist_rows
+        ):
+            if len(finalist_rows) >= FINALIST_KEEP:
+                finalist_rows[-1] = anchor_stage2_row
+            else:
+                finalist_rows.append(anchor_stage2_row)
+
         if len(
             finalist_rows
         ) < FINALIST_KEEP:
@@ -4233,7 +4196,7 @@ def run_research():
                     "deep_validation",
 
                 "message": (
-                    f"Complement deep finalist "
+                    f"Final-local deep finalist "
                     f"{i}/{len(finalist_configs)} "
                     f"{cfg['config_id']}"
                 ),
@@ -4954,7 +4917,7 @@ def run_research():
                     "Complement families",
 
                 "value":
-                    "Compression breakdown, bearish engulf near structure, high sweep/rejection, rally-failure breakdown. Outside-reversal family deliberately excluded.",
+                    "Final local confirmation only: HIGH_SWEEP_REJECTION around S2_0022; no other family is reopened.",
             }, {
                 "item":
                     "Overlap",
@@ -4966,7 +4929,13 @@ def run_research():
                     "Selection",
 
                 "value":
-                    "Coverage score rewards profitable fills of 2007/2010/2014 first, then accepted non-overlap edge, pre/post/era stability, combined PF and DD.",
+                    "Ranking keeps the original coverage logic but the search is restricted to the S2_0022 local geometry; exact anchor is forced into deep validation.",
+            }, {
+                "item":
+                    "Final local grid",
+
+                "value":
+                    "Sweep LB 10/15/20/30/40; body 1.15/1.25/1.35 ATR; closeLoc 0.35/0.40/0.45; upper wick/body 0.20/0.25/0.30 at RR3.50, then RR 3.25/3.50/3.75/4.00 on the strongest geometries.",
             }, {
                 "item":
                     "Historical holdout",
@@ -4981,7 +4950,7 @@ def run_research():
                 "packaging",
 
             "message":
-                "Building one ZIP results bundle",
+                "Building final-local ZIP results bundle",
         })
 
         build_bundle()
@@ -4991,7 +4960,7 @@ def run_research():
                 "complete",
 
             "message":
-                "USD/CAD M15 SHORT complementary frequency search complete",
+                "USD/CAD M15 SHORT complement final local confirmation complete",
 
             "hard_core_parity":
                 "MATCH",
@@ -5041,7 +5010,7 @@ def run_research():
 def root():
     return jsonify({
         "service":
-            "USDCAD M15 SHORT Complementary Frequency Search",
+            "USDCAD M15 SHORT Complement Final Local Confirmation",
 
         "status":
             STATUS[
@@ -5068,10 +5037,7 @@ def root():
             ),
 
         "complement_families": [
-            "COMPRESSION_BREAKDOWN",
-            "BEAR_ENGULF_STRUCTURE",
-            "HIGH_SWEEP_REJECTION",
-            "RALLY_FAILURE_BREAKDOWN",
+            "HIGH_SWEEP_REJECTION_FINAL_LOCAL_ONLY",
         ],
 
         "orders_supported":
@@ -5081,14 +5047,14 @@ def root():
             False,
 
         "routes": [
-            "/usdcad-m15-short-complementary-frequency/status",
-            "/usdcad-m15-short-complementary-frequency/results",
+            "/usdcad-m15-short-complement-final-local/status",
+            "/usdcad-m15-short-complement-final-local/results",
         ],
     })
 
 
 @app.route(
-    "/usdcad-m15-short-complementary-frequency/status"
+    "/usdcad-m15-short-complement-final-local/status"
 )
 def route_status():
     return jsonify(
@@ -5097,7 +5063,7 @@ def route_status():
 
 
 @app.route(
-    "/usdcad-m15-short-complementary-frequency/results"
+    "/usdcad-m15-short-complement-final-local/results"
 )
 def route_results():
     if not os.path.exists(
@@ -5122,7 +5088,7 @@ if __name__ == "__main__":
         target=run_research,
         name=(
             "usdcad-m15-short-"
-            "complementary-frequency"
+            "complement-final-local"
         ),
         daemon=True,
     )
