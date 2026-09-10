@@ -459,13 +459,17 @@ def features(c, h1, h4, d):
     va = np.isfinite(pa) & np.isfinite(pam) & (pam > 0)
     comp[va] = pa[va] / pam[va]
 
-    lbs = [5, 10, 20, 40, 60, 80, 100, 120, 165, 200]
+    # Build extreme caches from the actual configured research lookbacks
+    # plus the small fixed lookbacks used by other trigger families. This
+    # prevents a grid value (e.g. LB140) from existing downstream without
+    # its upstream prior-high/prior-low cache being created first.
+    lbs = sorted(set([5, 10, 20, 40, 60, 80, 100, 120, 165, 200] + list(LB_VALUES)))
     pl = {lb: prev_extreme(l, lb, "min") for lb in lbs}
     ph = {lb: prev_extreme(h, lb, "max") for lb in lbs}
 
     # ATR-normalised distance from current signal high to prior high.
     sd_high = {}
-    for lb in [40, 60, 80, 100, 120, 140, 165, 200]:
+    for lb in sorted(set([40, 60, 80, 100, 120, 165, 200] + list(LB_VALUES))):
         x = np.full(n, np.nan)
         ok = valid_atr & np.isfinite(ph[lb])
         x[ok] = np.abs(h[ok] - ph[lb][ok]) / a[ok]
