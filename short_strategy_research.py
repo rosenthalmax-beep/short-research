@@ -1,5 +1,5 @@
 """
-M15 FINAL LOCKED 10-STRATEGY PORTFOLIO + EQUITY COMPOUNDING ANALYSIS
+H1 + M15 FINAL LOCKED 20-STRATEGY PORTFOLIO ANALYSIS
 ================================================
 
 READ-ONLY research service. NEVER sends orders.
@@ -1608,12 +1608,4155 @@ def run_research():
         STATUS.update(state="error",message=str(e),error_type=type(e).__name__,traceback=traceback.format_exc(),progress=STATUS.get("progress",0))
 
 
+
+# ============================================================
+# H1 + M15 20-STRATEGY COMBINED PORTFOLIO LAYER
+# ============================================================
+#
+# READ ONLY. NEVER SENDS ORDERS.
+#
+# H1 authority:
+#   strategy_probe(6).py SHA256:
+#   4ec3b8870fb085eb842fdf85e60681b81968b300efa1a9e1ab677a1d242d5a65
+#
+# Executor reference:
+#   app(7).py SHA256:
+#   14d9aa2c555f7809efd8b8f03a53923c773d47494aaa0c60883d5b54cbfa89d4
+#
+# M15 authority:
+#   exact previously verified M15 portfolio runner SHA256:
+#   703baac7e933c6b5b33c2f5870bbacf6a0d7954b5a5067a313c524c7b8f15df8
+#
+# The H1 strategy dictionaries below were extracted literally from the
+# attached live strategy engine. The H1 historical signal/trade functions
+# below are copied from that same live engine. The short historical trade
+# wrapper comes from the prior final-live H1 portfolio audit whose strategy
+# dictionaries were programmatically verified identical to the attached
+# live engine before this combined file was generated.
+#
+# Baseline costs:
+#   H1  = 5 adverse ticks (the live H1 historical convention)
+#   M15 = 1 adverse pip (the final full-history M15 convention)
+#
+# Portfolio modes:
+#   INDEPENDENT
+#       Every strategy keeps only its own internal pyramiding=0 rule.
+#       Different H1/M15 strategies can overlap, including same instrument.
+#
+#   PAIR_GATE_H1_FIRST
+#       Mimics the current live strategy-engine rule that an already-open
+#       OANDA trade on an instrument blocks any new trade on that instrument.
+#       If H1 and M15 signals occur at the exact same entry timestamp, H1
+#       gets priority. BUY precedes SELL within the same timeframe.
+#
+#   PAIR_GATE_M15_FIRST
+#       Same one-open-trade-per-instrument gate, but M15 gets priority on an
+#       exact H1/M15 tie. This exists because the future combined watcher
+#       scheduling order has not yet been defined.
+#
+# Equity scenarios:
+#   full 3x3 H1-risk x M15-risk matrix:
+#       0.50%, 0.75%, 1.00% per new trade.
+#
+# Sizing:
+#   risk is based on then-REALISED equity because candle-only backtests do
+#   not reconstruct mark-to-market NAV between exits. The actual executor
+#   uses current OANDA NAV. Open positions retain their entry cash-risk.
+# ============================================================
+
+# H1 globals expected by the exact copied live functions.
+NY_TZ = NY
+DAILY_ALIGNMENT_HOUR = 17
+DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
+BACKTEST_SLIPPAGE_TICKS = 5
+
+STRATEGIES = {'EUR_USD': {'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'EURUSD',
+             'minimum_body_ratio': 1.0,
+             'strong_close_enabled': True,
+             'minimum_close_location': 0.6,
+             'lower_wick_filter_enabled': False,
+             'minimum_lower_wick_body_ratio': None,
+             'atr_length': 14,
+             'structure_lookback': 15,
+             'maximum_distance_atr': 0.1,
+             'minimum_range_enabled': False,
+             'minimum_range_atr': None,
+             'fast_daily_ema': 1,
+             'slow_daily_ema': 1,
+             'daily_close_ema': None,
+             'require_daily_close_above_slow': False,
+             'require_daily_fast_above_slow': False,
+             'minimum_daily_atr_ratio_50': None,
+             'session_timezone': 'America/New_York',
+             'session_mode': 'include',
+             'session_start_hour': 8,
+             'session_end_hour': 16,
+             'excluded_weekdays': {1, 4},
+             'reward_risk': 3.5,
+             'stop_buffer_ticks': 10},
+ 'GBP_USD': {'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'GBPUSD',
+             'minimum_body_ratio': 1.4,
+             'strong_close_enabled': True,
+             'minimum_close_location': 0.65,
+             'lower_wick_filter_enabled': False,
+             'minimum_lower_wick_body_ratio': None,
+             'atr_length': 14,
+             'structure_lookback': 20,
+             'maximum_distance_atr': 0.25,
+             'minimum_range_enabled': True,
+             'minimum_range_atr': 0.9,
+             'fast_daily_ema': 50,
+             'slow_daily_ema': 70,
+             'require_daily_close_above_slow': True,
+             'require_daily_fast_above_slow': True,
+             'session_timezone': 'America/New_York',
+             'session_mode': 'exclude',
+             'session_start_hour': 14,
+             'session_end_hour': 19,
+             'excluded_weekdays': set(),
+             'reward_risk': 4.25,
+             'stop_buffer_ticks': 10},
+ 'USD_JPY': {'tick_size': 0.001,
+             'price_precision': 3,
+             'signal_id_prefix': 'USDJPY',
+             'minimum_body_ratio': 1.0,
+             'strong_close_enabled': True,
+             'minimum_close_location': 0.6,
+             'lower_wick_filter_enabled': False,
+             'minimum_lower_wick_body_ratio': None,
+             'atr_length': 14,
+             'minimum_body_atr': 0.8,
+             'structure_lookback': 100,
+             'maximum_distance_atr': 0.55,
+             'minimum_range_enabled': False,
+             'minimum_range_atr': None,
+             'fast_daily_ema': 1,
+             'slow_daily_ema': 1,
+             'daily_close_ema': None,
+             'require_daily_close_above_slow': False,
+             'require_daily_fast_above_slow': False,
+             'minimum_daily_atr_ratio_50': None,
+             'session_timezone': 'America/New_York',
+             'session_mode': 'all',
+             'session_start_hour': None,
+             'session_end_hour': None,
+             'excluded_weekdays': set(),
+             'reward_risk': 3.75,
+             'stop_buffer_ticks': 10},
+ 'USD_CAD': {'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'USDCAD',
+             'minimum_body_ratio': 1.1,
+             'strong_close_enabled': False,
+             'minimum_close_location': 0.75,
+             'lower_wick_filter_enabled': True,
+             'minimum_lower_wick_body_ratio': 0.2,
+             'atr_length': 14,
+             'minimum_body_atr': 0.6,
+             'structure_lookback': 40,
+             'maximum_distance_atr': 0.05,
+             'minimum_range_enabled': True,
+             'minimum_range_atr': 1.2,
+             'fast_daily_ema': 1,
+             'slow_daily_ema': 1,
+             'require_daily_close_above_slow': False,
+             'require_daily_fast_above_slow': False,
+             'minimum_daily_atr_ratio_50': 0.95,
+             'session_timezone': 'America/New_York',
+             'session_mode': 'all',
+             'session_start_hour': None,
+             'session_end_hour': None,
+             'excluded_weekdays': set(),
+             'reward_risk': 3.5,
+             'stop_buffer_ticks': 10},
+ 'EUR_GBP': {'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'EURGBP',
+             'minimum_body_ratio': 1.0,
+             'strong_close_enabled': False,
+             'minimum_close_location': 0.75,
+             'lower_wick_filter_enabled': False,
+             'minimum_lower_wick_body_ratio': None,
+             'atr_length': 14,
+             'minimum_body_atr': 1.1,
+             'structure_lookback': 30,
+             'maximum_distance_atr': 0.075,
+             'minimum_range_enabled': True,
+             'minimum_range_atr': 1.4,
+             'daily_close_ema': 200,
+             'fast_daily_ema': 20,
+             'slow_daily_ema': 150,
+             'require_daily_close_above_slow': False,
+             'require_daily_fast_above_slow': True,
+             'minimum_daily_atr_ratio_50': None,
+             'session_timezone': 'Europe/London',
+             'session_mode': 'all',
+             'session_start_hour': None,
+             'session_end_hour': None,
+             'excluded_weekdays': set(),
+             'reward_risk': 3.0,
+             'stop_buffer_ticks': 10}}
+SHORT_STRATEGIES = {'EUR_USD': {'strategy_name': 'BALANCED_815',
+             'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'EURUSDSHORT',
+             'minimum_body_ratio': 1.1,
+             'maximum_close_location': 0.275,
+             'atr_length': 14,
+             'structure_lookback': 55,
+             'maximum_distance_atr': 0.35,
+             'fast_daily_ema': 85,
+             'slow_daily_ema': 100,
+             'require_daily_fast_below_slow': True,
+             'minimum_daily_ema_separation_atr': 0.05,
+             'maximum_slow_ema_slope_5d_atr': None,
+             'minimum_daily_atr_ratio_50': None,
+             'session_timezone': 'America/New_York',
+             'excluded_hours': {2, 10, 12, 14},
+             'excluded_weekdays': set(),
+             'reward_risk': 4.0,
+             'stop_buffer_ticks': 10},
+ 'GBP_USD': {'strategy_name': 'GBPUSD_FINAL_SHORT',
+             'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'GBPUSDSHORT',
+             'minimum_body_ratio': 1.0,
+             'maximum_close_location': None,
+             'atr_length': 14,
+             'structure_lookback': 70,
+             'maximum_distance_atr': 0.175,
+             'fast_daily_ema': 40,
+             'slow_daily_ema': 100,
+             'require_daily_fast_below_slow': True,
+             'minimum_daily_ema_separation_atr': None,
+             'maximum_slow_ema_slope_5d_atr': -0.05,
+             'minimum_daily_atr_ratio_50': 0.8,
+             'session_timezone': 'America/New_York',
+             'excluded_hours': {3, 15},
+             'excluded_weekdays': set(),
+             'reward_risk': 2.5,
+             'stop_buffer_ticks': 10},
+ 'USD_JPY': {'strategy_name': 'USDJPY_FINAL_SHORT',
+             'tick_size': 0.001,
+             'price_precision': 3,
+             'signal_id_prefix': 'USDJPYSHORT',
+             'minimum_body_ratio': 1.45,
+             'maximum_close_location': None,
+             'atr_length': 14,
+             'structure_lookback': 90,
+             'maximum_distance_atr': 0.5,
+             'fast_daily_ema': 90,
+             'slow_daily_ema': 90,
+             'require_daily_fast_below_slow': False,
+             'minimum_daily_ema_separation_atr': None,
+             'maximum_slow_ema_slope_5d_atr': None,
+             'minimum_daily_atr_ratio_50': None,
+             'session_timezone': 'America/New_York',
+             'excluded_hours': {1, 5, 6, 10, 11},
+             'excluded_weekdays': set(),
+             'reward_risk': 2.5,
+             'stop_buffer_ticks': 10},
+ 'USD_CAD': {'strategy_name': 'USDCAD_FINAL_SHORT',
+             'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'USDCADSHORT',
+             'minimum_body_ratio': 1.4,
+             'maximum_close_location': None,
+             'atr_length': 14,
+             'structure_lookback': 60,
+             'maximum_distance_atr': 0.25,
+             'fast_daily_ema': 300,
+             'slow_daily_ema': 300,
+             'require_daily_fast_below_slow': False,
+             'minimum_daily_ema_separation_atr': None,
+             'maximum_slow_ema_slope_5d_atr': None,
+             'minimum_daily_atr_ratio_50': None,
+             'momentum_lookback_bars': 24,
+             'minimum_upward_momentum_atr': 0.5,
+             'minimum_signal_range_atr': 0.9,
+             'maximum_stop_size_atr': 1.6,
+             'session_timezone': 'America/New_York',
+             'excluded_hours': {18},
+             'excluded_weekdays': set(),
+             'reward_risk': 3.25,
+             'stop_buffer_ticks': 10},
+ 'EUR_GBP': {'strategy_name': 'EURGBP_CONFIRMED_SHORT',
+             'tick_size': 1e-05,
+             'price_precision': 5,
+             'signal_id_prefix': 'EURGBPSHORT',
+             'minimum_body_ratio': 1.0,
+             'maximum_close_location': 0.2,
+             'atr_length': 14,
+             'structure_lookback': 90,
+             'maximum_distance_atr': 0.075,
+             'fast_daily_ema': 1,
+             'slow_daily_ema': 1,
+             'require_daily_close_below_slow': False,
+             'require_daily_fast_below_slow': False,
+             'minimum_daily_ema_separation_atr': None,
+             'maximum_slow_ema_slope_5d_atr': None,
+             'minimum_daily_atr_ratio_50': None,
+             'momentum_requirements': {12: 0.25, 48: 1.0},
+             'minimum_signal_range_atr': 1.1,
+             'maximum_stop_size_atr': 2.5,
+             'minimum_upper_wick_body_ratio': 0.1,
+             'minimum_h1_atr_ratio_50': 0.8,
+             'session_timezone': 'America/New_York',
+             'excluded_hours': {9},
+             'excluded_weekdays': set(),
+             'reward_risk': 3.0,
+             'stop_buffer_ticks': 10}}
+
+H1_REFERENCE_FULL_TRADES = 1314
+M15_REFERENCE_PORTFOLIO_TRADES = 1021
+
+H1_DATA_WARMUP = START - timedelta(days=120)
+H1_DAILY_WARMUP = START - timedelta(days=1500)
+
+COMBINED_RISK_LEVELS = [0.0050, 0.0075, 0.0100]
+COST_MULTIPLIERS = [0.50, 1.00, 1.50, 2.00]
+
+COMBINED_OUT = {
+    "source_audit": "h1_m15_20_source_audit.csv",
+    "manifest": "h1_m15_20_manifest.csv",
+    "coverage": "h1_m15_20_coverage.csv",
+    "parity": "h1_m15_20_parity.csv",
+    "strategy_summary": "h1_m15_20_strategy_summary.csv",
+    "timeframe_summary": "h1_m15_20_timeframe_summary.csv",
+    "pair_summary": "h1_m15_20_pair_summary.csv",
+    "mode_summary": "h1_m15_20_portfolio_mode_summary.csv",
+    "periods": "h1_m15_20_periods.csv",
+    "calendar": "h1_m15_20_calendar_years.csv",
+    "rolling": "h1_m15_20_rolling.csv",
+    "rolling_summary": "h1_m15_20_rolling_summary.csv",
+    "frequency": "h1_m15_20_trade_frequency.csv",
+    "monthly": "h1_m15_20_monthly_by_strategy.csv",
+    "correlation": "h1_m15_20_monthly_correlation.csv",
+    "overlap": "h1_m15_20_overlap.csv",
+    "concurrency": "h1_m15_20_concurrency.csv",
+    "pair_gate_rejections": "h1_m15_20_pair_gate_rejections.csv",
+    "cost_stress": "h1_m15_20_cost_stress.csv",
+    "equity_matrix": "h1_m15_20_equity_risk_matrix.csv",
+    "equity_periods": "h1_m15_20_equity_periods.csv",
+    "equity_calendar": "h1_m15_20_equity_calendar_years.csv",
+    "equity_calendar_summary": "h1_m15_20_equity_calendar_summary.csv",
+    "equity_rolling": "h1_m15_20_equity_rolling.csv",
+    "equity_rolling_summary": "h1_m15_20_equity_rolling_summary.csv",
+    "equity_key_curve": "h1_m15_20_equity_key_curves.csv",
+    "equity_key_trades": "h1_m15_20_equity_key_trades.csv",
+    "trades_independent": "h1_m15_20_trades_independent.csv",
+    "trades_pair_gate_h1_first": "h1_m15_20_trades_pair_gate_h1_first.csv",
+    "trades_pair_gate_m15_first": "h1_m15_20_trades_pair_gate_m15_first.csv",
+    "notes": "h1_m15_20_notes.csv",
+}
+COMBINED_BUNDLE = "H1_M15_FINAL_20_STRATEGY_PORTFOLIO_ANALYSIS_RESULTS.zip"
+
+COMBINED_STATUS = {
+    "state": "not_started",
+    "message": "H1 + M15 20-strategy analysis not started",
+    "orders_supported": False,
+    "trading_enabled": False,
+    "progress": 0,
+}
+
+# ----------------------------------------------------------------
+# Exact functions copied from attached live H1 strategy engine.
+# ----------------------------------------------------------------
+
+def strategy_timezone(
+    config
+):
+
+    return ZoneInfo(
+        config[
+            "session_timezone"
+        ]
+    )
+
+
+def round_price(
+    value,
+    config
+):
+
+    return round(
+        value,
+        config[
+            "price_precision"
+        ]
+    )
+
+
+def ema_series(
+    values,
+    length
+):
+
+    if len(values) < length:
+
+        raise ValueError(
+            f"Not enough values "
+            f"for EMA{length}"
+        )
+
+    result = [
+        None
+    ] * len(
+        values
+    )
+
+    multiplier = (
+        2.0
+        / (
+            length + 1.0
+        )
+    )
+
+    initial = (
+        sum(
+            values[
+                :length
+            ]
+        )
+        / length
+    )
+
+    result[
+        length - 1
+    ] = initial
+
+    previous = initial
+
+    for index in range(
+        length,
+        len(values)
+    ):
+
+        current = (
+            (
+                values[index]
+                - previous
+            )
+            * multiplier
+            + previous
+        )
+
+        result[
+            index
+        ] = current
+
+        previous = current
+
+    return result
+
+
+def true_ranges(
+    candles
+):
+
+    values = []
+
+    for index, candle in enumerate(
+        candles
+    ):
+
+        if index == 0:
+
+            tr = (
+                candle["high"]
+                - candle["low"]
+            )
+
+        else:
+
+            previous_close = (
+                candles[
+                    index - 1
+                ]["close"]
+            )
+
+            tr = max(
+
+                candle["high"]
+                - candle["low"],
+
+                abs(
+                    candle["high"]
+                    - previous_close
+                ),
+
+                abs(
+                    candle["low"]
+                    - previous_close
+                )
+            )
+
+        values.append(
+            tr
+        )
+
+    return values
+
+
+def rma_series(
+    values,
+    length
+):
+
+    if len(values) < length:
+
+        raise ValueError(
+            f"Not enough values "
+            f"for RMA{length}"
+        )
+
+    result = [
+        None
+    ] * len(
+        values
+    )
+
+    initial = (
+        sum(
+            values[
+                :length
+            ]
+        )
+        / length
+    )
+
+    result[
+        length - 1
+    ] = initial
+
+    previous = initial
+
+    for index in range(
+        length,
+        len(values)
+    ):
+
+        current = (
+            (
+                previous
+                * (
+                    length - 1
+                )
+            )
+            + values[index]
+        ) / length
+
+        result[
+            index
+        ] = current
+
+        previous = current
+
+    return result
+
+
+def atr_series(
+    candles,
+    length
+):
+
+    return rma_series(
+        true_ranges(
+            candles
+        ),
+        length
+    )
+
+
+def current_daily_start(
+    timestamp_utc
+):
+
+    ny_time = (
+        timestamp_utc
+        .astimezone(
+            NY_TZ
+        )
+    )
+
+    candidate = (
+        ny_time.replace(
+
+            hour=
+                DAILY_ALIGNMENT_HOUR,
+
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+    )
+
+    if ny_time < candidate:
+
+        candidate = (
+            candidate
+            - timedelta(
+                days=1
+            )
+        )
+
+    return candidate.astimezone(
+        timezone.utc
+    )
+
+
+def build_daily_state(
+    daily,
+    config
+):
+
+    closes = [
+        candle["close"]
+        for candle in daily
+    ]
+
+    fast_length = (
+        config[
+            "fast_daily_ema"
+        ]
+    )
+
+    slow_length = (
+        config[
+            "slow_daily_ema"
+        ]
+    )
+
+    if fast_length is not None:
+
+        fast_ema = ema_series(
+            closes,
+            fast_length
+        )
+
+    else:
+
+        fast_ema = [
+            None
+        ] * len(
+            closes
+        )
+
+    slow_ema = ema_series(
+        closes,
+        slow_length
+    )
+
+    # Optional independent daily-close EMA regime for long
+    # strategies. Existing longs leave this unset.
+    daily_close_ema_length = config.get(
+        "daily_close_ema"
+    )
+
+    if daily_close_ema_length is not None:
+
+        daily_close_ema = ema_series(
+            closes,
+            daily_close_ema_length
+        )
+
+    else:
+
+        daily_close_ema = [
+            None
+        ] * len(
+            closes
+        )
+
+    # Daily volatility regime support for long strategies.
+    # Existing longs ignore this unless
+    # minimum_daily_atr_ratio_50 is configured.
+    daily_atr = atr_series(
+        daily,
+        14
+    )
+
+    daily_atr_sma50 = [
+        None
+    ] * len(
+        daily_atr
+    )
+
+    rolling_sum = 0.0
+    rolling_values = []
+
+    for index, value in enumerate(
+        daily_atr
+    ):
+
+        if value is None:
+            rolling_values.append(
+                None
+            )
+            continue
+
+        rolling_values.append(
+            value
+        )
+        rolling_sum += value
+
+        if len(
+            rolling_values
+        ) > 50:
+
+            removed = (
+                rolling_values[
+                    -51
+                ]
+            )
+
+            if removed is not None:
+                rolling_sum -= removed
+
+        window = (
+            rolling_values[
+                -50:
+            ]
+        )
+
+        if (
+            len(
+                window
+            ) == 50
+            and
+            all(
+                item is not None
+                for item in window
+            )
+        ):
+
+            daily_atr_sma50[
+                index
+            ] = (
+                rolling_sum
+                / 50.0
+            )
+
+    result = []
+
+    for index, candle in enumerate(
+        daily
+    ):
+
+        daily_atr_ratio_50 = None
+
+        # Match the short/research warm-up convention:
+        # ATR14 seed + 50 valid ATR observations.
+        if (
+            index >= 63
+            and
+            daily_atr[
+                index
+            ] is not None
+            and
+            daily_atr_sma50[
+                index
+            ] is not None
+            and
+            daily_atr_sma50[
+                index
+            ] > 0
+        ):
+
+            daily_atr_ratio_50 = (
+                daily_atr[
+                    index
+                ]
+                / daily_atr_sma50[
+                    index
+                ]
+            )
+
+        result.append({
+
+            "time":
+                candle["time"],
+
+            "close":
+                candle["close"],
+
+            "fast_ema":
+                fast_ema[
+                    index
+                ],
+
+            "slow_ema":
+                slow_ema[
+                    index
+                ],
+
+            "daily_close_ema":
+                daily_close_ema[
+                    index
+                ],
+
+            "daily_atr":
+                daily_atr[
+                    index
+                ],
+
+            "daily_atr_ratio_50":
+                daily_atr_ratio_50
+        })
+
+    return result
+
+
+def previous_daily_values(
+    signal_time,
+    daily_state,
+    config
+):
+
+    session_start = (
+        current_daily_start(
+            signal_time
+        )
+    )
+
+    selected = None
+
+    require_fast = (
+        config[
+            "require_daily_fast_above_slow"
+        ]
+    )
+
+    require_daily_close_ema = (
+        config.get(
+            "daily_close_ema"
+        )
+        is not None
+    )
+
+    for row in daily_state:
+
+        slow_ready = (
+            row[
+                "slow_ema"
+            ]
+            is not None
+        )
+
+        fast_ready = (
+            not require_fast
+            or
+            row[
+                "fast_ema"
+            ]
+            is not None
+        )
+
+        daily_close_ema_ready = (
+            not require_daily_close_ema
+            or
+            row[
+                "daily_close_ema"
+            ]
+            is not None
+        )
+
+        if (
+            row["time"]
+            < session_start
+            and
+            slow_ready
+            and
+            fast_ready
+            and
+            daily_close_ema_ready
+        ):
+
+            selected = row
+
+        elif (
+            row["time"]
+            >= session_start
+        ):
+
+            break
+
+    return selected
+
+
+def build_short_daily_state(
+    daily,
+    config
+):
+
+    closes = [
+        candle["close"]
+        for candle in daily
+    ]
+
+    fast_ema = ema_series(
+        closes,
+        config[
+            "fast_daily_ema"
+        ]
+    )
+
+    slow_ema = ema_series(
+        closes,
+        config[
+            "slow_daily_ema"
+        ]
+    )
+
+    daily_atr = atr_series(
+        daily,
+        14
+    )
+
+    # 50-day simple average of Daily ATR14.
+    daily_atr_sma50 = [None] * len(daily_atr)
+    rolling_sum = 0.0
+    rolling_values = []
+
+    for index, value in enumerate(daily_atr):
+
+        if value is None:
+            rolling_values.append(None)
+            continue
+
+        rolling_values.append(value)
+        rolling_sum += value
+
+        if len(rolling_values) > 50:
+            removed = rolling_values[-51]
+            if removed is not None:
+                rolling_sum -= removed
+
+        window = rolling_values[-50:]
+
+        if (
+            len(window) == 50
+            and all(
+                item is not None
+                for item in window
+            )
+        ):
+            daily_atr_sma50[index] = (
+                rolling_sum / 50.0
+            )
+
+    result = []
+
+    for index, candle in enumerate(
+        daily
+    ):
+
+        slow_slope_5d_atr = None
+
+        if (
+            index >= 5
+            and slow_ema[index] is not None
+            and slow_ema[index - 5] is not None
+            and daily_atr[index] is not None
+            and daily_atr[index] > 0
+        ):
+            slow_slope_5d_atr = (
+                slow_ema[index]
+                - slow_ema[index - 5]
+            ) / daily_atr[index]
+
+        daily_atr_ratio_50 = None
+
+        # Match the research warmup convention exactly:
+        # ATR14 first becomes valid after its 14-bar seed, then
+        # the 50-day ATR mean is not exposed until index 63.
+        if (
+            index >= 63
+            and daily_atr[index] is not None
+            and daily_atr_sma50[index] is not None
+            and daily_atr_sma50[index] > 0
+        ):
+            daily_atr_ratio_50 = (
+                daily_atr[index]
+                / daily_atr_sma50[index]
+            )
+
+        result.append({
+
+            "time":
+                candle["time"],
+
+            "close":
+                candle["close"],
+
+            "fast_ema":
+                fast_ema[index],
+
+            "slow_ema":
+                slow_ema[index],
+
+            "daily_atr":
+                daily_atr[index],
+
+            "slow_ema_slope_5d_atr":
+                slow_slope_5d_atr,
+
+            "daily_atr_ratio_50":
+                daily_atr_ratio_50
+        })
+
+    return result
+
+
+def previous_short_daily_values(
+    signal_time,
+    daily_state
+):
+
+    session_start = (
+        current_daily_start(
+            signal_time
+        )
+    )
+
+    selected = None
+
+    for row in daily_state:
+
+        ready = (
+            row["fast_ema"] is not None
+            and row["slow_ema"] is not None
+            and row["daily_atr"] is not None
+        )
+
+        if (
+            row["time"] < session_start
+            and ready
+        ):
+            selected = row
+
+        elif row["time"] >= session_start:
+            break
+
+    return selected
+
+
+def local_signal_time(
+    signal_time,
+    config
+):
+
+    return signal_time.astimezone(
+        strategy_timezone(
+            config
+        )
+    )
+
+
+def session_allowed_for(
+    signal_time,
+    config
+):
+
+    mode = (
+        config[
+            "session_mode"
+        ]
+    )
+
+    if mode == "all":
+
+        return True
+
+    local_time = (
+        local_signal_time(
+            signal_time,
+            config
+        )
+    )
+
+    hour = (
+        local_time.hour
+    )
+
+    inside_window = (
+        hour
+        >= config[
+            "session_start_hour"
+        ]
+        and
+        hour
+        < config[
+            "session_end_hour"
+        ]
+    )
+
+    if mode == "include":
+
+        return inside_window
+
+    if mode == "exclude":
+
+        return not inside_window
+
+    raise ValueError(
+        f"Unknown session mode: "
+        f"{mode}"
+    )
+
+
+def weekday_allowed_for(
+    signal_time,
+    config
+):
+
+    local_time = (
+        local_signal_time(
+            signal_time,
+            config
+        )
+    )
+
+    return (
+        local_time.weekday()
+        not in config[
+            "excluded_weekdays"
+        ]
+    )
+
+
+def evaluate_signal_at_index(
+    instrument,
+    h1,
+    atr,
+    index,
+    daily_state
+):
+
+    config = (
+        STRATEGIES[
+            instrument
+        ]
+    )
+
+    minimum_index = max(
+
+        config[
+            "atr_length"
+        ],
+
+        config[
+            "structure_lookback"
+        ]
+    )
+
+    if index < minimum_index:
+
+        return None
+
+    signal = (
+        h1[index]
+    )
+
+    previous = (
+        h1[
+            index - 1
+        ]
+    )
+
+    current_atr = (
+        atr[index]
+    )
+
+    if current_atr is None:
+
+        return None
+
+    # ==============================================
+    # CANDLE VALUES
+    # ==============================================
+
+    previous_body = abs(
+        previous["close"]
+        - previous["open"]
+    )
+
+    current_body = abs(
+        signal["close"]
+        - signal["open"]
+    )
+
+    signal_range = (
+        signal["high"]
+        - signal["low"]
+    )
+
+    lower_wick = (
+        min(
+            signal["open"],
+            signal["close"]
+        )
+        - signal["low"]
+    )
+
+    close_location = (
+
+        (
+            signal["close"]
+            - signal["low"]
+        )
+        / signal_range
+
+        if signal_range > 0
+
+        else 0.0
+    )
+
+    body_ratio = (
+
+        current_body
+        / previous_body
+
+        if previous_body > 0
+
+        else None
+    )
+
+    body_atr = (
+
+        current_body
+        / current_atr
+
+        if current_atr > 0
+
+        else None
+    )
+
+    # ==============================================
+    # BODY RATIO
+    # ==============================================
+
+    body_ratio_allowed = (
+        previous_body > 0
+        and
+        current_body
+        >= (
+            previous_body
+            * config[
+                "minimum_body_ratio"
+            ]
+        )
+    )
+
+    # ==============================================
+    # BULLISH ENGULFING
+    # ==============================================
+
+    bullish_engulfing = (
+
+        previous[
+            "close"
+        ]
+        < previous[
+            "open"
+        ]
+
+        and
+
+        signal[
+            "close"
+        ]
+        > signal[
+            "open"
+        ]
+
+        and
+
+        signal[
+            "open"
+        ]
+        <= previous[
+            "close"
+        ]
+
+        and
+
+        signal[
+            "close"
+        ]
+        >= previous[
+            "open"
+        ]
+
+        and
+
+        body_ratio_allowed
+    )
+
+    # ==============================================
+    # STRONG CLOSE
+    # ==============================================
+
+    if config[
+        "strong_close_enabled"
+    ]:
+
+        strong_close_allowed = (
+            close_location
+            >= config[
+                "minimum_close_location"
+            ]
+        )
+
+    else:
+
+        strong_close_allowed = True
+
+    # ==============================================
+    # LOWER WICK
+    # ==============================================
+
+    if config[
+        "lower_wick_filter_enabled"
+    ]:
+
+        lower_wick_allowed = (
+            lower_wick
+            >= (
+                current_body
+                * config[
+                    "minimum_lower_wick_body_ratio"
+                ]
+            )
+        )
+
+    else:
+
+        lower_wick_allowed = True
+
+    # ==============================================
+    # MINIMUM RANGE
+    # ==============================================
+
+    if config[
+        "minimum_range_enabled"
+    ]:
+
+        minimum_range_allowed = (
+            signal_range
+            >= (
+                current_atr
+                * config[
+                    "minimum_range_atr"
+                ]
+            )
+        )
+
+    else:
+
+        minimum_range_allowed = True
+
+    # ==============================================
+    # MINIMUM BODY / ATR
+    # ==============================================
+
+    minimum_body_atr = config.get(
+        "minimum_body_atr"
+    )
+
+    minimum_body_atr_allowed = (
+
+        True
+
+        if minimum_body_atr is None
+
+        else (
+            body_atr is not None
+            and
+            body_atr >= minimum_body_atr
+        )
+    )
+
+    # ==============================================
+    # STRUCTURE
+    # ==============================================
+
+    lookback = (
+        config[
+            "structure_lookback"
+        ]
+    )
+
+    previous_bars = (
+        h1[
+            index - lookback:
+            index
+        ]
+    )
+
+    previous_lowest_low = min(
+        candle["low"]
+        for candle
+        in previous_bars
+    )
+
+    distance_from_recent_low = (
+        signal["low"]
+        - previous_lowest_low
+    )
+
+    maximum_distance = (
+        current_atr
+        * config[
+            "maximum_distance_atr"
+        ]
+    )
+
+    structure_allowed = (
+        distance_from_recent_low
+        <= maximum_distance
+    )
+
+    # ==============================================
+    # DAILY
+    # ==============================================
+
+    daily = (
+        previous_daily_values(
+            signal["time"],
+            daily_state,
+            config
+        )
+    )
+
+    if daily is None:
+
+        return None
+
+    if config[
+        "require_daily_close_above_slow"
+    ]:
+
+        daily_regime_allowed = (
+            daily["close"]
+            > daily["slow_ema"]
+        )
+
+    else:
+
+        daily_regime_allowed = True
+
+    if config[
+        "require_daily_fast_above_slow"
+    ]:
+
+        daily_alignment_allowed = (
+            daily["fast_ema"]
+            > daily["slow_ema"]
+        )
+
+    else:
+
+        daily_alignment_allowed = True
+
+    daily_close_ema_length = config.get(
+        "daily_close_ema"
+    )
+
+    daily_close_ema_value = daily.get(
+        "daily_close_ema"
+    )
+
+    daily_close_ema_allowed = (
+
+        True
+
+        if daily_close_ema_length is None
+
+        else (
+            daily_close_ema_value is not None
+            and
+            daily["close"] > daily_close_ema_value
+        )
+    )
+
+    minimum_daily_atr_ratio_50 = (
+        config.get(
+            "minimum_daily_atr_ratio_50"
+        )
+    )
+
+    daily_atr_ratio_50 = (
+        daily.get(
+            "daily_atr_ratio_50"
+        )
+    )
+
+    daily_atr_ratio_allowed = (
+
+        True
+
+        if minimum_daily_atr_ratio_50 is None
+
+        else (
+            daily_atr_ratio_50 is not None
+            and
+            daily_atr_ratio_50
+            >= minimum_daily_atr_ratio_50
+        )
+    )
+
+    # ==============================================
+    # SESSION / WEEKDAY
+    # ==============================================
+
+    session_allowed = (
+        session_allowed_for(
+            signal["time"],
+            config
+        )
+    )
+
+    weekday_allowed = (
+        weekday_allowed_for(
+            signal["time"],
+            config
+        )
+    )
+
+    local_time = (
+        local_signal_time(
+            signal["time"],
+            config
+        )
+    )
+
+    # ==============================================
+    # FINAL
+    # ==============================================
+
+    qualified = all([
+
+        bullish_engulfing,
+        strong_close_allowed,
+        lower_wick_allowed,
+        minimum_range_allowed,
+        minimum_body_atr_allowed,
+        structure_allowed,
+        daily_regime_allowed,
+        daily_alignment_allowed,
+        daily_close_ema_allowed,
+        daily_atr_ratio_allowed,
+        session_allowed,
+        weekday_allowed
+    ])
+
+    return {
+
+        "qualified":
+            qualified,
+
+        "signal_start_utc":
+            signal["time"],
+
+        "signal_close_utc":
+            signal["time"]
+            + timedelta(
+                hours=1
+            ),
+
+        "open":
+            signal["open"],
+
+        "high":
+            signal["high"],
+
+        "low":
+            signal["low"],
+
+        "close":
+            signal["close"],
+
+        "atr":
+            current_atr,
+
+        "body_ratio":
+            body_ratio,
+
+        "body_atr":
+            body_atr,
+
+        "daily_atr_ratio_50":
+            daily_atr_ratio_50,
+
+        "close_location":
+            close_location,
+
+        "lower_wick":
+            lower_wick,
+
+        "lower_wick_body_ratio":
+            (
+                lower_wick
+                / current_body
+
+                if current_body > 0
+
+                else None
+            ),
+
+        "local_timezone":
+            config[
+                "session_timezone"
+            ],
+
+        "local_hour":
+            local_time.hour,
+
+        "weekday":
+            local_time.strftime(
+                "%A"
+            ),
+
+        "previous_daily_close":
+            daily[
+                "close"
+            ],
+
+        "previous_daily_fast_ema":
+            daily[
+                "fast_ema"
+            ],
+
+        "previous_daily_slow_ema":
+            daily[
+                "slow_ema"
+            ],
+
+        "previous_daily_close_ema":
+            daily.get(
+                "daily_close_ema"
+            )
+    }
+
+
+def evaluate_short_signal_at_index(
+    instrument,
+    h1,
+    atr,
+    index,
+    daily_state
+):
+
+    if instrument not in SHORT_STRATEGIES:
+        raise ValueError(
+            f"{instrument} has no short strategy"
+        )
+
+    config = SHORT_STRATEGIES[instrument]
+
+    momentum_requirements = config.get(
+        "momentum_requirements",
+        {}
+    )
+
+    maximum_momentum_lookback = max(
+        momentum_requirements.keys(),
+        default=0
+    )
+
+    h1_atr_ratio_warmup = (
+        config["atr_length"] + 49
+        if config.get("minimum_h1_atr_ratio_50") is not None
+        else 0
+    )
+
+    minimum_index = max(
+        config["atr_length"],
+        config["structure_lookback"],
+        config.get("momentum_lookback_bars", 0),
+        maximum_momentum_lookback,
+        h1_atr_ratio_warmup
+    )
+
+    if index < minimum_index:
+        return None
+
+    signal = h1[index]
+    previous = h1[index - 1]
+    current_atr = atr[index]
+
+    if current_atr is None:
+        return None
+
+    previous_body = abs(
+        previous["close"] - previous["open"]
+    )
+    current_body = abs(
+        signal["close"] - signal["open"]
+    )
+    signal_range = (
+        signal["high"] - signal["low"]
+    )
+
+    close_location = (
+        (signal["close"] - signal["low"])
+        / signal_range
+        if signal_range > 0
+        else 1.0
+    )
+
+    body_ratio = (
+        current_body / previous_body
+        if previous_body > 0
+        else None
+    )
+
+    body_ratio_allowed = (
+        previous_body > 0
+        and current_body >= (
+            previous_body
+            * config["minimum_body_ratio"]
+        )
+    )
+
+    bearish_engulfing = (
+        previous["close"] > previous["open"]
+        and signal["close"] < signal["open"]
+        and signal["open"] >= previous["close"]
+        and signal["close"] <= previous["open"]
+        and body_ratio_allowed
+    )
+
+    maximum_close_location = config.get(
+        "maximum_close_location"
+    )
+    strong_close_allowed = (
+        True
+        if maximum_close_location is None
+        else close_location <= maximum_close_location
+    )
+
+    lookback = config["structure_lookback"]
+    previous_bars = h1[index - lookback:index]
+    previous_highest_high = max(
+        candle["high"]
+        for candle in previous_bars
+    )
+    distance_from_recent_high = (
+        previous_highest_high
+        - signal["high"]
+    )
+    maximum_distance = (
+        current_atr
+        * config["maximum_distance_atr"]
+    )
+    structure_allowed = (
+        distance_from_recent_high
+        <= maximum_distance
+    )
+
+    daily = previous_short_daily_values(
+        signal["time"],
+        daily_state
+    )
+    if daily is None:
+        return None
+
+    require_daily_close_below_slow = config.get(
+        "require_daily_close_below_slow",
+        True
+    )
+    daily_regime_allowed = (
+        True
+        if not require_daily_close_below_slow
+        else daily["close"] < daily["slow_ema"]
+    )
+    require_fast_below_slow = config.get(
+        "require_daily_fast_below_slow",
+        True
+    )
+    daily_alignment_allowed = (
+        True
+        if not require_fast_below_slow
+        else daily["fast_ema"] < daily["slow_ema"]
+    )
+
+    daily_separation = (
+        (
+            daily["slow_ema"]
+            - daily["fast_ema"]
+        ) / daily["daily_atr"]
+        if daily["daily_atr"] > 0
+        else None
+    )
+
+    minimum_separation = config.get(
+        "minimum_daily_ema_separation_atr"
+    )
+    daily_separation_allowed = (
+        True
+        if minimum_separation is None
+        else (
+            daily_separation is not None
+            and daily_separation >= minimum_separation
+        )
+    )
+
+    maximum_slope = config.get(
+        "maximum_slow_ema_slope_5d_atr"
+    )
+    daily_slope = daily.get(
+        "slow_ema_slope_5d_atr"
+    )
+    daily_slope_allowed = (
+        True
+        if maximum_slope is None
+        else (
+            daily_slope is not None
+            and daily_slope <= maximum_slope
+        )
+    )
+
+    minimum_atr_ratio = config.get(
+        "minimum_daily_atr_ratio_50"
+    )
+    daily_atr_ratio = daily.get(
+        "daily_atr_ratio_50"
+    )
+    daily_atr_ratio_allowed = (
+        True
+        if minimum_atr_ratio is None
+        else (
+            daily_atr_ratio is not None
+            and daily_atr_ratio >= minimum_atr_ratio
+        )
+    )
+
+    # Optional H1 filters. Existing strategies leave these absent unless used.
+    momentum_lookback = config.get("momentum_lookback_bars")
+    minimum_upward_momentum_atr = config.get(
+        "minimum_upward_momentum_atr"
+    )
+    upward_momentum = None
+    upward_momentum_atr = None
+
+    if momentum_lookback is not None:
+        momentum_reference_close = h1[index - momentum_lookback]["close"]
+        upward_momentum = signal["close"] - momentum_reference_close
+        upward_momentum_atr = (
+            upward_momentum / current_atr
+            if current_atr > 0
+            else None
+        )
+
+    upward_momentum_allowed = (
+        True
+        if minimum_upward_momentum_atr is None
+        else (
+            upward_momentum_atr is not None
+            and upward_momentum_atr >= minimum_upward_momentum_atr
+        )
+    )
+
+    momentum_requirement_values = {}
+    momentum_requirements_allowed = True
+
+    for lookback_bars, minimum_atr in momentum_requirements.items():
+        momentum_atr_value = (
+            signal["close"] - h1[index - lookback_bars]["close"]
+        ) / current_atr
+        momentum_requirement_values[lookback_bars] = momentum_atr_value
+        if momentum_atr_value < minimum_atr:
+            momentum_requirements_allowed = False
+
+    minimum_signal_range_atr = config.get("minimum_signal_range_atr")
+    signal_range_atr = (
+        signal_range / current_atr
+        if current_atr > 0
+        else None
+    )
+    signal_range_allowed = (
+        True
+        if minimum_signal_range_atr is None
+        else (
+            signal_range_atr is not None
+            and signal_range_atr >= minimum_signal_range_atr
+        )
+    )
+
+    maximum_stop_size_atr = config.get("maximum_stop_size_atr")
+    stop_price_for_filter = (
+        signal["high"]
+        + config["stop_buffer_ticks"] * config["tick_size"]
+    )
+    stop_size = stop_price_for_filter - signal["close"]
+    stop_size_atr = (
+        stop_size / current_atr
+        if current_atr > 0
+        else None
+    )
+    stop_size_allowed = (
+        True
+        if maximum_stop_size_atr is None
+        else (
+            stop_size_atr is not None
+            and stop_size_atr <= maximum_stop_size_atr
+        )
+    )
+
+    upper_wick = max(
+        0.0,
+        signal["high"] - max(signal["open"], signal["close"])
+    )
+    upper_wick_body_ratio = (
+        upper_wick / current_body
+        if current_body > 0
+        else None
+    )
+    minimum_upper_wick_body_ratio = config.get(
+        "minimum_upper_wick_body_ratio"
+    )
+    upper_wick_allowed = (
+        True
+        if minimum_upper_wick_body_ratio is None
+        else (
+            upper_wick_body_ratio is not None
+            and upper_wick_body_ratio >= minimum_upper_wick_body_ratio
+        )
+    )
+
+    minimum_h1_atr_ratio_50 = config.get(
+        "minimum_h1_atr_ratio_50"
+    )
+    h1_atr_ratio_50 = None
+
+    if minimum_h1_atr_ratio_50 is not None:
+        atr_window = atr[index - 49:index + 1]
+        if (
+            len(atr_window) == 50
+            and all(value is not None for value in atr_window)
+        ):
+            atr_mean_50 = sum(atr_window) / 50.0
+            if atr_mean_50 > 0:
+                h1_atr_ratio_50 = current_atr / atr_mean_50
+
+    h1_atr_ratio_allowed = (
+        True
+        if minimum_h1_atr_ratio_50 is None
+        else (
+            h1_atr_ratio_50 is not None
+            and h1_atr_ratio_50 >= minimum_h1_atr_ratio_50
+        )
+    )
+
+    local_time = signal["time"].astimezone(
+        ZoneInfo(config["session_timezone"])
+    )
+    session_allowed = (
+        local_time.hour
+        not in config["excluded_hours"]
+    )
+    weekday_allowed = (
+        local_time.weekday()
+        not in config["excluded_weekdays"]
+    )
+
+    qualified = all([
+        bearish_engulfing,
+        strong_close_allowed,
+        structure_allowed,
+        daily_regime_allowed,
+        daily_alignment_allowed,
+        daily_separation_allowed,
+        daily_slope_allowed,
+        daily_atr_ratio_allowed,
+        upward_momentum_allowed,
+        momentum_requirements_allowed,
+        signal_range_allowed,
+        stop_size_allowed,
+        upper_wick_allowed,
+        h1_atr_ratio_allowed,
+        session_allowed,
+        weekday_allowed
+    ])
+
+    return {
+        "qualified": qualified,
+        "side": "SELL",
+        "strategy_name": config["strategy_name"],
+        "signal_start_utc": signal["time"],
+        "signal_close_utc": signal["time"] + timedelta(hours=1),
+        "open": signal["open"],
+        "high": signal["high"],
+        "low": signal["low"],
+        "close": signal["close"],
+        "atr": current_atr,
+        "body_ratio": body_ratio,
+        "close_location": close_location,
+        "previous_highest_high": previous_highest_high,
+        "distance_from_recent_high": distance_from_recent_high,
+        "distance_from_recent_high_atr": (
+            distance_from_recent_high / current_atr
+            if current_atr > 0
+            else None
+        ),
+        "local_timezone": config["session_timezone"],
+        "local_hour": local_time.hour,
+        "weekday": local_time.strftime("%A"),
+        "previous_daily_close": daily["close"],
+        "previous_daily_fast_ema": daily["fast_ema"],
+        "previous_daily_slow_ema": daily["slow_ema"],
+        "previous_daily_atr14": daily["daily_atr"],
+        "daily_ema_separation_atr": daily_separation,
+        "slow_ema_slope_5d_atr": daily_slope,
+        "daily_atr_ratio_50": daily_atr_ratio,
+        "upward_momentum": upward_momentum,
+        "upward_momentum_atr": upward_momentum_atr,
+        "momentum_requirements_atr": momentum_requirement_values,
+        "signal_range_atr": signal_range_atr,
+        "stop_size": stop_size,
+        "stop_size_atr": stop_size_atr,
+        "upper_wick_body_ratio": upper_wick_body_ratio,
+        "h1_atr_ratio_50": h1_atr_ratio_50
+    }
+
+
+def create_trade(
+    instrument,
+    signal_result
+):
+
+    config = (
+        STRATEGIES[
+            instrument
+        ]
+    )
+
+    tick = (
+        config[
+            "tick_size"
+        ]
+    )
+
+    reference_entry = (
+        signal_result[
+            "close"
+        ]
+    )
+
+    backtest_entry = (
+        reference_entry
+        + (
+            BACKTEST_SLIPPAGE_TICKS
+            * tick
+        )
+    )
+
+    stop = (
+        signal_result[
+            "low"
+        ]
+        - (
+            config[
+                "stop_buffer_ticks"
+            ]
+            * tick
+        )
+    )
+
+    trade_risk = (
+        reference_entry
+        - stop
+    )
+
+    target = (
+        reference_entry
+        + (
+            trade_risk
+            * config[
+                "reward_risk"
+            ]
+        )
+    )
+
+    return {
+
+        "instrument":
+            instrument,
+
+        "signal_start_utc":
+            signal_result[
+                "signal_start_utc"
+            ],
+
+        "entry_time_utc":
+            signal_result[
+                "signal_close_utc"
+            ],
+
+        "reference_entry":
+            round_price(
+                reference_entry,
+                config
+            ),
+
+        "backtest_entry":
+            round_price(
+                backtest_entry,
+                config
+            ),
+
+        "stop":
+            round_price(
+                stop,
+                config
+            ),
+
+        "target":
+            round_price(
+                target,
+                config
+            ),
+
+        "exit_bar_start_utc":
+            None,
+
+        "exit_time_utc":
+            None,
+
+        "exit_reason":
+            None
+    }
+
+
+def determine_exit_on_bar(
+    trade,
+    candle
+):
+
+    stop = (
+        trade[
+            "stop"
+        ]
+    )
+
+    target = (
+        trade[
+            "target"
+        ]
+    )
+
+    stop_touched = (
+        candle["low"]
+        <= stop
+    )
+
+    target_touched = (
+        candle["high"]
+        >= target
+    )
+
+    if (
+        not stop_touched
+        and
+        not target_touched
+    ):
+
+        return None
+
+    if (
+        stop_touched
+        and
+        not target_touched
+    ):
+
+        return "STOP"
+
+    if (
+        target_touched
+        and
+        not stop_touched
+    ):
+
+        return "TARGET"
+
+    # TradingView historical broker-emulator
+    # same-bar path approximation.
+    distance_to_high = abs(
+        candle["high"]
+        - candle["open"]
+    )
+
+    distance_to_low = abs(
+        candle["open"]
+        - candle["low"]
+    )
+
+    if (
+        distance_to_high
+        < distance_to_low
+    ):
+
+        return "TARGET"
+
+    return "STOP"
+
+
+def simulate_trades(
+    instrument,
+    h1,
+    atr,
+    daily_state,
+    start,
+    end
+):
+
+    config = (
+        STRATEGIES[
+            instrument
+        ]
+    )
+
+    raw_signals = []
+    trades = []
+    ignored_signals = []
+
+    open_trade = None
+
+    start_index = max(
+
+        config[
+            "atr_length"
+        ],
+
+        config[
+            "structure_lookback"
+        ]
+    )
+
+    evaluated_bars = 0
+
+    for index in range(
+        start_index,
+        len(h1)
+    ):
+
+        candle = (
+            h1[index]
+        )
+
+        candle_time = (
+            candle["time"]
+        )
+
+        if candle_time < start:
+
+            continue
+
+        if candle_time >= end:
+
+            break
+
+        evaluated_bars += 1
+
+        # ==========================================
+        # EXISTING POSITION
+        # ==========================================
+
+        if open_trade is not None:
+
+            exit_reason = (
+                determine_exit_on_bar(
+                    open_trade,
+                    candle
+                )
+            )
+
+            if exit_reason is not None:
+
+                open_trade[
+                    "exit_reason"
+                ] = exit_reason
+
+                open_trade[
+                    "exit_bar_start_utc"
+                ] = candle_time
+
+                open_trade[
+                    "exit_time_utc"
+                ] = (
+                    candle_time
+                    + timedelta(
+                        hours=1
+                    )
+                )
+
+                open_trade = None
+
+        # ==========================================
+        # SIGNAL
+        # ==========================================
+
+        result = (
+            evaluate_signal_at_index(
+                instrument,
+                h1,
+                atr,
+                index,
+                daily_state
+            )
+        )
+
+        if (
+            result is None
+            or
+            not result[
+                "qualified"
+            ]
+        ):
+
+            continue
+
+        raw_signals.append(
+            result
+        )
+
+        # ==========================================
+        # PYRAMIDING=0
+        # ==========================================
+
+        if open_trade is not None:
+
+            ignored_signals.append({
+
+                "signal_start_utc":
+                    result[
+                        "signal_start_utc"
+                    ],
+
+                "signal_close_utc":
+                    result[
+                        "signal_close_utc"
+                    ],
+
+                "reason":
+                    "POSITION_ALREADY_OPEN",
+
+                "existing_trade_entry_time":
+                    open_trade[
+                        "entry_time_utc"
+                    ]
+            })
+
+            continue
+
+        new_trade = (
+            create_trade(
+                instrument,
+                result
+            )
+        )
+
+        trades.append(
+            new_trade
+        )
+
+        open_trade = (
+            new_trade
+        )
+
+    return {
+
+        "evaluated_bars":
+            evaluated_bars,
+
+        "raw_signals":
+            raw_signals,
+
+        "trades":
+            trades,
+
+        "ignored_signals":
+            ignored_signals,
+
+        "position_still_open_at_end":
+            open_trade is not None
+    }
+
+# ----------------------------------------------------------------
+# Faster exact-equivalent daily lookup.
+#
+# The live historical helper linearly scans the daily list. That is fine for
+# short live windows but prohibitively slow over ~24 years. These overrides
+# preserve the same strict `row["time"] < current_daily_start(signal_time)`
+# semantics and readiness rules using bisect.
+# ----------------------------------------------------------------
+
+_H1_DAILY_TIMES = {}
+
+def register_h1_daily_state(daily_state):
+    _H1_DAILY_TIMES[id(daily_state)] = [row["time"] for row in daily_state]
+
+
+def previous_daily_values(signal_time, daily_state, config):
+    times = _H1_DAILY_TIMES.get(id(daily_state))
+    if times is None:
+        times = [row["time"] for row in daily_state]
+        _H1_DAILY_TIMES[id(daily_state)] = times
+
+    session_start = current_daily_start(signal_time)
+    j = bisect.bisect_left(times, session_start) - 1
+
+    require_fast = config["require_daily_fast_above_slow"]
+    require_daily_close_ema = config.get("daily_close_ema") is not None
+
+    while j >= 0:
+        row = daily_state[j]
+        slow_ready = row["slow_ema"] is not None
+        fast_ready = (not require_fast) or row["fast_ema"] is not None
+        close_ema_ready = (
+            (not require_daily_close_ema)
+            or row["daily_close_ema"] is not None
+        )
+        if slow_ready and fast_ready and close_ema_ready:
+            return row
+        j -= 1
+
+    return None
+
+
+def previous_short_daily_values(signal_time, daily_state):
+    times = _H1_DAILY_TIMES.get(id(daily_state))
+    if times is None:
+        times = [row["time"] for row in daily_state]
+        _H1_DAILY_TIMES[id(daily_state)] = times
+
+    session_start = current_daily_start(signal_time)
+    j = bisect.bisect_left(times, session_start) - 1
+
+    while j >= 0:
+        row = daily_state[j]
+        ready = (
+            row["fast_ema"] is not None
+            and row["slow_ema"] is not None
+            and row["daily_atr"] is not None
+        )
+        if ready:
+            return row
+        j -= 1
+
+    return None
+
+
+# ----------------------------------------------------------------
+# Proven short historical mechanics + H1 R conversion.
+# ----------------------------------------------------------------
+
+def portfolio_short_trade_from_signal(
+    instrument,
+    signal_result
+):
+    config = SHORT_STRATEGIES[instrument]
+    tick = config["tick_size"]
+
+    reference_entry = signal_result["close"]
+
+    # Locked research convention:
+    # adverse short fill = signal close - 5 ticks.
+    backtest_entry = (
+        reference_entry
+        - BACKTEST_SLIPPAGE_TICKS * tick
+    )
+
+    stop = (
+        signal_result["high"]
+        + config["stop_buffer_ticks"] * tick
+    )
+
+    reference_risk = stop - reference_entry
+
+    if reference_risk <= 0:
+        raise RuntimeError(
+            f"Invalid short reference risk for {instrument}"
+        )
+
+    target = (
+        reference_entry
+        - reference_risk * config["reward_risk"]
+    )
+
+    return {
+        "instrument": instrument,
+        "side": "SELL",
+        "strategy": "SHORT",
+        "signal_start_utc": signal_result["signal_start_utc"],
+        "entry_time_utc": signal_result["signal_close_utc"],
+        "reference_entry": round_price(reference_entry, config),
+        "backtest_entry": round_price(backtest_entry, config),
+        "stop": round_price(stop, config),
+        "target": round_price(target, config),
+        "exit_bar_start_utc": None,
+        "exit_time_utc": None,
+        "exit_reason": None,
+    }
+
+
+def portfolio_short_exit_on_bar(
+    trade,
+    candle
+):
+    stop_touched = (
+        candle["high"] >= trade["stop"]
+    )
+
+    target_touched = (
+        candle["low"] <= trade["target"]
+    )
+
+    if not stop_touched and not target_touched:
+        return None
+
+    if stop_touched and not target_touched:
+        return "STOP"
+
+    if target_touched and not stop_touched:
+        return "TARGET"
+
+    # Locked short same-bar rule:
+    # if high is closer to candle open, stop is assumed first;
+    # otherwise target is assumed first.
+    distance_to_high = abs(
+        candle["high"] - candle["open"]
+    )
+
+    distance_to_low = abs(
+        candle["open"] - candle["low"]
+    )
+
+    if distance_to_high < distance_to_low:
+        return "STOP"
+
+    return "TARGET"
+
+
+def portfolio_simulate_shorts(
+    instrument,
+    h1,
+    atr,
+    daily_state,
+    start,
+    end
+):
+    config = SHORT_STRATEGIES[instrument]
+
+    required_lookbacks = [
+        config["atr_length"],
+        config["structure_lookback"],
+    ]
+
+    momentum_lookback = config.get(
+        "momentum_lookback_bars"
+    )
+
+    if momentum_lookback is not None:
+        required_lookbacks.append(
+            momentum_lookback
+        )
+
+    momentum_requirements = config.get(
+        "momentum_requirements",
+        {}
+    )
+
+    for lookback_bars in momentum_requirements.keys():
+        required_lookbacks.append(
+            int(lookback_bars)
+        )
+
+    if config.get(
+        "minimum_h1_atr_ratio_50"
+    ) is not None:
+        required_lookbacks.append(50)
+
+    start_index = max(
+        required_lookbacks
+    )
+
+    trades = []
+    open_trade = None
+    raw_signal_count = 0
+    ignored_signal_count = 0
+
+    for index in range(
+        start_index,
+        len(h1)
+    ):
+        candle = h1[index]
+        candle_time = candle["time"]
+
+        if candle_time < start:
+            continue
+
+        if candle_time >= end:
+            break
+
+        # Existing short position is evaluated first.
+        # This preserves the locked convention that a new
+        # signal on the exact H1 candle where the old trade
+        # exits is allowed.
+        if open_trade is not None:
+            exit_reason = (
+                portfolio_short_exit_on_bar(
+                    open_trade,
+                    candle
+                )
+            )
+
+            if exit_reason is not None:
+                open_trade["exit_reason"] = (
+                    exit_reason
+                )
+                open_trade[
+                    "exit_bar_start_utc"
+                ] = candle_time
+                open_trade[
+                    "exit_time_utc"
+                ] = (
+                    candle_time
+                    + timedelta(hours=1)
+                )
+                open_trade = None
+
+        result = evaluate_short_signal_at_index(
+            instrument,
+            h1,
+            atr,
+            index,
+            daily_state
+        )
+
+        if (
+            result is None
+            or not result["qualified"]
+        ):
+            continue
+
+        raw_signal_count += 1
+
+        if open_trade is not None:
+            ignored_signal_count += 1
+            continue
+
+        new_trade = (
+            portfolio_short_trade_from_signal(
+                instrument,
+                result
+            )
+        )
+
+        trades.append(
+            new_trade
+        )
+
+        open_trade = (
+            new_trade
+        )
+
+    return {
+        "trades": trades,
+        "raw_signal_count": raw_signal_count,
+        "ignored_signal_count": ignored_signal_count,
+        "position_still_open_at_end": (
+            open_trade is not None
+        ),
+    }
+
+
+def portfolio_long_trade_r(
+    trade
+):
+    if trade["exit_reason"] not in {
+        "TARGET",
+        "STOP",
+    }:
+        return None
+
+    entry = float(
+        trade["backtest_entry"]
+    )
+    stop = float(
+        trade["stop"]
+    )
+    target = float(
+        trade["target"]
+    )
+
+    actual_risk = entry - stop
+
+    if actual_risk <= 0:
+        return None
+
+    if trade["exit_reason"] == "STOP":
+        exit_price = stop
+    else:
+        exit_price = target
+
+    return (
+        exit_price - entry
+    ) / actual_risk
+
+
+def portfolio_short_trade_r(
+    trade
+):
+    if trade["exit_reason"] not in {
+        "TARGET",
+        "STOP",
+    }:
+        return None
+
+    entry = float(
+        trade["backtest_entry"]
+    )
+    stop = float(
+        trade["stop"]
+    )
+    target = float(
+        trade["target"]
+    )
+
+    actual_risk = stop - entry
+
+    if actual_risk <= 0:
+        return None
+
+    if trade["exit_reason"] == "STOP":
+        exit_price = stop
+    else:
+        exit_price = target
+
+    return (
+        entry - exit_price
+    ) / actual_risk
+
+
+def h1_standardise_trade(pair, side, trade, result_r, reward_risk):
+    signal_time = trade["signal_start_utc"]
+    entry_time = trade["entry_time_utc"]
+    exit_bar_start = trade["exit_bar_start_utc"]
+    exit_event = trade["exit_time_utc"]
+
+    sid = f"{pair}_H1_{'LONG' if side == 'BUY' else 'SHORT'}"
+
+    return {
+        "pair": pair,
+        "strategy_id": sid,
+        "trigger": "LIVE_H1_LONG" if side == "BUY" else "LIVE_H1_SHORT",
+        "timeframe": "H1",
+        "side": side,
+        "signal_time": signal_time,
+        "entry_time": entry_time,
+        "exit_time": exit_bar_start,
+        "exit_event_time": exit_event,
+        "rr": float(reward_risk),
+        "reference_entry": float(trade["reference_entry"]),
+        "historical_fill": float(trade["backtest_entry"]),
+        "stop": float(trade["stop"]),
+        "target": float(trade["target"]),
+        "result": trade["exit_reason"],
+        "r": float(result_r),
+        "cost_model": "H1_5_ADVERSE_TICKS",
+        "baseline_cost_value": float(BACKTEST_SLIPPAGE_TICKS),
+    }
+
+
+def collect_h1_pair(pair):
+    h1, h1_empty = fetch_history(pair, "H1", H1_DATA_WARMUP, NOW)
+    daily, d_empty = fetch_history(pair, "D", H1_DAILY_WARMUP, NOW)
+
+    if len(h1) < 90000:
+        raise RuntimeError(
+            f"Incomplete H1 history for {pair}: {len(h1)} candles; "
+            f"first={iso(h1[0]['time']) if h1 else 'NONE'}"
+        )
+    if len(daily) < 5000:
+        raise RuntimeError(
+            f"Incomplete daily history for {pair}: {len(daily)} candles; "
+            f"first={iso(daily[0]['time']) if daily else 'NONE'}"
+        )
+
+    out = {}
+    meta = []
+
+    long_cfg = STRATEGIES[pair]
+    long_atr = atr_series(h1, long_cfg["atr_length"])
+    long_daily_state = build_daily_state(daily, long_cfg)
+    register_h1_daily_state(long_daily_state)
+
+    long_sim = simulate_trades(
+        pair, h1, long_atr, long_daily_state, START, NOW
+    )
+
+    long_trades = []
+    for tr in long_sim["trades"]:
+        result_r = portfolio_long_trade_r(tr)
+        if result_r is None:
+            continue
+        long_trades.append(
+            h1_standardise_trade(
+                pair, "BUY", tr, result_r, long_cfg["reward_risk"]
+            )
+        )
+
+    long_sid = f"{pair}_H1_LONG"
+    out[long_sid] = long_trades
+    meta.append({
+        "strategy_id": long_sid,
+        "raw_signals": len(long_sim["raw_signals"]),
+        "ignored_while_own_position_open": len(long_sim["ignored_signals"]),
+        "position_still_open_at_end": long_sim["position_still_open_at_end"],
+    })
+
+    short_cfg = SHORT_STRATEGIES[pair]
+    short_atr = atr_series(h1, short_cfg["atr_length"])
+    short_daily_state = build_short_daily_state(daily, short_cfg)
+    register_h1_daily_state(short_daily_state)
+
+    short_sim = portfolio_simulate_shorts(
+        pair, h1, short_atr, short_daily_state, START, NOW
+    )
+
+    short_trades = []
+    for tr in short_sim["trades"]:
+        result_r = portfolio_short_trade_r(tr)
+        if result_r is None:
+            continue
+        short_trades.append(
+            h1_standardise_trade(
+                pair, "SELL", tr, result_r, short_cfg["reward_risk"]
+            )
+        )
+
+    short_sid = f"{pair}_H1_SHORT"
+    out[short_sid] = short_trades
+    meta.append({
+        "strategy_id": short_sid,
+        "raw_signals": short_sim["raw_signal_count"],
+        "ignored_while_own_position_open": short_sim["ignored_signal_count"],
+        "position_still_open_at_end": short_sim["position_still_open_at_end"],
+    })
+
+    coverage = {
+        "pair": pair,
+        "h1_requested_start_utc": iso(H1_DATA_WARMUP),
+        "h1_actual_first_utc": iso(h1[0]["time"]),
+        "h1_actual_last_utc": iso(h1[-1]["time"]),
+        "h1_candles": len(h1),
+        "daily_requested_start_utc": iso(H1_DAILY_WARMUP),
+        "daily_actual_first_utc": iso(daily[0]["time"]),
+        "daily_actual_last_utc": iso(daily[-1]["time"]),
+        "daily_candles": len(daily),
+        "empty_h1_chunks": h1_empty,
+        "empty_daily_chunks": d_empty,
+    }
+
+    # Prevent id-cache growth after the pair is finished.
+    _H1_DAILY_TIMES.pop(id(long_daily_state), None)
+    _H1_DAILY_TIMES.pop(id(short_daily_state), None)
+
+    return out, meta, coverage
+
+
+def load_m15_baseline_trades():
+    path = OUT["trades"]
+    if not os.path.exists(path):
+        raise RuntimeError(
+            "M15 baseline trade CSV is missing after the embedded M15 run"
+        )
+
+    rows = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for raw in csv.DictReader(f):
+            signal_time = parse_time(raw["signal_time"])
+            exit_bar_start = parse_time(raw["exit_time"])
+            rows.append({
+                "pair": raw["pair"],
+                "strategy_id": raw["strategy_id"],
+                "trigger": raw["trigger"],
+                "timeframe": "M15",
+                "side": raw["side"],
+                "signal_time": signal_time,
+                # Signal is only knowable at the end of its M15 candle.
+                "entry_time": signal_time + timedelta(minutes=15),
+                "exit_time": exit_bar_start,
+                # Exit bar is only resolved at bar granularity; use its close
+                # as the event timestamp so exact-exit-candle replacement is
+                # handled consistently with the H1 engine.
+                "exit_event_time": exit_bar_start + timedelta(minutes=15),
+                "rr": float(raw["rr"]),
+                "reference_entry": float(raw["reference_entry"]),
+                "historical_fill": float(raw["historical_fill"]),
+                "stop": float(raw["stop"]),
+                "target": float(raw["target"]),
+                "result": raw["result"],
+                "r": float(raw["r"]),
+                "cost_model": "M15_1_ADVERSE_PIP",
+                "baseline_cost_value": float(raw.get("cost_pips") or 1.0),
+            })
+    return rows
+
+
+def actual_intervals_overlap(a, b):
+    return (
+        a["entry_time"] < b["exit_event_time"]
+        and b["entry_time"] < a["exit_event_time"]
+    )
+
+
+def actual_overlap_rows(strategy_trades):
+    ids = sorted(strategy_trades)
+    out = []
+    for ia, a in enumerate(ids):
+        for b in ids[ia + 1:]:
+            ta = strategy_trades[a]
+            tb = strategy_trades[b]
+            ca = sum(any(actual_intervals_overlap(x, y) for y in tb) for x in ta)
+            cb = sum(any(actual_intervals_overlap(y, x) for x in ta) for y in tb)
+            pa = ta[0]["pair"] if ta else a.split("_H1")[0].split("_M15")[0]
+            pb = tb[0]["pair"] if tb else b.split("_H1")[0].split("_M15")[0]
+            out.append({
+                "strategy_a": a,
+                "strategy_b": b,
+                "a_trades_overlapping_b": ca,
+                "b_trades_overlapping_a": cb,
+                "same_pair": pa == pb,
+                "timeframe_a": ta[0]["timeframe"] if ta else "",
+                "timeframe_b": tb[0]["timeframe"] if tb else "",
+            })
+    return out
+
+
+def actual_concurrency_rows(scope, all_trades):
+    events = []
+    for t in all_trades:
+        events.append((t["entry_time"], 1, t["strategy_id"], t["pair"], t["timeframe"]))
+        events.append((t["exit_event_time"], -1, t["strategy_id"], t["pair"], t["timeframe"]))
+
+    # Exit before entry at the same timestamp.
+    events.sort(key=lambda z: (z[0], z[1], z[2]))
+
+    active = 0
+    max_active = 0
+    hist = defaultdict(float)
+    last = None
+
+    for ts, delta, sid, pair, tf in events:
+        if last is not None and ts > last:
+            hist[active] += (ts - last).total_seconds()
+        active += delta
+        max_active = max(max_active, active)
+        last = ts
+
+    total = sum(hist.values())
+    rows = [
+        {"scope": scope, "metric": "max_concurrent_positions", "value": max_active}
+    ]
+    for k in sorted(hist):
+        rows.append({
+            "scope": scope,
+            "metric": f"pct_time_{k}_positions",
+            "value": pct(hist[k], total),
+        })
+
+    clusters = defaultdict(int)
+    for t in all_trades:
+        clusters[t["entry_time"]] += 1
+
+    rows.append({
+        "scope": scope,
+        "metric": "entry_timestamps_with_2plus_trades",
+        "value": sum(v >= 2 for v in clusters.values()),
+    })
+    rows.append({
+        "scope": scope,
+        "metric": "max_same_timestamp_entries",
+        "value": max(clusters.values()) if clusters else 0,
+    })
+    return rows
+
+
+def apply_pair_gate(trades, priority):
+    """
+    Apply the current live-engine style instrument gate:
+    no new trade on a pair while any accepted trade on that pair is open.
+
+    priority:
+        H1_FIRST or M15_FIRST for exact same-timestamp conflicts.
+        BUY precedes SELL within a timeframe, matching the current H1
+        watcher ordering where longs are processed before shorts.
+    """
+    if priority not in {"H1_FIRST", "M15_FIRST"}:
+        raise ValueError(priority)
+
+    tf_order = (
+        {"H1": 0, "M15": 1}
+        if priority == "H1_FIRST"
+        else {"M15": 0, "H1": 1}
+    )
+    side_order = {"BUY": 0, "SELL": 1}
+
+    candidates = sorted(
+        trades,
+        key=lambda t: (
+            t["entry_time"],
+            tf_order[t["timeframe"]],
+            side_order.get(t["side"], 9),
+            t["strategy_id"],
+        ),
+    )
+
+    active = {}
+    accepted = []
+    rejected = []
+
+    for t in candidates:
+        pair = t["pair"]
+        cur = active.get(pair)
+
+        if cur is not None and cur["exit_event_time"] <= t["entry_time"]:
+            active.pop(pair, None)
+            cur = None
+
+        if cur is not None:
+            rejected.append({
+                "priority_mode": priority,
+                "pair": pair,
+                "rejected_strategy_id": t["strategy_id"],
+                "rejected_timeframe": t["timeframe"],
+                "rejected_side": t["side"],
+                "rejected_entry_time": iso(t["entry_time"]),
+                "blocking_strategy_id": cur["strategy_id"],
+                "blocking_timeframe": cur["timeframe"],
+                "blocking_side": cur["side"],
+                "blocking_entry_time": iso(cur["entry_time"]),
+                "blocking_exit_time": iso(cur["exit_event_time"]),
+            })
+            continue
+
+        accepted.append(t)
+        active[pair] = t
+
+    accepted.sort(key=lambda t: (t["signal_time"], t["strategy_id"]))
+    return accepted, rejected
+
+
+def serialise_trade(t):
+    row = dict(t)
+    for k in ("signal_time", "entry_time", "exit_time", "exit_event_time"):
+        if isinstance(row.get(k), datetime):
+            row[k] = iso(row[k])
+    return row
+
+
+def recalc_trade_cost_multiplier(t, multiplier):
+    """
+    Stress each timeframe relative to its native historical baseline:
+      H1 1.0x = 5 adverse ticks
+      M15 1.0x = 1 adverse pip
+
+    Signal, stop, target, result and exit timing stay unchanged; only actual
+    R from the adverse fill changes.
+    """
+    x = dict(t)
+    pair = x["pair"]
+    tick = PAIR_META[pair]["tick"]
+    pip = PAIR_META[pair]["pip"]
+
+    if x["timeframe"] == "H1":
+        precision = 3 if pair == "USD_JPY" else 5
+        slip = BACKTEST_SLIPPAGE_TICKS * multiplier * tick
+        fill = (
+            x["reference_entry"] + slip
+            if x["side"] == "BUY"
+            else x["reference_entry"] - slip
+        )
+        fill = round(fill, precision)
+        x["cost_stress_value"] = BACKTEST_SLIPPAGE_TICKS * multiplier
+        x["cost_stress_unit"] = "ticks"
+    else:
+        slip = multiplier * pip
+        fill = (
+            x["reference_entry"] + slip
+            if x["side"] == "BUY"
+            else x["reference_entry"] - slip
+        )
+        x["cost_stress_value"] = multiplier
+        x["cost_stress_unit"] = "pips"
+
+    stop = x["stop"]
+    target = x["target"]
+
+    if x["side"] == "BUY":
+        actual_risk = fill - stop
+        r = -1.0 if x["result"] == "STOP" else (target - fill) / actual_risk
+    else:
+        actual_risk = stop - fill
+        r = -1.0 if x["result"] == "STOP" else (fill - target) / actual_risk
+
+    if actual_risk <= 0:
+        raise RuntimeError(
+            f"Invalid stressed risk {x['strategy_id']} multiplier={multiplier}"
+        )
+
+    x["historical_fill"] = float(fill)
+    x["r"] = float(r)
+    x["cost_multiplier"] = float(multiplier)
+    return x
+
+
+def simulate_mixed_equity(
+    trades,
+    h1_risk_fraction,
+    m15_risk_fraction,
+    starting_balance=100.0,
+):
+    """
+    Event-driven mixed-timeframe compounding.
+
+    Each new trade risks its timeframe-specific percentage of then-REALISED
+    equity. Existing positions retain their entry cash risk. The real OANDA
+    executor sizes from current NAV, including unrealised P/L; that cannot be
+    reconstructed exactly from OHLC outcome-only trade records.
+
+    Exits are processed before entries at the exact same timestamp.
+    """
+    if not trades:
+        return {
+            "summary": {
+                "h1_risk_pct": h1_risk_fraction * 100,
+                "m15_risk_pct": m15_risk_fraction * 100,
+                "starting_balance": starting_balance,
+                "ending_balance": starting_balance,
+                "ending_multiple": 1.0,
+                "total_return_pct": 0.0,
+                "cagr_pct": 0.0,
+                "max_closed_equity_dd_pct": 0.0,
+                "max_open_risk_floor_dd_pct": 0.0,
+                "max_open_positions": 0,
+                "max_open_risk_pct_of_realised_equity": 0.0,
+                "trades": 0,
+            },
+            "curve": [],
+            "trade_rows": [],
+            "exit_times": [],
+            "exit_balances": [],
+        }
+
+    ordered = sorted(trades, key=lambda t: (t["entry_time"], t["strategy_id"]))
+
+    events = []
+    for n, t in enumerate(ordered):
+        key = (t["strategy_id"], t["entry_time"], t["exit_event_time"], n)
+        events.append((t["entry_time"], 1, t["strategy_id"], key, t))
+        events.append((t["exit_event_time"], 0, t["strategy_id"], key, t))
+
+    # 0 exit, 1 entry
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+
+    balance = float(starting_balance)
+    peak = balance
+    max_closed_dd = 0.0
+    max_floor_dd = 0.0
+    open_trades = {}
+    open_risk_cash = 0.0
+    max_open_positions = 0
+    max_open_risk_pct = 0.0
+    curve = []
+    trade_rows = []
+    exit_times = []
+    exit_balances = []
+
+    for ts, kind, sid, key, t in events:
+        if kind == 0:
+            rec = open_trades.pop(key, None)
+            if rec is None:
+                raise RuntimeError(
+                    f"Mixed equity exit without entry: {sid} {iso(ts)}"
+                )
+
+            pnl_cash = rec["risk_cash"] * float(t["r"])
+            before = balance
+            balance += pnl_cash
+            open_risk_cash -= rec["risk_cash"]
+            if abs(open_risk_cash) < 1e-12:
+                open_risk_cash = 0.0
+
+            peak = max(peak, balance)
+            closed_dd = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            max_closed_dd = min(max_closed_dd, closed_dd)
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            max_floor_dd = min(max_floor_dd, floor_dd)
+
+            exit_times.append(ts)
+            exit_balances.append(balance)
+
+            trade_rows.append({
+                "h1_risk_pct": h1_risk_fraction * 100.0,
+                "m15_risk_pct": m15_risk_fraction * 100.0,
+                "pair": t["pair"],
+                "strategy_id": t["strategy_id"],
+                "timeframe": t["timeframe"],
+                "side": t["side"],
+                "entry_time": iso(t["entry_time"]),
+                "exit_time": iso(t["exit_event_time"]),
+                "r": t["r"],
+                "result": t["result"],
+                "entry_realised_equity": rec["entry_equity"],
+                "risk_fraction": rec["risk_fraction"],
+                "risk_cash": rec["risk_cash"],
+                "pnl_cash": pnl_cash,
+                "balance_before_exit": before,
+                "balance_after_exit": balance,
+                "closed_equity_drawdown_pct": closed_dd,
+                "open_positions_after_exit": len(open_trades),
+                "open_risk_cash_after_exit": open_risk_cash,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+            curve.append({
+                "time_utc": iso(ts),
+                "event": "EXIT",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": closed_dd,
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+        else:
+            risk_fraction = (
+                h1_risk_fraction
+                if t["timeframe"] == "H1"
+                else m15_risk_fraction
+            )
+
+            if balance <= 0:
+                raise RuntimeError(
+                    f"Equity depleted before {sid} at {iso(ts)}"
+                )
+
+            risk_cash = balance * risk_fraction
+            open_trades[key] = {
+                "risk_cash": risk_cash,
+                "risk_fraction": risk_fraction,
+                "entry_equity": balance,
+            }
+            open_risk_cash += risk_cash
+            max_open_positions = max(max_open_positions, len(open_trades))
+
+            open_risk_pct = (
+                (open_risk_cash / balance) * 100.0
+                if balance > 0
+                else 999.0
+            )
+            max_open_risk_pct = max(max_open_risk_pct, open_risk_pct)
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            max_floor_dd = min(max_floor_dd, floor_dd)
+
+            curve.append({
+                "time_utc": iso(ts),
+                "event": "ENTRY",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": ((balance / peak) - 1.0) * 100.0,
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_pct_of_realised_equity": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+    if open_trades:
+        raise RuntimeError(
+            f"Mixed equity finished with {len(open_trades)} open trades"
+        )
+
+    first_entry = min(t["entry_time"] for t in ordered)
+    last_exit = max(t["exit_event_time"] for t in ordered)
+    years = max(
+        (last_exit - first_entry).total_seconds() / (365.2425 * 86400.0),
+        1e-9,
+    )
+    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
+    cagr_pct = (
+        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
+        if balance > 0 and starting_balance > 0
+        else -100.0
+    )
+
+    return {
+        "summary": {
+            "h1_risk_pct": h1_risk_fraction * 100.0,
+            "m15_risk_pct": m15_risk_fraction * 100.0,
+            "starting_balance": starting_balance,
+            "ending_balance": balance,
+            "ending_multiple": balance / starting_balance,
+            "total_return_pct": total_return_pct,
+            "cagr_pct": cagr_pct,
+            "simulation_start_utc": iso(first_entry),
+            "simulation_end_utc": iso(last_exit),
+            "simulation_years": years,
+            "trades": len(ordered),
+            "max_closed_equity_dd_pct": max_closed_dd,
+            "max_open_risk_floor_dd_pct": max_floor_dd,
+            "max_open_positions": max_open_positions,
+            "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
+        },
+        "curve": curve,
+        "trade_rows": trade_rows,
+        "exit_times": exit_times,
+        "exit_balances": exit_balances,
+    }
+
+
+def mixed_balance_before(sim, ts):
+    j = bisect.bisect_left(sim["exit_times"], ts) - 1
+    return sim["exit_balances"][j] if j >= 0 else STARTING_BALANCE
+
+
+def mixed_equity_period_row(
+    mode,
+    sim,
+    h1_risk,
+    m15_risk,
+    label,
+    start,
+    end,
+    trades,
+):
+    sb = mixed_balance_before(sim, start)
+    eb = mixed_balance_before(sim, end)
+    exits = [t for t in trades if start <= t["exit_event_time"] < end]
+    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
+    years = max((end - start).total_seconds() / (365.2425 * 86400.0), 1e-9)
+    ann = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0
+        else 0.0
+    )
+    return {
+        "portfolio_mode": mode,
+        "h1_risk_pct": h1_risk * 100.0,
+        "m15_risk_pct": m15_risk * 100.0,
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": ann,
+        "realized_exits": len(exits),
+    }
+
+
+def mixed_equity_calendar_rows(
+    mode, sim, h1_risk, m15_risk, trades, first_year, last_year
+):
+    rows = []
+    for y in range(first_year, last_year + 1):
+        a = datetime(y, 1, 1, tzinfo=timezone.utc)
+        nominal_b = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+        b = min(nominal_b, NOW)
+        if b <= a:
+            continue
+        row = mixed_equity_period_row(
+            mode, sim, h1_risk, m15_risk, str(y), a, b, trades
+        )
+        row["year"] = y
+        row["complete_year"] = nominal_b <= NOW
+        rows.append(row)
+    return rows
+
+
+def mixed_equity_calendar_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        key = (
+            r["portfolio_mode"],
+            r["h1_risk_pct"],
+            r["m15_risk_pct"],
+        )
+        grouped[key].append(r)
+
+    out = []
+    for key, g in grouped.items():
+        mode, h1p, m15p = key
+        complete = [x for x in g if x["complete_year"]]
+        active = [x for x in complete if x["realized_exits"] > 0]
+        positive = [x for x in active if x["compounded_return_pct"] > 0]
+        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        out.append({
+            "portfolio_mode": mode,
+            "h1_risk_pct": h1p,
+            "m15_risk_pct": m15p,
+            "completed_years": len(complete),
+            "active_completed_years": len(active),
+            "positive_active_completed_years": len(positive),
+            "positive_active_completed_years_pct": pct(len(positive), len(active)),
+            "average_return_pct_active": (
+                sum(x["compounded_return_pct"] for x in active) / len(active)
+                if active else 0.0
+            ),
+            "median_return_pct_active": safe_median(
+                x["compounded_return_pct"] for x in active
+            ),
+            "worst_year": worst["year"] if worst else "",
+            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
+            "best_year": best["year"] if best else "",
+            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
+        })
+    return out
+
+
+def mixed_equity_rolling_rows(
+    mode,
+    sim,
+    h1_risk,
+    m15_risk,
+    trades,
+    months,
+    start_month,
+    end_complete_month,
+):
+    rows = []
+    cur = start_month
+    while add_months(cur, months) <= end_complete_month:
+        end = add_months(cur, months)
+        row = mixed_equity_period_row(
+            mode, sim, h1_risk, m15_risk,
+            f"ROLLING_{months}M", cur, end, trades
+        )
+        row["months"] = months
+        rows.append(row)
+        cur = add_months(cur, 1)
+    return rows
+
+
+def mixed_equity_rolling_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        key = (
+            r["portfolio_mode"],
+            r["h1_risk_pct"],
+            r["m15_risk_pct"],
+            r["months"],
+        )
+        grouped[key].append(r)
+
+    out = []
+    for key, g in grouped.items():
+        mode, h1p, m15p, months = key
+        active = [x for x in g if x["realized_exits"] > 0]
+        positive = [x for x in active if x["compounded_return_pct"] > 0]
+        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        out.append({
+            "portfolio_mode": mode,
+            "h1_risk_pct": h1p,
+            "m15_risk_pct": m15p,
+            "months": months,
+            "windows": len(g),
+            "active_windows": len(active),
+            "zero_exit_windows": len(g) - len(active),
+            "positive_active_windows": len(positive),
+            "positive_active_windows_pct": pct(len(positive), len(active)),
+            "median_compounded_return_pct_active": safe_median(
+                x["compounded_return_pct"] for x in active
+            ),
+            "worst_compounded_return_pct": (
+                worst["compounded_return_pct"] if worst else 0.0
+            ),
+            "worst_start_utc": worst["start_utc"] if worst else "",
+            "best_compounded_return_pct": (
+                best["compounded_return_pct"] if best else 0.0
+            ),
+            "best_start_utc": best["start_utc"] if best else "",
+        })
+    return out
+
+
+def combined_monthly_matrix(strategy_trades, start_month, end_month):
+    ids = sorted(strategy_trades)
+    rows = []
+    cur = start_month
+    while cur < end_month:
+        nxt = add_months(cur, 1)
+        row = {"month": cur.strftime("%Y-%m")}
+        for sid in ids:
+            row[sid] = sum(
+                t["r"]
+                for t in strategy_trades[sid]
+                if cur <= t["signal_time"] < nxt
+            )
+        row["PORTFOLIO"] = sum(row[sid] for sid in ids)
+        rows.append(row)
+        cur = nxt
+    return rows
+
+
+def combined_json_safe(value):
+    if isinstance(value, set):
+        return sorted(value)
+    if isinstance(value, dict):
+        return {k: combined_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [combined_json_safe(v) for v in value]
+    return value
+
+
+def run_combined_research():
+    try:
+        COMBINED_STATUS.update(
+            state="starting",
+            message="Running exact 10-strategy M15 rebuild first",
+            progress=1,
+        )
+
+        # ------------------------------------------------------------
+        # 1) Re-run the exact already-verified M15 engine.
+        # ------------------------------------------------------------
+        run_research()
+        if STATUS.get("state") != "complete":
+            raise RuntimeError(
+                "Embedded M15 rebuild failed: " + json.dumps(STATUS, default=str)
+            )
+
+        m15_trades = load_m15_baseline_trades()
+        if len(m15_trades) < M15_REFERENCE_PORTFOLIO_TRADES:
+            raise RuntimeError(
+                f"M15 portfolio below known reference: "
+                f"{len(m15_trades)} < {M15_REFERENCE_PORTFOLIO_TRADES}"
+            )
+
+        COMBINED_STATUS.update(
+            state="h1_download",
+            message="Rebuilding the exact current-live 10-strategy H1 portfolio",
+            progress=55,
+        )
+
+        # ------------------------------------------------------------
+        # 2) Rebuild exact current-live H1 portfolio from attached rules.
+        # ------------------------------------------------------------
+        h1_by_strategy = {}
+        h1_meta = []
+        h1_coverage = []
+
+        for pi, pair in enumerate(PAIRS):
+            COMBINED_STATUS.update(
+                state="h1_rebuild",
+                message=f"Rebuilding current-live H1 {pair} long + short",
+                progress=57 + pi * 5,
+            )
+            pair_trades, pair_meta, cov = collect_h1_pair(pair)
+            h1_by_strategy.update(pair_trades)
+            h1_meta.extend(pair_meta)
+            h1_coverage.append(cov)
+            gc.collect()
+
+        h1_trades = sorted(
+            [t for sid in sorted(h1_by_strategy) for t in h1_by_strategy[sid]],
+            key=lambda t: (t["signal_time"], t["strategy_id"]),
+        )
+
+        if len(h1_trades) < H1_REFERENCE_FULL_TRADES:
+            raise RuntimeError(
+                f"H1 portfolio reproduction below prior final-live reference: "
+                f"{len(h1_trades)} < {H1_REFERENCE_FULL_TRADES}. "
+                f"Do not trust combined results until this is reconciled."
+            )
+
+        COMBINED_STATUS.update(
+            state="merging",
+            message="Merging H1 + M15 and applying live instrument-gate variants",
+            progress=83,
+        )
+
+        # ------------------------------------------------------------
+        # 3) Unified strategy dictionaries + portfolio modes.
+        # ------------------------------------------------------------
+        m15_by_strategy = defaultdict(list)
+        for t in m15_trades:
+            m15_by_strategy[t["strategy_id"]].append(t)
+
+        all_by_strategy = {}
+        all_by_strategy.update({k: list(v) for k, v in h1_by_strategy.items()})
+        all_by_strategy.update({k: list(v) for k, v in m15_by_strategy.items()})
+
+        independent = sorted(
+            h1_trades + m15_trades,
+            key=lambda t: (t["signal_time"], t["strategy_id"]),
+        )
+
+        gated_h1, rejected_h1 = apply_pair_gate(independent, "H1_FIRST")
+        gated_m15, rejected_m15 = apply_pair_gate(independent, "M15_FIRST")
+
+        modes = {
+            "INDEPENDENT": independent,
+            "PAIR_GATE_H1_FIRST": gated_h1,
+            "PAIR_GATE_M15_FIRST": gated_m15,
+        }
+
+        # ------------------------------------------------------------
+        # 4) Audit / manifest / parity.
+        # ------------------------------------------------------------
+        source_audit = [
+            {
+                "source": "strategy_probe(6).py",
+                "role": "CURRENT LIVE H1 STRATEGY AUTHORITY",
+                "sha256": "4ec3b8870fb085eb842fdf85e60681b81968b300efa1a9e1ab677a1d242d5a65",
+            },
+            {
+                "source": "app(7).py",
+                "role": "CURRENT LIVE EXECUTOR / 1%-NAV REFERENCE",
+                "sha256": "14d9aa2c555f7809efd8b8f03a53923c773d47494aaa0c60883d5b54cbfa89d4",
+            },
+            {
+                "source": "m15_final_locked_portfolio_EQUITY_COMPOUNDING_analysis.py",
+                "role": "FINAL LOCKED 10-STRATEGY M15 REBUILD AUTHORITY",
+                "sha256": "703baac7e933c6b5b33c2f5870bbacf6a0d7954b5a5067a313c524c7b8f15df8",
+            },
+        ]
+        write_csv(COMBINED_OUT["source_audit"], source_audit)
+
+        manifest = []
+        for pair in PAIRS:
+            manifest.append({
+                "strategy_id": f"{pair}_H1_LONG",
+                "pair": pair,
+                "timeframe": "H1",
+                "side": "BUY",
+                "source": "attached current live strategy_probe(6).py",
+                "config_json": json.dumps(
+                    combined_json_safe(STRATEGIES[pair]), sort_keys=True
+                ),
+            })
+            manifest.append({
+                "strategy_id": f"{pair}_H1_SHORT",
+                "pair": pair,
+                "timeframe": "H1",
+                "side": "SELL",
+                "source": "attached current live strategy_probe(6).py",
+                "config_json": json.dumps(
+                    combined_json_safe(SHORT_STRATEGIES[pair]), sort_keys=True
+                ),
+            })
+        for row in MANIFEST:
+            manifest.append({
+                "strategy_id": row["strategy_id"],
+                "pair": row["pair"],
+                "timeframe": "M15",
+                "side": row["side"],
+                "source": row["source"],
+                "config_json": row["rules"],
+            })
+        write_csv(COMBINED_OUT["manifest"], manifest)
+
+        coverage_rows = []
+        for r in h1_coverage:
+            coverage_rows.append({"timeframe": "H1", **r})
+        # Carry forward the exact M15 coverage produced by embedded runner.
+        if os.path.exists(OUT["coverage"]):
+            with open(OUT["coverage"], newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    coverage_rows.append({"timeframe": "M15", **r})
+        write_csv(COMBINED_OUT["coverage"], coverage_rows)
+
+        parity_rows = []
+        for sid in sorted(h1_by_strategy):
+            parity_rows.append({
+                "scope": "H1_STRATEGY",
+                "strategy_id": sid,
+                "trades": len(h1_by_strategy[sid]),
+                "status": "INFO",
+            })
+        parity_rows.extend({
+            "scope": "H1_PORTFOLIO",
+            "strategy_id": "ALL_H1",
+            "trades": len(h1_trades),
+            "reference_min": H1_REFERENCE_FULL_TRADES,
+            "status": (
+                "PASS_EQUAL"
+                if len(h1_trades) == H1_REFERENCE_FULL_TRADES
+                else "PASS_NEWER_TRADES"
+            ),
+        } for _ in [0])
+        parity_rows.extend({
+            "scope": "M15_PORTFOLIO",
+            "strategy_id": "ALL_M15",
+            "trades": len(m15_trades),
+            "reference_min": M15_REFERENCE_PORTFOLIO_TRADES,
+            "status": (
+                "PASS_EQUAL"
+                if len(m15_trades) == M15_REFERENCE_PORTFOLIO_TRADES
+                else "PASS_NEWER_TRADES"
+            ),
+        } for _ in [0])
+        write_csv(COMBINED_OUT["parity"], parity_rows)
+
+        # ------------------------------------------------------------
+        # 5) Non-compounded strategy / timeframe / pair / mode stats.
+        # ------------------------------------------------------------
+        all_strategy_ids = sorted(all_by_strategy)
+        independent_stats = calc_stats(independent)
+
+        strategy_summary = []
+        for sid in all_strategy_ids:
+            tr = all_by_strategy[sid]
+            s = calc_stats(tr)
+            strategy_summary.append({
+                "strategy_id": sid,
+                "pair": tr[0]["pair"] if tr else "",
+                "timeframe": tr[0]["timeframe"] if tr else "",
+                "side": tr[0]["side"] if tr else "",
+                **s,
+                "contribution_pct_of_independent_total_r": pct(
+                    s["total_r"], independent_stats["total_r"]
+                ),
+            })
+        write_csv(COMBINED_OUT["strategy_summary"], strategy_summary)
+
+        tf_rows = []
+        for tf in ("H1", "M15"):
+            tr = [t for t in independent if t["timeframe"] == tf]
+            s = calc_stats(tr)
+            tf_rows.append({
+                "timeframe": tf,
+                **s,
+                "contribution_pct_of_independent_total_r": pct(
+                    s["total_r"], independent_stats["total_r"]
+                ),
+            })
+        write_csv(COMBINED_OUT["timeframe_summary"], tf_rows)
+
+        pair_rows = []
+        for pair in PAIRS:
+            tr = [t for t in independent if t["pair"] == pair]
+            s = calc_stats(tr)
+            pair_rows.append({
+                "pair": pair,
+                **s,
+                "contribution_pct_of_independent_total_r": pct(
+                    s["total_r"], independent_stats["total_r"]
+                ),
+            })
+        write_csv(COMBINED_OUT["pair_summary"], pair_rows)
+
+        mode_rows = []
+        for mode, tr in modes.items():
+            s = calc_stats(tr)
+            se = calc_stats(tr, "exit")
+            mode_rows.append({
+                "portfolio_mode": mode,
+                "strategies_available": len(all_strategy_ids),
+                "trades": s["trades"],
+                "winners": s["winners"],
+                "losers": s["losers"],
+                "win_rate_pct": s["win_rate_pct"],
+                "profit_factor": s["profit_factor"],
+                "total_r": s["total_r"],
+                "expectancy_r": s["expectancy_r"],
+                "signal_order_max_drawdown_r": s["max_drawdown_r"],
+                "exit_order_max_drawdown_r": se["max_drawdown_r"],
+                "longest_loss_streak": s["longest_loss_streak"],
+                "trades_removed_vs_independent": len(independent) - len(tr),
+            })
+        write_csv(COMBINED_OUT["mode_summary"], mode_rows)
+
+        # ------------------------------------------------------------
+        # 6) Periods / calendar / rolling / frequency for each mode.
+        # ------------------------------------------------------------
+        period_defs = [
+            ("FULL", None, None),
+            ("PRE_2010", None, datetime(2010, 1, 1, tzinfo=timezone.utc)),
+            ("2010_PLUS", datetime(2010, 1, 1, tzinfo=timezone.utc), None),
+            ("2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), None),
+            ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
+            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+            ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+            ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+        ]
+
+        active_start = month_floor(min(t["signal_time"] for t in independent))
+        end_complete = month_floor(NOW)
+
+        period_rows = []
+        calendar_out = []
+        rolling_out = []
+        frequency_out = []
+
+        for mode, tr in modes.items():
+            for label, a, b in period_defs:
+                row = stats_row(mode, label, tr, a, b)
+                row["portfolio_mode"] = mode
+                period_rows.append(row)
+
+            calendar_out.extend(
+                dict(r, portfolio_mode=mode)
+                for r in calendar_rows(mode, tr, START.year, NOW.year)
+            )
+
+            for months in (12, 24, 36):
+                rolling_out.extend(
+                    dict(r, portfolio_mode=mode)
+                    for r in rolling_rows(
+                        mode, tr, months, active_start, end_complete
+                    )
+                )
+
+            freq_periods = [
+                ("FULL", active_start, NOW),
+                ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
+                ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+                ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+                ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+                ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+            ]
+            for label, a, b in freq_periods:
+                row = frequency_row(mode, tr, a, b, label)
+                row["portfolio_mode"] = mode
+                frequency_out.append(row)
+
+        # Also include H1-only and M15-only frequency.
+        for tf in ("H1", "M15"):
+            tf_tr = [t for t in independent if t["timeframe"] == tf]
+            for label, a, b in [
+                ("FULL", active_start, NOW),
+                ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+                ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+                ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+            ]:
+                row = frequency_row(f"{tf}_ONLY", tf_tr, a, b, label)
+                row["portfolio_mode"] = f"{tf}_ONLY"
+                frequency_out.append(row)
+
+        write_csv(COMBINED_OUT["periods"], period_rows)
+        write_csv(COMBINED_OUT["calendar"], calendar_out)
+        write_csv(COMBINED_OUT["rolling"], rolling_out)
+        write_csv(COMBINED_OUT["rolling_summary"], rolling_summary(rolling_out))
+        write_csv(COMBINED_OUT["frequency"], frequency_out)
+
+        # ------------------------------------------------------------
+        # 7) Correlation / overlap / concurrency / gate rejections.
+        # ------------------------------------------------------------
+        monthly = combined_monthly_matrix(
+            all_by_strategy, active_start, month_floor(NOW)
+        )
+        write_csv(COMBINED_OUT["monthly"], monthly)
+        write_csv(
+            COMBINED_OUT["correlation"],
+            correlation_rows(monthly, all_strategy_ids),
+        )
+        write_csv(COMBINED_OUT["overlap"], actual_overlap_rows(all_by_strategy))
+
+        concurrency_out = []
+        for mode, tr in modes.items():
+            concurrency_out.extend(actual_concurrency_rows(mode, tr))
+        write_csv(COMBINED_OUT["concurrency"], concurrency_out)
+
+        gate_rejections = rejected_h1 + rejected_m15
+        write_csv(COMBINED_OUT["pair_gate_rejections"], gate_rejections)
+
+        # ------------------------------------------------------------
+        # 8) Native-cost multiplier stress.
+        # ------------------------------------------------------------
+        cost_rows = []
+        for mult in COST_MULTIPLIERS:
+            stressed_independent = [
+                recalc_trade_cost_multiplier(t, mult) for t in independent
+            ]
+            stressed_by_key = {
+                (
+                    t["strategy_id"],
+                    t["entry_time"],
+                    t["exit_event_time"],
+                ): t
+                for t in stressed_independent
+            }
+
+            for mode, base_trades in modes.items():
+                stressed = [
+                    stressed_by_key[(
+                        t["strategy_id"],
+                        t["entry_time"],
+                        t["exit_event_time"],
+                    )]
+                    for t in base_trades
+                ]
+                s = calc_stats(stressed)
+                cost_rows.append({
+                    "portfolio_mode": mode,
+                    "cost_multiplier": mult,
+                    "h1_adverse_ticks": BACKTEST_SLIPPAGE_TICKS * mult,
+                    "m15_adverse_pips": 1.0 * mult,
+                    **s,
+                })
+
+                # Two most decision-relevant risk allocations under cost stress.
+                for h1r, m15r, label in [
+                    (0.0100, 0.0100, "H1_1_M15_1"),
+                    (0.0075, 0.0100, "H1_0.75_M15_1"),
+                ]:
+                    es = simulate_mixed_equity(
+                        stressed, h1r, m15r, STARTING_BALANCE
+                    )["summary"]
+                    cost_rows.append({
+                        "portfolio_mode": mode,
+                        "cost_multiplier": mult,
+                        "h1_adverse_ticks": BACKTEST_SLIPPAGE_TICKS * mult,
+                        "m15_adverse_pips": 1.0 * mult,
+                        "equity_scenario": label,
+                        **es,
+                    })
+        write_csv(COMBINED_OUT["cost_stress"], cost_rows)
+
+        # ------------------------------------------------------------
+        # 9) Full H1-risk x M15-risk equity matrix for all 3 modes.
+        # ------------------------------------------------------------
+        COMBINED_STATUS.update(
+            state="equity",
+            message="Running 3x3 H1/M15 risk matrix across all portfolio modes",
+            progress=91,
+        )
+
+        equity_matrix = []
+        equity_periods = []
+        equity_calendar = []
+        equity_rolling = []
+        key_curves = []
+        key_trade_rows = []
+
+        key_scenarios = {
+            ("INDEPENDENT", 1.00, 1.00),
+            ("INDEPENDENT", 0.75, 1.00),
+            ("PAIR_GATE_H1_FIRST", 1.00, 1.00),
+            ("PAIR_GATE_H1_FIRST", 0.75, 1.00),
+        }
+
+        for mode, tr in modes.items():
+            first_year = min(t["entry_time"].year for t in tr)
+            roll_start = month_floor(min(t["entry_time"] for t in tr))
+
+            for h1r in COMBINED_RISK_LEVELS:
+                for m15r in COMBINED_RISK_LEVELS:
+                    sim = simulate_mixed_equity(
+                        tr, h1r, m15r, STARTING_BALANCE
+                    )
+                    equity_matrix.append({
+                        "portfolio_mode": mode,
+                        **sim["summary"],
+                    })
+
+                    for label, a, b in [
+                        ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
+                        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+                        ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+                        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+                        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+                    ]:
+                        equity_periods.append(
+                            mixed_equity_period_row(
+                                mode, sim, h1r, m15r, label, a, b, tr
+                            )
+                        )
+
+                    equity_calendar.extend(
+                        mixed_equity_calendar_rows(
+                            mode, sim, h1r, m15r, tr, first_year, NOW.year
+                        )
+                    )
+
+                    for months in (12, 24, 36):
+                        equity_rolling.extend(
+                            mixed_equity_rolling_rows(
+                                mode, sim, h1r, m15r, tr,
+                                months, roll_start, end_complete
+                            )
+                        )
+
+                    scenario_key = (
+                        mode,
+                        round(h1r * 100.0, 2),
+                        round(m15r * 100.0, 2),
+                    )
+                    if scenario_key in key_scenarios:
+                        for r in sim["curve"]:
+                            key_curves.append({
+                                "portfolio_mode": mode,
+                                "h1_risk_pct": h1r * 100.0,
+                                "m15_risk_pct": m15r * 100.0,
+                                **r,
+                            })
+                        for r in sim["trade_rows"]:
+                            key_trade_rows.append({
+                                "portfolio_mode": mode,
+                                **r,
+                            })
+
+        write_csv(COMBINED_OUT["equity_matrix"], equity_matrix)
+        write_csv(COMBINED_OUT["equity_periods"], equity_periods)
+        write_csv(COMBINED_OUT["equity_calendar"], equity_calendar)
+        write_csv(
+            COMBINED_OUT["equity_calendar_summary"],
+            mixed_equity_calendar_summary(equity_calendar),
+        )
+        write_csv(COMBINED_OUT["equity_rolling"], equity_rolling)
+        write_csv(
+            COMBINED_OUT["equity_rolling_summary"],
+            mixed_equity_rolling_summary(equity_rolling),
+        )
+        write_csv(COMBINED_OUT["equity_key_curve"], key_curves)
+        write_csv(COMBINED_OUT["equity_key_trades"], key_trade_rows)
+
+        # ------------------------------------------------------------
+        # 10) Trade logs + notes + one ZIP.
+        # ------------------------------------------------------------
+        write_csv(
+            COMBINED_OUT["trades_independent"],
+            [serialise_trade(t) for t in independent],
+        )
+        write_csv(
+            COMBINED_OUT["trades_pair_gate_h1_first"],
+            [serialise_trade(t) for t in gated_h1],
+        )
+        write_csv(
+            COMBINED_OUT["trades_pair_gate_m15_first"],
+            [serialise_trade(t) for t in gated_m15],
+        )
+
+        notes = [
+            {
+                "item": "Read only",
+                "value": "This research service never sends orders.",
+            },
+            {
+                "item": "H1 authority",
+                "value": "All 10 H1 configs are literal extracts from the attached current live strategy_probe(6).py.",
+            },
+            {
+                "item": "H1 backtest cost",
+                "value": "Baseline adverse entry is exactly 5 ticks, matching current H1 historical code.",
+            },
+            {
+                "item": "M15 authority",
+                "value": "The embedded exact final 10-strategy M15 runner is executed first and must pass its own final-lock parity guards.",
+            },
+            {
+                "item": "M15 backtest cost",
+                "value": "Baseline adverse entry is 1 pip, matching the final full-history M15 research.",
+            },
+            {
+                "item": "Current live instrument gate",
+                "value": "The attached H1 live engine refuses a new signal when OANDA already has any open trade on that instrument. PAIR_GATE modes model that restriction across H1+M15; INDEPENDENT shows pure research diversification.",
+            },
+            {
+                "item": "Exact-tie gate priority",
+                "value": "Both H1-first and M15-first variants are exported because the future combined H1/M15 watcher tie order is not yet defined. BUY precedes SELL within a timeframe.",
+            },
+            {
+                "item": "Risk matrix",
+                "value": "Every portfolio mode is compounded at all nine H1-risk x M15-risk combinations from 0.50%, 0.75% and 1.00% per trade.",
+            },
+            {
+                "item": "NAV caveat",
+                "value": "Actual app(7).py sizes from current OANDA NAV. The backtest sizes from realised equity because candle-level outcome records do not reconstruct intra-trade mark-to-market NAV. Conservative open-risk-floor DD is exported.",
+            },
+            {
+                "item": "Actual event timing",
+                "value": "H1 entries use signal candle close (+1h); M15 entries use signal candle close (+15m). Exit event timestamps use the close of the historical exit bar. This is used for cross-timeframe pair gating and concurrency.",
+            },
+            {
+                "item": "Cost multiplier stress",
+                "value": "0.5x/1x/1.5x/2x means H1 2.5/5/7.5/10 adverse ticks while M15 uses 0.5/1/1.5/2 adverse pips.",
+            },
+        ]
+        write_csv(COMBINED_OUT["notes"], notes)
+
+        COMBINED_STATUS.update(
+            state="packaging",
+            message="Packaging one H1+M15 20-strategy ZIP",
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            COMBINED_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED
+        ) as z:
+            for p in COMBINED_OUT.values():
+                if os.path.exists(p):
+                    z.write(p, arcname=os.path.basename(p))
+            # Include the embedded M15 parity/result bundle as provenance.
+            if os.path.exists(BUNDLE):
+                z.write(BUNDLE, arcname=os.path.basename(BUNDLE))
+
+        ind = calc_stats(independent)
+        COMBINED_STATUS.update(
+            state="complete",
+            message="H1 + M15 final 20-strategy portfolio analysis complete",
+            progress=100,
+            results=COMBINED_BUNDLE,
+            h1_trades=len(h1_trades),
+            m15_trades=len(m15_trades),
+            independent_trades=len(independent),
+            independent_total_r=ind["total_r"],
+            independent_pf=ind["profit_factor"],
+            pair_gate_h1_first_trades=len(gated_h1),
+            pair_gate_m15_first_trades=len(gated_m15),
+        )
+
+    except Exception as e:
+        import traceback
+        COMBINED_STATUS.update(
+            state="error",
+            message=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc(),
+            progress=COMBINED_STATUS.get("progress", 0),
+        )
+
+
 # ============================================================
 # FLASK ROUTES
 # ============================================================
 @app.get("/")
 def root():
-    return jsonify({"service":"M15 Final Locked 10-Strategy Portfolio + Equity Compounding Analysis","state":STATUS.get("state"),"message":STATUS.get("message"),"orders_supported":False,"trading_enabled":False,"routes":["/m15-final-portfolio-equity/status","/m15-final-portfolio-equity/results"]})
+    return jsonify({
+        "service": "H1 + M15 Final Locked 20-Strategy Portfolio Analysis",
+        "state": COMBINED_STATUS.get("state"),
+        "message": COMBINED_STATUS.get("message"),
+        "orders_supported": False,
+        "trading_enabled": False,
+        "routes": [
+            "/h1-m15-final-portfolio/status",
+            "/h1-m15-final-portfolio/results",
+            "/m15-final-portfolio-equity/status",
+            "/m15-final-portfolio-equity/results",
+        ],
+    })
 
 @app.get("/m15-final-portfolio-equity/status")
 def status():
@@ -1626,8 +5769,27 @@ def results():
     return send_file(os.path.abspath(BUNDLE),as_attachment=True,download_name=BUNDLE)
 
 
+
+@app.get("/h1-m15-final-portfolio/status")
+def combined_portfolio_status():
+    return jsonify(COMBINED_STATUS)
+
+
+@app.get("/h1-m15-final-portfolio/results")
+def combined_portfolio_results():
+    if not os.path.exists(COMBINED_BUNDLE):
+        return jsonify({
+            "error": "Combined results not ready",
+            "status": COMBINED_STATUS,
+        }), 404
+    return send_file(
+        os.path.abspath(COMBINED_BUNDLE),
+        as_attachment=True,
+        download_name=COMBINED_BUNDLE,
+    )
+
 def start_background():
-    threading.Thread(target=run_research,daemon=True).start()
+    threading.Thread(target=run_combined_research, daemon=True).start()
 
 if __name__ == "__main__":
     start_background()
