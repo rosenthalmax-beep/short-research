@@ -465,7 +465,7 @@ def features(c, h1, h4, d):
 
     # ATR-normalised distance from current signal high to prior high.
     sd_high = {}
-    for lb in [40, 60, 80, 100, 120, 165, 200]:
+    for lb in [40, 60, 80, 100, 120, 140, 165, 200]:
         x = np.full(n, np.nan)
         ok = valid_atr & np.isfinite(ph[lb])
         x[ok] = np.abs(h[ok] - ph[lb][ok]) / a[ok]
