@@ -5748,78 +5748,81 @@ def run_combined_research():
 # READ ONLY. NEVER SENDS ORDERS.
 #
 # Purpose:
-#   Test whether universal early-exit rules improve the exact locked
-#   20-strategy H1+M15 portfolio without changing any ENTRY rule.
+#   Test whether universal stop-management rules improve the exact locked
+#   20-strategy H1+M15 portfolio without changing ANY entry rule or target.
 #
 # Control:
-#   Existing STOP / TARGET only.
+#   Existing fixed STOP / TARGET only.
 #
 # Candidate families:
-#   1) MAX HOLD ONLY
-#      H1: 12 / 24 / 48 / 72 completed post-entry H1 bars
-#      M15: 24 / 48 / 72 / 96 completed post-entry M15 bars
+#   1) BREAK-EVEN
+#      After post-entry MFE first reaches +0.50R / +1.00R / +1.50R / +2.00R,
+#      ratchet the stop to the adverse historical fill (0.00R).
 #
-#   2) TIME + MFE PROGRESS
-#      At the same bar limits, exit at that bar close ONLY IF the trade
-#      has never achieved +0.25R, +0.50R or +0.75R MFE since entry.
-#      If the threshold has already been reached, the trade is left alone
-#      to continue to its original stop or target.
+#   2) SINGLE PROFIT LOCK
+#      Broad universal trigger/lock combinations:
+#          +1.00R -> +0.25R
+#          +1.00R -> +0.50R
+#          +1.50R -> +0.25R
+#          +1.50R -> +0.50R
+#          +2.00R -> +0.50R
+#          +2.00R -> +1.00R
 #
-#   3) UNIVERSAL REVERSAL
-#      Exit at bar close after a strong exact opposite engulfing candle.
-#      Opposite body thresholds: 0.75 / 1.00 / 1.25 ATR14.
-#      This is deliberately generic: no pair-specific reversal optimization.
+#   3) STEP TRAILS
+#      A) +1R -> BE, +2R -> +1R, +3R -> +2R
+#      B) +1.5R -> +0.5R, +2.5R -> +1.5R, +3.5R -> +2.5R
 #
-# Important causality conventions:
-#   - Original stop/target is always checked FIRST inside each bar.
-#   - If neither is hit, MFE/reversal/time logic is evaluated at bar close.
-#   - MFE starts only AFTER entry; the signal candle's pre-entry excursion
-#     is never counted.
-#   - Exact exit-candle re-entry remains eligible, preserving locked p0 logic.
+# Important causality convention:
+#   - The stop active at the START of a candle is the only stop that can be
+#     hit during that candle.
+#   - If a new MFE threshold is reached during the candle, the ratcheted stop
+#     becomes active only from the NEXT candle onward.
+#   - This deliberately prevents impossible same-bar knowledge such as seeing
+#     the high first and then pretending a newly-moved stop was already live.
+#   - Original target is NEVER moved.
 #   - Original entry adverse-cost convention is unchanged.
-#   - Primary early-exit result uses the bar close with no invented extra
-#     market-exit slippage. A separate sensitivity table adds 0.5x and 1.0x
-#     the native adverse entry-cost amount ONLY to early-market exits.
+#   - Exact exit-candle re-entry remains eligible, preserving locked p0 logic.
+#   - Gap through a managed stop is filled at the candle open (worse than the
+#     stop level where appropriate), a conservative midpoint approximation.
 #
 # Live portfolio modes:
 #   INDEPENDENT
 #       Research ceiling: different strategies can overlap in either direction.
 #
 #   LIVE_SAFE_H1_FIRST
-#       Matches the current non-hedging OANDA constraint: same-direction
-#       same-pair overlaps are allowed, but a new trade is rejected while an
-#       opposite-direction trade on that pair is open. H1 wins exact entry ties.
+#       Current non-hedging OANDA constraint: same-direction same-pair overlap
+#       allowed; a new trade is rejected while an opposite-direction trade on
+#       that pair is open. H1 wins exact entry ties.
 #
 #   LIVE_SAFE_M15_FIRST
-#       Same rule, but M15 wins exact H1/M15 entry ties. Exported as a tie-order
-#       sensitivity because the two live watcher loops are independent.
+#       Same rule with M15 exact-tie priority, exported as sensitivity.
 # ============================================================
 
 EXIT_STATUS = {
     "state": "not_started",
-    "message": "Exit research not started",
+    "message": "Stop-management research not started",
     "progress": 0,
 }
 
-EXIT_BUNDLE = "H1_M15_20_EXIT_RESEARCH_RESULTS.zip"
+EXIT_BUNDLE = "H1_M15_20_STOP_MANAGEMENT_RESEARCH_RESULTS.zip"
 EXIT_OUT = {
-    "scenario_definitions": "h1_m15_exit_scenario_definitions.csv",
-    "control_parity": "h1_m15_exit_control_parity.csv",
-    "scenario_summary": "h1_m15_exit_scenario_summary.csv",
-    "delta_vs_control": "h1_m15_exit_delta_vs_control.csv",
-    "by_strategy": "h1_m15_exit_by_strategy.csv",
-    "by_timeframe": "h1_m15_exit_by_timeframe.csv",
-    "periods": "h1_m15_exit_periods.csv",
-    "rolling": "h1_m15_exit_rolling.csv",
-    "rolling_summary": "h1_m15_exit_rolling_summary.csv",
-    "calendar": "h1_m15_exit_calendar.csv",
-    "calendar_summary": "h1_m15_exit_calendar_summary.csv",
-    "exit_reasons": "h1_m15_exit_reason_summary.csv",
-    "hold_summary": "h1_m15_exit_hold_summary.csv",
-    "gate_rejections": "h1_m15_exit_live_safe_gate_rejections.csv",
-    "market_exit_cost_stress": "h1_m15_exit_market_exit_cost_stress.csv",
-    "trades": "h1_m15_exit_all_trades.csv",
-    "notes": "h1_m15_exit_notes.csv",
+    "scenario_definitions": "h1_m15_stop_scenario_definitions.csv",
+    "control_parity": "h1_m15_stop_control_parity.csv",
+    "scenario_summary": "h1_m15_stop_scenario_summary.csv",
+    "delta_vs_control": "h1_m15_stop_delta_vs_control.csv",
+    "by_strategy": "h1_m15_stop_by_strategy.csv",
+    "by_timeframe": "h1_m15_stop_by_timeframe.csv",
+    "periods": "h1_m15_stop_periods.csv",
+    "rolling": "h1_m15_stop_rolling.csv",
+    "rolling_summary": "h1_m15_stop_rolling_summary.csv",
+    "calendar": "h1_m15_stop_calendar.csv",
+    "calendar_summary": "h1_m15_stop_calendar_summary.csv",
+    "exit_reasons": "h1_m15_stop_exit_reason_summary.csv",
+    "hold_summary": "h1_m15_stop_management_summary.csv",
+    "gate_rejections": "h1_m15_stop_live_safe_gate_rejections.csv",
+    "market_exit_cost_stress": "h1_m15_stop_fill_cost_stress.csv",
+    "trades": "h1_m15_stop_all_trades.csv",
+    "notes": "h1_m15_stop_notes.csv",
 }
 
 # Current known control counts from the exact combined run on 2026-09-10.
@@ -5840,69 +5843,77 @@ H1_CONTROL_MIN_BY_STRATEGY = {
 M15_CONTROL_MIN_BY_STRATEGY = dict(REFERENCE_COUNTS)
 
 
-def build_exit_scenarios():
-    out = [{
-        "scenario_id": "CONTROL",
-        "family": "CONTROL",
-        "h1_max_bars": None,
-        "m15_max_bars": None,
-        "mfe_threshold_r": None,
-        "reversal_body_atr_min": None,
-        "description": "Original locked stop/target exits only",
-    }]
+def _scenario(
+    scenario_id,
+    family,
+    stages,
+    description,
+):
+    row = {
+        "scenario_id": scenario_id,
+        "family": family,
+        "stages": tuple((float(a), float(b)) for a, b in stages),
+        "description": description,
+    }
+    for n in range(1, 4):
+        if n <= len(stages):
+            row[f"stage{n}_trigger_r"] = float(stages[n - 1][0])
+            row[f"stage{n}_lock_r"] = float(stages[n - 1][1])
+        else:
+            row[f"stage{n}_trigger_r"] = None
+            row[f"stage{n}_lock_r"] = None
+    return row
 
-    bar_pairs = [
-        (12, 24, "A"),
-        (24, 48, "B"),
-        (48, 72, "C"),
-        (72, 96, "D"),
+
+def build_exit_scenarios():
+    out = [
+        _scenario(
+            "CONTROL",
+            "CONTROL",
+            (),
+            "Original locked fixed stop/target exits only",
+        )
     ]
 
-    for h1_bars, m15_bars, label in bar_pairs:
-        out.append({
-            "scenario_id": f"TIME_ONLY_{label}_H1_{h1_bars}_M15_{m15_bars}",
-            "family": "TIME_ONLY",
-            "h1_max_bars": h1_bars,
-            "m15_max_bars": m15_bars,
-            "mfe_threshold_r": None,
-            "reversal_body_atr_min": None,
-            "description": (
-                f"Exit at bar close after H1={h1_bars} or M15={m15_bars} "
-                "post-entry bars if stop/target has not already hit"
-            ),
-        })
+    for trigger in (0.50, 1.00, 1.50, 2.00):
+        label = str(trigger).replace(".", "P")
+        out.append(_scenario(
+            f"BE_AFTER_{label}R",
+            "BREAK_EVEN",
+            ((trigger, 0.00),),
+            f"After MFE reaches +{trigger:.2f}R, stop moves to breakeven from next candle",
+        ))
 
-        for mfe in (0.25, 0.50, 0.75):
-            mfe_label = str(mfe).replace(".", "P")
-            out.append({
-                "scenario_id": (
-                    f"TIME_MFE_{label}_H1_{h1_bars}_M15_{m15_bars}_MFE_{mfe_label}R"
-                ),
-                "family": "TIME_MFE",
-                "h1_max_bars": h1_bars,
-                "m15_max_bars": m15_bars,
-                "mfe_threshold_r": mfe,
-                "reversal_body_atr_min": None,
-                "description": (
-                    f"At H1={h1_bars}/M15={m15_bars} bars, exit only if "
-                    f"post-entry MFE has never reached +{mfe:.2f}R"
-                ),
-            })
+    singles = [
+        (1.00, 0.25),
+        (1.00, 0.50),
+        (1.50, 0.25),
+        (1.50, 0.50),
+        (2.00, 0.50),
+        (2.00, 1.00),
+    ]
+    for trigger, lock in singles:
+        tl = str(trigger).replace(".", "P")
+        ll = str(lock).replace(".", "P")
+        out.append(_scenario(
+            f"LOCK_{tl}R_TO_{ll}R",
+            "SINGLE_LOCK",
+            ((trigger, lock),),
+            f"After MFE reaches +{trigger:.2f}R, stop locks +{lock:.2f}R from next candle",
+        ))
 
-    for body_atr in (0.75, 1.00, 1.25):
-        label = str(body_atr).replace(".", "P")
-        out.append({
-            "scenario_id": f"REVERSAL_OPP_ENGULF_BODY_{label}ATR",
-            "family": "REVERSAL",
-            "h1_max_bars": None,
-            "m15_max_bars": None,
-            "mfe_threshold_r": None,
-            "reversal_body_atr_min": body_atr,
-            "description": (
-                "Exit at bar close on an exact opposite engulfing candle "
-                f"whose body is >= {body_atr:.2f} ATR14"
-            ),
-        })
+    out.append(_scenario(
+        "STEP_1R_BE_2R_1R_3R_2R",
+        "STEP_TRAIL",
+        ((1.00, 0.00), (2.00, 1.00), (3.00, 2.00)),
+        "+1R -> BE; +2R -> +1R; +3R -> +2R, each active next candle",
+    ))
+    out.append(_scenario(
+        "STEP_1P5R_0P5R_2P5R_1P5R_3P5R_2P5R",
+        "STEP_TRAIL",
+        ((1.50, 0.50), (2.50, 1.50), (3.50, 2.50)),
+        "+1.5R -> +0.5R; +2.5R -> +1.5R; +3.5R -> +2.5R, active next candle",
+    ))
 
     return out
 
@@ -5912,67 +5923,41 @@ EXIT_SCENARIO_MAP = {x["scenario_id"]: x for x in EXIT_SCENARIOS}
 
 
 def exit_rule_for_timeframe(scenario, timeframe):
-    if timeframe == "H1":
-        max_bars = scenario["h1_max_bars"]
-    elif timeframe == "M15":
-        max_bars = scenario["m15_max_bars"]
-    else:
+    if timeframe not in {"H1", "M15"}:
         raise ValueError(f"Unknown timeframe: {timeframe}")
-
     return {
         "family": scenario["family"],
-        "max_bars": max_bars,
-        "mfe_threshold_r": scenario["mfe_threshold_r"],
-        "reversal_body_atr_min": scenario["reversal_body_atr_min"],
+        "stages": tuple(scenario.get("stages", ())),
     }
 
 
-def exact_opposite_reversal(candles, atr_values, index, open_side, body_atr_min):
-    if body_atr_min is None or index <= 0:
-        return False
-    if index >= len(candles) or index >= len(atr_values):
-        return False
-
-    atr = atr_values[index]
-    if atr is None or not math.isfinite(float(atr)) or atr <= 0:
-        return False
-
-    previous = candles[index - 1]
-    current = candles[index]
-
-    if open_side == "BUY":
-        if not (
-            previous["close"] > previous["open"]
-            and current["close"] < current["open"]
-            and current["open"] >= previous["close"]
-            and current["close"] <= previous["open"]
-        ):
-            return False
-        body = current["open"] - current["close"]
-    else:
-        if not (
-            previous["close"] < previous["open"]
-            and current["close"] > current["open"]
-            and current["open"] <= previous["close"]
-            and current["close"] >= previous["open"]
-        ):
-            return False
-        body = current["close"] - current["open"]
-
-    return body > 0 and (body / atr) >= body_atr_min
-
-
-def exit_result_r(side, fill, stop, exit_price):
+def exit_result_r(side, fill, original_stop, exit_price):
     if side == "BUY":
-        actual_risk = fill - stop
+        actual_risk = fill - original_stop
         if actual_risk <= 0:
             return None
         return (exit_price - fill) / actual_risk
 
-    actual_risk = stop - fill
+    actual_risk = original_stop - fill
     if actual_risk <= 0:
         return None
     return (fill - exit_price) / actual_risk
+
+
+def _stop_price_for_lock_r(side, fill, original_risk, lock_r):
+    if side == "BUY":
+        return fill + lock_r * original_risk
+    return fill - lock_r * original_risk
+
+
+def _stop_lock_r(side, fill, original_risk, stop_price):
+    if side == "BUY":
+        return (stop_price - fill) / original_risk
+    return (fill - stop_price) / original_risk
+
+
+def _better_stop(side, candidate, current):
+    return candidate > current if side == "BUY" else candidate < current
 
 
 def evaluate_trade_exit_on_bar(
@@ -5989,23 +5974,40 @@ def evaluate_trade_exit_on_bar(
     """
     Returns (exit_reason, exit_price, mfe_r_after).
 
-    Intrabar stop/target is always resolved before any close-based early exit.
+    The managed stop active at candle OPEN is fixed for the whole candle.
+    Any threshold newly reached during this candle can ratchet the stop only
+    for the NEXT candle. This is deliberately causal/conservative.
     """
     candle = candles[index]
-    stop = trade["stop"]
-    target = trade["target"]
-    fill = trade["historical_fill"]
-    actual_risk = (
-        fill - stop if side == "BUY" else stop - fill
+    original_stop = float(trade["stop"])
+    target = float(trade["target"])
+    fill = float(trade["historical_fill"])
+    original_risk = (
+        fill - original_stop if side == "BUY" else original_stop - fill
     )
-    if actual_risk <= 0:
-        raise RuntimeError("Invalid actual risk")
+    if original_risk <= 0:
+        raise RuntimeError("Invalid original actual risk")
+
+    active_stop = float(trade.get("active_stop", original_stop))
+
+    # Conservative gap handling: a gap through the active stop fills at the
+    # candle open rather than granting the stale stop price.
+    if side == "BUY" and candle["open"] <= active_stop:
+        reason = "MANAGED_STOP" if active_stop > original_stop else "STOP"
+        return reason, float(candle["open"]), mfe_r_before
+    if side == "SELL" and candle["open"] >= active_stop:
+        reason = "MANAGED_STOP" if active_stop < original_stop else "STOP"
+        return reason, float(candle["open"]), mfe_r_before
 
     hit_stop = (
-        candle["low"] <= stop if side == "BUY" else candle["high"] >= stop
+        candle["low"] <= active_stop
+        if side == "BUY"
+        else candle["high"] >= active_stop
     )
     hit_target = (
-        candle["high"] >= target if side == "BUY" else candle["low"] <= target
+        candle["high"] >= target
+        if side == "BUY"
+        else candle["low"] <= target
     )
 
     if hit_stop or hit_target:
@@ -6015,42 +6017,88 @@ def evaluate_trade_exit_on_bar(
                 < abs(candle["open"] - candle["low"])
             )
             if side == "BUY":
-                reason = "TARGET" if high_closer else "STOP"
+                target_first = high_closer
             else:
-                reason = "STOP" if high_closer else "TARGET"
-        else:
-            reason = "STOP" if hit_stop else "TARGET"
+                target_first = not high_closer
 
-        price = stop if reason == "STOP" else target
-        # We do not try to infer MFE beyond the event that happened first.
-        return reason, price, mfe_r_before
+            if target_first:
+                return "TARGET", target, mfe_r_before
 
+            reason = (
+                "MANAGED_STOP"
+                if (
+                    (side == "BUY" and active_stop > original_stop)
+                    or (side == "SELL" and active_stop < original_stop)
+                )
+                else "STOP"
+            )
+            return reason, active_stop, mfe_r_before
+
+        if hit_target:
+            return "TARGET", target, mfe_r_before
+
+        reason = (
+            "MANAGED_STOP"
+            if (
+                (side == "BUY" and active_stop > original_stop)
+                or (side == "SELL" and active_stop < original_stop)
+            )
+            else "STOP"
+        )
+        return reason, active_stop, mfe_r_before
+
+    # No exit: measure this candle's favourable excursion from the adverse
+    # historical fill, in units of the ORIGINAL actual stop risk.
     if side == "BUY":
-        bar_favourable = (candle["high"] - fill) / actual_risk
+        bar_favourable = (candle["high"] - fill) / original_risk
     else:
-        bar_favourable = (fill - candle["low"]) / actual_risk
+        bar_favourable = (fill - candle["low"]) / original_risk
 
     mfe_after = max(mfe_r_before, float(bar_favourable))
 
-    reversal_min = rule.get("reversal_body_atr_min")
-    if reversal_min is not None and exact_opposite_reversal(
-        candles, atr_values, index, side, reversal_min
-    ):
-        return "REVERSAL_EXIT", candle["close"], mfe_after
+    # Ratchet stop for NEXT candle only. If several thresholds were crossed
+    # on this bar, jump directly to the highest qualifying lock.
+    stages = rule.get("stages", ())
+    best_stop = active_stop
+    best_lock = _stop_lock_r(side, fill, original_risk, active_stop)
+    activated = []
 
-    max_bars = rule.get("max_bars")
-    if max_bars is not None and bars_open >= max_bars:
-        threshold = rule.get("mfe_threshold_r")
-        if threshold is None:
-            return "TIME_EXIT", candle["close"], mfe_after
-        if mfe_after < threshold:
-            return "TIME_PROGRESS_EXIT", candle["close"], mfe_after
+    for trigger_r, lock_r in stages:
+        if mfe_after + 1e-12 < trigger_r:
+            continue
+
+        candidate = _stop_price_for_lock_r(
+            side,
+            fill,
+            original_risk,
+            lock_r,
+        )
+
+        if _better_stop(side, candidate, best_stop):
+            best_stop = candidate
+            best_lock = lock_r
+            activated.append((trigger_r, lock_r))
+
+    if best_stop != active_stop:
+        trade["active_stop"] = float(best_stop)
+        trade["max_locked_r"] = float(best_lock)
+        trade["stop_adjustments"] = int(trade.get("stop_adjustments", 0)) + 1
+        trade["last_stop_activation_index"] = int(index)
+        trade["last_stop_activation_mfe_r"] = float(mfe_after)
+        if activated:
+            trade["last_stop_trigger_r"] = float(activated[-1][0])
+    else:
+        trade.setdefault("active_stop", active_stop)
+        trade.setdefault("max_locked_r", _stop_lock_r(
+            side, fill, original_risk, active_stop
+        ))
+        trade.setdefault("stop_adjustments", 0)
 
     return None, None, mfe_after
 
 
 # ============================================================
-# M15 EXIT-RESEARCH BACKTEST
+# M15 STOP-MANAGEMENT BACKTEST
 # ============================================================
 
 def m15_one_outcome_exit(
@@ -6094,6 +6142,9 @@ def m15_one_outcome_exit(
         "stop": stop,
         "target": target,
         "historical_fill": fill,
+        "active_stop": stop,
+        "max_locked_r": -1.0,
+        "stop_adjustments": 0,
     }
     rule = exit_rule_for_timeframe(scenario, "M15")
     mfe_r = 0.0
@@ -6142,9 +6193,10 @@ def m15_one_outcome_exit(
             "bars_held": j - i,
             "hold_hours": (j - i) * 0.25,
             "mfe_r_at_exit": float(mfe_r),
-            "early_exit": reason in {
-                "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
-            },
+            "stop_adjustments": int(trade.get("stop_adjustments", 0)),
+            "max_locked_r": float(trade.get("max_locked_r", -1.0)),
+            "final_active_stop": float(trade.get("active_stop", stop)),
+            "early_exit": reason == "MANAGED_STOP",
         }
 
     return None
@@ -6238,7 +6290,7 @@ def m15_evaluate_strategy_exit(
 
 
 # ============================================================
-# H1 EXIT-RESEARCH BACKTEST
+# H1 STOP-MANAGEMENT BACKTEST
 # ============================================================
 
 def h1_open_trade_from_result(pair, side, result):
@@ -6278,6 +6330,9 @@ def h1_open_trade_from_result(pair, side, result):
         "cost_model": "H1_5_ADVERSE_TICKS",
         "baseline_cost_value": float(BACKTEST_SLIPPAGE_TICKS),
         "mfe_r": 0.0,
+        "active_stop": float(stop),
+        "max_locked_r": -1.0,
+        "stop_adjustments": 0,
     }
 
 
@@ -6351,12 +6406,16 @@ def h1_simulate_side_exit(
                         "bars_held": bars_open,
                         "hold_hours": float(bars_open),
                         "mfe_r_at_exit": float(mfe_after),
-                        "early_exit": reason in {
-                            "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
-                        },
+                        "stop_adjustments": int(open_trade.get("stop_adjustments", 0)),
+                        "max_locked_r": float(open_trade.get("max_locked_r", -1.0)),
+                        "final_active_stop": float(open_trade.get("active_stop", open_trade["stop"])),
+                        "early_exit": reason == "MANAGED_STOP",
                     })
                     finished.pop("mfe_r", None)
                     finished.pop("entry_index", None)
+                    finished.pop("last_stop_activation_index", None)
+                    finished.pop("last_stop_activation_mfe_r", None)
+                    finished.pop("last_stop_trigger_r", None)
                     trades.append(finished)
                 open_trade = None
 
@@ -6459,7 +6518,7 @@ def apply_live_safe_nonhedging_gate(trades, priority="H1_FIRST"):
 
 
 # ============================================================
-# EXIT-RESEARCH METRICS
+# STOP-MANAGEMENT METRICS
 # ============================================================
 
 def serialise_exit_trade(scenario_id, mode, t):
@@ -6495,22 +6554,29 @@ def exit_reason_rows(scenario_id, mode, trades):
 
 def hold_summary_row(scenario_id, mode, trades):
     holds = [float(t.get("hold_hours", 0.0)) for t in trades]
-    early = [t for t in trades if t.get("early_exit")]
+    managed_exits = [t for t in trades if t.get("early_exit")]
+    adjusted = [t for t in trades if int(t.get("stop_adjustments", 0)) > 0]
     return {
         "scenario_id": scenario_id,
         "portfolio_mode": mode,
         "trades": len(trades),
-        "early_exits": len(early),
-        "early_exit_pct": pct(len(early), len(trades)),
+        "trades_with_stop_adjustment": len(adjusted),
+        "trades_with_stop_adjustment_pct": pct(len(adjusted), len(trades)),
+        "managed_stop_exits": len(managed_exits),
+        "managed_stop_exit_pct": pct(len(managed_exits), len(trades)),
         "median_hold_hours": safe_median(holds),
         "mean_hold_hours": (sum(holds) / len(holds)) if holds else 0.0,
         "max_hold_hours": max(holds) if holds else 0.0,
-        "median_early_exit_mfe_r": safe_median(
-            t.get("mfe_r_at_exit", 0.0) for t in early
+        "mean_stop_adjustments_when_adjusted": (
+            sum(int(t.get("stop_adjustments", 0)) for t in adjusted) / len(adjusted)
+            if adjusted else 0.0
         ),
-        "mean_early_exit_r": (
-            sum(t["r"] for t in early) / len(early)
-            if early else 0.0
+        "median_max_locked_r_when_adjusted": safe_median(
+            t.get("max_locked_r", 0.0) for t in adjusted
+        ),
+        "mean_managed_stop_exit_r": (
+            sum(t["r"] for t in managed_exits) / len(managed_exits)
+            if managed_exits else 0.0
         ),
     }
 
@@ -6576,14 +6642,14 @@ def reprice_early_exit_cost(t, extra_cost_mult):
 
 
 # ============================================================
-# MAIN EXIT RESEARCH
+# MAIN STOP-MANAGEMENT RESEARCH
 # ============================================================
 
 def run_exit_research():
     try:
         EXIT_STATUS.update(
             state="starting",
-            message="Starting exact 20-strategy exit research",
+            message="Starting exact 20-strategy stop-management research",
             progress=1,
         )
         write_csv(EXIT_OUT["scenario_definitions"], EXIT_SCENARIOS)
@@ -6599,7 +6665,7 @@ def run_exit_research():
         for pi, pair in enumerate(PAIRS):
             EXIT_STATUS.update(
                 state="m15_rebuild",
-                message=f"M15 {pair}: downloading history + testing exit rules",
+                message=f"M15 {pair}: downloading history + testing stop rules",
                 progress=4 + pi * 8,
             )
 
@@ -6650,7 +6716,7 @@ def run_exit_research():
         for pi, pair in enumerate(PAIRS):
             EXIT_STATUS.update(
                 state="h1_rebuild",
-                message=f"H1 {pair}: downloading history + testing exit rules",
+                message=f"H1 {pair}: downloading history + testing stop rules",
                 progress=45 + pi * 7,
             )
 
@@ -7012,11 +7078,11 @@ def run_exit_research():
                 market_cost_rows.append({
                     "scenario_id": scenario_id,
                     "portfolio_mode": "LIVE_SAFE_H1_FIRST",
-                    "extra_early_exit_cost_mult": extra_mult,
+                    "extra_managed_stop_cost_mult": extra_mult,
                     "interpretation": (
-                        "0=no extra close slippage; 0.5/1.0 = adverse extra "
+                        "0=no extra managed-stop slippage; 0.5/1.0 = adverse extra "
                         "close cost equal to 0.5x/1.0x each timeframe's native "
-                        "entry adverse-cost amount, applied only to early exits"
+                        "entry adverse-cost amount, applied only to managed-stop exits"
                     ),
                     **st,
                     "cagr_pct": es["cagr_pct"],
@@ -7056,34 +7122,36 @@ def run_exit_research():
                 "value": "All equity comparisons use 1% per accepted H1 trade and 1% per accepted M15 trade, matching the current live deployment decision.",
             },
             {
-                "item": "Time exit timing",
-                "value": "Stop/target is checked intrabar first. If neither is hit and the time rule fires, the market exit is assumed at that bar close.",
+                "item": "Stop-ratchet causality",
+                "value": "The stop active at candle open is fixed for that candle. Any threshold reached intrabar changes the stop only from the next candle onward. Original target never moves.",
             },
             {
                 "item": "MFE definition",
-                "value": "MFE is calculated from the adverse historical fill in units of actual stop risk, using only post-entry bars. Signal-candle excursion before entry is excluded.",
+                "value": "MFE is calculated from the adverse historical fill in units of original actual stop risk, using only post-entry bars. Signal-candle excursion before entry is excluded.",
+            },
+
+
+            {
+                "item": "Stop families",
+                "value": "Universal breakeven, single profit-lock and discrete step-trail rules are tested across all 20 strategies. No pair- or strategy-specific threshold optimisation is performed.",
             },
             {
-                "item": "Progress exit",
-                "value": "The TIME_MFE rule is a one-time deadline test: at the specified bar count, exit only if MFE has never reached the threshold. If threshold was reached, the trade remains on original stop/target indefinitely.",
+                "item": "Gap handling",
+                "value": "If a later candle opens through an already-active managed stop, the historical fill is the candle open, not the stale stop price.",
             },
             {
-                "item": "Reversal exit",
-                "value": "Universal exact opposite engulfing only; body must exceed the specified ATR14 threshold. No pair-specific reversal tuning is used.",
-            },
-            {
-                "item": "Early exit costs",
-                "value": "Primary scenario results preserve the original adverse-entry cost convention. A separate sensitivity file adds 0.5x and 1.0x native adverse price cost to early-market exits only.",
+                "item": "Managed stop costs",
+                "value": "Primary results use the modelled managed-stop fill. A separate sensitivity file adds 0.5x and 1.0x each timeframe's native adverse entry-cost amount to managed-stop exits only.",
             },
             {
                 "item": "Selection discipline",
-                "value": "Do not pick the single highest CAGR blindly. Prefer broad plateaus that improve PF/expectancy/DD/rolling windows across H1, M15 and many strategies, including under extra early-exit cost stress.",
+                "value": "Do not pick the single highest CAGR blindly. Prefer a broad threshold plateau that improves PF/expectancy/DD/rolling windows across H1, M15 and many strategies, including under managed-stop slippage stress.",
             },
         ])
 
         EXIT_STATUS.update(
             state="packaging",
-            message="Packaging exit-research ZIP",
+            message="Packaging stop-management ZIP",
             progress=98,
         )
         with zipfile.ZipFile(
@@ -7096,7 +7164,7 @@ def run_exit_research():
         control_live = summary_lookup[("CONTROL", "LIVE_SAFE_H1_FIRST")]
         EXIT_STATUS.update(
             state="complete",
-            message="20-strategy exit research complete",
+            message="20-strategy stop-management research complete",
             progress=100,
             results=EXIT_BUNDLE,
             scenarios=len(EXIT_SCENARIOS),
@@ -7122,12 +7190,12 @@ def run_exit_research():
 
 
 # ============================================================
-# EXIT RESEARCH FLASK ROUTES
+# STOP-MANAGEMENT RESEARCH FLASK ROUTES
 # ============================================================
 @app.get("/")
 def exit_root():
     return jsonify({
-        "service": "H1 + M15 20-Strategy Exit Research",
+        "service": "H1 + M15 20-Strategy Stop-Management Research",
         "state": EXIT_STATUS.get("state"),
         "message": EXIT_STATUS.get("message"),
         "orders_supported": False,
@@ -7136,22 +7204,22 @@ def exit_root():
         "primary_live_mode": "LIVE_SAFE_H1_FIRST",
         "scenarios": len(EXIT_SCENARIOS),
         "routes": [
-            "/h1-m15-exit-research/status",
-            "/h1-m15-exit-research/results",
+            "/h1-m15-stop-research/status",
+            "/h1-m15-stop-research/results",
         ],
     })
 
 
-@app.get("/h1-m15-exit-research/status")
+@app.get("/h1-m15-stop-research/status")
 def exit_research_status():
     return jsonify(EXIT_STATUS)
 
 
-@app.get("/h1-m15-exit-research/results")
+@app.get("/h1-m15-stop-research/results")
 def exit_research_results():
     if not os.path.exists(EXIT_BUNDLE):
         return jsonify({
-            "error": "Exit research results not ready",
+            "error": "Stop-management research results not ready",
             "status": EXIT_STATUS,
         }), 404
     return send_file(
