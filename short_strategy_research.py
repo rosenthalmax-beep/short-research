@@ -12,10 +12,10 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/GBP M15 LONG — FINAL SWEEP-DISPLACEMENT CONFIRMATION
+# EUR/GBP M15 LONG — FINAL RR-ONLY BOUNDARY CONFIRMATION
 #
 # Purpose:
-#   Final focused confirmation after the full-history broad search.
+#   Final RR-only boundary confirmation after geometry/context lock.
 #   Five of six broad archetype families failed; only
 #   SWEEP_DISPLACEMENT is re-opened here.
 #
@@ -99,29 +99,26 @@ STOP_TICKS = 10
 
 PRIMARY_COST = 1.0
 COSTS = [0.5, 1.0, 1.5, 2.0]
-RR_VALUES = [2.75, 3.00, 3.25, 3.50, 3.75, 4.00, 4.25]
+RR_VALUES = [2.00, 2.25, 2.50, 2.75, 3.00, 3.25, 3.50]
 
 STAGE1_KEEP = 16
 STAGE2_KEEP = 16
 FINAL_KEEP = 12
 
 OUTS = {
-    "coverage": "eurgbp_m15_long_final_confirmation_coverage.csv",
-    "parity": "eurgbp_m15_long_final_confirmation_parity.csv",
-    "stage1": "eurgbp_m15_long_final_confirmation_stage1_geometry.csv",
-    "stage2": "eurgbp_m15_long_final_confirmation_stage2_context.csv",
-    "stage3": "eurgbp_m15_long_final_confirmation_stage3_rr.csv",
-    "final": "eurgbp_m15_long_final_confirmation_finalists.csv",
-    "periods": "eurgbp_m15_long_final_confirmation_periods.csv",
-    "cost": "eurgbp_m15_long_final_confirmation_cost_stress.csv",
-    "rolling": "eurgbp_m15_long_final_confirmation_rolling.csv",
-    "rolling_summary": "eurgbp_m15_long_final_confirmation_rolling_summary.csv",
-    "calendar": "eurgbp_m15_long_final_confirmation_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_long_final_confirmation_calendar_summary.csv",
-    "trades": "eurgbp_m15_long_final_confirmation_finalist_trades.csv",
-    "notes": "eurgbp_m15_long_final_confirmation_notes.csv",
+    "coverage": "eurgbp_m15_long_rr_only_coverage.csv",
+    "parity": "eurgbp_m15_long_rr_only_parity.csv",
+    "rr_grid": "eurgbp_m15_long_rr_only_grid.csv",
+    "periods": "eurgbp_m15_long_rr_only_periods.csv",
+    "cost": "eurgbp_m15_long_rr_only_cost_stress.csv",
+    "rolling": "eurgbp_m15_long_rr_only_rolling.csv",
+    "rolling_summary": "eurgbp_m15_long_rr_only_rolling_summary.csv",
+    "calendar": "eurgbp_m15_long_rr_only_calendar_years.csv",
+    "calendar_summary": "eurgbp_m15_long_rr_only_calendar_summary.csv",
+    "trades": "eurgbp_m15_long_rr_only_trades.csv",
+    "notes": "eurgbp_m15_long_rr_only_notes.csv",
 }
-BUNDLE = "EURGBP_M15_LONG_FINAL_CONFIRMATION_RESULTS.zip"
+BUNDLE = "EURGBP_M15_LONG_FINAL_RR_ONLY_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -1076,6 +1073,30 @@ def calendar_summary(rows):
 
 # ---------------- runner ----------------
 
+FROZEN_GEOMETRY = {
+    "sweep_lb": 60,
+    "body_atr_min": 1.20,
+    "lower_wick_body_min": 0.25,
+    "mom4_max": -1.25,
+    "context": "NY_WINDOW_01-03",
+}
+
+
+def frozen_rr_configs():
+    out=[]
+    for rr in RR_VALUES:
+        out.append(cfg(
+            f"FINAL_RR_{rr:.2f}",
+            sweep_lb=FROZEN_GEOMETRY["sweep_lb"],
+            body_atr_min=FROZEN_GEOMETRY["body_atr_min"],
+            lower_wick_body_min=FROZEN_GEOMETRY["lower_wick_body_min"],
+            mom4_max=FROZEN_GEOMETRY["mom4_max"],
+            context=FROZEN_GEOMETRY["context"],
+            rr=rr,
+        ))
+    return out
+
+
 def run():
     try:
         STATUS.update({"state":"fetching","message":"Fetching EUR/GBP history"})
@@ -1098,20 +1119,35 @@ def run():
             "daily_candles":len(d),
         }])
 
-        STATUS.update({"state":"precompute","message":"HTF completion alignment"})
+        STATUS.update({"state":"precompute","message":"Building causal HTF and M15 features"})
         t=[x["time"] for x in m15]
         ah1=align_htf(t,htf_state(h1))
         ah4=align_htf(t,htf_state(h4))
         ad=align_htf(t,htf_state(d))
-
-        STATUS.update({"state":"precompute","message":"M15 feature cache"})
         f=features(m15,ah1,ah4,ad)
 
         # ----------------------------------------------------
         # HARD PARITY
         # ----------------------------------------------------
+        # Retain the four original engine guards, then explicitly
+        # guard the now-frozen winning geometry at RR2.75.
         parity_rows=[]
-        for label,c,expected in parity_configs():
+        checks=list(parity_configs())
+        checks.append((
+            "FROZEN_FINAL_GEOMETRY_RR275",
+            cfg(
+                "FROZEN_FINAL_GEOMETRY_RR275",
+                sweep_lb=60,
+                body_atr_min=1.20,
+                lower_wick_body_min=0.25,
+                mom4_max=-1.25,
+                context="NY_WINDOW_01-03",
+                rr=2.75,
+            ),
+            57,
+        ))
+
+        for label,c,expected in checks:
             tr=backtest(
                 m15,
                 indices(c,f),
@@ -1141,87 +1177,29 @@ def run():
         write_csv(OUTS["parity"],parity_rows)
 
         # ----------------------------------------------------
-        # STAGE 1 — focused geometry under frozen NY00-03 anchor
+        # FINAL RR-ONLY GRID
         # ----------------------------------------------------
-        s1=focused_geometry_configs()
-        s1map={x["config_id"]:x for x in s1}
-        s1rows=[]
-        for n,c in enumerate(s1,1):
+        configs=frozen_rr_configs()
+        rr_rows=[]
+        for n,c in enumerate(configs,1):
             STATUS.update({
-                "state":"stage1_geometry",
-                "message":f"{n}/{len(s1)} {c['config_id']}"
+                "state":"rr_only",
+                "message":f"{n}/{len(configs)} {c['config_id']}"
             })
-            s1rows.append(evaluate(c,m15,indices(c,f)))
-        s1rows=sortrows(s1rows)
-        write_csv(OUTS["stage1"],s1rows)
+            rr_rows.append(evaluate(c,m15,indices(c,f)))
 
-        eligible1=[
-            r for r in s1rows
-            if r["full_trades"]>=40
-            and r["pre2010_r"]>0
-            and r["post2010_r"]>0
-            and r["positive_eras"]>=3
-        ]
-        top1=(eligible1 if eligible1 else s1rows)[:STAGE1_KEEP]
+        rr_rows=sortrows(rr_rows)
+        write_csv(OUTS["rr_grid"],rr_rows)
 
-        # ----------------------------------------------------
-        # STAGE 2 — context comparison on the strongest geometries
-        # ----------------------------------------------------
-        s2=stage2_context_configs(top1,s1map)
-        s2map={x["config_id"]:x for x in s2}
-        s2rows=[]
-        for n,c in enumerate(s2,1):
-            STATUS.update({
-                "state":"stage2_context",
-                "message":f"{n}/{len(s2)} {c['config_id']}"
-            })
-            s2rows.append(evaluate(c,m15,indices(c,f)))
-        s2rows=sortrows(s2rows)
-        write_csv(OUTS["stage2"],s2rows)
-
-        eligible2=[
-            r for r in s2rows
-            if r["full_trades"]>=40
-            and r["pre2010_r"]>0
-            and r["post2010_r"]>0
-            and r["positive_eras"]>=3
-        ]
-        top2=(eligible2 if eligible2 else s2rows)[:STAGE2_KEEP]
-
-        # ----------------------------------------------------
-        # STAGE 3 — clean RR sweep on actual improved geometries
-        # ----------------------------------------------------
-        s3=stage3_rr_configs(top2,s2map)
-        s3map={x["config_id"]:x for x in s3}
-        s3rows=[]
-        for n,c in enumerate(s3,1):
-            STATUS.update({
-                "state":"stage3_rr",
-                "message":f"{n}/{len(s3)} {c['config_id']}"
-            })
-            s3rows.append(evaluate(c,m15,indices(c,f)))
-        s3rows=sortrows(s3rows)
-        write_csv(OUTS["stage3"],s3rows)
-
-        eligible3=[
-            r for r in s3rows
-            if r["full_trades"]>=45
-            and r["pre2010_r"]>0
-            and r["post2010_r"]>0
-            and r["positive_eras"]==4
-        ]
-        finalrows=(eligible3 if eligible3 else s3rows)[:FINAL_KEEP]
-        finals=[s3map[r["config_id"]] for r in finalrows]
-        write_csv(OUTS["final"],finalrows)
-
-        # ----------------------------------------------------
-        # DEEP FINALIST DIAGNOSTICS
-        # ----------------------------------------------------
+        # Deep-test EVERY RR point. This is a boundary-confirmation run,
+        # not a winner-pruning search.
         periods=[]; costs=[]; rolling=[]; cal=[]; trades=[]
-        for n,c in enumerate(finals,1):
+        cfg_by_id={c["config_id"]:c for c in configs}
+
+        for n,c in enumerate(configs,1):
             STATUS.update({
-                "state":"deep_finalists",
-                "message":f"{n}/{len(finals)} {c['config_id']}"
+                "state":"deep_rr",
+                "message":f"{n}/{len(configs)} {c['config_id']}"
             })
             ix=indices(c,f)
             periods.extend(final_periods(c,m15,ix))
@@ -1233,7 +1211,7 @@ def run():
                 z.update({
                     "config_id":c["config_id"],
                     "family":c["family"],
-                    "context":c.get("context","NONE"),
+                    "context":c["context"],
                     "sweep_lb":c["sweep_lb"],
                     "body_atr_min":c["body_atr_min"],
                     "lower_wick_body_min":c["lower_wick_body_min"],
@@ -1251,36 +1229,36 @@ def run():
 
         write_csv(OUTS["notes"], [
             {
-                "item":"Research status",
-                "value":"Final focused EUR/GBP M15 LONG confirmation. Only SWEEP_DISPLACEMENT remains open; no new archetypes are searched.",
+                "item":"Purpose",
+                "value":"Final EUR/GBP M15 LONG RR-only boundary confirmation. Entry geometry and context are frozen; no other parameter is optimized.",
+            },
+            {
+                "item":"Frozen trigger",
+                "value":"Bullish M15 sweep-displacement: low < previous 60-bar low; close > previous M15 high; body >=1.20 ATR14; lower wick/body >=0.25; prior 4h momentum <= -1.25 ATR14.",
+            },
+            {
+                "item":"Frozen context",
+                "value":"NY_WINDOW_01-03 = signal candle New York hour 01, 02 or 03; no weekday filter; no H1/H4 trend filter.",
+            },
+            {
+                "item":"RR grid",
+                "value":"2.00 / 2.25 / 2.50 / 2.75 / 3.00 / 3.25 / 3.50. All seven receive identical full diagnostics.",
             },
             {
                 "item":"Parity",
-                "value":"Hard guards reproduce 72-trade NY40/body1.15, 64-trade NY60/body1.15, 96-trade ex-Friday/body1.35 and 57-trade H1/body1.35 comparators through 2026-09-10 09:49 UTC.",
+                "value":"Four original confirmation-engine guards plus frozen final geometry RR2.75 = 57 trades through the fixed parity cutoff.",
             },
             {
-                "item":"Geometry grid",
-                "value":"Sweep 20/40/60/80/100; body 1.10-1.35; lower wick/body 0.20/0.25/0.30; prior 4h momentum <= -1.00/-1.25/-1.50 ATR.",
+                "item":"Historical mechanics",
+                "value":"1.0 pip adverse long fill baseline; stop = signal low -10 ticks; target based on reference signal-close risk; pyramiding 0; exits from next M15 candle; exact exit-candle signal eligible.",
             },
             {
-                "item":"Contexts",
-                "value":"NY00-03 anchor; NY23-03, NY00-04, NY01-03, NY23-04; exclude Friday; prior completed H1 EMA50>EMA200; no-context ablation.",
-            },
-            {
-                "item":"RR",
-                "value":"Clean RR confirmation 2.75/3.00/3.25/3.50/3.75/4.00/4.25 on Stage-2 survivors.",
-            },
-            {
-                "item":"Historical cost",
-                "value":"1.0 pip adverse long fill baseline; stress 0.5/1.0/1.5/2.0 pips.",
-            },
-            {
-                "item":"Selection philosophy",
-                "value":"Prefer four positive eras, positive pre/post-2010, stable rolling/calendar behaviour, recent survivability and parameter plateaus over maximum lifetime R.",
+                "item":"Selection rule",
+                "value":"Choose the most robust RR plateau using pre/post-2010, four eras, 0.5-2 pip costs, rolling 12/24/36M, calendar consistency, DD and recent history; do not simply maximize lifetime R/PF.",
             },
             {
                 "item":"Holdout caveat",
-                "value":"Full history has been used in development; period splits are temporal robustness checks, not pristine untouched OOS.",
+                "value":"Full history has been used in development; these are robustness checks, not pristine untouched OOS.",
             },
         ])
 
@@ -1288,12 +1266,11 @@ def run():
         pack()
         STATUS.update({
             "state":"complete",
-            "message":"EUR/GBP M15 LONG final confirmation complete",
+            "message":"EUR/GBP M15 LONG final RR-only confirmation complete",
             "parity":"MATCH",
-            "stage1_geometry_configs":len(s1),
-            "stage2_context_configs":len(s2),
-            "stage3_rr_configs":len(s3),
-            "finalists":len(finals),
+            "frozen_geometry":FROZEN_GEOMETRY,
+            "rr_values":RR_VALUES,
+            "rr_configs":len(configs),
             "bundle":BUNDLE,
         })
 
@@ -1304,27 +1281,29 @@ def run():
 @app.route("/")
 def root():
     return jsonify({
-        "service":"EURGBP M15 LONG Final Sweep-Displacement Confirmation",
+        "service":"EURGBP M15 LONG Final RR-Only Confirmation",
         "status":STATUS["state"],
         "instrument":PAIR,
         "timeframe":"M15",
         "side":"BUY",
+        "frozen_geometry":FROZEN_GEOMETRY,
+        "rr_values":RR_VALUES,
         "requested_start_utc":iso(START),
         "parity_cutoff_utc":iso(PARITY_CUTOFF),
         "primary_cost_pips":PRIMARY_COST,
         "orders_supported":False,
         "trading_enabled":False,
         "routes":[
-            "/eurgbp-m15-long-final-confirmation/status",
-            "/eurgbp-m15-long-final-confirmation/results",
+            "/eurgbp-m15-long-final-rr/status",
+            "/eurgbp-m15-long-final-rr/results",
         ],
     })
 
-@app.route("/eurgbp-m15-long-final-confirmation/status")
+@app.route("/eurgbp-m15-long-final-rr/status")
 def status():
     return jsonify(STATUS)
 
-@app.route("/eurgbp-m15-long-final-confirmation/results")
+@app.route("/eurgbp-m15-long-final-rr/results")
 def results():
     return dl(BUNDLE)
 
