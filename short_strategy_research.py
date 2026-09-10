@@ -1,5 +1,5 @@
 """
-M15 FINAL LOCKED 10-STRATEGY PORTFOLIO ANALYSIS
+M15 FINAL LOCKED 10-STRATEGY PORTFOLIO + EQUITY COMPOUNDING ANALYSIS
 ================================================
 
 READ-ONLY research service. NEVER sends orders.
@@ -32,6 +32,10 @@ then exports one ZIP containing:
     - trade overlap / concurrency diagnostics
     - all 1-pip baseline trades
     - parity / validation-reference diagnostics
+    - event-driven compounded equity at 0.50% / 0.75% / 1.00% risk per trade
+    - compounded calendar-year and rolling 12/24/36M returns
+    - concurrent open-risk exposure and conservative open-risk floor DD
+    - compounded cost-stress matrix across 0.5/1.0/1.5/2.0-pip fills
 
 Historical conventions
 ----------------------
@@ -140,6 +144,12 @@ PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CAD", "EUR_GBP"]
 COSTS = [0.5, 1.0, 1.5, 2.0]
 BASELINE_COST = 1.0
 
+# Equity simulation. Scale-invariant: change the starting balance if desired.
+# Every new trade risks this fraction of THEN-REALISED account equity.
+# Existing open trades keep the cash risk amount fixed at their own entry.
+STARTING_BALANCE = float(os.getenv("PORTFOLIO_START_BALANCE", "100.0"))
+RISK_LEVELS = [0.0050, 0.0075, 0.0100]  # 0.50%, 0.75%, 1.00%
+
 PAIR_META = {
     "EUR_USD": {"tick": 0.00001, "pip": 0.0001},
     "GBP_USD": {"tick": 0.00001, "pip": 0.0001},
@@ -204,8 +214,17 @@ OUT = {
     "concurrency": "m15_final_portfolio_concurrency.csv",
     "trades": "m15_final_portfolio_trades.csv",
     "notes": "m15_final_portfolio_notes.csv",
+    "equity_summary": "m15_final_portfolio_equity_summary.csv",
+    "equity_periods": "m15_final_portfolio_equity_periods.csv",
+    "equity_calendar": "m15_final_portfolio_equity_calendar_years.csv",
+    "equity_calendar_summary": "m15_final_portfolio_equity_calendar_summary.csv",
+    "equity_rolling": "m15_final_portfolio_equity_rolling.csv",
+    "equity_rolling_summary": "m15_final_portfolio_equity_rolling_summary.csv",
+    "equity_curve": "m15_final_portfolio_equity_curve.csv",
+    "equity_trades": "m15_final_portfolio_equity_trades.csv",
+    "equity_cost_stress": "m15_final_portfolio_equity_cost_stress.csv",
 }
-BUNDLE = "M15_FINAL_LOCKED_PORTFOLIO_ANALYSIS_RESULTS.zip"
+BUNDLE = "M15_FINAL_LOCKED_PORTFOLIO_EQUITY_COMPOUNDING_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -870,6 +889,380 @@ def frequency_row(scope,trades,start,end,label):
     }
 
 
+
+# ============================================================
+# EVENT-DRIVEN EQUITY / COMPOUNDING
+# ============================================================
+
+def _trade_key(t):
+    return (
+        t["strategy_id"],
+        t["pair"],
+        int(t.get("signal_index", -1)),
+        t["signal_time"],
+        t["exit_time"],
+    )
+
+
+def _equity_balance_before(curve_exit_times, curve_balances, ts, starting_balance):
+    """
+    Balance immediately BEFORE events stamped exactly at ts.
+    This makes a [start, end) period include exits at start and exclude exits at end.
+    """
+    j = bisect.bisect_left(curve_exit_times, ts) - 1
+    return curve_balances[j] if j >= 0 else starting_balance
+
+
+def simulate_equity(trades, risk_fraction, starting_balance=100.0):
+    """
+    Event-driven compounding with real concurrency.
+
+    Sizing:
+        risk_cash = realised_equity_at_signal * risk_fraction
+
+    Concurrent positions:
+        each position keeps its own original cash-risk amount until exit.
+        No portfolio risk cap is imposed; this intentionally represents the
+        requested fixed per-trade risk system.
+
+    Event ordering:
+        EXIT before ENTRY at the exact same timestamp.
+        This matches the historical rule that a signal on an exact exit candle
+        is eligible and lets newly freed equity be used for that new signal.
+
+    Equity:
+        balance is realised/closed equity. We do NOT invent intra-trade MTM,
+        because the backtest trade record contains only entry/stop/target/exit.
+        We therefore also report a conservative open-risk floor:
+            realised_equity - sum(open trade cash risks)
+        i.e. the balance if every currently open position instantly lost 1R.
+    """
+    if not trades:
+        return {
+            "summary": {
+                "risk_fraction": risk_fraction,
+                "risk_pct_per_trade": risk_fraction * 100.0,
+                "starting_balance": starting_balance,
+                "ending_balance": starting_balance,
+                "total_return_pct": 0.0,
+                "cagr_pct": 0.0,
+                "max_closed_equity_dd_pct": 0.0,
+                "max_open_risk_floor_dd_pct": 0.0,
+                "max_open_positions": 0,
+                "max_open_risk_cash": 0.0,
+                "max_open_risk_pct_of_realised_equity": 0.0,
+                "trades": 0,
+            },
+            "curve": [],
+            "trade_rows": [],
+            "exit_times": [],
+            "exit_balances": [],
+        }
+
+    trades_sorted = sorted(trades, key=lambda x: (x["signal_time"], x["strategy_id"]))
+    events = []
+    for n, t in enumerate(trades_sorted):
+        key = _trade_key(t) + (n,)
+        events.append((t["signal_time"], 1, t["strategy_id"], key, t))  # entry
+        events.append((t["exit_time"], 0, t["strategy_id"], key, t))    # exit
+    # 0=exit before 1=entry at same timestamp.
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+
+    balance = float(starting_balance)
+    peak = balance
+    max_closed_dd_pct = 0.0
+    max_open_floor_dd_pct = 0.0
+
+    open_trades = {}
+    open_risk_cash = 0.0
+    max_open_positions = 0
+    max_open_risk_cash = 0.0
+    max_open_risk_pct = 0.0
+
+    curve = []
+    trade_rows = []
+    exit_times = []
+    exit_balances = []
+
+    first_signal = trades_sorted[0]["signal_time"]
+    last_exit = max(t["exit_time"] for t in trades_sorted)
+
+    for ts, event_kind, sid, key, t in events:
+        if event_kind == 0:  # EXIT
+            rec = open_trades.pop(key, None)
+            if rec is None:
+                raise RuntimeError(
+                    f"Equity simulator exit without open trade: {sid} {iso(ts)}"
+                )
+
+            balance_before_exit = balance
+            pnl_cash = rec["risk_cash"] * float(t["r"])
+            balance += pnl_cash
+            open_risk_cash -= rec["risk_cash"]
+            if abs(open_risk_cash) < 1e-12:
+                open_risk_cash = 0.0
+
+            peak = max(peak, balance)
+            closed_dd_pct = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            max_closed_dd_pct = min(max_closed_dd_pct, closed_dd_pct)
+
+            open_risk_pct = (
+                (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
+            )
+            floor_equity = balance - open_risk_cash
+            floor_dd_pct = (
+                ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            )
+            max_open_floor_dd_pct = min(max_open_floor_dd_pct, floor_dd_pct)
+
+            exit_times.append(ts)
+            exit_balances.append(balance)
+
+            trade_rows.append({
+                "risk_pct_per_trade": risk_fraction * 100.0,
+                "pair": t["pair"],
+                "strategy_id": t["strategy_id"],
+                "trigger": t["trigger"],
+                "side": t["side"],
+                "signal_time": iso(t["signal_time"]),
+                "exit_time": iso(t["exit_time"]),
+                "r": t["r"],
+                "result": t["result"],
+                "entry_realised_equity": rec["entry_equity"],
+                "risk_cash": rec["risk_cash"],
+                "pnl_cash": pnl_cash,
+                "balance_before_exit": balance_before_exit,
+                "balance_after_exit": balance,
+                "open_positions_after_exit": len(open_trades),
+                "open_risk_cash_after_exit": open_risk_cash,
+                "open_risk_pct_of_realised_equity_after_exit": open_risk_pct,
+                "closed_equity_drawdown_pct": closed_dd_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd_pct,
+            })
+
+            curve.append({
+                "risk_pct_per_trade": risk_fraction * 100.0,
+                "time_utc": iso(ts),
+                "event": "EXIT",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": closed_dd_pct,
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_pct_of_realised_equity": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd_pct,
+            })
+
+        else:  # ENTRY
+            if balance <= 0:
+                raise RuntimeError(
+                    f"Equity depleted before entry: balance={balance} at {iso(ts)}"
+                )
+            risk_cash = balance * risk_fraction
+            open_trades[key] = {
+                "risk_cash": risk_cash,
+                "entry_equity": balance,
+            }
+            open_risk_cash += risk_cash
+            max_open_positions = max(max_open_positions, len(open_trades))
+            max_open_risk_cash = max(max_open_risk_cash, open_risk_cash)
+
+            open_risk_pct = (
+                (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
+            )
+            max_open_risk_pct = max(max_open_risk_pct, open_risk_pct)
+
+            floor_equity = balance - open_risk_cash
+            floor_dd_pct = (
+                ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            )
+            max_open_floor_dd_pct = min(max_open_floor_dd_pct, floor_dd_pct)
+
+            curve.append({
+                "risk_pct_per_trade": risk_fraction * 100.0,
+                "time_utc": iso(ts),
+                "event": "ENTRY",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": ((balance / peak) - 1.0) * 100.0,
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_pct_of_realised_equity": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd_pct,
+            })
+
+    if open_trades:
+        raise RuntimeError(
+            f"Equity simulator finished with {len(open_trades)} open trades"
+        )
+
+    years = max((last_exit - first_signal).total_seconds() / (365.2425 * 86400.0), 1e-9)
+    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
+    cagr_pct = (
+        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
+        if balance > 0 and starting_balance > 0 else -100.0
+    )
+
+    summary = {
+        "risk_fraction": risk_fraction,
+        "risk_pct_per_trade": risk_fraction * 100.0,
+        "starting_balance": starting_balance,
+        "ending_balance": balance,
+        "ending_multiple": balance / starting_balance if starting_balance else 0.0,
+        "total_return_pct": total_return_pct,
+        "cagr_pct": cagr_pct,
+        "simulation_start_utc": iso(first_signal),
+        "simulation_end_utc": iso(last_exit),
+        "simulation_years": years,
+        "trades": len(trades_sorted),
+        "max_closed_equity_dd_pct": max_closed_dd_pct,
+        "max_open_risk_floor_dd_pct": max_open_floor_dd_pct,
+        "max_open_positions": max_open_positions,
+        "max_open_risk_cash": max_open_risk_cash,
+        "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
+    }
+
+    return {
+        "summary": summary,
+        "curve": curve,
+        "trade_rows": trade_rows,
+        "exit_times": exit_times,
+        "exit_balances": exit_balances,
+    }
+
+
+def equity_period_row(sim, risk_fraction, label, start, end, trades):
+    sb = _equity_balance_before(
+        sim["exit_times"], sim["exit_balances"], start, STARTING_BALANCE
+    )
+    eb = _equity_balance_before(
+        sim["exit_times"], sim["exit_balances"], end, STARTING_BALANCE
+    )
+    tr = [t for t in trades if start <= t["exit_time"] < end]
+    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
+    days = max((end - start).total_seconds() / 86400.0, 1e-9)
+    years = days / 365.2425
+    ann = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0 and years > 0 else 0.0
+    )
+    return {
+        "risk_pct_per_trade": risk_fraction * 100.0,
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": ann,
+        "realized_exits": len(tr),
+    }
+
+
+def equity_calendar_rows(sim, risk_fraction, trades, first_active_year, last_year):
+    rows = []
+    for y in range(first_active_year, last_year + 1):
+        a = datetime(y, 1, 1, tzinfo=timezone.utc)
+        nominal_b = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+        b = min(nominal_b, NOW)
+        if b <= a:
+            continue
+        row = equity_period_row(sim, risk_fraction, str(y), a, b, trades)
+        row["year"] = y
+        row["complete_year"] = nominal_b <= NOW
+        rows.append(row)
+    return rows
+
+
+def equity_calendar_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[r["risk_pct_per_trade"]].append(r)
+
+    out = []
+    for risk_pct, g in grouped.items():
+        complete = [x for x in g if x["complete_year"]]
+        active = [x for x in complete if x["realized_exits"] > 0]
+        positive = [x for x in active if x["compounded_return_pct"] > 0]
+        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        out.append({
+            "risk_pct_per_trade": risk_pct,
+            "completed_years": len(complete),
+            "active_completed_years": len(active),
+            "positive_active_completed_years": len(positive),
+            "positive_active_completed_years_pct": pct(len(positive), len(active)),
+            "average_compounded_return_pct_active_year": (
+                sum(x["compounded_return_pct"] for x in active) / len(active)
+                if active else 0.0
+            ),
+            "median_compounded_return_pct_active_year": safe_median(
+                x["compounded_return_pct"] for x in active
+            ),
+            "worst_year": worst["year"] if worst else "",
+            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
+            "best_year": best["year"] if best else "",
+            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
+        })
+    return out
+
+
+def equity_rolling_rows(sim, risk_fraction, trades, months, start_month, end_complete_month):
+    rows = []
+    cur = start_month
+    while add_months(cur, months) <= end_complete_month:
+        end = add_months(cur, months)
+        row = equity_period_row(
+            sim, risk_fraction, f"ROLLING_{months}M", cur, end, trades
+        )
+        row["months"] = months
+        rows.append(row)
+        cur = add_months(cur, 1)
+    return rows
+
+
+def equity_rolling_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(r["risk_pct_per_trade"], r["months"])].append(r)
+
+    out = []
+    for (risk_pct, months), g in grouped.items():
+        active = [x for x in g if x["realized_exits"] > 0]
+        positive = [x for x in active if x["compounded_return_pct"] > 0]
+        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        out.append({
+            "risk_pct_per_trade": risk_pct,
+            "months": months,
+            "windows": len(g),
+            "active_windows": len(active),
+            "zero_exit_windows": len(g) - len(active),
+            "positive_active_windows": len(positive),
+            "positive_active_windows_pct": pct(len(positive), len(active)),
+            "median_compounded_return_pct_active": safe_median(
+                x["compounded_return_pct"] for x in active
+            ),
+            "median_realized_exits_active": safe_median(
+                x["realized_exits"] for x in active
+            ),
+            "worst_compounded_return_pct": (
+                worst["compounded_return_pct"] if worst else 0.0
+            ),
+            "worst_start_utc": worst["start_utc"] if worst else "",
+            "best_compounded_return_pct": (
+                best["compounded_return_pct"] if best else 0.0
+            ),
+            "best_start_utc": best["start_utc"] if best else "",
+        })
+    return out
+
+
 # ============================================================
 # PORTFOLIO OVERLAP / MONTHLY
 # ============================================================
@@ -1006,6 +1399,95 @@ def run_research():
         STATUS.update(state="analyzing",message="Merging 10 final locked strategies",progress=68)
         portfolio=sorted([t for sid in ids for t in baseline[sid]],key=lambda x:(x["signal_time"],x["strategy_id"]))
 
+        # ------------------------------------------------------------
+        # Event-driven compounded equity analysis at baseline 1-pip cost.
+        # ------------------------------------------------------------
+        STATUS.update(
+            state="analyzing",
+            message="Simulating compounded equity at 0.50%, 0.75% and 1.00% risk",
+            progress=72,
+        )
+        equity_sims = {
+            rf: simulate_equity(portfolio, rf, STARTING_BALANCE)
+            for rf in RISK_LEVELS
+        }
+
+        equity_summary = [equity_sims[rf]["summary"] for rf in RISK_LEVELS]
+        equity_curve = []
+        equity_trades = []
+        equity_periods = []
+        equity_calendar = []
+        equity_rolling = []
+
+        active_start = month_floor(portfolio[0]["signal_time"])
+        first_active_year = portfolio[0]["signal_time"].year
+        equity_period_defs = [
+            ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
+            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+            ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+            ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+        ]
+        equity_end_complete = month_floor(NOW)
+
+        for rf in RISK_LEVELS:
+            sim = equity_sims[rf]
+            equity_curve.extend(sim["curve"])
+            equity_trades.extend(sim["trade_rows"])
+
+            for label, a, b in equity_period_defs:
+                equity_periods.append(
+                    equity_period_row(sim, rf, label, a, b, portfolio)
+                )
+
+            equity_calendar.extend(
+                equity_calendar_rows(
+                    sim, rf, portfolio, first_active_year, NOW.year
+                )
+            )
+
+            for months in (12, 24, 36):
+                equity_rolling.extend(
+                    equity_rolling_rows(
+                        sim, rf, portfolio, months, active_start, equity_end_complete
+                    )
+                )
+
+        write_csv(OUT["equity_summary"], equity_summary)
+        write_csv(OUT["equity_periods"], equity_periods)
+        write_csv(OUT["equity_calendar"], equity_calendar)
+        write_csv(
+            OUT["equity_calendar_summary"],
+            equity_calendar_summary(equity_calendar),
+        )
+        write_csv(OUT["equity_rolling"], equity_rolling)
+        write_csv(
+            OUT["equity_rolling_summary"],
+            equity_rolling_summary(equity_rolling),
+        )
+        write_csv(OUT["equity_curve"], equity_curve)
+        write_csv(OUT["equity_trades"], equity_trades)
+
+        # Compounded cost stress: same frozen signals/rebuild logic, all
+        # requested cost assumptions x all three risk levels.
+        equity_cost_rows = []
+        for cost in COSTS:
+            pts = sorted(
+                [
+                    t
+                    for sid in ids
+                    for t in strategy_trades_by_cost[cost][sid]
+                ],
+                key=lambda x: (x["signal_time"], x["strategy_id"]),
+            )
+            for rf in RISK_LEVELS:
+                ss = simulate_equity(pts, rf, STARTING_BALANCE)["summary"]
+                equity_cost_rows.append({
+                    "cost_pips": cost,
+                    **ss,
+                })
+        write_csv(OUT["equity_cost_stress"], equity_cost_rows)
+
         # Strategy summaries / periods / calendars / rolling.
         strategy_summary=[]; strategy_periods=[]; strategy_calendar=[]; strategy_roll=[]; strategy_cost=[]
         period_defs=[
@@ -1109,13 +1591,18 @@ def run_research():
             {"item":"Cost stress","value":"Every strategy is rebuilt at 0.5/1.0/1.5/2.0 pips adverse fill; signal rules are unchanged."},
             {"item":"EURUSD legacy warning","value":"Old EURUSD files in Library are superseded. This runner uses the later full-history locks: LONG BR1.20/body1.00/no hour exclusion; SHORT BR1.10/body1.30/range1.70/S60D.225/NY02-03/no weekday."},
             {"item":"USDJPY legacy warning","value":"This runner uses final SWEEP30_RR4.00 + completed H1 ATR ratio>=0.80 for USDJPY LONG, not the older any-20/40/60/100 sweep lock."},
+            {"item":"Equity sizing","value":"For compounded simulations, each new trade risks 0.50%, 0.75% or 1.00% of THEN-REALISED equity at signal time. Existing open positions keep their original cash-risk amount."},
+            {"item":"Equity event order","value":"At the same timestamp, exits are processed before new entries, matching exact exit-candle signal eligibility."},
+            {"item":"Equity drawdown","value":"max_closed_equity_dd_pct is based on realised exits only. Because intra-trade mark-to-market is not reconstructed, max_open_risk_floor_dd_pct is also exported as a conservative floor assuming every currently open trade instantly loses its full 1R cash risk."},
+            {"item":"No portfolio risk cap","value":"Different locked strategies may overlap exactly as in the portfolio test. The compounding simulation does not suppress trades or cap aggregate open risk; it reports the resulting concurrent cash risk."},
+            {"item":"Equity rolling windows","value":"Compounded rolling 12/24/36M returns start from the month of the first actual portfolio trade, avoiding the pre-signal 2002-2004 zero-history distortion."},
         ])
 
         STATUS.update(state="packaging",message="Building one ZIP results bundle",progress=95)
         with zipfile.ZipFile(BUNDLE,"w",compression=zipfile.ZIP_DEFLATED) as z:
             for p in OUT.values():
                 if os.path.exists(p): z.write(p,arcname=os.path.basename(p))
-        STATUS.update(state="complete",message="M15 final locked 10-strategy portfolio analysis complete",progress=100,results=BUNDLE,portfolio_trades=len(portfolio),portfolio_total_r=port_stats["total_r"],portfolio_pf=port_stats["profit_factor"])
+        STATUS.update(state="complete",message="M15 final locked 10-strategy portfolio + equity analysis complete",progress=100,results=BUNDLE,portfolio_trades=len(portfolio),portfolio_total_r=port_stats["total_r"],portfolio_pf=port_stats["profit_factor"])
     except Exception as e:
         import traceback
         STATUS.update(state="error",message=str(e),error_type=type(e).__name__,traceback=traceback.format_exc(),progress=STATUS.get("progress",0))
@@ -1126,13 +1613,13 @@ def run_research():
 # ============================================================
 @app.get("/")
 def root():
-    return jsonify({"service":"M15 Final Locked 10-Strategy Portfolio Analysis","state":STATUS.get("state"),"message":STATUS.get("message"),"orders_supported":False,"trading_enabled":False,"routes":["/m15-final-portfolio/status","/m15-final-portfolio/results"]})
+    return jsonify({"service":"M15 Final Locked 10-Strategy Portfolio + Equity Compounding Analysis","state":STATUS.get("state"),"message":STATUS.get("message"),"orders_supported":False,"trading_enabled":False,"routes":["/m15-final-portfolio-equity/status","/m15-final-portfolio-equity/results"]})
 
-@app.get("/m15-final-portfolio/status")
+@app.get("/m15-final-portfolio-equity/status")
 def status():
     return jsonify(STATUS)
 
-@app.get("/m15-final-portfolio/results")
+@app.get("/m15-final-portfolio-equity/results")
 def results():
     if not os.path.exists(BUNDLE):
         return jsonify({"error":"Results not ready","status":STATUS}),404
