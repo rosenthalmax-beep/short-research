@@ -1,4 +1,4 @@
-import os, csv, time, bisect, zipfile, threading
+import os, csv, time, bisect, zipfile, threading, traceback
 from copy import deepcopy
 from collections import deque, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -16,8 +16,8 @@ from flask import Flask, jsonify, send_file
 #
 # PURPOSE
 #   Preserve the FINAL LOCKED 57-trade EUR/GBP M15 LONG core
-#   exactly, then search for a structurally different Trigger B
-#   that adds genuinely non-overlapping trades.
+#   exactly, then locally validate the previously discovered London
+#   exact-bullish-engulfing Trigger B without changing the engine.
 #
 # FROZEN CORE — DO NOT OPTIMISE / LOOSEN
 #   family: SWEEP_DISPLACEMENT
@@ -39,20 +39,13 @@ from flask import Flask, jsonify, send_file
 #   Through 2026-09-10 09:49 UTC the frozen core MUST reproduce
 #   exactly 57 trades. The run aborts on any mismatch.
 #
-# COMPLEMENT SEARCH — STRUCTURALLY DIFFERENT FAMILIES ONLY
-#   1) COMPRESSION_BREAKOUT
-#   2) FAILED_BREAKDOWN_RECLAIM
-#   3) ENGULF_STRUCTURE
-#   4) WASHOUT_RECLAIM
-#
-# Deliberately NOT searched:
-#   - SWEEP_DISPLACEMENT (the core family itself)
-#   - OUTSIDE_REVERSAL (too close to the frozen reversal core)
+# COMPLEMENT LOCAL CONFIRMATION — ENGULF_STRUCTURE ONLY
+#   Anchor: BR1.20 / body1.00 / LB165 / distance0.10 / London04-07 / RR2.00
 #
 # ANTI-OVERFIT DESIGN
-#   - Stage 1: broad geometry at fixed RR3.00, no context
-#   - Stage 2: only top geometries get simple causal contexts
-#   - Stage 3: only top context variants get RR confirmation
+#   - Stage 1: local geometry around the anchor at RR2.00
+#   - Stage 2: adjacent London windows only
+#   - Stage 3: clean RR sweep 1.50 -> 2.50
 #   - score does NOT reward 2009 / 2012 / 2016 specifically
 #   - those inactive years are reported only as diagnostics
 #   - 2002-2004 are never optimisation targets
@@ -90,7 +83,7 @@ from flask import Flask, jsonify, send_file
 #   overlap and finalist trade logs
 #
 # ONE ZIP
-#   /eurgbp-m15-long-complement-final-local-final-local/results
+#   /eurgbp-m15-long-complement-final-local/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -1413,8 +1406,16 @@ def run_research():
         })
 
     except Exception as e:
-        STATUS.update({"state":"error","message":str(e),"orders_supported":False,"trading_enabled":False})
-        print("ERROR:",e,flush=True)
+        tb = traceback.format_exc()
+        STATUS.update({
+            "state":"error",
+            "message":str(e),
+            "error_type":type(e).__name__,
+            "traceback":tb,
+            "orders_supported":False,
+            "trading_enabled":False,
+        })
+        print(tb, flush=True)
 
 
 # ============================================================
@@ -1425,19 +1426,22 @@ def run_research():
 def root():
     return jsonify({
         "service":"EUR/GBP M15 LONG Final Complement Local Confirmation",
-        "state":STATUS["state"],"instrument":PAIR,"timeframe":"M15","side":"BUY",
+        "state":STATUS["state"],
+        "message":STATUS.get("message"),
+        "error_type":STATUS.get("error_type"),
+        "instrument":PAIR,"timeframe":"M15","side":"BUY",
         "orders_supported":False,"trading_enabled":False,
         "routes":[
-            "/eurgbp-m15-long-complement-final-local-final-local/status",
-            "/eurgbp-m15-long-complement-final-local-final-local/results",
+            "/eurgbp-m15-long-complement-final-local/status",
+            "/eurgbp-m15-long-complement-final-local/results",
         ],
     })
 
-@app.route("/eurgbp-m15-long-complement-final-local-final-local/status")
+@app.route("/eurgbp-m15-long-complement-final-local/status")
 def route_status():
     return jsonify(STATUS)
 
-@app.route("/eurgbp-m15-long-complement-final-local-final-local/results")
+@app.route("/eurgbp-m15-long-complement-final-local/results")
 def route_results():
     return dl(BUNDLE)
 
