@@ -1082,7 +1082,7 @@ def run():
         m15=fetch("M15",START,NOW,35)
         h1=fetch("H1",WARMUP,NOW,180)
         h4=fetch("H4",WARMUP,NOW,700)
-        d=fetch("D",WARMUP,NOW,3000,daily=True)
+        d=fetch("D",WARMUP,NOW,3000)
         if not all([m15,h1,h4,d]):
             raise RuntimeError("Missing required EUR/GBP history")
 
