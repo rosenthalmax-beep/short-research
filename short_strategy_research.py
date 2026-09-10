@@ -12,7 +12,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/GBP M15 SHORT — FINAL COMPLEMENT ENGULF CONFIRMATION
+# EUR/GBP M15 SHORT — FINAL COMPLEMENT BR-ONLY CONFIRMATION
 #
 # PURPOSE
 #   Freeze the FINAL 44-trade EUR/GBP M15 SHORT core exactly,
@@ -98,7 +98,7 @@ from flask import Flask, jsonify, send_file
 #                       otherwise TARGET first
 #
 # ONE ZIP
-#   /eurgbp-m15-short-complement-final-confirmation/results
+#   /eurgbp-m15-short-complement-final-br-only/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -126,45 +126,45 @@ COSTS = [0.5, 1.0, 1.5, 2.0]
 
 CORE_RR = 4.50
 ANCHOR_RR = 2.50
-RRS = [2.00, 2.25, 2.50, 2.75, 3.00]
+RRS = [2.50]
 
-BR_VALUES = [1.20, 1.30, 1.40, 1.50, 1.60]
-BODY_VALUES = [0.80, 0.90, 1.00, 1.10, 1.20]
-LB_VALUES = [60, 80, 100, 120, 140, 165]
-DIST_VALUES = [0.10, 0.15, 0.20, 0.25, 0.30]
-H1_EMA_PERIODS = [50, 75, 100, 125, 150, 200]
+BR_VALUES = [1.40, 1.50, 1.60, 1.70, 1.80, 2.00]
+BODY_VALUES = [1.00]
+LB_VALUES = [100]
+DIST_VALUES = [0.15]
+H1_EMA_PERIODS = [100]
 
 STAGE2_CANDLE_KEEP = 6
-STAGE2_STRUCTURE_KEEP = 6
-STAGE3_GEOMETRY_KEEP = 10
-STAGE4_H1_KEEP = 10
-FINAL_KEEP = 12
+STAGE2_STRUCTURE_KEEP = 1
+STAGE3_GEOMETRY_KEEP = 6
+STAGE4_H1_KEEP = 6
+FINAL_KEEP = 6
 
 MEANINGFUL_CORE_INACTIVE_YEARS = [2005, 2009, 2013, 2023]
 EARLY_NON_TARGET_YEARS = [2002, 2003, 2004]
 
 OUTS = {
-    "coverage": "eurgbp_m15_short_complement_final_confirmation_coverage.csv",
-    "parity": "eurgbp_m15_short_complement_final_confirmation_parity.csv",
-    "core": "eurgbp_m15_short_complement_final_confirmation_core_baseline.csv",
-    "stage1_br_body": "eurgbp_m15_short_complement_final_confirmation_stage1_br_body.csv",
-    "stage1_structure": "eurgbp_m15_short_complement_final_confirmation_stage1_structure_distance.csv",
-    "stage2_geometry": "eurgbp_m15_short_complement_final_confirmation_stage2_geometry_interactions.csv",
-    "stage3_h1": "eurgbp_m15_short_complement_final_confirmation_stage3_h1_regime.csv",
-    "stage4_rr": "eurgbp_m15_short_complement_final_confirmation_stage4_rr.csv",
-    "finalists": "eurgbp_m15_short_complement_final_confirmation_finalists.csv",
-    "periods": "eurgbp_m15_short_complement_final_confirmation_periods.csv",
-    "cost": "eurgbp_m15_short_complement_final_confirmation_cost_stress.csv",
-    "rolling": "eurgbp_m15_short_complement_final_confirmation_rolling.csv",
-    "rolling_summary": "eurgbp_m15_short_complement_final_confirmation_rolling_summary.csv",
-    "calendar": "eurgbp_m15_short_complement_final_confirmation_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_short_complement_final_confirmation_calendar_summary.csv",
-    "overlap": "eurgbp_m15_short_complement_final_confirmation_overlap.csv",
-    "trades": "eurgbp_m15_short_complement_final_confirmation_finalist_trades.csv",
-    "parameter_summary": "eurgbp_m15_short_complement_final_confirmation_parameter_summary.csv",
-    "notes": "eurgbp_m15_short_complement_final_confirmation_notes.csv",
+    "coverage": "eurgbp_m15_short_complement_final_br_only_coverage.csv",
+    "parity": "eurgbp_m15_short_complement_final_br_only_parity.csv",
+    "core": "eurgbp_m15_short_complement_final_br_only_core_baseline.csv",
+    "stage1_br_body": "eurgbp_m15_short_complement_final_br_only_stage1_br_body.csv",
+    "stage1_structure": "eurgbp_m15_short_complement_final_br_only_stage1_structure_distance.csv",
+    "stage2_geometry": "eurgbp_m15_short_complement_final_br_only_stage2_geometry_interactions.csv",
+    "stage3_h1": "eurgbp_m15_short_complement_final_br_only_stage3_h1_regime.csv",
+    "stage4_rr": "eurgbp_m15_short_complement_final_br_only_stage4_rr.csv",
+    "finalists": "eurgbp_m15_short_complement_final_br_only_finalists.csv",
+    "periods": "eurgbp_m15_short_complement_final_br_only_periods.csv",
+    "cost": "eurgbp_m15_short_complement_final_br_only_cost_stress.csv",
+    "rolling": "eurgbp_m15_short_complement_final_br_only_rolling.csv",
+    "rolling_summary": "eurgbp_m15_short_complement_final_br_only_rolling_summary.csv",
+    "calendar": "eurgbp_m15_short_complement_final_br_only_calendar_years.csv",
+    "calendar_summary": "eurgbp_m15_short_complement_final_br_only_calendar_summary.csv",
+    "overlap": "eurgbp_m15_short_complement_final_br_only_overlap.csv",
+    "trades": "eurgbp_m15_short_complement_final_br_only_finalist_trades.csv",
+    "parameter_summary": "eurgbp_m15_short_complement_final_br_only_parameter_summary.csv",
+    "notes": "eurgbp_m15_short_complement_final_br_only_notes.csv",
 }
-BUNDLE = "EURGBP_M15_SHORT_COMPLEMENT_FINAL_CONFIRMATION_RESULTS.zip"
+BUNDLE = "EURGBP_M15_SHORT_COMPLEMENT_FINAL_BR_ONLY_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -569,35 +569,31 @@ def anchor_cfg(cid="ANCHOR"):
 
 
 def build_stage1_br_body():
-    out = []
-    for br, body in product(BR_VALUES, BODY_VALUES):
-        out.append(cfg(
-            f"S1A_BR{br:.2f}_B{body:.2f}",
-            br_min=br,
-            body_atr_min=body,
-            structure_lb=100,
-            structure_dist_atr_max=0.20,
-            h1_ema_period=100,
-            context="H1_CLOSE_LT_EMA100",
-            rr=ANCHOR_RR,
-        ))
-    return out
-
+    # FINAL MICRO TEST: only BR varies.
+    # body=1.00, LB100, distance=0.15, H1 EMA100 and RR2.50 are frozen.
+    return [cfg(
+        f"BR_ONLY_{br:.2f}",
+        br_min=br,
+        body_atr_min=1.00,
+        structure_lb=100,
+        structure_dist_atr_max=0.15,
+        h1_ema_period=100,
+        context="H1_CLOSE_LT_EMA100",
+        rr=2.50,
+    ) for br in BR_VALUES]
 
 def build_stage1_structure_distance():
-    out = []
-    for lb, dist in product(LB_VALUES, DIST_VALUES):
-        out.append(cfg(
-            f"S1B_LB{lb}_D{dist:.3f}",
-            br_min=1.40,
-            body_atr_min=1.00,
-            structure_lb=lb,
-            structure_dist_atr_max=dist,
-            h1_ema_period=100,
-            context="H1_CLOSE_LT_EMA100",
-            rr=ANCHOR_RR,
-        ))
-    return out
+    # Single frozen structure reference; no structure optimization in this run.
+    return [cfg(
+        "FROZEN_STRUCTURE_REFERENCE",
+        br_min=1.60,
+        body_atr_min=1.00,
+        structure_lb=100,
+        structure_dist_atr_max=0.15,
+        h1_ema_period=100,
+        context="H1_CLOSE_LT_EMA100",
+        rr=2.50,
+    )]
 
 
 def choose_local_rows(rows, keep):
@@ -612,121 +608,27 @@ def choose_local_rows(rows, keep):
 
 
 def build_stage2_geometry(rows_a, rows_b, by_a, by_b):
-    candle_rows = choose_local_rows(rows_a, STAGE2_CANDLE_KEEP)
-    struct_rows = choose_local_rows(rows_b, STAGE2_STRUCTURE_KEEP)
-    candle_pairs = []
-    for r in candle_rows:
-        c = by_a[r["config_id"]]
-        pair = (c["br_min"], c["body_atr_min"])
-        if pair not in candle_pairs:
-            candle_pairs.append(pair)
-    struct_pairs = []
-    for r in struct_rows:
-        c = by_b[r["config_id"]]
-        pair = (c["structure_lb"], c["structure_dist_atr_max"])
-        if pair not in struct_pairs:
-            struct_pairs.append(pair)
-
-    # Always retain the historical anchor dimensions even if local ranking
-    # happens to push them outside the automatic keep set.
-    if (1.40, 1.00) not in candle_pairs:
-        candle_pairs.append((1.40, 1.00))
-    if (100, 0.20) not in struct_pairs:
-        struct_pairs.append((100, 0.20))
-
-    out, seen = [], set()
-    for br, body in candle_pairs:
-        for lb, dist in struct_pairs:
-            sig = (br, body, lb, dist)
-            if sig in seen:
-                continue
-            seen.add(sig)
-            out.append(cfg(
-                f"S2_BR{br:.2f}_B{body:.2f}_LB{lb}_D{dist:.3f}",
-                br_min=br,
-                body_atr_min=body,
-                structure_lb=lb,
-                structure_dist_atr_max=dist,
-                h1_ema_period=100,
-                context="H1_CLOSE_LT_EMA100",
-                rr=ANCHOR_RR,
-            ))
-    return out
-
+    # BR-only confirmation: preserve all six BR values exactly.
+    return [cfg(
+        f"BR_ONLY_{br:.2f}",
+        br_min=br, body_atr_min=1.00, structure_lb=100,
+        structure_dist_atr_max=0.15, h1_ema_period=100,
+        context="H1_CLOSE_LT_EMA100", rr=2.50,
+    ) for br in BR_VALUES]
 
 def build_stage3_h1(rows2, by2):
-    bases = choose_local_rows(rows2, STAGE3_GEOMETRY_KEEP)
-    # Anchor geometry always gets regime confirmation too.
-    anchor_sig = (1.40, 1.00, 100, 0.20)
-    if not any((by2[r["config_id"]]["br_min"], by2[r["config_id"]]["body_atr_min"],
-                by2[r["config_id"]]["structure_lb"], by2[r["config_id"]]["structure_dist_atr_max"]) == anchor_sig
-               for r in bases):
-        for r in rows2:
-            c = by2[r["config_id"]]
-            if (c["br_min"], c["body_atr_min"], c["structure_lb"], c["structure_dist_atr_max"]) == anchor_sig:
-                bases.append(r)
-                break
-
-    out, seen = [], set()
-    for rank, row in enumerate(bases):
-        base = by2[row["config_id"]]
-        contexts = [("NONE", None)] + [(f"H1_CLOSE_LT_EMA{p}", p) for p in H1_EMA_PERIODS]
-        for context, period in contexts:
-            x = deepcopy(base)
-            x["config_id"] = f"S3_{rank:02d}_{context}"
-            x["context"] = context
-            x["h1_ema_period"] = period
-            sig = (x["br_min"], x["body_atr_min"], x["structure_lb"],
-                   x["structure_dist_atr_max"], context)
-            if sig not in seen:
-                seen.add(sig)
-                out.append(x)
-    return out
-
+    # H1 EMA100 is frozen; no NONE ablation or alternate EMA periods here.
+    return [deepcopy(by2[r["config_id"]]) for r in rows2]
 
 def build_stage4_rr(rows3, by3):
-    ranked = sort_rows(rows3)
-    eligible = [r for r in ranked if (
-        r["context"] != "NONE"
-        and r["accepted_adds"] >= 10
-        and r["accepted_r"] > 0
-        and r["accepted_pre2010_r"] > 0
-        and r["accepted_post2010_r"] > 0
-        and r["accepted_positive_eras"] >= 3
-    )]
-    bases = (eligible if eligible else [r for r in ranked if r["context"] != "NONE"])[:STAGE4_H1_KEEP]
-
-    # Always retain the exact historical anchor into RR confirmation.
-    def is_anchor_row(r):
-        c = by3[r["config_id"]]
-        return (
-            c["br_min"] == 1.40 and c["body_atr_min"] == 1.00
-            and c["structure_lb"] == 100
-            and abs(c["structure_dist_atr_max"] - 0.20) < 1e-12
-            and c["context"] == "H1_CLOSE_LT_EMA100"
-        )
-    if not any(is_anchor_row(r) for r in bases):
-        ar = next((r for r in rows3 if is_anchor_row(r)), None)
-        if ar is not None:
-            bases.append(ar)
-
-    out, seen = [], set()
-    for rank, row in enumerate(bases):
-        base = by3[row["config_id"]]
-        for rr in RRS:
-            x = deepcopy(base)
-            x["config_id"] = f"S4_{rank:02d}_RR_{rr:.2f}"
-            x["rr"] = rr
-            sig = (x["br_min"], x["body_atr_min"], x["structure_lb"],
-                   x["structure_dist_atr_max"], x["context"], rr)
-            if sig not in seen:
-                seen.add(sig)
-                out.append(x)
+    # RR2.50 is frozen; only BR is under test.
+    out = []
+    for r in rows3:
+        x = deepcopy(by3[r["config_id"]])
+        x["config_id"] = x["config_id"] + "_RR2.50"
+        x["rr"] = 2.50
+        out.append(x)
     return out
-
-# ============================================================
-# SIGNAL EVALUATION
-# ============================================================
 
 def apply_context(mask, c, f):
     ctx = c.get("context", "NONE")
@@ -1625,6 +1527,7 @@ def run_research():
         write_csv(OUTS["overlap"], overlap)
         write_csv(OUTS["trades"], trade_rows)
         write_csv(OUTS["notes"], [
+            {"note": "BR-only test freezes body1.00/LB100/dist0.15/H1 EMA100/RR2.50 and varies only BR 1.40/1.50/1.60/1.70/1.80/2.00."},
             {"note": "Source anchor from uploaded complement run: BR1.40/body1.00/LB100/dist0.20/H1 close<EMA100/RR2.50; prior full-run snapshot was 41 candidate, 40 accepted, 1 overlap, 84 combined at 2026-09-10 13:01 UTC."},
             {"note": "Hard parity uses only source-supported fixed historical observations: core=44 through 2026-09-10 12:30 UTC; by 2026-03-01 core=43, accepted complement=40, combined=83. Current 41/40/1/84 figures are diagnostic only."},
             {"note": "No session or weekday optimisation is performed for the complement."},
@@ -1639,7 +1542,7 @@ def run_research():
         pack()
         STATUS.update({
             "state": "complete",
-            "message": "EUR/GBP M15 SHORT final engulf complement confirmation complete",
+            "message": "EUR/GBP M15 SHORT final BR-only complement confirmation complete",
             "core_trades": len(core_full),
             "stage1_br_body_configs": len(stage1a),
             "stage1_structure_configs": len(stage1b),
@@ -1672,7 +1575,7 @@ def run_research():
 @app.route("/")
 def root():
     payload = {
-        "service": "EUR/GBP M15 SHORT Final Engulf Complement Confirmation",
+        "service": "EUR/GBP M15 SHORT Final BR-Only Complement Confirmation",
         "state": STATUS["state"],
         "instrument": PAIR,
         "timeframe": "M15",
@@ -1680,8 +1583,8 @@ def root():
         "orders_supported": False,
         "trading_enabled": False,
         "routes": [
-            "/eurgbp-m15-short-complement-final-confirmation/status",
-            "/eurgbp-m15-short-complement-final-confirmation/results",
+            "/eurgbp-m15-short-complement-final-br-only/status",
+            "/eurgbp-m15-short-complement-final-br-only/results",
         ],
     }
     if STATUS.get("state") == "error":
@@ -1693,12 +1596,12 @@ def root():
     return jsonify(payload)
 
 
-@app.route("/eurgbp-m15-short-complement-final-confirmation/status")
+@app.route("/eurgbp-m15-short-complement-final-br-only/status")
 def route_status():
     return jsonify(STATUS)
 
 
-@app.route("/eurgbp-m15-short-complement-final-confirmation/results")
+@app.route("/eurgbp-m15-short-complement-final-br-only/results")
 def route_results():
     return dl(BUNDLE)
 
