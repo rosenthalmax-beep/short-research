@@ -12,57 +12,69 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/GBP M15 LONG — FULL-HISTORY RE-EXAMINATION
+# EUR/GBP M15 LONG — FINAL SWEEP-DISPLACEMENT CONFIRMATION
 #
-# Fresh research universe:
-#   2002-05-06 20:00 UTC -> present / earliest OANDA available
+# Purpose:
+#   Final focused confirmation after the full-history broad search.
+#   Five of six broad archetype families failed; only
+#   SWEEP_DISPLACEMENT is re-opened here.
 #
-# No prior EUR/GBP M15 LONG specification is treated as a benchmark.
-# This is a clean full-history search from first principles.
-#
-# Pair-specific session handling:
-#   both America/New_York and Europe/London 4-hour blocks are tested
-#   as broad Stage-2 contexts; neither is assumed a priori.
-#
-# Full-history families:
-#   ENGULF_STRUCTURE
-#   SWEEP_DISPLACEMENT
-#   FAILED_BREAKDOWN_RECLAIM
-#   OUTSIDE_REVERSAL
-#   COMPRESSION_BREAKOUT
-#   WASHOUT_RECLAIM
-#
-# Staged Railway-safe process:
-#   Stage 1 raw archetypes
-#   Stage 2 broad HTF/time/weekday contexts (NY + London)
-#   Stage 3 local geometry + RR
-#   Finalists: eras, 2002-17 / 2018+, last 2/5Y,
-#              0.5/1/1.5/2 pip cost stress,
-#              rolling 12/24/36M, calendar years,
-#              ablation and local plateau
-#
-# Historical conventions:
+# Frozen research mechanics inherited from the broad run:
 #   OANDA midpoint
+#   2002-05-06 20:00 UTC -> present / earliest OANDA available
 #   ATR14 Wilder/RMA SMA-seeded
 #   signal timestamp = M15 candle OPEN
-#   primary adverse cost = 1 pip
 #   long fill = signal close + adverse cost
+#   primary adverse cost = 1 pip
 #   stop = signal low - 10 ticks
 #   target based on REFERENCE signal-close risk
-#   exits next candle
+#   exits tested from next candle
 #   pyramiding 0
 #   exact exit-candle signal eligible
-#   long same-bar: high closer to open => target else stop
+#   same-bar LONG tie: high closer to open => TARGET else STOP
 #
-# HTF no-lookahead:
-#   complete_at = next ACTUAL HTF candle OPEN
-#   lookup = bisect_right(completion_times, signal_time) - 1
+# Sweep-displacement trigger:
+#   current M15 candle bullish
+#   current low < previous N-bar low (current excluded)
+#   current close > previous M15 high
+#   body >= body_atr_min * ATR14
+#   lower wick >= wick_ratio * bullish body
+#   prior 4h momentum <= mom4_max * ATR14
 #
-# Daily:
-#   OANDA D, dailyAlignment=17, America/New_York
+# Focused geometry:
+#   sweep lookback: 20 / 40 / 60 / 80 / 100
+#   body ATR:      1.10 / 1.15 / 1.20 / 1.25 / 1.30 / 1.35
+#   lower wick:    0.20 / 0.25 / 0.30 body
+#   prior 4h mom: -1.00 / -1.25 / -1.50 ATR
+#
+# Context comparison:
+#   NY 00-03 anchor
+#   adjacent NY 23-03 / 00-04 / 01-03 / 23-04
+#   exclude Friday
+#   previous completed H1 EMA50 > EMA200
+#   no-context ablation
+#
+# Clean RR confirmation:
+#   2.75 / 3.00 / 3.25 / 3.50 / 3.75 / 4.00 / 4.25
+#
+# Four hard parity guards through 2026-09-10 09:49 UTC:
+#   NY00-03 LB40 body1.15 wick0.25 mom<=-1.25 RR3.50 => 72 trades
+#   NY00-03 LB60 body1.15 wick0.25 mom<=-1.25 RR3.50 => 64 trades
+#   ex-Friday LB40 body1.35 wick0.25 mom<=-1.25 RR3.50 => 96 trades
+#   H1 EMA50>EMA200 LB40 body1.35 wick0.25 mom<=-1.25 RR3.50 => 57 trades
+#
+# Final diagnostics:
+#   pre-2010 / 2010+
+#   2002-07 / 2008-13 / 2014-19 / 2020+
+#   2002-17 / 2018+
+#   last 5Y / last 2Y
+#   0.5 / 1.0 / 1.5 / 2.0 pip cost stress
+#   rolling 12 / 24 / 36 months
+#   calendar-year consistency
+#   finalist trades
 #
 # ONE ZIP:
-#   /eurgbp-m15-long-full-history/results
+#   /eurgbp-m15-long-final-confirmation/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -76,6 +88,7 @@ PAIR = "EUR_GBP"
 START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 WARMUP = START - timedelta(days=900)
+PARITY_CUTOFF = datetime(2026, 9, 10, 9, 49, tzinfo=timezone.utc)
 
 NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
@@ -86,32 +99,29 @@ STOP_TICKS = 10
 
 PRIMARY_COST = 1.0
 COSTS = [0.5, 1.0, 1.5, 2.0]
+RR_VALUES = [2.75, 3.00, 3.25, 3.50, 3.75, 4.00, 4.25]
 
-STAGE1_KEEP = 12
-STAGE2_BASE_KEEP = 7
-STAGE2_KEEP = 9
-STAGE3_BASE_KEEP = 4
-FINAL_KEEP = 8
+STAGE1_KEEP = 16
+STAGE2_KEEP = 16
+FINAL_KEEP = 12
 
 OUTS = {
-    "coverage": "eurgbp_m15_long_full_history_coverage.csv",
-    "stage1": "eurgbp_m15_long_full_history_stage1.csv",
-    "stage1_family_summary": "eurgbp_m15_long_full_history_stage1_family_summary.csv",
-    "stage2": "eurgbp_m15_long_full_history_stage2.csv",
-    "stage3": "eurgbp_m15_long_full_history_stage3.csv",
-    "final": "eurgbp_m15_long_full_history_finalists.csv",
-    "periods": "eurgbp_m15_long_full_history_periods.csv",
-    "cost": "eurgbp_m15_long_full_history_cost_stress.csv",
-    "rolling": "eurgbp_m15_long_full_history_rolling.csv",
-    "rolling_summary": "eurgbp_m15_long_full_history_rolling_summary.csv",
-    "calendar": "eurgbp_m15_long_full_history_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_long_full_history_calendar_summary.csv",
-    "ablation": "eurgbp_m15_long_full_history_ablation.csv",
-    "plateau": "eurgbp_m15_long_full_history_plateau.csv",
-    "trades": "eurgbp_m15_long_full_history_finalist_trades.csv",
-    "notes": "eurgbp_m15_long_full_history_notes.csv",
+    "coverage": "eurgbp_m15_long_final_confirmation_coverage.csv",
+    "parity": "eurgbp_m15_long_final_confirmation_parity.csv",
+    "stage1": "eurgbp_m15_long_final_confirmation_stage1_geometry.csv",
+    "stage2": "eurgbp_m15_long_final_confirmation_stage2_context.csv",
+    "stage3": "eurgbp_m15_long_final_confirmation_stage3_rr.csv",
+    "final": "eurgbp_m15_long_final_confirmation_finalists.csv",
+    "periods": "eurgbp_m15_long_final_confirmation_periods.csv",
+    "cost": "eurgbp_m15_long_final_confirmation_cost_stress.csv",
+    "rolling": "eurgbp_m15_long_final_confirmation_rolling.csv",
+    "rolling_summary": "eurgbp_m15_long_final_confirmation_rolling_summary.csv",
+    "calendar": "eurgbp_m15_long_final_confirmation_calendar_years.csv",
+    "calendar_summary": "eurgbp_m15_long_final_confirmation_calendar_summary.csv",
+    "trades": "eurgbp_m15_long_final_confirmation_finalist_trades.csv",
+    "notes": "eurgbp_m15_long_final_confirmation_notes.csv",
 }
-BUNDLE = "EURGBP_M15_LONG_FULL_HISTORY_REEXAMINATION_RESULTS.zip"
+BUNDLE = "EURGBP_M15_LONG_FINAL_CONFIRMATION_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -447,173 +457,271 @@ def features(c, h1, h4, d):
         "d_ema200":d["ema200"],"d_atr":d["atr_ratio50"],
     }
 
-# ---------------- configs ----------------
+# ---------------- focused configs ----------------
 
-def cfg(cid,fam,rr=3.5,**kw):
+def cfg(cid, fam="SWEEP_DISPLACEMENT", rr=3.5, **kw):
     x = {
-        "config_id":cid,"family":fam,"rr":rr,"context":"NONE",
-        "br_min":None,"body_atr_min":None,"range_atr_min":None,
-        "close_loc_min":None,"lower_wick_body_min":None,
-        "structure_lb":None,"structure_dist_atr_max":None,
-        "sweep_lb":None,"breakout_lb":None,"compression_max":None,
-        "mom4_max":None,
-        "excluded_weekdays":set(),"excluded_ny_hours":set(),
+        "config_id": cid,
+        "family": fam,
+        "rr": rr,
+        "context": "NY_BLOCK_00-03",
+        "br_min": None,
+        "body_atr_min": None,
+        "range_atr_min": None,
+        "close_loc_min": None,
+        "lower_wick_body_min": None,
+        "structure_lb": None,
+        "structure_dist_atr_max": None,
+        "sweep_lb": None,
+        "breakout_lb": None,
+        "compression_max": None,
+        "mom4_max": None,
+        "excluded_weekdays": set(),
+        "excluded_ny_hours": set(),
     }
     x.update(kw)
     return x
 
-def stage1_configs():
-    out=[]
-    eng=[
-        (1.0,.5,60,.10),(1.0,.75,100,.10),(1.2,.5,100,.15),
-        (1.2,.75,120,.10),(1.2,1.0,165,.10),(1.35,.5,120,.20),
-        (1.35,.75,165,.10),(1.35,1.0,165,.15),
-        (1.5,.75,100,.10),(1.5,1.0,165,.10),
-    ]
-    for i,(br,b,lb,d) in enumerate(eng):
-        out.append(cfg(f"S1_ENG_{i}","ENGULF_STRUCTURE",
-                       br_min=br,body_atr_min=b,
-                       structure_lb=lb,structure_dist_atr_max=d))
-    sweep=[
-        (20,.75,.15,-.5),(20,1,.25,-1),(40,.75,.25,-.5),
-        (40,1,.25,-1),(40,1.25,.25,-1.25),(60,.75,.25,-.75),
-        (60,1,.35,-1),(60,1.25,.25,-1.5),(100,1,.35,-1.25),
-        (100,1.25,.35,-1.5),
-    ]
-    for i,(lb,b,w,m) in enumerate(sweep):
-        out.append(cfg(f"S1_SWEEP_{i}","SWEEP_DISPLACEMENT",
-                       sweep_lb=lb,body_atr_min=b,
-                       lower_wick_body_min=w,mom4_max=m))
-    fail=[
-        (20,.5,.6),(20,.75,.7),(40,.5,.6),(40,.75,.7),
-        (40,1,.75),(60,.5,.65),(60,.75,.7),(60,1,.75),
-        (100,.75,.7),(100,1,.8),
-    ]
-    for i,(lb,b,c) in enumerate(fail):
-        out.append(cfg(f"S1_FAIL_{i}","FAILED_BREAKDOWN_RECLAIM",
-                       sweep_lb=lb,body_atr_min=b,close_loc_min=c))
-    outside=[
-        (.5,.6,40,.2),(.75,.65,40,.15),(.75,.7,60,.2),
-        (1,.65,60,.15),(1,.75,80,.2),(1.25,.7,80,.15),
-        (1.25,.75,100,.2),(1.5,.75,100,.15),
-    ]
-    for i,(b,c,lb,d) in enumerate(outside):
-        out.append(cfg(f"S1_OUT_{i}","OUTSIDE_REVERSAL",
-                       body_atr_min=b,close_loc_min=c,
-                       structure_lb=lb,structure_dist_atr_max=d))
-    comp=[
-        (.60,.75,1.2,10),(.65,.75,1.3,10),(.65,1,1.4,10),
-        (.70,.75,1.3,10),(.70,1,1.4,10),(.70,1.25,1.5,10),
-        (.75,.75,1.3,10),(.75,1,1.4,10),(.75,1.25,1.5,20),
-        (.80,1,1.5,20),
-    ]
-    for i,(co,b,r,lb) in enumerate(comp):
-        out.append(cfg(f"S1_COMP_{i}","COMPRESSION_BREAKOUT",
-                       compression_max=co,body_atr_min=b,
-                       range_atr_min=r,breakout_lb=lb))
-    wash=[
-        (20,.5,-.75,.65),(20,.75,-1,.7),(40,.5,-1,.65),
-        (40,.75,-1.25,.7),(40,1,-1.5,.75),(60,.75,-1.25,.7),
-        (60,1,-1.5,.75),(100,1,-1.5,.75),
-    ]
-    for i,(lb,b,m,c) in enumerate(wash):
-        out.append(cfg(f"S1_WASH_{i}","WASHOUT_RECLAIM",
-                       sweep_lb=lb,body_atr_min=b,
-                       mom4_max=m,close_loc_min=c))
+
+def focused_geometry_configs():
+    out = []
+    counter = 0
+    for sweep_lb in [20, 40, 60, 80, 100]:
+        for body in [1.10, 1.15, 1.20, 1.25, 1.30, 1.35]:
+            for wick in [0.20, 0.25, 0.30]:
+                for mom in [-1.00, -1.25, -1.50]:
+                    counter += 1
+                    out.append(cfg(
+                        f"GEO_{counter:04d}",
+                        sweep_lb=sweep_lb,
+                        body_atr_min=body,
+                        lower_wick_body_min=wick,
+                        mom4_max=mom,
+                        context="NY_BLOCK_00-03",
+                        rr=3.50,
+                    ))
     return out
 
-CONTEXTS=[
-    "NONE","H1_CLOSE_GT_EMA100","H1_CLOSE_GT_EMA200",
-    "H1_EMA50_GT_EMA200","H4_CLOSE_GT_EMA100","H4_CLOSE_GT_EMA200",
-    "D_CLOSE_GT_EMA200","D_EMA50_GT_EMA200",
-    "H1_ATR_GE_080","H4_ATR_GE_080","D_ATR_GE_080",
-    "NY_BLOCK_00-03","NY_BLOCK_04-07","NY_BLOCK_08-11",
-    "NY_BLOCK_12-15","NY_BLOCK_16-19","NY_BLOCK_20-23",
-    "LDN_BLOCK_00-03","LDN_BLOCK_04-07","LDN_BLOCK_08-11",
-    "LDN_BLOCK_12-15","LDN_BLOCK_16-19","LDN_BLOCK_20-23",
-    "EXCLUDE_WEEKDAY_0","EXCLUDE_WEEKDAY_1","EXCLUDE_WEEKDAY_2",
-    "EXCLUDE_WEEKDAY_3","EXCLUDE_WEEKDAY_4",
+
+CONTEXTS = [
+    "NY_BLOCK_00-03",
+    "NY_WINDOW_23-03",
+    "NY_WINDOW_00-04",
+    "NY_WINDOW_01-03",
+    "NY_WINDOW_23-04",
+    "EXCLUDE_WEEKDAY_4",
+    "H1_EMA50_GT_EMA200",
+    "NONE",
 ]
 
-# ---------------- signal evaluation ----------------
 
-def context_mask(mask,c,f):
-    ctx=c.get("context","NONE")
-    if ctx=="H1_CLOSE_GT_EMA100": mask &= f["h1_close"]>f["h1_ema100"]
-    elif ctx=="H1_CLOSE_GT_EMA200": mask &= f["h1_close"]>f["h1_ema200"]
-    elif ctx=="H1_EMA50_GT_EMA200": mask &= f["h1_ema50"]>f["h1_ema200"]
-    elif ctx=="H4_CLOSE_GT_EMA100": mask &= f["h4_close"]>f["h4_ema100"]
-    elif ctx=="H4_CLOSE_GT_EMA200": mask &= f["h4_close"]>f["h4_ema200"]
-    elif ctx=="D_CLOSE_GT_EMA200": mask &= f["d_close"]>f["d_ema200"]
-    elif ctx=="D_EMA50_GT_EMA200": mask &= f["d_ema50"]>f["d_ema200"]
-    elif ctx=="H1_ATR_GE_080": mask &= f["h1_atr"]>=.8
-    elif ctx=="H4_ATR_GE_080": mask &= f["h4_atr"]>=.8
-    elif ctx=="D_ATR_GE_080": mask &= f["d_atr"]>=.8
-    elif ctx.startswith("NY_BLOCK_"):
-        a,b=map(int,ctx.split("_")[-1].split("-"))
-        mask &= (f["ny_hour"]>=a)&(f["ny_hour"]<=b)
-    elif ctx.startswith("LDN_BLOCK_"):
-        a,b=map(int,ctx.split("_")[-1].split("-"))
-        mask &= (f["ldn_hour"]>=a)&(f["ldn_hour"]<=b)
+def _hour_in_window(hours, start_hour, end_hour):
+    if start_hour <= end_hour:
+        return (hours >= start_hour) & (hours <= end_hour)
+    return (hours >= start_hour) | (hours <= end_hour)
+
+
+def context_mask(mask, c, f):
+    ctx = c.get("context", "NONE")
+
+    if ctx == "H1_EMA50_GT_EMA200":
+        mask &= f["h1_ema50"] > f["h1_ema200"]
+
+    elif ctx == "NY_BLOCK_00-03":
+        mask &= (f["ny_hour"] >= 0) & (f["ny_hour"] <= 3)
+
+    elif ctx.startswith("NY_WINDOW_"):
+        a, b = map(int, ctx.split("_")[-1].split("-"))
+        mask &= _hour_in_window(f["ny_hour"], a, b)
+
     elif ctx.startswith("EXCLUDE_WEEKDAY_"):
-        w=int(ctx.split("_")[-1]); mask &= f["ny_weekday"]!=w
-    for w in c.get("excluded_weekdays",set()):
-        mask &= f["ny_weekday"]!=w
-    for h in c.get("excluded_ny_hours",set()):
-        mask &= f["ny_hour"]!=h
+        w = int(ctx.split("_")[-1])
+        mask &= f["ny_weekday"] != w
+
+    elif ctx != "NONE":
+        raise ValueError(f"Unsupported focused context: {ctx}")
+
+    for w in c.get("excluded_weekdays", set()):
+        mask &= f["ny_weekday"] != w
+    for h in c.get("excluded_ny_hours", set()):
+        mask &= f["ny_hour"] != h
     return mask
 
-def indices(c,f):
-    m=f["valid_atr"].copy() & f["bullish"]
-    fam=c["family"]
 
-    if fam=="ENGULF_STRUCTURE":
-        m &= f["exact"]
-        if c["br_min"] is not None: m &= f["br"]>=c["br_min"]
-        if c["body_atr_min"] is not None: m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["structure_dist"][c["structure_lb"]] <= c["structure_dist_atr_max"]
+def indices(c, f):
+    m = f["valid_atr"].copy() & f["bullish"]
 
-    elif fam=="SWEEP_DISPLACEMENT":
-        lb=c["sweep_lb"]
-        m &= f["low"]<f["prev_low"][lb]
-        prevh=np.roll(f["high"],1); m[0]=False
-        m &= f["close"]>prevh
-        m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["lwb"]>=c["lower_wick_body_min"]
-        m &= f["mom4"]<=c["mom4_max"]
+    lb = c["sweep_lb"]
+    m &= f["low"] < f["prev_low"][lb]
 
-    elif fam=="FAILED_BREAKDOWN_RECLAIM":
-        pl=f["prev_low"][c["sweep_lb"]]
-        m &= f["low"]<pl
-        m &= f["close"]>pl
-        m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["close_loc"]>=c["close_loc_min"]
+    previous_high = np.roll(f["high"], 1)
+    m[0] = False
+    m &= f["close"] > previous_high
 
-    elif fam=="OUTSIDE_REVERSAL":
-        ph=np.roll(f["high"],1); pl=np.roll(f["low"],1); m[0]=False
-        m &= f["high"]>ph
-        m &= f["low"]<pl
-        m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["close_loc"]>=c["close_loc_min"]
-        m &= f["structure_dist"][c["structure_lb"]] <= c["structure_dist_atr_max"]
+    m &= f["body_atr"] >= c["body_atr_min"]
+    m &= f["lwb"] >= c["lower_wick_body_min"]
+    m &= f["mom4"] <= c["mom4_max"]
 
-    elif fam=="COMPRESSION_BREAKOUT":
-        m &= f["compression"]<=c["compression_max"]
-        m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["range_atr"]>=c["range_atr_min"]
-        m &= f["close"]>f["prev_high"][c["breakout_lb"]]
-
-    elif fam=="WASHOUT_RECLAIM":
-        pl=f["prev_low"][c["sweep_lb"]]
-        m &= f["low"]<pl
-        m &= f["close"]>f["prev_low"][10]
-        m &= f["body_atr"]>=c["body_atr_min"]
-        m &= f["mom4"]<=c["mom4_max"]
-        m &= f["close_loc"]>=c["close_loc_min"]
-
-    m=context_mask(m,c,f)
-    m[:200]=False
+    m = context_mask(m, c, f)
+    m[:200] = False
     return np.flatnonzero(m).tolist()
+
+
+# ---------------- focused stage 2 / 3 ----------------
+
+def geometry_key(c):
+    return (
+        int(c["sweep_lb"]),
+        round(float(c["body_atr_min"]), 4),
+        round(float(c["lower_wick_body_min"]), 4),
+        round(float(c["mom4_max"]), 4),
+    )
+
+
+def comparator_seeds():
+    """Known strong geometries from the broad-search ZIP.
+
+    These are injected into Stage 2 even if the NY-anchor geometry ranking
+    would otherwise omit them. This protects the ex-Friday and H1-trend
+    branches from being lost simply because Stage 1 is anchored to NY00-03.
+    """
+    return [
+        cfg(
+            "SEED_NY40_BODY115",
+            sweep_lb=40,
+            body_atr_min=1.15,
+            lower_wick_body_min=0.25,
+            mom4_max=-1.25,
+            context="NY_BLOCK_00-03",
+            rr=3.50,
+        ),
+        cfg(
+            "SEED_NY60_BODY115",
+            sweep_lb=60,
+            body_atr_min=1.15,
+            lower_wick_body_min=0.25,
+            mom4_max=-1.25,
+            context="NY_BLOCK_00-03",
+            rr=3.50,
+        ),
+        cfg(
+            "SEED_BODY135",
+            sweep_lb=40,
+            body_atr_min=1.35,
+            lower_wick_body_min=0.25,
+            mom4_max=-1.25,
+            context="NY_BLOCK_00-03",
+            rr=3.50,
+        ),
+    ]
+
+
+def stage2_context_configs(top_rows, geometry_by_id):
+    bases = []
+    seen = set()
+
+    for row in top_rows[:STAGE1_KEEP]:
+        base = deepcopy(geometry_by_id[row["config_id"]])
+        key = geometry_key(base)
+        if key not in seen:
+            seen.add(key)
+            bases.append(base)
+
+    for seed in comparator_seeds():
+        key = geometry_key(seed)
+        if key not in seen:
+            seen.add(key)
+            bases.append(seed)
+
+    out = []
+    for rank, base in enumerate(bases):
+        for ctx in CONTEXTS:
+            x = deepcopy(base)
+            x["config_id"] = f"CTX_{rank:02d}_{ctx}"
+            x["context"] = ctx
+            x["rr"] = 3.50
+            out.append(x)
+    return out
+
+
+def stage3_rr_configs(top_rows, context_by_id):
+    out = []
+    seen = set()
+    for rank, row in enumerate(top_rows[:STAGE2_KEEP]):
+        base = context_by_id[row["config_id"]]
+        for rr in RR_VALUES:
+            x = deepcopy(base)
+            x["rr"] = rr
+            x["config_id"] = f"RR_{rank:02d}_{rr:.2f}"
+            sig = (
+                geometry_key(x),
+                x["context"],
+                round(rr, 4),
+            )
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(x)
+    return out
+
+
+# ---------------- hard parity comparators ----------------
+
+def parity_configs():
+    return [
+        (
+            "ANCHOR_NY40_BODY115",
+            cfg(
+                "ANCHOR_NY40_BODY115",
+                sweep_lb=40,
+                body_atr_min=1.15,
+                lower_wick_body_min=0.25,
+                mom4_max=-1.25,
+                context="NY_BLOCK_00-03",
+                rr=3.50,
+            ),
+            72,
+        ),
+        (
+            "ANCHOR_NY60_BODY115",
+            cfg(
+                "ANCHOR_NY60_BODY115",
+                sweep_lb=60,
+                body_atr_min=1.15,
+                lower_wick_body_min=0.25,
+                mom4_max=-1.25,
+                context="NY_BLOCK_00-03",
+                rr=3.50,
+            ),
+            64,
+        ),
+        (
+            "ANCHOR_EXFRI_BODY135",
+            cfg(
+                "ANCHOR_EXFRI_BODY135",
+                sweep_lb=40,
+                body_atr_min=1.35,
+                lower_wick_body_min=0.25,
+                mom4_max=-1.25,
+                context="EXCLUDE_WEEKDAY_4",
+                rr=3.50,
+            ),
+            96,
+        ),
+        (
+            "ANCHOR_H1_BODY135",
+            cfg(
+                "ANCHOR_H1_BODY135",
+                sweep_lb=40,
+                body_atr_min=1.35,
+                lower_wick_body_min=0.25,
+                mom4_max=-1.25,
+                context="H1_EMA50_GT_EMA200",
+                rr=3.50,
+            ),
+            57,
+        ),
+    ]
 
 # ---------------- backtest ----------------
 
@@ -970,19 +1078,24 @@ def calendar_summary(rows):
 
 def run():
     try:
+        STATUS.update({"state":"fetching","message":"Fetching EUR/GBP history"})
         m15=fetch("M15",START,NOW,35)
         h1=fetch("H1",WARMUP,NOW,180)
         h4=fetch("H4",WARMUP,NOW,700)
-        d=fetch("D",WARMUP,NOW,3500)
+        d=fetch("D",WARMUP,NOW,3000,daily=True)
         if not all([m15,h1,h4,d]):
-            raise RuntimeError("Missing required history")
+            raise RuntimeError("Missing required EUR/GBP history")
 
         write_csv(OUTS["coverage"], [{
-            "instrument":PAIR,"requested_start_utc":iso(START),
+            "instrument":PAIR,
+            "requested_start_utc":iso(START),
+            "parity_cutoff_utc":iso(PARITY_CUTOFF),
             "actual_first_m15_utc":iso(m15[0]["time"]),
             "actual_last_m15_utc":iso(m15[-1]["time"]),
-            "m15_candles":len(m15),"h1_candles":len(h1),
-            "h4_candles":len(h4),"daily_candles":len(d),
+            "m15_candles":len(m15),
+            "h1_candles":len(h1),
+            "h4_candles":len(h4),
+            "daily_candles":len(d),
         }])
 
         STATUS.update({"state":"precompute","message":"HTF completion alignment"})
@@ -994,53 +1107,122 @@ def run():
         STATUS.update({"state":"precompute","message":"M15 feature cache"})
         f=features(m15,ah1,ah4,ad)
 
-        # Stage 1: broad archetypes with no inherited benchmark.
-        s1=stage1_configs()
+        # ----------------------------------------------------
+        # HARD PARITY
+        # ----------------------------------------------------
+        parity_rows=[]
+        for label,c,expected in parity_configs():
+            tr=backtest(
+                m15,
+                indices(c,f),
+                c["rr"],
+                PRIMARY_COST,
+                m15[0]["time"],
+                PARITY_CUTOFF,
+            )
+            actual=len(tr)
+            parity_rows.append({
+                "parity_id":label,
+                "expected_trades":expected,
+                "actual_trades":actual,
+                "status":"MATCH" if actual==expected else "FAIL",
+                "sweep_lb":c["sweep_lb"],
+                "body_atr_min":c["body_atr_min"],
+                "lower_wick_body_min":c["lower_wick_body_min"],
+                "mom4_max":c["mom4_max"],
+                "context":c["context"],
+                "rr":c["rr"],
+            })
+            if actual != expected:
+                write_csv(OUTS["parity"],parity_rows)
+                raise RuntimeError(
+                    f"Parity failed for {label}: expected {expected}, got {actual}"
+                )
+        write_csv(OUTS["parity"],parity_rows)
+
+        # ----------------------------------------------------
+        # STAGE 1 — focused geometry under frozen NY00-03 anchor
+        # ----------------------------------------------------
+        s1=focused_geometry_configs()
         s1map={x["config_id"]:x for x in s1}
         s1rows=[]
         for n,c in enumerate(s1,1):
-            STATUS.update({"state":"stage1","message":f"{n}/{len(s1)} {c['config_id']}"})
+            STATUS.update({
+                "state":"stage1_geometry",
+                "message":f"{n}/{len(s1)} {c['config_id']}"
+            })
             s1rows.append(evaluate(c,m15,indices(c,f)))
         s1rows=sortrows(s1rows)
         write_csv(OUTS["stage1"],s1rows)
-        write_csv(OUTS["stage1_family_summary"],family_summary(s1rows))
-        top1=[r for r in s1rows if r["full_trades"]>=45][:STAGE1_KEEP]
-        if len(top1)<STAGE1_KEEP: top1=s1rows[:STAGE1_KEEP]
 
-        # stage 2
-        s2=stage2(top1,s1map)
+        eligible1=[
+            r for r in s1rows
+            if r["full_trades"]>=40
+            and r["pre2010_r"]>0
+            and r["post2010_r"]>0
+            and r["positive_eras"]>=3
+        ]
+        top1=(eligible1 if eligible1 else s1rows)[:STAGE1_KEEP]
+
+        # ----------------------------------------------------
+        # STAGE 2 — context comparison on the strongest geometries
+        # ----------------------------------------------------
+        s2=stage2_context_configs(top1,s1map)
         s2map={x["config_id"]:x for x in s2}
         s2rows=[]
         for n,c in enumerate(s2,1):
-            STATUS.update({"state":"stage2","message":f"{n}/{len(s2)} {c['config_id']}"})
+            STATUS.update({
+                "state":"stage2_context",
+                "message":f"{n}/{len(s2)} {c['config_id']}"
+            })
             s2rows.append(evaluate(c,m15,indices(c,f)))
         s2rows=sortrows(s2rows)
         write_csv(OUTS["stage2"],s2rows)
-        top2=[r for r in s2rows if r["full_trades"]>=45][:STAGE2_KEEP]
-        if len(top2)<STAGE2_KEEP: top2=s2rows[:STAGE2_KEEP]
 
-        # stage 3
-        s3=stage3(top2,s2map)
+        eligible2=[
+            r for r in s2rows
+            if r["full_trades"]>=40
+            and r["pre2010_r"]>0
+            and r["post2010_r"]>0
+            and r["positive_eras"]>=3
+        ]
+        top2=(eligible2 if eligible2 else s2rows)[:STAGE2_KEEP]
+
+        # ----------------------------------------------------
+        # STAGE 3 — clean RR sweep on actual improved geometries
+        # ----------------------------------------------------
+        s3=stage3_rr_configs(top2,s2map)
         s3map={x["config_id"]:x for x in s3}
         s3rows=[]
         for n,c in enumerate(s3,1):
-            STATUS.update({"state":"stage3","message":f"{n}/{len(s3)} {c['config_id']}"})
+            STATUS.update({
+                "state":"stage3_rr",
+                "message":f"{n}/{len(s3)} {c['config_id']}"
+            })
             s3rows.append(evaluate(c,m15,indices(c,f)))
         s3rows=sortrows(s3rows)
         write_csv(OUTS["stage3"],s3rows)
 
-        eligible=[
+        eligible3=[
             r for r in s3rows
-            if r["full_trades"]>=55 and r["pre2010_r"]>0
-            and r["post2010_r"]>0 and r["positive_eras"]>=3
+            if r["full_trades"]>=45
+            and r["pre2010_r"]>0
+            and r["post2010_r"]>0
+            and r["positive_eras"]==4
         ]
-        finalrows=(eligible if eligible else s3rows)[:FINAL_KEEP]
+        finalrows=(eligible3 if eligible3 else s3rows)[:FINAL_KEEP]
         finals=[s3map[r["config_id"]] for r in finalrows]
         write_csv(OUTS["final"],finalrows)
 
+        # ----------------------------------------------------
+        # DEEP FINALIST DIAGNOSTICS
+        # ----------------------------------------------------
         periods=[]; costs=[]; rolling=[]; cal=[]; trades=[]
         for n,c in enumerate(finals,1):
-            STATUS.update({"state":"final","message":f"{n}/{len(finals)} {c['config_id']}"})
+            STATUS.update({
+                "state":"deep_finalists",
+                "message":f"{n}/{len(finals)} {c['config_id']}"
+            })
             ix=indices(c,f)
             periods.extend(final_periods(c,m15,ix))
             costs.extend(cost_rows(c,m15,ix))
@@ -1052,6 +1234,10 @@ def run():
                     "config_id":c["config_id"],
                     "family":c["family"],
                     "context":c.get("context","NONE"),
+                    "sweep_lb":c["sweep_lb"],
+                    "body_atr_min":c["body_atr_min"],
+                    "lower_wick_body_min":c["lower_wick_body_min"],
+                    "mom4_max":c["mom4_max"],
                 })
                 trades.append(z)
 
@@ -1063,53 +1249,51 @@ def run():
         write_csv(OUTS["calendar_summary"],calendar_summary(cal))
         write_csv(OUTS["trades"],trades)
 
-        # top finalist ablation + plateau
-        if finals:
-            top=finals[0]
-            ab=[]
-            if top.get("context","NONE")!="NONE":
-                x=deepcopy(top); x["config_id"]=top["config_id"]+"_NO_CONTEXT"; x["context"]="NONE"
-                r=evaluate(x,m15,indices(x,f)); r["ablation"]="REMOVE_CONTEXT"; ab.append(r)
-            for fld in ["br_min","body_atr_min","range_atr_min","close_loc_min","lower_wick_body_min","mom4_max"]:
-                if top.get(fld) is None: continue
-                x=deepcopy(top); x["config_id"]=top["config_id"]+"_NO_"+fld; x[fld]=None
-                try:
-                    r=evaluate(x,m15,indices(x,f)); r["ablation"]="REMOVE_"+fld; ab.append(r)
-                except Exception:
-                    pass
-            write_csv(OUTS["ablation"],sortrows(ab))
-
-            plateau=[]
-            for x in local_variants(top,99):
-                x["rr"]=top["rr"]
-                try:
-                    plateau.append(evaluate(x,m15,indices(x,f)))
-                except Exception:
-                    pass
-            write_csv(OUTS["plateau"],sortrows(plateau))
-        else:
-            write_csv(OUTS["ablation"],[])
-            write_csv(OUTS["plateau"],[])
-
         write_csv(OUTS["notes"], [
-            {"item":"Research status","value":"Fresh EUR/GBP M15 LONG full-history search; no inherited M15 benchmark."},
-            {"item":"Universe","value":"Requested from 2002-05-06 20:00 UTC to current completed OANDA candles; actual coverage reported separately."},
-            {"item":"Families","value":"ENGULF_STRUCTURE; SWEEP_DISPLACEMENT; FAILED_BREAKDOWN_RECLAIM; OUTSIDE_REVERSAL; COMPRESSION_BREAKOUT; WASHOUT_RECLAIM."},
-            {"item":"Stage 2 contexts","value":"Single-factor H1/H4/D trend and volatility contexts, New York 4-hour blocks, London 4-hour blocks, and weekday exclusions."},
-            {"item":"Historical cost","value":"1.0 pip adverse long fill baseline; stress 0.5/1.0/1.5/2.0 pips."},
-            {"item":"Risk geometry","value":"Reference entry = signal close; stop = signal low - 10 ticks; target from reference signal-close risk; pyramiding 0."},
-            {"item":"HTF causality","value":"complete_at = next actual HTF candle open; lookup = bisect_right(completion_times, signal_time)-1."},
-            {"item":"Selection philosophy","value":"Prefer positive pre/post-2010 and multi-era robustness; final local plateau and ablation are diagnostics, not permission to overfit."},
-            {"item":"Holdout caveat","value":"Full history is the research universe. DEV/2018+ splits are temporal robustness views, not a pristine untouched OOS set."},
+            {
+                "item":"Research status",
+                "value":"Final focused EUR/GBP M15 LONG confirmation. Only SWEEP_DISPLACEMENT remains open; no new archetypes are searched.",
+            },
+            {
+                "item":"Parity",
+                "value":"Hard guards reproduce 72-trade NY40/body1.15, 64-trade NY60/body1.15, 96-trade ex-Friday/body1.35 and 57-trade H1/body1.35 comparators through 2026-09-10 09:49 UTC.",
+            },
+            {
+                "item":"Geometry grid",
+                "value":"Sweep 20/40/60/80/100; body 1.10-1.35; lower wick/body 0.20/0.25/0.30; prior 4h momentum <= -1.00/-1.25/-1.50 ATR.",
+            },
+            {
+                "item":"Contexts",
+                "value":"NY00-03 anchor; NY23-03, NY00-04, NY01-03, NY23-04; exclude Friday; prior completed H1 EMA50>EMA200; no-context ablation.",
+            },
+            {
+                "item":"RR",
+                "value":"Clean RR confirmation 2.75/3.00/3.25/3.50/3.75/4.00/4.25 on Stage-2 survivors.",
+            },
+            {
+                "item":"Historical cost",
+                "value":"1.0 pip adverse long fill baseline; stress 0.5/1.0/1.5/2.0 pips.",
+            },
+            {
+                "item":"Selection philosophy",
+                "value":"Prefer four positive eras, positive pre/post-2010, stable rolling/calendar behaviour, recent survivability and parameter plateaus over maximum lifetime R.",
+            },
+            {
+                "item":"Holdout caveat",
+                "value":"Full history has been used in development; period splits are temporal robustness checks, not pristine untouched OOS.",
+            },
         ])
 
         STATUS.update({"state":"packaging","message":"Building ZIP"})
         pack()
         STATUS.update({
             "state":"complete",
-            "message":"EUR/GBP M15 LONG full-history re-examination complete",
-            "stage1_configs":len(s1),"stage2_configs":len(s2),
-            "stage3_configs":len(s3),"finalists":len(finals),
+            "message":"EUR/GBP M15 LONG final confirmation complete",
+            "parity":"MATCH",
+            "stage1_geometry_configs":len(s1),
+            "stage2_context_configs":len(s2),
+            "stage3_rr_configs":len(s3),
+            "finalists":len(finals),
             "bundle":BUNDLE,
         })
 
@@ -1120,23 +1304,27 @@ def run():
 @app.route("/")
 def root():
     return jsonify({
-        "service":"EURGBP M15 LONG Full-History Re-examination",
+        "service":"EURGBP M15 LONG Final Sweep-Displacement Confirmation",
         "status":STATUS["state"],
-        "instrument":PAIR,"timeframe":"M15","side":"BUY",
+        "instrument":PAIR,
+        "timeframe":"M15",
+        "side":"BUY",
         "requested_start_utc":iso(START),
+        "parity_cutoff_utc":iso(PARITY_CUTOFF),
         "primary_cost_pips":PRIMARY_COST,
-        "orders_supported":False,"trading_enabled":False,
+        "orders_supported":False,
+        "trading_enabled":False,
         "routes":[
-            "/eurgbp-m15-long-full-history/status",
-            "/eurgbp-m15-long-full-history/results",
+            "/eurgbp-m15-long-final-confirmation/status",
+            "/eurgbp-m15-long-final-confirmation/results",
         ],
     })
 
-@app.route("/eurgbp-m15-long-full-history/status")
+@app.route("/eurgbp-m15-long-final-confirmation/status")
 def status():
     return jsonify(STATUS)
 
-@app.route("/eurgbp-m15-long-full-history/results")
+@app.route("/eurgbp-m15-long-final-confirmation/results")
 def results():
     return dl(BUNDLE)
 
