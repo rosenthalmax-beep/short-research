@@ -12,7 +12,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/GBP M15 LONG — COMPLEMENTARY FREQUENCY SEARCH
+# EUR/GBP M15 LONG — FINAL COMPLEMENT LOCAL CONFIRMATION
 #
 # PURPOSE
 #   Preserve the FINAL LOCKED 57-trade EUR/GBP M15 LONG core
@@ -90,7 +90,7 @@ from flask import Flask, jsonify, send_file
 #   overlap and finalist trade logs
 #
 # ONE ZIP
-#   /eurgbp-m15-long-complementary-frequency/results
+#   /eurgbp-m15-long-complement-final-local-final-local/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -104,7 +104,6 @@ PAIR = "EUR_GBP"
 START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 WARMUP = START - timedelta(days=900)
-PARITY_CUTOFF = datetime(2026, 9, 10, 9, 49, tzinfo=timezone.utc)
 
 NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
@@ -116,38 +115,55 @@ PRIMARY_COST = 1.0
 COSTS = [0.5, 1.0, 1.5, 2.0]
 
 CORE_RR = 2.75
-STAGE1_RR = 3.00
-STAGE3_RRS = [2.00, 2.50, 3.00, 3.50, 4.00, 4.50]
 
-STAGE1_KEEP = 30
-STAGE2_GEOMETRY_KEEP = 18
-STAGE2_KEEP = 24
-STAGE3_BASE_KEEP = 18
+# Final local confirmation is deliberately narrow:
+#   Stage 1 = geometry around the London engulfing anchor at RR2.00
+#   Stage 2 = adjacent London windows only
+#   Stage 3 = clean RR sweep 1.50 -> 2.50
+STAGE1_RR = 2.00
+STAGE3_RRS = [1.50, 1.75, 2.00, 2.25, 2.50]
+
+STAGE2_GEOMETRY_KEEP = 30
+STAGE3_BASE_KEEP = 12
 FINAL_KEEP = 16
+
+# Exact complement anchor from the prior broad frequency run.
+ANCHOR = {
+    "family": "ENGULF_STRUCTURE",
+    "context": "LDN_BLOCK_04-07",
+    "rr": 2.00,
+    "br_min": 1.20,
+    "body_atr_min": 1.00,
+    "structure_lb": 165,
+    "structure_dist_atr_max": 0.10,
+}
+
+# Fixed historical cutoffs for hard parity.
+CORE_PARITY_CUTOFF = datetime(2026, 9, 10, 9, 49, tzinfo=timezone.utc)
+ANCHOR_PARITY_CUTOFF = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
 
 MEANINGFUL_CORE_INACTIVE_YEARS = [2009, 2012, 2016]
 EARLY_NON_TARGET_YEARS = [2002, 2003, 2004]
 
 OUTS = {
-    "coverage": "eurgbp_m15_long_complementary_frequency_coverage.csv",
-    "parity": "eurgbp_m15_long_complementary_frequency_parity.csv",
-    "core": "eurgbp_m15_long_complementary_frequency_core_baseline.csv",
-    "stage1": "eurgbp_m15_long_complementary_frequency_stage1.csv",
-    "family": "eurgbp_m15_long_complementary_frequency_family_summary.csv",
-    "stage2": "eurgbp_m15_long_complementary_frequency_stage2_context.csv",
-    "stage3": "eurgbp_m15_long_complementary_frequency_stage3_rr.csv",
-    "finalists": "eurgbp_m15_long_complementary_frequency_finalists.csv",
-    "periods": "eurgbp_m15_long_complementary_frequency_periods.csv",
-    "cost": "eurgbp_m15_long_complementary_frequency_cost_stress.csv",
-    "rolling": "eurgbp_m15_long_complementary_frequency_rolling.csv",
-    "rolling_summary": "eurgbp_m15_long_complementary_frequency_rolling_summary.csv",
-    "calendar": "eurgbp_m15_long_complementary_frequency_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_long_complementary_frequency_calendar_summary.csv",
-    "overlap": "eurgbp_m15_long_complementary_frequency_overlap.csv",
-    "trades": "eurgbp_m15_long_complementary_frequency_finalist_trades.csv",
-    "notes": "eurgbp_m15_long_complementary_frequency_notes.csv",
+    "coverage": "eurgbp_m15_long_complement_final_local_coverage.csv",
+    "parity": "eurgbp_m15_long_complement_final_local_parity.csv",
+    "core": "eurgbp_m15_long_complement_final_local_core_baseline.csv",
+    "stage1": "eurgbp_m15_long_complement_final_local_stage1_geometry.csv",
+    "stage2": "eurgbp_m15_long_complement_final_local_stage2_london_windows.csv",
+    "stage3": "eurgbp_m15_long_complement_final_local_stage3_rr.csv",
+    "finalists": "eurgbp_m15_long_complement_final_local_finalists.csv",
+    "periods": "eurgbp_m15_long_complement_final_local_periods.csv",
+    "cost": "eurgbp_m15_long_complement_final_local_cost_stress.csv",
+    "rolling": "eurgbp_m15_long_complement_final_local_rolling.csv",
+    "rolling_summary": "eurgbp_m15_long_complement_final_local_rolling_summary.csv",
+    "calendar": "eurgbp_m15_long_complement_final_local_calendar_years.csv",
+    "calendar_summary": "eurgbp_m15_long_complement_final_local_calendar_summary.csv",
+    "overlap": "eurgbp_m15_long_complement_final_local_overlap.csv",
+    "trades": "eurgbp_m15_long_complement_final_local_finalist_trades.csv",
+    "notes": "eurgbp_m15_long_complement_final_local_notes.csv",
 }
-BUNDLE = "EURGBP_M15_LONG_COMPLEMENTARY_FREQUENCY_RESULTS.zip"
+BUNDLE = "EURGBP_M15_LONG_COMPLEMENT_FINAL_LOCAL_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -440,12 +456,12 @@ def features(c, h1, h4, d):
     pam = np.r_[np.nan, am20[:-1]]
     comp[va] = pa[va]/pam[va]
 
-    lbs = [5,10,20,40,60,80,100,120,165,200]
+    lbs = [5,10,20,40,60,80,100,120,165,200,250]
     pl = {lb: prev_extreme(l,lb,"min") for lb in lbs}
     ph = {lb: prev_extreme(h,lb,"max") for lb in lbs}
 
     sd = {}
-    for lb in [40,60,80,100,120,165,200]:
+    for lb in [40,60,80,100,120,165,200,250]:
         x = np.full(n,np.nan)
         ok = valid_atr & np.isfinite(pl[lb])
         x[ok] = np.abs(l[ok]-pl[lb][ok])/a[ok]
@@ -525,82 +541,42 @@ def frozen_core_cfg():
 
 
 def build_stage1_configs():
-    """Broad but controlled alternative-family geometry search."""
+    """Focused local geometry around the London engulfing complement."""
     out = []
     n = 0
 
-    # Compression -> breakout: 54 configs
-    for co, body, rang, lb in product(
-        [0.65, 0.75, 0.85],
-        [0.80, 1.00, 1.20],
-        [1.20, 1.40, 1.60],
-        [5, 10],
+    # 4 * 3 * 5 * 3 = 180 local geometries.
+    # Anchor is interior/near-interior on all dimensions except none:
+    # body1.00, BR1.20, LB165, distance0.10.
+    for body, br, lb, dist in product(
+        [0.90, 1.00, 1.10, 1.20],
+        [1.10, 1.20, 1.30],
+        [100, 130, 165, 200, 250],
+        [0.05, 0.10, 0.15],
     ):
         out.append(cfg(
-            f"S1_{n:04d}", "COMPRESSION_BREAKOUT",
-            compression_max=co,
-            body_atr_min=body,
-            range_atr_min=rang,
-            breakout_lb=lb,
-        )); n += 1
-
-    # Failed low breakdown -> reclaim: 36 configs
-    for lb, body, close_loc in product(
-        [20, 40, 60, 100],
-        [0.60, 0.80, 1.00],
-        [0.60, 0.70, 0.80],
-    ):
-        out.append(cfg(
-            f"S1_{n:04d}", "FAILED_BREAKDOWN_RECLAIM",
-            sweep_lb=lb,
-            body_atr_min=body,
-            close_loc_min=close_loc,
-        )); n += 1
-
-    # Exact bullish engulf near structure: 54 configs
-    for br, body, lb, dist in product(
-        [1.00, 1.20, 1.40],
-        [0.60, 0.80, 1.00],
-        [60, 100, 165],
-        [0.10, 0.20],
-    ):
-        out.append(cfg(
-            f"S1_{n:04d}", "ENGULF_STRUCTURE",
+            f"S1_{n:04d}",
+            "ENGULF_STRUCTURE",
+            rr=STAGE1_RR,
+            context="LDN_BLOCK_04-07",
             br_min=br,
             body_atr_min=body,
             structure_lb=lb,
             structure_dist_atr_max=dist,
-        )); n += 1
-
-    # Washout / momentum reversal: 36 configs
-    for lb, body, mom, close_loc in product(
-        [20, 40, 60],
-        [0.60, 0.80, 1.00],
-        [-0.75, -1.25],
-        [0.65, 0.75],
-    ):
-        out.append(cfg(
-            f"S1_{n:04d}", "WASHOUT_RECLAIM",
-            sweep_lb=lb,
-            body_atr_min=body,
-            mom4_max=mom,
-            close_loc_min=close_loc,
-        )); n += 1
+        ))
+        n += 1
 
     return out
 
 
 STAGE2_CONTEXTS = [
-    "NONE",
-    "H1_CLOSE_GT_EMA100",
-    "H1_EMA50_GT_EMA200",
-    "H4_CLOSE_GT_EMA100",
-    "D_CLOSE_GT_EMA200",
+    # Anchor plus sensible adjacent London windows only.
+    "LDN_BLOCK_03-06",
+    "LDN_BLOCK_03-07",
     "LDN_BLOCK_04-07",
-    "LDN_BLOCK_08-11",
-    "NY_BLOCK_00-03",
-    "NY_BLOCK_04-07",
-    "EXCLUDE_FRIDAY",
+    "LDN_BLOCK_04-08",
+    "LDN_BLOCK_05-08",
+    "LDN_BLOCK_03-08",
 ]
 
 
@@ -965,23 +941,29 @@ def family_summary(rows):
 # STAGED SEARCH
 # ============================================================
 
+def _is_anchor_geometry(c):
+    return (
+        c.get("family") == ANCHOR["family"]
+        and abs(float(c.get("br_min")) - ANCHOR["br_min"]) < 1e-12
+        and abs(float(c.get("body_atr_min")) - ANCHOR["body_atr_min"]) < 1e-12
+        and int(c.get("structure_lb")) == ANCHOR["structure_lb"]
+        and abs(float(c.get("structure_dist_atr_max")) - ANCHOR["structure_dist_atr_max"]) < 1e-12
+    )
+
+
 def stage2_configs(stage1_rows, by_id):
-    # Preserve family diversity: take up to 5 strong geometries from each
-    # family, then fill remaining slots by overall rank.
-    selected = []
-    seen = set()
-    by_family = defaultdict(list)
-    for r in sort_rows(stage1_rows):
-        by_family[r["family"]].append(r)
-    for fam, rows in by_family.items():
-        for r in rows[:5]:
-            if r["config_id"] not in seen:
-                selected.append(r); seen.add(r["config_id"])
-    for r in sort_rows(stage1_rows):
-        if len(selected) >= STAGE2_GEOMETRY_KEEP:
-            break
-        if r["config_id"] not in seen:
-            selected.append(r); seen.add(r["config_id"])
+    """Take the strongest local geometries, always retaining the exact anchor."""
+    selected = sort_rows(stage1_rows)[:STAGE2_GEOMETRY_KEEP]
+    selected_ids = {r["config_id"] for r in selected}
+
+    anchor_row = next(
+        (r for r in stage1_rows if _is_anchor_geometry(by_id[r["config_id"]])),
+        None,
+    )
+    if anchor_row is None:
+        raise RuntimeError("Exact London engulfing anchor geometry missing from Stage 1 grid")
+    if anchor_row["config_id"] not in selected_ids:
+        selected = selected[:-1] + [anchor_row]
 
     out = []
     for rank, row in enumerate(selected):
@@ -995,13 +977,28 @@ def stage2_configs(stage1_rows, by_id):
 
 
 def stage3_configs(stage2_rows, by_id):
-    # Deepen only robust survivors, while retaining family diversity.
+    """RR sweep on robust London-window survivors; force anchor base through."""
     eligible = [r for r in sort_rows(stage2_rows) if (
         r["accepted_adds"] >= 8
         and r["accepted_r"] > 0
         and r["accepted_positive_eras"] >= 2
     )]
     base_rows = eligible[:STAGE3_BASE_KEEP] if eligible else sort_rows(stage2_rows)[:STAGE3_BASE_KEEP]
+
+    anchor_base = next(
+        (r for r in stage2_rows
+         if by_id[r["config_id"]].get("context") == ANCHOR["context"]
+         and _is_anchor_geometry(by_id[r["config_id"]])),
+        None,
+    )
+    if anchor_base is None:
+        raise RuntimeError("Exact anchor context missing from Stage 2")
+    if anchor_base["config_id"] not in {r["config_id"] for r in base_rows}:
+        if len(base_rows) >= STAGE3_BASE_KEEP:
+            base_rows = base_rows[:-1] + [anchor_base]
+        else:
+            base_rows.append(anchor_base)
+
     out = []
     seen = set()
     for rank, row in enumerate(base_rows):
@@ -1011,12 +1008,12 @@ def stage3_configs(stage2_rows, by_id):
             x["config_id"] = f"S3_{rank:02d}_RR_{rr:.2f}"
             x["rr"] = rr
             sig = tuple(str(x.get(k)) for k in [
-                "family","context","compression_max","body_atr_min",
-                "range_atr_min","breakout_lb","br_min","structure_lb",
-                "structure_dist_atr_max","sweep_lb","close_loc_min","mom4_max","rr"
+                "family","context","body_atr_min","br_min",
+                "structure_lb","structure_dist_atr_max","rr"
             ])
             if sig not in seen:
-                seen.add(sig); out.append(x)
+                seen.add(sig)
+                out.append(x)
     return out
 
 
@@ -1200,8 +1197,10 @@ def run_research():
             raise RuntimeError("Missing required EUR/GBP history")
 
         write_csv(OUTS["coverage"],[{
-            "instrument":PAIR,"requested_start_utc":iso(START),
-            "parity_cutoff_utc":iso(PARITY_CUTOFF),
+            "instrument":PAIR,
+            "requested_start_utc":iso(START),
+            "core_parity_cutoff_utc":iso(CORE_PARITY_CUTOFF),
+            "anchor_parity_cutoff_utc":iso(ANCHOR_PARITY_CUTOFF),
             "actual_first_m15_utc":iso(m15[0]["time"]),
             "actual_last_m15_utc":iso(m15[-1]["time"]),
             "m15_candles":len(m15),"h1_candles":len(h1),
@@ -1215,23 +1214,72 @@ def run_research():
         ad=align_htf(times,htf_state(daily))
         f=features(m15,ah1,ah4,ad)
 
+        # ---------------- HARD PARITY: frozen Trigger A ----------------
         core_cfg=frozen_core_cfg()
         core_ix=signal_indices(core_cfg,f)
-
-        # HARD PARITY through fixed historical cutoff.
-        parity_core=run_backtest(
-            m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],PARITY_CUTOFF
+        core_parity=run_backtest(
+            m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],CORE_PARITY_CUTOFF
         )
-        parity_rows=[{
-            "check":"FROZEN_CORE_57","expected_trades":57,
-            "actual_trades":len(parity_core),
-            "status":"MATCH" if len(parity_core)==57 else "MISMATCH",
-            "cutoff_utc":iso(PARITY_CUTOFF),
-        }]
+
+        # ---------------- HARD PARITY: prior London Trigger B anchor ----------------
+        anchor_cfg = cfg(
+            "ANCHOR_LDN_ENGULF",
+            ANCHOR["family"],
+            rr=ANCHOR["rr"],
+            context=ANCHOR["context"],
+            br_min=ANCHOR["br_min"],
+            body_atr_min=ANCHOR["body_atr_min"],
+            structure_lb=ANCHOR["structure_lb"],
+            structure_dist_atr_max=ANCHOR["structure_dist_atr_max"],
+        )
+        anchor_ix=signal_indices(anchor_cfg,f)
+        core_anchor_cut=run_backtest(
+            m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF
+        )
+        anchor_parity=run_backtest(
+            m15,anchor_ix,ANCHOR["rr"],PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF
+        )
+        anchor_combined,anchor_accepted,anchor_rejected=nonoverlap_overlay(
+            core_anchor_cut,anchor_parity
+        )
+
+        parity_rows=[
+            {
+                "check":"FROZEN_CORE_57",
+                "expected_core_trades":57,
+                "actual_core_trades":len(core_parity),
+                "status":"MATCH" if len(core_parity)==57 else "MISMATCH",
+                "cutoff_utc":iso(CORE_PARITY_CUTOFF),
+            },
+            {
+                "check":"LONDON_ENGULF_ANCHOR_24",
+                "expected_candidate_trades":24,
+                "actual_candidate_trades":len(anchor_parity),
+                "expected_accepted_nonoverlap":24,
+                "actual_accepted_nonoverlap":len(anchor_accepted),
+                "expected_rejected_overlap":0,
+                "actual_rejected_overlap":len(anchor_rejected),
+                "expected_combined_trades":81,
+                "actual_combined_trades":len(anchor_combined),
+                "status":"MATCH" if (
+                    len(anchor_parity)==24 and len(anchor_accepted)==24
+                    and len(anchor_rejected)==0 and len(anchor_combined)==81
+                ) else "MISMATCH",
+                "cutoff_utc":iso(ANCHOR_PARITY_CUTOFF),
+            },
+        ]
         write_csv(OUTS["parity"],parity_rows)
-        if len(parity_core)!=57:
+        if len(core_parity)!=57:
             raise RuntimeError(
-                f"Frozen EUR/GBP LONG core parity failed: expected 57, got {len(parity_core)}"
+                f"Frozen EUR/GBP LONG core parity failed: expected 57, got {len(core_parity)}"
+            )
+        if not (
+            len(anchor_parity)==24 and len(anchor_accepted)==24
+            and len(anchor_rejected)==0 and len(anchor_combined)==81
+        ):
+            raise RuntimeError(
+                "London engulfing anchor parity failed: expected 24 candidate / "
+                "24 accepted / 0 overlap / 81 combined"
             )
 
         core_full=run_backtest(m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],NOW)
@@ -1240,57 +1288,71 @@ def run_research():
             "strategy":"FROZEN_CORE","rr":CORE_RR,
             **{k:round(v,6) if isinstance(v,float) else v for k,v in core_stats.items()},
             "known_meaningful_inactive_years":"2009,2012,2016",
-            "note":"Core is frozen; no parameter in Trigger A is searched or loosened.",
+            "note":"Trigger A is frozen; only Trigger B London engulfing neighbourhood is tested.",
         }])
 
-        # STAGE 1
+        # STAGE 1 — local geometry, anchor London04-07, RR2.00.
         stage1=build_stage1_configs()
         by1={c["config_id"]:c for c in stage1}
         rows1=[]
         for n,c in enumerate(stage1,1):
-            STATUS.update({"state":"stage1","message":f"Stage 1 {n}/{len(stage1)} {c['config_id']}"})
+            STATUS.update({"state":"stage1","message":f"Local geometry {n}/{len(stage1)} {c['config_id']}"})
             cand_ix=signal_indices(c,f)
             cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
             rows1.append(evaluation_row(c,core_full,cand))
         rows1=sort_rows(rows1)
         write_csv(OUTS["stage1"],rows1)
-        write_csv(OUTS["family"],family_summary(rows1))
 
-        # STAGE 2 contexts
+        # STAGE 2 — adjacent London windows only.
         stage2=stage2_configs(rows1,by1)
         by2={c["config_id"]:c for c in stage2}
         rows2=[]
         for n,c in enumerate(stage2,1):
-            STATUS.update({"state":"stage2","message":f"Stage 2 {n}/{len(stage2)} {c['config_id']}"})
+            STATUS.update({"state":"stage2","message":f"London window {n}/{len(stage2)} {c['config_id']}"})
             cand_ix=signal_indices(c,f)
             cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
             rows2.append(evaluation_row(c,core_full,cand))
         rows2=sort_rows(rows2)
         write_csv(OUTS["stage2"],rows2)
 
-        # STAGE 3 RR confirmation
+        # STAGE 3 — clean RR sweep 1.50 -> 2.50.
         stage3=stage3_configs(rows2,by2)
         by3={c["config_id"]:c for c in stage3}
         rows3=[]
         for n,c in enumerate(stage3,1):
-            STATUS.update({"state":"stage3","message":f"Stage 3 {n}/{len(stage3)} {c['config_id']}"})
+            STATUS.update({"state":"stage3","message":f"RR confirmation {n}/{len(stage3)} {c['config_id']}"})
             cand_ix=signal_indices(c,f)
             cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
             rows3.append(evaluation_row(c,core_full,cand))
         rows3=sort_rows(rows3)
         write_csv(OUTS["stage3"],rows3)
 
-        # Finalists: robustness-first, not gap-year-specific.
+        # Robustness-first finalist selection. Gap years are NOT scored.
         eligible=[r for r in rows3 if (
             r["accepted_adds"]>=10
             and r["accepted_r"]>0
-            and r["accepted_pre2010_r"]>0
             and r["accepted_post2010_r"]>0
             and r["accepted_positive_eras"]>=3
             and r["combined_r"]>core_stats["total_r"]
-            and r["combined_dd"]>=-10.0
+            and r["combined_dd"]>=-9.0
         )]
         finalist_rows=(eligible if eligible else rows3)[:FINAL_KEEP]
+
+        # Force exact old anchor RR2.00 into deep diagnostics if ranking omits it.
+        anchor_stage3_row = next(
+            (r for r in rows3 if (
+                abs(float(r["rr"])-2.00)<1e-12
+                and r["context"]==ANCHOR["context"]
+                and abs(float(r["br_min"])-ANCHOR["br_min"])<1e-12
+                and abs(float(r["body_atr_min"])-ANCHOR["body_atr_min"])<1e-12
+                and int(r["structure_lb"])==ANCHOR["structure_lb"]
+                and abs(float(r["structure_dist_atr_max"])-ANCHOR["structure_dist_atr_max"])<1e-12
+            )),
+            None,
+        )
+        if anchor_stage3_row is not None and anchor_stage3_row["config_id"] not in {r["config_id"] for r in finalist_rows}:
+            finalist_rows = finalist_rows[:max(0,FINAL_KEEP-1)] + [anchor_stage3_row]
+
         finalists=[by3[r["config_id"]] for r in finalist_rows]
         write_csv(OUTS["finalists"],finalist_rows)
 
@@ -1328,17 +1390,22 @@ def run_research():
         write_csv(OUTS["overlap"],overlap)
         write_csv(OUTS["trades"],trade_rows)
         write_csv(OUTS["notes"],[
-            {"note":"Frozen core parity must equal 57 through 2026-09-10 09:49 UTC."},
-            {"note":"Stage scoring deliberately does not reward filling 2009, 2012 or 2016; those years are diagnostics only."},
-            {"note":"2002-2004 are early-history non-target years and are not optimisation targets."},
+            {"note":"Trigger A remains frozen at the 57-trade RR2.75 sweep-displacement core."},
+            {"note":"Trigger B search is restricted to the previously discovered London exact-bullish-engulfing family."},
+            {"note":"Exact prior Trigger B anchor must reproduce 24 candidate / 24 accepted / 0 overlap / 81 combined through the fixed cutoff."},
+            {"note":"Stage 1 tests body 0.90-1.20, BR 1.10-1.30, structure LB100-250 and distance 0.05-0.15 only."},
+            {"note":"Stage 2 tests only adjacent London windows around the prior 04-07 edge."},
+            {"note":"Stage 3 tests RR 1.50/1.75/2.00/2.25/2.50 only."},
+            {"note":"2009/2012/2016 are diagnostics only and do not enter candidate scoring."},
+            {"note":"2002-2004 remain early-history non-target years; do not optimise specifically for them."},
             {"note":"Candidate interval [signal, exit) overlapping any core trade is rejected; exact core exit candle remains eligible."},
-            {"note":"Final complement should be selected on general temporal/rolling/cost robustness and frequency improvement, not highest lifetime R/PF."},
-            {"note":"Full history has been used in development, so period splits are robustness diagnostics rather than pristine OOS."},
+            {"note":"Select on parameter plateau, era/rolling/cost robustness and combined DD, not maximum lifetime PF/R."},
+            {"note":"Full history has been used in development; temporal splits are robustness diagnostics, not pristine OOS."},
         ])
 
         pack()
         STATUS.update({
-            "state":"complete","message":"EUR/GBP M15 LONG complementary-frequency search complete",
+            "state":"complete","message":"EUR/GBP M15 LONG final complement local confirmation complete",
             "core_trades":len(core_full),"stage1_configs":len(stage1),
             "stage2_configs":len(stage2),"stage3_configs":len(stage3),
             "finalists":len(finalists),"results_bundle":BUNDLE,
@@ -1357,25 +1424,25 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service":"EUR/GBP M15 LONG Complementary Frequency Search",
+        "service":"EUR/GBP M15 LONG Final Complement Local Confirmation",
         "state":STATUS["state"],"instrument":PAIR,"timeframe":"M15","side":"BUY",
         "orders_supported":False,"trading_enabled":False,
         "routes":[
-            "/eurgbp-m15-long-complementary-frequency/status",
-            "/eurgbp-m15-long-complementary-frequency/results",
+            "/eurgbp-m15-long-complement-final-local-final-local/status",
+            "/eurgbp-m15-long-complement-final-local-final-local/results",
         ],
     })
 
-@app.route("/eurgbp-m15-long-complementary-frequency/status")
+@app.route("/eurgbp-m15-long-complement-final-local-final-local/status")
 def route_status():
     return jsonify(STATUS)
 
-@app.route("/eurgbp-m15-long-complementary-frequency/results")
+@app.route("/eurgbp-m15-long-complement-final-local-final-local/results")
 def route_results():
     return dl(BUNDLE)
 
 if __name__ == "__main__":
-    thread=threading.Thread(target=run_research,name="eurgbp-m15-long-complement",daemon=True)
+    thread=threading.Thread(target=run_research,name="eurgbp-m15-long-complement-final-local",daemon=True)
     thread.start()
     port=int(os.getenv("PORT",5000))
     app.run(host="0.0.0.0",port=port,debug=False)
