@@ -449,12 +449,12 @@ def features(c, h1, h4, d):
     pam = np.r_[np.nan, am20[:-1]]
     comp[va] = pa[va]/pam[va]
 
-    lbs = [5,10,20,40,60,80,100,120,165,200,250]
+    lbs = [5,10,20,40,60,80,100,120,130,165,200,250]
     pl = {lb: prev_extreme(l,lb,"min") for lb in lbs}
     ph = {lb: prev_extreme(h,lb,"max") for lb in lbs}
 
     sd = {}
-    for lb in [40,60,80,100,120,165,200,250]:
+    for lb in [40,60,80,100,120,130,165,200,250]:
         x = np.full(n,np.nan)
         ok = valid_atr & np.isfinite(pl[lb])
         x[ok] = np.abs(l[ok]-pl[lb][ok])/a[ok]
