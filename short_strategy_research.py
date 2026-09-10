@@ -5739,58 +5739,1436 @@ def run_combined_research():
         )
 
 
+
+
 # ============================================================
-# FLASK ROUTES
+# H1 + M15 EXIT RESEARCH LAYER
+# ============================================================
+#
+# READ ONLY. NEVER SENDS ORDERS.
+#
+# Purpose:
+#   Test whether universal early-exit rules improve the exact locked
+#   20-strategy H1+M15 portfolio without changing any ENTRY rule.
+#
+# Control:
+#   Existing STOP / TARGET only.
+#
+# Candidate families:
+#   1) MAX HOLD ONLY
+#      H1: 12 / 24 / 48 / 72 completed post-entry H1 bars
+#      M15: 24 / 48 / 72 / 96 completed post-entry M15 bars
+#
+#   2) TIME + MFE PROGRESS
+#      At the same bar limits, exit at that bar close ONLY IF the trade
+#      has never achieved +0.25R, +0.50R or +0.75R MFE since entry.
+#      If the threshold has already been reached, the trade is left alone
+#      to continue to its original stop or target.
+#
+#   3) UNIVERSAL REVERSAL
+#      Exit at bar close after a strong exact opposite engulfing candle.
+#      Opposite body thresholds: 0.75 / 1.00 / 1.25 ATR14.
+#      This is deliberately generic: no pair-specific reversal optimization.
+#
+# Important causality conventions:
+#   - Original stop/target is always checked FIRST inside each bar.
+#   - If neither is hit, MFE/reversal/time logic is evaluated at bar close.
+#   - MFE starts only AFTER entry; the signal candle's pre-entry excursion
+#     is never counted.
+#   - Exact exit-candle re-entry remains eligible, preserving locked p0 logic.
+#   - Original entry adverse-cost convention is unchanged.
+#   - Primary early-exit result uses the bar close with no invented extra
+#     market-exit slippage. A separate sensitivity table adds 0.5x and 1.0x
+#     the native adverse entry-cost amount ONLY to early-market exits.
+#
+# Live portfolio modes:
+#   INDEPENDENT
+#       Research ceiling: different strategies can overlap in either direction.
+#
+#   LIVE_SAFE_H1_FIRST
+#       Matches the current non-hedging OANDA constraint: same-direction
+#       same-pair overlaps are allowed, but a new trade is rejected while an
+#       opposite-direction trade on that pair is open. H1 wins exact entry ties.
+#
+#   LIVE_SAFE_M15_FIRST
+#       Same rule, but M15 wins exact H1/M15 entry ties. Exported as a tie-order
+#       sensitivity because the two live watcher loops are independent.
+# ============================================================
+
+EXIT_STATUS = {
+    "state": "not_started",
+    "message": "Exit research not started",
+    "progress": 0,
+}
+
+EXIT_BUNDLE = "H1_M15_20_EXIT_RESEARCH_RESULTS.zip"
+EXIT_OUT = {
+    "scenario_definitions": "h1_m15_exit_scenario_definitions.csv",
+    "control_parity": "h1_m15_exit_control_parity.csv",
+    "scenario_summary": "h1_m15_exit_scenario_summary.csv",
+    "delta_vs_control": "h1_m15_exit_delta_vs_control.csv",
+    "by_strategy": "h1_m15_exit_by_strategy.csv",
+    "by_timeframe": "h1_m15_exit_by_timeframe.csv",
+    "periods": "h1_m15_exit_periods.csv",
+    "rolling": "h1_m15_exit_rolling.csv",
+    "rolling_summary": "h1_m15_exit_rolling_summary.csv",
+    "calendar": "h1_m15_exit_calendar.csv",
+    "calendar_summary": "h1_m15_exit_calendar_summary.csv",
+    "exit_reasons": "h1_m15_exit_reason_summary.csv",
+    "hold_summary": "h1_m15_exit_hold_summary.csv",
+    "gate_rejections": "h1_m15_exit_live_safe_gate_rejections.csv",
+    "market_exit_cost_stress": "h1_m15_exit_market_exit_cost_stress.csv",
+    "trades": "h1_m15_exit_all_trades.csv",
+    "notes": "h1_m15_exit_notes.csv",
+}
+
+# Current known control counts from the exact combined run on 2026-09-10.
+# A later run may have MORE trades because the history endpoint advances, but
+# it must never fall below these counts under CONTROL.
+H1_CONTROL_MIN_BY_STRATEGY = {
+    "EUR_GBP_H1_LONG": 52,
+    "EUR_GBP_H1_SHORT": 73,
+    "EUR_USD_H1_LONG": 163,
+    "EUR_USD_H1_SHORT": 122,
+    "GBP_USD_H1_LONG": 205,
+    "GBP_USD_H1_SHORT": 123,
+    "USD_CAD_H1_LONG": 82,
+    "USD_CAD_H1_SHORT": 98,
+    "USD_JPY_H1_LONG": 228,
+    "USD_JPY_H1_SHORT": 169,
+}
+M15_CONTROL_MIN_BY_STRATEGY = dict(REFERENCE_COUNTS)
+
+
+def build_exit_scenarios():
+    out = [{
+        "scenario_id": "CONTROL",
+        "family": "CONTROL",
+        "h1_max_bars": None,
+        "m15_max_bars": None,
+        "mfe_threshold_r": None,
+        "reversal_body_atr_min": None,
+        "description": "Original locked stop/target exits only",
+    }]
+
+    bar_pairs = [
+        (12, 24, "A"),
+        (24, 48, "B"),
+        (48, 72, "C"),
+        (72, 96, "D"),
+    ]
+
+    for h1_bars, m15_bars, label in bar_pairs:
+        out.append({
+            "scenario_id": f"TIME_ONLY_{label}_H1_{h1_bars}_M15_{m15_bars}",
+            "family": "TIME_ONLY",
+            "h1_max_bars": h1_bars,
+            "m15_max_bars": m15_bars,
+            "mfe_threshold_r": None,
+            "reversal_body_atr_min": None,
+            "description": (
+                f"Exit at bar close after H1={h1_bars} or M15={m15_bars} "
+                "post-entry bars if stop/target has not already hit"
+            ),
+        })
+
+        for mfe in (0.25, 0.50, 0.75):
+            mfe_label = str(mfe).replace(".", "P")
+            out.append({
+                "scenario_id": (
+                    f"TIME_MFE_{label}_H1_{h1_bars}_M15_{m15_bars}_MFE_{mfe_label}R"
+                ),
+                "family": "TIME_MFE",
+                "h1_max_bars": h1_bars,
+                "m15_max_bars": m15_bars,
+                "mfe_threshold_r": mfe,
+                "reversal_body_atr_min": None,
+                "description": (
+                    f"At H1={h1_bars}/M15={m15_bars} bars, exit only if "
+                    f"post-entry MFE has never reached +{mfe:.2f}R"
+                ),
+            })
+
+    for body_atr in (0.75, 1.00, 1.25):
+        label = str(body_atr).replace(".", "P")
+        out.append({
+            "scenario_id": f"REVERSAL_OPP_ENGULF_BODY_{label}ATR",
+            "family": "REVERSAL",
+            "h1_max_bars": None,
+            "m15_max_bars": None,
+            "mfe_threshold_r": None,
+            "reversal_body_atr_min": body_atr,
+            "description": (
+                "Exit at bar close on an exact opposite engulfing candle "
+                f"whose body is >= {body_atr:.2f} ATR14"
+            ),
+        })
+
+    return out
+
+
+EXIT_SCENARIOS = build_exit_scenarios()
+EXIT_SCENARIO_MAP = {x["scenario_id"]: x for x in EXIT_SCENARIOS}
+
+
+def exit_rule_for_timeframe(scenario, timeframe):
+    if timeframe == "H1":
+        max_bars = scenario["h1_max_bars"]
+    elif timeframe == "M15":
+        max_bars = scenario["m15_max_bars"]
+    else:
+        raise ValueError(f"Unknown timeframe: {timeframe}")
+
+    return {
+        "family": scenario["family"],
+        "max_bars": max_bars,
+        "mfe_threshold_r": scenario["mfe_threshold_r"],
+        "reversal_body_atr_min": scenario["reversal_body_atr_min"],
+    }
+
+
+def exact_opposite_reversal(candles, atr_values, index, open_side, body_atr_min):
+    if body_atr_min is None or index <= 0:
+        return False
+    if index >= len(candles) or index >= len(atr_values):
+        return False
+
+    atr = atr_values[index]
+    if atr is None or not math.isfinite(float(atr)) or atr <= 0:
+        return False
+
+    previous = candles[index - 1]
+    current = candles[index]
+
+    if open_side == "BUY":
+        if not (
+            previous["close"] > previous["open"]
+            and current["close"] < current["open"]
+            and current["open"] >= previous["close"]
+            and current["close"] <= previous["open"]
+        ):
+            return False
+        body = current["open"] - current["close"]
+    else:
+        if not (
+            previous["close"] < previous["open"]
+            and current["close"] > current["open"]
+            and current["open"] <= previous["close"]
+            and current["close"] >= previous["open"]
+        ):
+            return False
+        body = current["close"] - current["open"]
+
+    return body > 0 and (body / atr) >= body_atr_min
+
+
+def exit_result_r(side, fill, stop, exit_price):
+    if side == "BUY":
+        actual_risk = fill - stop
+        if actual_risk <= 0:
+            return None
+        return (exit_price - fill) / actual_risk
+
+    actual_risk = stop - fill
+    if actual_risk <= 0:
+        return None
+    return (fill - exit_price) / actual_risk
+
+
+def evaluate_trade_exit_on_bar(
+    *,
+    side,
+    trade,
+    candles,
+    atr_values,
+    index,
+    bars_open,
+    mfe_r_before,
+    rule,
+):
+    """
+    Returns (exit_reason, exit_price, mfe_r_after).
+
+    Intrabar stop/target is always resolved before any close-based early exit.
+    """
+    candle = candles[index]
+    stop = trade["stop"]
+    target = trade["target"]
+    fill = trade["historical_fill"]
+    actual_risk = (
+        fill - stop if side == "BUY" else stop - fill
+    )
+    if actual_risk <= 0:
+        raise RuntimeError("Invalid actual risk")
+
+    hit_stop = (
+        candle["low"] <= stop if side == "BUY" else candle["high"] >= stop
+    )
+    hit_target = (
+        candle["high"] >= target if side == "BUY" else candle["low"] <= target
+    )
+
+    if hit_stop or hit_target:
+        if hit_stop and hit_target:
+            high_closer = (
+                abs(candle["high"] - candle["open"])
+                < abs(candle["open"] - candle["low"])
+            )
+            if side == "BUY":
+                reason = "TARGET" if high_closer else "STOP"
+            else:
+                reason = "STOP" if high_closer else "TARGET"
+        else:
+            reason = "STOP" if hit_stop else "TARGET"
+
+        price = stop if reason == "STOP" else target
+        # We do not try to infer MFE beyond the event that happened first.
+        return reason, price, mfe_r_before
+
+    if side == "BUY":
+        bar_favourable = (candle["high"] - fill) / actual_risk
+    else:
+        bar_favourable = (fill - candle["low"]) / actual_risk
+
+    mfe_after = max(mfe_r_before, float(bar_favourable))
+
+    reversal_min = rule.get("reversal_body_atr_min")
+    if reversal_min is not None and exact_opposite_reversal(
+        candles, atr_values, index, side, reversal_min
+    ):
+        return "REVERSAL_EXIT", candle["close"], mfe_after
+
+    max_bars = rule.get("max_bars")
+    if max_bars is not None and bars_open >= max_bars:
+        threshold = rule.get("mfe_threshold_r")
+        if threshold is None:
+            return "TIME_EXIT", candle["close"], mfe_after
+        if mfe_after < threshold:
+            return "TIME_PROGRESS_EXIT", candle["close"], mfe_after
+
+    return None, None, mfe_after
+
+
+# ============================================================
+# M15 EXIT-RESEARCH BACKTEST
+# ============================================================
+
+def m15_one_outcome_exit(
+    pair,
+    strategy_id,
+    trigger,
+    side,
+    m15,
+    atr_values,
+    i,
+    rr,
+    cost_pips,
+    scenario,
+):
+    meta = PAIR_META[pair]
+    tick = meta["tick"]
+    pip = meta["pip"]
+    sig = m15[i]
+    ref = sig["close"]
+
+    if side == "BUY":
+        stop = sig["low"] - 10 * tick
+        ref_risk = ref - stop
+        if ref_risk <= 0:
+            return None
+        target = ref + rr * ref_risk
+        fill = ref + cost_pips * pip
+    else:
+        stop = sig["high"] + 10 * tick
+        ref_risk = stop - ref
+        if ref_risk <= 0:
+            return None
+        target = ref - rr * ref_risk
+        fill = ref - cost_pips * pip
+
+    actual_risk = fill - stop if side == "BUY" else stop - fill
+    if actual_risk <= 0:
+        return None
+
+    trade = {
+        "stop": stop,
+        "target": target,
+        "historical_fill": fill,
+    }
+    rule = exit_rule_for_timeframe(scenario, "M15")
+    mfe_r = 0.0
+
+    for j in range(i + 1, len(m15)):
+        reason, exit_price, mfe_r = evaluate_trade_exit_on_bar(
+            side=side,
+            trade=trade,
+            candles=m15,
+            atr_values=atr_values,
+            index=j,
+            bars_open=j - i,
+            mfe_r_before=mfe_r,
+            rule=rule,
+        )
+
+        if reason is None:
+            continue
+
+        r = exit_result_r(side, fill, stop, exit_price)
+        if r is None:
+            return None
+
+        return {
+            "pair": pair,
+            "strategy_id": strategy_id,
+            "trigger": trigger,
+            "timeframe": "M15",
+            "side": side,
+            "signal_index": i,
+            "exit_index": j,
+            "signal_time": sig["time"],
+            "entry_time": sig["time"] + timedelta(minutes=15),
+            "exit_time": m15[j]["time"],
+            "exit_event_time": m15[j]["time"] + timedelta(minutes=15),
+            "rr": rr,
+            "reference_entry": ref,
+            "historical_fill": fill,
+            "stop": stop,
+            "target": target,
+            "result": reason,
+            "exit_price": float(exit_price),
+            "r": float(r),
+            "cost_model": "M15_1_ADVERSE_PIP",
+            "baseline_cost_value": float(cost_pips),
+            "bars_held": j - i,
+            "hold_hours": (j - i) * 0.25,
+            "mfe_r_at_exit": float(mfe_r),
+            "early_exit": reason in {
+                "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
+            },
+        }
+
+    return None
+
+
+def m15_run_stream_exit(
+    pair,
+    strategy_id,
+    side,
+    m15,
+    atr_values,
+    signals,
+    cost_pips,
+    scenario,
+):
+    signals = sorted(signals, key=lambda z: z[0])
+    idxs = [z[0] for z in signals]
+    out = []
+    p = 0
+
+    while p < len(signals):
+        i, trig, rr = signals[p]
+        tr = m15_one_outcome_exit(
+            pair,
+            strategy_id,
+            trig,
+            side,
+            m15,
+            atr_values,
+            i,
+            rr,
+            cost_pips,
+            scenario,
+        )
+        if tr is None:
+            p += 1
+            continue
+
+        out.append(tr)
+        # Exact exit-candle signal is eligible.
+        p = bisect.bisect_left(idxs, tr["exit_index"], lo=p + 1)
+
+    return out
+
+
+def m15_evaluate_strategy_exit(
+    pair,
+    strategy_id,
+    spec,
+    m15,
+    atr_values,
+    cost_pips,
+    scenario,
+):
+    if spec["mode"] in ("single", "priority_union"):
+        trades = m15_run_stream_exit(
+            pair,
+            strategy_id,
+            spec["side"],
+            m15,
+            atr_values,
+            spec["signals"],
+            cost_pips,
+            scenario,
+        )
+        return trades
+
+    core = m15_run_stream_exit(
+        pair,
+        strategy_id,
+        spec["side"],
+        m15,
+        atr_values,
+        spec["core_signals"],
+        cost_pips,
+        scenario,
+    )
+    comp = m15_run_stream_exit(
+        pair,
+        strategy_id,
+        spec["side"],
+        m15,
+        atr_values,
+        spec["comp_signals"],
+        cost_pips,
+        scenario,
+    )
+
+    combined, _, _ = overlay(core, comp)
+    return combined
+
+
+# ============================================================
+# H1 EXIT-RESEARCH BACKTEST
+# ============================================================
+
+def h1_open_trade_from_result(pair, side, result):
+    config = STRATEGIES[pair] if side == "BUY" else SHORT_STRATEGIES[pair]
+    tick = config["tick_size"]
+    ref = float(result["close"])
+
+    if side == "BUY":
+        fill = ref + BACKTEST_SLIPPAGE_TICKS * tick
+        stop = float(result["low"]) - config["stop_buffer_ticks"] * tick
+        ref_risk = ref - stop
+        target = ref + ref_risk * config["reward_risk"]
+    else:
+        fill = ref - BACKTEST_SLIPPAGE_TICKS * tick
+        stop = float(result["high"]) + config["stop_buffer_ticks"] * tick
+        ref_risk = stop - ref
+        target = ref - ref_risk * config["reward_risk"]
+
+    actual_risk = fill - stop if side == "BUY" else stop - fill
+    if ref_risk <= 0 or actual_risk <= 0:
+        return None
+
+    return {
+        "pair": pair,
+        "strategy_id": f"{pair}_H1_{'LONG' if side == 'BUY' else 'SHORT'}",
+        "trigger": "LIVE_H1_LONG" if side == "BUY" else "LIVE_H1_SHORT",
+        "timeframe": "H1",
+        "side": side,
+        "signal_time": result["signal_start_utc"],
+        "entry_time": result["signal_close_utc"],
+        "rr": float(config["reward_risk"]),
+        "reference_entry": ref,
+        "historical_fill": float(fill),
+        "stop": float(stop),
+        "target": float(target),
+        "entry_index": int(result.get("index", -1)),
+        "cost_model": "H1_5_ADVERSE_TICKS",
+        "baseline_cost_value": float(BACKTEST_SLIPPAGE_TICKS),
+        "mfe_r": 0.0,
+    }
+
+
+def h1_simulate_side_exit(
+    pair,
+    side,
+    h1,
+    atr_values,
+    daily_state,
+    start,
+    end,
+    scenario,
+):
+    config = STRATEGIES[pair] if side == "BUY" else SHORT_STRATEGIES[pair]
+
+    required = [config["atr_length"], config["structure_lookback"]]
+    if side == "SELL":
+        ml = config.get("momentum_lookback_bars")
+        if ml is not None:
+            required.append(int(ml))
+        for lookback in config.get("momentum_requirements", {}).keys():
+            required.append(int(lookback))
+        if config.get("minimum_h1_atr_ratio_50") is not None:
+            required.append(50)
+
+    start_index = max(required)
+    open_trade = None
+    trades = []
+    raw_signals = 0
+    ignored = 0
+    rule = exit_rule_for_timeframe(scenario, "H1")
+
+    for index in range(start_index, len(h1)):
+        candle = h1[index]
+        candle_time = candle["time"]
+        if candle_time < start:
+            continue
+        if candle_time >= end:
+            break
+
+        if open_trade is not None:
+            bars_open = index - open_trade["signal_index"]
+            reason, exit_price, mfe_after = evaluate_trade_exit_on_bar(
+                side=side,
+                trade=open_trade,
+                candles=h1,
+                atr_values=atr_values,
+                index=index,
+                bars_open=bars_open,
+                mfe_r_before=open_trade["mfe_r"],
+                rule=rule,
+            )
+            open_trade["mfe_r"] = mfe_after
+
+            if reason is not None:
+                r = exit_result_r(
+                    side,
+                    open_trade["historical_fill"],
+                    open_trade["stop"],
+                    exit_price,
+                )
+                if r is not None:
+                    finished = dict(open_trade)
+                    finished.update({
+                        "exit_index": index,
+                        "exit_time": candle_time,
+                        "exit_event_time": candle_time + timedelta(hours=1),
+                        "result": reason,
+                        "exit_price": float(exit_price),
+                        "r": float(r),
+                        "bars_held": bars_open,
+                        "hold_hours": float(bars_open),
+                        "mfe_r_at_exit": float(mfe_after),
+                        "early_exit": reason in {
+                            "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
+                        },
+                    })
+                    finished.pop("mfe_r", None)
+                    finished.pop("entry_index", None)
+                    trades.append(finished)
+                open_trade = None
+
+        if side == "BUY":
+            result = evaluate_signal_at_index(
+                pair, h1, atr_values, index, daily_state
+            )
+        else:
+            result = evaluate_short_signal_at_index(
+                pair, h1, atr_values, index, daily_state
+            )
+
+        if result is None or not result.get("qualified"):
+            continue
+
+        raw_signals += 1
+        if open_trade is not None:
+            ignored += 1
+            continue
+
+        new_trade = h1_open_trade_from_result(pair, side, result)
+        if new_trade is None:
+            continue
+        # Signal candle index is the current index; MFE starts next bar.
+        new_trade["signal_index"] = index
+        open_trade = new_trade
+
+    return {
+        "trades": trades,
+        "raw_signal_count": raw_signals,
+        "ignored_signal_count": ignored,
+        "position_still_open_at_end": open_trade is not None,
+    }
+
+
+# ============================================================
+# LIVE-SAFE NON-HEDGING GATE
+# ============================================================
+
+def live_safe_sort_key(trade, priority):
+    if priority == "H1_FIRST":
+        tf_rank = 0 if trade["timeframe"] == "H1" else 1
+    elif priority == "M15_FIRST":
+        tf_rank = 0 if trade["timeframe"] == "M15" else 1
+    else:
+        raise ValueError(priority)
+
+    side_rank = 0 if trade["side"] == "BUY" else 1
+    return (
+        trade["entry_time"],
+        tf_rank,
+        side_rank,
+        trade["strategy_id"],
+    )
+
+
+def apply_live_safe_nonhedging_gate(trades, priority="H1_FIRST"):
+    """
+    Allows same-pair SAME-DIRECTION overlaps across different strategies.
+    Blocks only an entry that opposes any still-open trade on that pair.
+    """
+    ordered = sorted(trades, key=lambda t: live_safe_sort_key(t, priority))
+    active = []
+    accepted = []
+    rejected = []
+
+    for t in ordered:
+        ts = t["entry_time"]
+        active = [x for x in active if x["exit_event_time"] > ts]
+
+        blockers = [
+            x for x in active
+            if x["pair"] == t["pair"] and x["side"] != t["side"]
+        ]
+
+        if blockers:
+            blocker = sorted(
+                blockers,
+                key=lambda x: (x["exit_event_time"], x["strategy_id"]),
+            )[0]
+            rejected.append({
+                "priority": priority,
+                "candidate_strategy_id": t["strategy_id"],
+                "candidate_pair": t["pair"],
+                "candidate_side": t["side"],
+                "candidate_timeframe": t["timeframe"],
+                "candidate_entry_time": iso(t["entry_time"]),
+                "candidate_r": t["r"],
+                "blocker_strategy_id": blocker["strategy_id"],
+                "blocker_side": blocker["side"],
+                "blocker_timeframe": blocker["timeframe"],
+                "blocker_exit_event_time": iso(blocker["exit_event_time"]),
+            })
+            continue
+
+        accepted.append(t)
+        active.append(t)
+
+    return accepted, rejected
+
+
+# ============================================================
+# EXIT-RESEARCH METRICS
+# ============================================================
+
+def serialise_exit_trade(scenario_id, mode, t):
+    row = {"scenario_id": scenario_id, "portfolio_mode": mode}
+    for k, v in t.items():
+        if isinstance(v, datetime):
+            row[k] = iso(v)
+        else:
+            row[k] = v
+    return row
+
+
+def exit_reason_rows(scenario_id, mode, trades):
+    grouped = defaultdict(list)
+    for t in trades:
+        grouped[t["result"]].append(t)
+
+    rows = []
+    for reason in sorted(grouped):
+        g = grouped[reason]
+        s = calc_stats(g)
+        rows.append({
+            "scenario_id": scenario_id,
+            "portfolio_mode": mode,
+            "exit_reason": reason,
+            **s,
+            "pct_of_trades": pct(len(g), len(trades)),
+            "median_hold_hours": safe_median(t.get("hold_hours", 0.0) for t in g),
+            "median_mfe_r_at_exit": safe_median(t.get("mfe_r_at_exit", 0.0) for t in g),
+        })
+    return rows
+
+
+def hold_summary_row(scenario_id, mode, trades):
+    holds = [float(t.get("hold_hours", 0.0)) for t in trades]
+    early = [t for t in trades if t.get("early_exit")]
+    return {
+        "scenario_id": scenario_id,
+        "portfolio_mode": mode,
+        "trades": len(trades),
+        "early_exits": len(early),
+        "early_exit_pct": pct(len(early), len(trades)),
+        "median_hold_hours": safe_median(holds),
+        "mean_hold_hours": (sum(holds) / len(holds)) if holds else 0.0,
+        "max_hold_hours": max(holds) if holds else 0.0,
+        "median_early_exit_mfe_r": safe_median(
+            t.get("mfe_r_at_exit", 0.0) for t in early
+        ),
+        "mean_early_exit_r": (
+            sum(t["r"] for t in early) / len(early)
+            if early else 0.0
+        ),
+    }
+
+
+def calendar_summary_exit(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(r["scenario_id"], r["portfolio_mode"])].append(r)
+
+    out = []
+    for (scenario_id, mode), g in grouped.items():
+        complete = [x for x in g if str(x.get("complete_year")).lower() in {"true", "1"}]
+        active = [x for x in complete if x["realized_exits"] > 0]
+        positive = [x for x in active if x["compounded_return_pct"] > 0]
+        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+        out.append({
+            "scenario_id": scenario_id,
+            "portfolio_mode": mode,
+            "completed_active_years": len(active),
+            "positive_completed_active_years": len(positive),
+            "positive_completed_active_years_pct": pct(len(positive), len(active)),
+            "median_calendar_return_pct": safe_median(
+                x["compounded_return_pct"] for x in active
+            ),
+            "worst_year": worst["year"] if worst else "",
+            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
+            "best_year": best["year"] if best else "",
+            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
+        })
+    return out
+
+
+def reprice_early_exit_cost(t, extra_cost_mult):
+    if not t.get("early_exit") or extra_cost_mult == 0:
+        return dict(t)
+
+    out = dict(t)
+    pair = t["pair"]
+
+    if t["timeframe"] == "H1":
+        native_price_cost = (
+            BACKTEST_SLIPPAGE_TICKS * PAIR_META[pair]["tick"]
+        )
+    else:
+        native_price_cost = PAIR_META[pair]["pip"]
+
+    extra = extra_cost_mult * native_price_cost
+    raw_exit = float(t["exit_price"])
+    stressed_exit = (
+        raw_exit - extra if t["side"] == "BUY" else raw_exit + extra
+    )
+
+    out["exit_price"] = stressed_exit
+    out["r"] = float(exit_result_r(
+        t["side"],
+        float(t["historical_fill"]),
+        float(t["stop"]),
+        stressed_exit,
+    ))
+    out["early_exit_extra_cost_mult"] = extra_cost_mult
+    return out
+
+
+# ============================================================
+# MAIN EXIT RESEARCH
+# ============================================================
+
+def run_exit_research():
+    try:
+        EXIT_STATUS.update(
+            state="starting",
+            message="Starting exact 20-strategy exit research",
+            progress=1,
+        )
+        write_csv(EXIT_OUT["scenario_definitions"], EXIT_SCENARIOS)
+
+        scenario_by_strategy = {
+            s["scenario_id"]: defaultdict(list)
+            for s in EXIT_SCENARIOS
+        }
+
+        # ------------------------------------------------------------
+        # 1) Rebuild M15 signals once per pair, then evaluate every exit rule.
+        # ------------------------------------------------------------
+        for pi, pair in enumerate(PAIRS):
+            EXIT_STATUS.update(
+                state="m15_rebuild",
+                message=f"M15 {pair}: downloading history + testing exit rules",
+                progress=4 + pi * 8,
+            )
+
+            m15, empty = fetch_history(pair, "M15", START, NOW)
+            if len(m15) < 350000:
+                raise RuntimeError(
+                    f"Incomplete {pair} M15 history: {len(m15)} candles"
+                )
+
+            aligned = {}
+            for gran in PAIR_HTFS[pair]:
+                hs, _ = fetch_history(pair, gran, HTF_WARMUP, NOW)
+                if not hs:
+                    raise RuntimeError(f"Missing {pair} {gran} history")
+                aligned[gran] = align_htf(
+                    [x["time"] for x in m15],
+                    htf_state(hs),
+                )
+                del hs
+
+            features = build_features(pair, m15, aligned)
+            specs = signal_sets(pair, features)
+            atr_values = [
+                None if not np.isfinite(x) else float(x)
+                for x in features["atr"]
+            ]
+
+            for scenario in EXIT_SCENARIOS:
+                sid = scenario["scenario_id"]
+                for strategy_id, spec in specs.items():
+                    trades = m15_evaluate_strategy_exit(
+                        pair,
+                        strategy_id,
+                        spec,
+                        m15,
+                        atr_values,
+                        BASELINE_COST,
+                        scenario,
+                    )
+                    scenario_by_strategy[sid][strategy_id].extend(trades)
+
+            del features, specs, aligned, atr_values, m15
+            gc.collect()
+
+        # ------------------------------------------------------------
+        # 2) Rebuild H1 once per pair, test every exit rule.
+        # ------------------------------------------------------------
+        for pi, pair in enumerate(PAIRS):
+            EXIT_STATUS.update(
+                state="h1_rebuild",
+                message=f"H1 {pair}: downloading history + testing exit rules",
+                progress=45 + pi * 7,
+            )
+
+            h1, _ = fetch_history(pair, "H1", H1_DATA_WARMUP, NOW)
+            daily, _ = fetch_history(pair, "D", H1_DAILY_WARMUP, NOW)
+
+            if len(h1) < 90000:
+                raise RuntimeError(
+                    f"Incomplete {pair} H1 history: {len(h1)} candles"
+                )
+            if len(daily) < 5000:
+                raise RuntimeError(
+                    f"Incomplete {pair} daily history: {len(daily)} candles"
+                )
+
+            long_cfg = STRATEGIES[pair]
+            long_atr = atr_series(h1, long_cfg["atr_length"])
+            long_daily = build_daily_state(daily, long_cfg)
+            register_h1_daily_state(long_daily)
+
+            short_cfg = SHORT_STRATEGIES[pair]
+            short_atr = atr_series(h1, short_cfg["atr_length"])
+            short_daily = build_short_daily_state(daily, short_cfg)
+            register_h1_daily_state(short_daily)
+
+            for scenario in EXIT_SCENARIOS:
+                sid = scenario["scenario_id"]
+
+                long_sim = h1_simulate_side_exit(
+                    pair,
+                    "BUY",
+                    h1,
+                    long_atr,
+                    long_daily,
+                    START,
+                    NOW,
+                    scenario,
+                )
+                short_sim = h1_simulate_side_exit(
+                    pair,
+                    "SELL",
+                    h1,
+                    short_atr,
+                    short_daily,
+                    START,
+                    NOW,
+                    scenario,
+                )
+
+                scenario_by_strategy[sid][f"{pair}_H1_LONG"].extend(
+                    long_sim["trades"]
+                )
+                scenario_by_strategy[sid][f"{pair}_H1_SHORT"].extend(
+                    short_sim["trades"]
+                )
+
+            _H1_DAILY_TIMES.pop(id(long_daily), None)
+            _H1_DAILY_TIMES.pop(id(short_daily), None)
+            del h1, daily, long_atr, short_atr, long_daily, short_daily
+            gc.collect()
+
+        # ------------------------------------------------------------
+        # 3) Hard control-parity guard.
+        # ------------------------------------------------------------
+        EXIT_STATUS.update(
+            state="parity",
+            message="Checking CONTROL against locked portfolio references",
+            progress=82,
+        )
+
+        parity = []
+        control_by_strategy = scenario_by_strategy["CONTROL"]
+        for strategy_id, minimum in {
+            **H1_CONTROL_MIN_BY_STRATEGY,
+            **M15_CONTROL_MIN_BY_STRATEGY,
+        }.items():
+            actual = len(control_by_strategy.get(strategy_id, []))
+            status = (
+                "PASS_EQUAL"
+                if actual == minimum
+                else ("PASS_NEWER_TRADES" if actual > minimum else "FAIL_BELOW_REFERENCE")
+            )
+            parity.append({
+                "strategy_id": strategy_id,
+                "reference_min_trades": minimum,
+                "control_current_trades": actual,
+                "status": status,
+            })
+
+        write_csv(EXIT_OUT["control_parity"], parity)
+        bad = [x for x in parity if x["status"] == "FAIL_BELOW_REFERENCE"]
+        if bad:
+            raise RuntimeError(
+                "CONTROL reproduction fell below reference: "
+                + json.dumps(bad, default=str)
+            )
+
+        # ------------------------------------------------------------
+        # 4) Apply portfolio modes and calculate 1%+1% equity statistics.
+        # ------------------------------------------------------------
+        summary_rows = []
+        strategy_rows = []
+        timeframe_rows = []
+        period_rows = []
+        rolling_rows_out = []
+        calendar_rows_out = []
+        exit_reason_out = []
+        hold_rows = []
+        gate_rejections = []
+        trade_rows = []
+        mode_trade_cache = {}
+
+        end_complete = month_floor(NOW)
+
+        for si, scenario in enumerate(EXIT_SCENARIOS):
+            scenario_id = scenario["scenario_id"]
+            EXIT_STATUS.update(
+                state="analyzing",
+                message=f"Analysing {scenario_id}",
+                progress=84 + int(9 * (si + 1) / len(EXIT_SCENARIOS)),
+            )
+
+            by_strategy = scenario_by_strategy[scenario_id]
+            independent = sorted(
+                [t for sid in sorted(by_strategy) for t in by_strategy[sid]],
+                key=lambda t: (t["entry_time"], t["strategy_id"]),
+            )
+
+            live_h1, rej_h1 = apply_live_safe_nonhedging_gate(
+                independent, "H1_FIRST"
+            )
+            live_m15, rej_m15 = apply_live_safe_nonhedging_gate(
+                independent, "M15_FIRST"
+            )
+
+            modes = {
+                "INDEPENDENT": independent,
+                "LIVE_SAFE_H1_FIRST": live_h1,
+                "LIVE_SAFE_M15_FIRST": live_m15,
+            }
+
+            for r in rej_h1:
+                gate_rejections.append({"scenario_id": scenario_id, **r})
+            for r in rej_m15:
+                gate_rejections.append({"scenario_id": scenario_id, **r})
+
+            for mode, trades in modes.items():
+                mode_trade_cache[(scenario_id, mode)] = trades
+                stats = calc_stats(trades)
+                exit_stats = calc_stats(trades, "exit")
+                sim = simulate_mixed_equity(
+                    trades,
+                    0.01,
+                    0.01,
+                    STARTING_BALANCE,
+                )
+                es = sim["summary"]
+                early = [t for t in trades if t.get("early_exit")]
+
+                summary_rows.append({
+                    "scenario_id": scenario_id,
+                    "family": scenario["family"],
+                    "portfolio_mode": mode,
+                    "trades": stats["trades"],
+                    "winners": stats["winners"],
+                    "losers": stats["losers"],
+                    "win_rate_pct": stats["win_rate_pct"],
+                    "profit_factor": stats["profit_factor"],
+                    "total_r": stats["total_r"],
+                    "expectancy_r": stats["expectancy_r"],
+                    "signal_order_max_drawdown_r": stats["max_drawdown_r"],
+                    "exit_order_max_drawdown_r": exit_stats["max_drawdown_r"],
+                    "longest_loss_streak": stats["longest_loss_streak"],
+                    "early_exits": len(early),
+                    "early_exit_pct": pct(len(early), len(trades)),
+                    "cagr_pct_1pct_h1_1pct_m15": es["cagr_pct"],
+                    "total_return_pct_1pct_h1_1pct_m15": es["total_return_pct"],
+                    "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
+                    "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
+                    "max_open_positions": es["max_open_positions"],
+                    "max_open_risk_pct_of_realised_equity": es[
+                        "max_open_risk_pct_of_realised_equity"
+                    ],
+                })
+
+                hold_rows.append(hold_summary_row(scenario_id, mode, trades))
+                exit_reason_out.extend(exit_reason_rows(scenario_id, mode, trades))
+
+                for tf in ("H1", "M15"):
+                    g = [t for t in trades if t["timeframe"] == tf]
+                    st = calc_stats(g)
+                    timeframe_rows.append({
+                        "scenario_id": scenario_id,
+                        "portfolio_mode": mode,
+                        "timeframe": tf,
+                        **st,
+                        "early_exits": sum(bool(t.get("early_exit")) for t in g),
+                        "median_hold_hours": safe_median(
+                            t.get("hold_hours", 0.0) for t in g
+                        ),
+                    })
+
+                for strategy_id in sorted(by_strategy):
+                    g = [t for t in trades if t["strategy_id"] == strategy_id]
+                    st = calc_stats(g)
+                    strategy_rows.append({
+                        "scenario_id": scenario_id,
+                        "portfolio_mode": mode,
+                        "strategy_id": strategy_id,
+                        "timeframe": (
+                            g[0]["timeframe"]
+                            if g else ("H1" if "_H1_" in strategy_id else "M15")
+                        ),
+                        **st,
+                        "early_exits": sum(bool(t.get("early_exit")) for t in g),
+                        "median_hold_hours": safe_median(
+                            t.get("hold_hours", 0.0) for t in g
+                        ),
+                    })
+
+                for label, a, b in [
+                    ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
+                    ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+                    ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+                    ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+                    ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+                ]:
+                    row = mixed_equity_period_row(
+                        mode,
+                        sim,
+                        0.01,
+                        0.01,
+                        label,
+                        a,
+                        b,
+                        trades,
+                    )
+                    row["scenario_id"] = scenario_id
+                    period_rows.append(row)
+
+                first_year = min(t["entry_time"].year for t in trades)
+                cal = mixed_equity_calendar_rows(
+                    mode,
+                    sim,
+                    0.01,
+                    0.01,
+                    trades,
+                    first_year,
+                    NOW.year,
+                )
+                for row in cal:
+                    row["scenario_id"] = scenario_id
+                    calendar_rows_out.append(row)
+
+                roll_start = month_floor(min(t["entry_time"] for t in trades))
+                for months in (12, 24, 36):
+                    rr = mixed_equity_rolling_rows(
+                        mode,
+                        sim,
+                        0.01,
+                        0.01,
+                        trades,
+                        months,
+                        roll_start,
+                        end_complete,
+                    )
+                    for row in rr:
+                        row["scenario_id"] = scenario_id
+                        rolling_rows_out.append(row)
+
+                # Keep one complete trade log. ~20 scenarios x ~2300 trades is
+                # compact enough for a CSV and invaluable for auditing winners.
+                for t in trades:
+                    trade_rows.append(serialise_exit_trade(scenario_id, mode, t))
+
+        # ------------------------------------------------------------
+        # 5) Deltas vs CONTROL within each portfolio mode.
+        # ------------------------------------------------------------
+        summary_lookup = {
+            (r["scenario_id"], r["portfolio_mode"]): r
+            for r in summary_rows
+        }
+        delta_rows = []
+        for row in summary_rows:
+            control = summary_lookup[("CONTROL", row["portfolio_mode"])]
+            delta_rows.append({
+                "scenario_id": row["scenario_id"],
+                "family": row["family"],
+                "portfolio_mode": row["portfolio_mode"],
+                "delta_trades": row["trades"] - control["trades"],
+                "delta_total_r": row["total_r"] - control["total_r"],
+                "delta_pf": row["profit_factor"] - control["profit_factor"],
+                "delta_expectancy_r": row["expectancy_r"] - control["expectancy_r"],
+                "delta_cagr_pct_points": (
+                    row["cagr_pct_1pct_h1_1pct_m15"]
+                    - control["cagr_pct_1pct_h1_1pct_m15"]
+                ),
+                "delta_closed_dd_pct_points": (
+                    row["max_closed_equity_dd_pct"]
+                    - control["max_closed_equity_dd_pct"]
+                ),
+                "delta_floor_dd_pct_points": (
+                    row["max_open_risk_floor_dd_pct"]
+                    - control["max_open_risk_floor_dd_pct"]
+                ),
+                "early_exits": row["early_exits"],
+            })
+
+        # ------------------------------------------------------------
+        # 6) Rolling summaries, adapted to scenario dimension.
+        # ------------------------------------------------------------
+        roll_grouped = defaultdict(list)
+        for row in rolling_rows_out:
+            roll_grouped[(
+                row["scenario_id"],
+                row["portfolio_mode"],
+                row["months"],
+            )].append(row)
+
+        roll_summary_out = []
+        for (scenario_id, mode, months), g in roll_grouped.items():
+            active = [x for x in g if x["realized_exits"] > 0]
+            positive = [x for x in active if x["compounded_return_pct"] > 0]
+            worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
+            best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
+            roll_summary_out.append({
+                "scenario_id": scenario_id,
+                "portfolio_mode": mode,
+                "months": months,
+                "windows": len(g),
+                "active_windows": len(active),
+                "positive_active_windows": len(positive),
+                "positive_active_windows_pct": pct(len(positive), len(active)),
+                "median_return_pct_active": safe_median(
+                    x["compounded_return_pct"] for x in active
+                ),
+                "worst_return_pct": worst["compounded_return_pct"] if worst else 0.0,
+                "worst_start_utc": worst["start_utc"] if worst else "",
+                "best_return_pct": best["compounded_return_pct"] if best else 0.0,
+                "best_start_utc": best["start_utc"] if best else "",
+            })
+
+        # ------------------------------------------------------------
+        # 7) Extra market-exit-cost sensitivity for live-safe H1-first.
+        # ------------------------------------------------------------
+        market_cost_rows = []
+        for scenario in EXIT_SCENARIOS:
+            scenario_id = scenario["scenario_id"]
+            base_trades = mode_trade_cache[(scenario_id, "LIVE_SAFE_H1_FIRST")]
+            for extra_mult in (0.0, 0.5, 1.0):
+                stressed = [
+                    reprice_early_exit_cost(t, extra_mult)
+                    for t in base_trades
+                ]
+                st = calc_stats(stressed)
+                es = simulate_mixed_equity(
+                    stressed, 0.01, 0.01, STARTING_BALANCE
+                )["summary"]
+                market_cost_rows.append({
+                    "scenario_id": scenario_id,
+                    "portfolio_mode": "LIVE_SAFE_H1_FIRST",
+                    "extra_early_exit_cost_mult": extra_mult,
+                    "interpretation": (
+                        "0=no extra close slippage; 0.5/1.0 = adverse extra "
+                        "close cost equal to 0.5x/1.0x each timeframe's native "
+                        "entry adverse-cost amount, applied only to early exits"
+                    ),
+                    **st,
+                    "cagr_pct": es["cagr_pct"],
+                    "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
+                    "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
+                })
+
+        # ------------------------------------------------------------
+        # 8) Write everything.
+        # ------------------------------------------------------------
+        write_csv(EXIT_OUT["scenario_summary"], summary_rows)
+        write_csv(EXIT_OUT["delta_vs_control"], delta_rows)
+        write_csv(EXIT_OUT["by_strategy"], strategy_rows)
+        write_csv(EXIT_OUT["by_timeframe"], timeframe_rows)
+        write_csv(EXIT_OUT["periods"], period_rows)
+        write_csv(EXIT_OUT["rolling"], rolling_rows_out)
+        write_csv(EXIT_OUT["rolling_summary"], roll_summary_out)
+        write_csv(EXIT_OUT["calendar"], calendar_rows_out)
+        write_csv(EXIT_OUT["calendar_summary"], calendar_summary_exit(calendar_rows_out))
+        write_csv(EXIT_OUT["exit_reasons"], exit_reason_out)
+        write_csv(EXIT_OUT["hold_summary"], hold_rows)
+        write_csv(EXIT_OUT["gate_rejections"], gate_rejections)
+        write_csv(EXIT_OUT["market_exit_cost_stress"], market_cost_rows)
+        write_csv(EXIT_OUT["trades"], trade_rows)
+
+        write_csv(EXIT_OUT["notes"], [
+            {
+                "item": "Entry rules frozen",
+                "value": "No entry parameter is optimized or changed. This file inherits the exact final locked 10 H1 + 10 M15 definitions from the validated combined runner.",
+            },
+            {
+                "item": "Primary live mode",
+                "value": "LIVE_SAFE_H1_FIRST allows same-direction same-pair overlaps and blocks only opposite-direction same-pair entries, matching the current non-hedging account constraint. M15-first is exported as exact-tie sensitivity.",
+            },
+            {
+                "item": "1% + 1%",
+                "value": "All equity comparisons use 1% per accepted H1 trade and 1% per accepted M15 trade, matching the current live deployment decision.",
+            },
+            {
+                "item": "Time exit timing",
+                "value": "Stop/target is checked intrabar first. If neither is hit and the time rule fires, the market exit is assumed at that bar close.",
+            },
+            {
+                "item": "MFE definition",
+                "value": "MFE is calculated from the adverse historical fill in units of actual stop risk, using only post-entry bars. Signal-candle excursion before entry is excluded.",
+            },
+            {
+                "item": "Progress exit",
+                "value": "The TIME_MFE rule is a one-time deadline test: at the specified bar count, exit only if MFE has never reached the threshold. If threshold was reached, the trade remains on original stop/target indefinitely.",
+            },
+            {
+                "item": "Reversal exit",
+                "value": "Universal exact opposite engulfing only; body must exceed the specified ATR14 threshold. No pair-specific reversal tuning is used.",
+            },
+            {
+                "item": "Early exit costs",
+                "value": "Primary scenario results preserve the original adverse-entry cost convention. A separate sensitivity file adds 0.5x and 1.0x native adverse price cost to early-market exits only.",
+            },
+            {
+                "item": "Selection discipline",
+                "value": "Do not pick the single highest CAGR blindly. Prefer broad plateaus that improve PF/expectancy/DD/rolling windows across H1, M15 and many strategies, including under extra early-exit cost stress.",
+            },
+        ])
+
+        EXIT_STATUS.update(
+            state="packaging",
+            message="Packaging exit-research ZIP",
+            progress=98,
+        )
+        with zipfile.ZipFile(
+            EXIT_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED
+        ) as z:
+            for path in EXIT_OUT.values():
+                if os.path.exists(path):
+                    z.write(path, arcname=os.path.basename(path))
+
+        control_live = summary_lookup[("CONTROL", "LIVE_SAFE_H1_FIRST")]
+        EXIT_STATUS.update(
+            state="complete",
+            message="20-strategy exit research complete",
+            progress=100,
+            results=EXIT_BUNDLE,
+            scenarios=len(EXIT_SCENARIOS),
+            control_live_safe_trades=control_live["trades"],
+            control_live_safe_pf=control_live["profit_factor"],
+            control_live_safe_cagr_pct=control_live[
+                "cagr_pct_1pct_h1_1pct_m15"
+            ],
+            control_live_safe_floor_dd_pct=control_live[
+                "max_open_risk_floor_dd_pct"
+            ],
+        )
+
+    except Exception as e:
+        import traceback
+        EXIT_STATUS.update(
+            state="error",
+            message=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc(),
+            progress=EXIT_STATUS.get("progress", 0),
+        )
+
+
+# ============================================================
+# EXIT RESEARCH FLASK ROUTES
 # ============================================================
 @app.get("/")
-def root():
+def exit_root():
     return jsonify({
-        "service": "H1 + M15 Final Locked 20-Strategy Portfolio Analysis",
-        "state": COMBINED_STATUS.get("state"),
-        "message": COMBINED_STATUS.get("message"),
+        "service": "H1 + M15 20-Strategy Exit Research",
+        "state": EXIT_STATUS.get("state"),
+        "message": EXIT_STATUS.get("message"),
         "orders_supported": False,
         "trading_enabled": False,
+        "risk_model": "1% H1 + 1% M15",
+        "primary_live_mode": "LIVE_SAFE_H1_FIRST",
+        "scenarios": len(EXIT_SCENARIOS),
         "routes": [
-            "/h1-m15-final-portfolio/status",
-            "/h1-m15-final-portfolio/results",
-            "/m15-final-portfolio-equity/status",
-            "/m15-final-portfolio-equity/results",
+            "/h1-m15-exit-research/status",
+            "/h1-m15-exit-research/results",
         ],
     })
 
-@app.get("/m15-final-portfolio-equity/status")
-def status():
-    return jsonify(STATUS)
 
-@app.get("/m15-final-portfolio-equity/results")
-def results():
-    if not os.path.exists(BUNDLE):
-        return jsonify({"error":"Results not ready","status":STATUS}),404
-    return send_file(os.path.abspath(BUNDLE),as_attachment=True,download_name=BUNDLE)
+@app.get("/h1-m15-exit-research/status")
+def exit_research_status():
+    return jsonify(EXIT_STATUS)
 
 
-
-@app.get("/h1-m15-final-portfolio/status")
-def combined_portfolio_status():
-    return jsonify(COMBINED_STATUS)
-
-
-@app.get("/h1-m15-final-portfolio/results")
-def combined_portfolio_results():
-    if not os.path.exists(COMBINED_BUNDLE):
+@app.get("/h1-m15-exit-research/results")
+def exit_research_results():
+    if not os.path.exists(EXIT_BUNDLE):
         return jsonify({
-            "error": "Combined results not ready",
-            "status": COMBINED_STATUS,
+            "error": "Exit research results not ready",
+            "status": EXIT_STATUS,
         }), 404
     return send_file(
-        os.path.abspath(COMBINED_BUNDLE),
+        os.path.abspath(EXIT_BUNDLE),
         as_attachment=True,
-        download_name=COMBINED_BUNDLE,
+        download_name=EXIT_BUNDLE,
     )
 
+
 def start_background():
-    threading.Thread(target=run_combined_research, daemon=True).start()
+    threading.Thread(target=run_exit_research, daemon=True).start()
+
 
 if __name__ == "__main__":
     start_background()
-    app.run(host="0.0.0.0",port=int(os.getenv("PORT","8080")),threaded=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8080")),
+        threaded=True,
+    )
