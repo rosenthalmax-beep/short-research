@@ -16,7 +16,7 @@ from flask import Flask, jsonify, send_file
 
 
 # ============================================================
-# EUR/GBP M15 SHORT — FULL-HISTORY RE-EXAMINATION
+# EUR/GBP M15 SHORT — FINAL HIGH-SWEEP CONFIRMATION
 #
 # PURPOSE
 # -------
@@ -175,7 +175,7 @@ from flask import Flask, jsonify, send_file
 # ONE ZIP
 # ============================================================
 #
-# /eurgbp-m15-short-full-history/results
+# /eurgbp-m15-short-final-high-sweep/results
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -247,6 +247,7 @@ ALL_LOOKBACKS = [
     80,
     100,
     120,
+    140,
     165,
     200,
 ]
@@ -257,63 +258,63 @@ ALL_LOOKBACKS = [
 # ============================================================
 
 OUT_COVERAGE = (
-    "eurgbp_m15_short_full_history_coverage.csv"
+    "eurgbp_m15_short_final_high_sweep_coverage.csv"
 )
 
 OUT_STAGE1 = (
-    "eurgbp_m15_short_full_history_stage1_raw.csv"
+    "eurgbp_m15_short_final_high_sweep_stage1_geometry.csv"
 )
 
 OUT_STAGE2 = (
-    "eurgbp_m15_short_full_history_stage2_context.csv"
+    "eurgbp_m15_short_final_high_sweep_stage2_wick.csv"
 )
 
 OUT_STAGE3 = (
-    "eurgbp_m15_short_full_history_stage3_local_rr.csv"
+    "eurgbp_m15_short_final_high_sweep_stage3_weekday.csv"
 )
 
 OUT_FINALISTS = (
-    "eurgbp_m15_short_full_history_finalists.csv"
+    "eurgbp_m15_short_final_high_sweep_finalists.csv"
 )
 
 OUT_PERIODS = (
-    "eurgbp_m15_short_full_history_periods.csv"
+    "eurgbp_m15_short_final_high_sweep_periods.csv"
 )
 
 OUT_COST = (
-    "eurgbp_m15_short_full_history_cost_stress.csv"
+    "eurgbp_m15_short_final_high_sweep_cost_stress.csv"
 )
 
 OUT_ROLLING = (
-    "eurgbp_m15_short_full_history_rolling.csv"
+    "eurgbp_m15_short_final_high_sweep_rolling.csv"
 )
 
 OUT_ROLLING_SUMMARY = (
-    "eurgbp_m15_short_full_history_rolling_summary.csv"
+    "eurgbp_m15_short_final_high_sweep_rolling_summary.csv"
 )
 
 OUT_CALENDAR = (
-    "eurgbp_m15_short_full_history_calendar_years.csv"
+    "eurgbp_m15_short_final_high_sweep_calendar_years.csv"
 )
 
 OUT_CALENDAR_SUMMARY = (
-    "eurgbp_m15_short_full_history_calendar_summary.csv"
+    "eurgbp_m15_short_final_high_sweep_calendar_summary.csv"
 )
 
 OUT_PLATEAU = (
-    "eurgbp_m15_short_full_history_plateau.csv"
+    "eurgbp_m15_short_final_high_sweep_parameter_summary.csv"
 )
 
 OUT_TRADES = (
-    "eurgbp_m15_short_full_history_finalist_trades.csv"
+    "eurgbp_m15_short_final_high_sweep_finalist_trades.csv"
 )
 
 OUT_NOTES = (
-    "eurgbp_m15_short_full_history_notes.csv"
+    "eurgbp_m15_short_final_high_sweep_notes.csv"
 )
 
 OUT_BUNDLE = (
-    "EURGBP_M15_SHORT_FULL_HISTORY_REEXAMINATION_RESULTS.zip"
+    "EURGBP_M15_SHORT_FINAL_HIGH_SWEEP_CONFIRMATION_RESULTS.zip"
 )
 
 STATUS = {
@@ -4342,907 +4343,583 @@ def plateau_rows(
 # MAIN
 # ============================================================
 
+
+# ============================================================
+# FINAL HIGH-SWEEP CONFIRMATION OVERRIDES
+# ============================================================
+import traceback
+from zoneinfo import ZoneInfo
+
+OUT_PARITY = "eurgbp_m15_short_final_high_sweep_parity.csv"
+OUT_STAGE4 = "eurgbp_m15_short_final_high_sweep_stage4_rr.csv"
+
+PARITY_CUTOFF = datetime(2026, 6, 16, 0, 0, tzinfo=timezone.utc)
+ANCHOR_EXPECTED_TRADES = 59
+
+SWEEP_GRID = [60, 80, 100, 120, 140, 165, 200]
+BODY_GRID = [1.10, 1.20, 1.25, 1.30, 1.40, 1.50, 1.60]
+CLOSE_GRID = [0.20, 0.25, 0.30, 0.35]
+WICK_GRID = [0.15, 0.20, 0.25, 0.30, 0.35]
+RR_GRID_FINAL = [3.75, 4.00, 4.25, 4.50, 4.75, 5.00, 5.25]
+
+ANCHOR_SWEEP = 100
+ANCHOR_BODY = 1.40
+ANCHOR_CLOSE = 0.25
+ANCHOR_WICK = 0.25
+ANCHOR_WEEKDAY_EXCLUDE = 2  # Wednesday, Europe/London
+ANCHOR_RR = 4.50
+
+_GEOMETRY_INDEX_CACHE = {}
+
+
+def high_sweep_cfg(config_id, sweep_lb, body, close_loc, wick, rr=ANCHOR_RR, excluded_weekday=ANCHOR_WEEKDAY_EXCLUDE):
+    context = {"type": "NONE"} if excluded_weekday is None else {
+        "type": "EXCLUDE_WEEKDAY",
+        "weekday": int(excluded_weekday),
+    }
+    return {
+        "config_id": config_id,
+        "family": "HIGH_SWEEP_REJECTION",
+        "br_min": None,
+        "body_atr_min": float(body),
+        "range_atr_min": None,
+        "close_loc_max": float(close_loc),
+        "upper_wick_body_min": float(wick),
+        "structure_lb": None,
+        "structure_dist_atr_max": None,
+        "sweep_lb": int(sweep_lb),
+        "breakout_lb": None,
+        "compression_max": None,
+        "rally_12h_min": None,
+        "rr": float(rr),
+        "context": context,
+    }
+
+
+def context_label(cfg):
+    c = cfg.get("context", {"type": "NONE"})
+    if c["type"] == "EXCLUDE_WEEKDAY":
+        names = ["MON", "TUE", "WED", "THU", "FRI"]
+        return "EXCLUDE_" + names[int(c["weekday"])]
+    return c["type"]
+
+
+def geometry_indices(cfg, f):
+    key = (
+        int(cfg["sweep_lb"]),
+        round(float(cfg["body_atr_min"]), 5),
+        round(float(cfg["close_loc_max"]), 5),
+        round(float(cfg["upper_wick_body_min"]), 5),
+    )
+    if key not in _GEOMETRY_INDEX_CACHE:
+        prior_high = f["prev_high"][key[0]]
+        mask = (
+            f["valid_atr"]
+            & f["bearish"]
+            & np.isfinite(prior_high)
+            & (f["high"] > prior_high)
+            & (f["close"] < prior_high)
+            & (f["body_atr"] >= key[1])
+            & (f["close_location"] <= key[2])
+            & (f["upper_wick_body"] >= key[3])
+        )
+        mask[:220] = False
+        _GEOMETRY_INDEX_CACHE[key] = np.flatnonzero(mask).astype(int)
+    return _GEOMETRY_INDEX_CACHE[key]
+
+
+def focused_signal_indices(cfg, f):
+    indices = geometry_indices(cfg, f)
+    context = cfg.get("context", {"type": "NONE"})
+    if context["type"] == "NONE":
+        return indices.tolist()
+    if context["type"] == "EXCLUDE_WEEKDAY":
+        excluded = int(context["weekday"])
+        weekdays = f["london_weekday"]
+        return indices[weekdays[indices] != excluded].tolist()
+    raise RuntimeError("Unsupported final-confirmation context: " + str(context))
+
+
+def decorate(row, cfg):
+    row = dict(row)
+    row["context_detail"] = context_label(cfg)
+    row["excluded_weekday"] = (
+        cfg.get("context", {}).get("weekday")
+        if cfg.get("context", {}).get("type") == "EXCLUDE_WEEKDAY"
+        else None
+    )
+    return row
+
+
+def evaluate_cfg(cfg, candles, features):
+    indices = focused_signal_indices(cfg, features)
+    return decorate(evaluation_row(cfg, candles, indices), cfg)
+
+
+def unique_cfgs(configs):
+    seen = set()
+    out = []
+    for cfg in configs:
+        c = cfg.get("context", {"type": "NONE"})
+        key = (
+            cfg["sweep_lb"], cfg["body_atr_min"], cfg["close_loc_max"],
+            cfg["upper_wick_body_min"], cfg["rr"],
+            c.get("type"), c.get("weekday"),
+        )
+        if key not in seen:
+            seen.add(key)
+            out.append(cfg)
+    return out
+
+
+def selected_bases(rows, by_id, top_n, ensure_anchor=True):
+    ranked = sort_rows(rows)
+    chosen = []
+    ids = set()
+
+    # Primary robust shortlist.
+    for row in ranked:
+        if int(row["full_trades"]) < 35:
+            continue
+        if int(row["positive_eras"]) < 3:
+            continue
+        cid = row["config_id"]
+        if cid not in ids:
+            chosen.append(deepcopy(by_id[cid]))
+            ids.add(cid)
+        if len(chosen) >= top_n:
+            break
+
+    # Preserve sweep-lookback diversity so the boundary question remains visible.
+    for lb in SWEEP_GRID:
+        candidates = [r for r in ranked if int(float(r.get("sweep_lb") or 0)) == lb]
+        if candidates:
+            cid = candidates[0]["config_id"]
+            if cid not in ids:
+                chosen.append(deepcopy(by_id[cid]))
+                ids.add(cid)
+
+    # Preserve body-threshold diversity.
+    for body in BODY_GRID:
+        candidates = [r for r in ranked if abs(float(r.get("body_atr_min") or -99) - body) < 1e-9]
+        if candidates:
+            cid = candidates[0]["config_id"]
+            if cid not in ids:
+                chosen.append(deepcopy(by_id[cid]))
+                ids.add(cid)
+
+    if ensure_anchor:
+        anchor_key = (ANCHOR_SWEEP, ANCHOR_BODY, ANCHOR_CLOSE, ANCHOR_WICK, ANCHOR_RR, "EXCLUDE_WEEKDAY", ANCHOR_WEEKDAY_EXCLUDE)
+        found = False
+        for cfg in chosen:
+            c = cfg.get("context", {})
+            key = (cfg["sweep_lb"], cfg["body_atr_min"], cfg["close_loc_max"], cfg["upper_wick_body_min"], cfg["rr"], c.get("type"), c.get("weekday"))
+            if key == anchor_key:
+                found = True
+                break
+        if not found:
+            chosen.append(high_sweep_cfg(
+                "ANCHOR_BASE", ANCHOR_SWEEP, ANCHOR_BODY, ANCHOR_CLOSE,
+                ANCHOR_WICK, ANCHOR_RR, ANCHOR_WEEKDAY_EXCLUDE,
+            ))
+    return unique_cfgs(chosen)
+
+
+def best_by(rows, field):
+    grouped = {}
+    for row in sort_rows(rows):
+        val = row.get(field)
+        if val not in grouped:
+            grouped[val] = row
+    out = []
+    for val, row in grouped.items():
+        x = dict(row)
+        x["summary_field"] = field
+        x["summary_value"] = val
+        out.append(x)
+    return out
+
+
+def build_bundle():
+    paths = [
+        OUT_COVERAGE, OUT_PARITY, OUT_STAGE1, OUT_STAGE2, OUT_STAGE3,
+        OUT_STAGE4, OUT_FINALISTS, OUT_PERIODS, OUT_COST,
+        OUT_ROLLING, OUT_ROLLING_SUMMARY, OUT_CALENDAR,
+        OUT_CALENDAR_SUMMARY, OUT_PLATEAU, OUT_TRADES, OUT_NOTES,
+    ]
+    with zipfile.ZipFile(OUT_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in paths:
+            if os.path.exists(path):
+                archive.write(path, arcname=os.path.basename(path))
+
+
 def run_research():
     try:
-        m15 = fetch_history(
-            "M15",
-            START,
-            NOW,
-            35,
-        )
-
-        h1 = fetch_history(
-            "H1",
-            HTF_WARMUP_START,
-            NOW,
-            180,
-        )
-
-        h4 = fetch_history(
-            "H4",
-            HTF_WARMUP_START,
-            NOW,
-            700,
-        )
-
-        daily = fetch_history(
-            "D",
-            HTF_WARMUP_START,
-            NOW,
-            3500,
-        )
-
-        if not all([
-            m15,
-            h1,
-            h4,
-            daily,
-        ]):
-            raise RuntimeError(
-                "Missing required EUR_GBP history"
-            )
-
-        write_csv(
-            OUT_COVERAGE,
-            [{
-                "instrument":
-                    PAIR,
-
-                "requested_start_utc":
-                    iso_utc(START),
-
-                "actual_first_m15_utc":
-                    iso_utc(
-                        m15[
-                            0
-                        ][
-                            "time"
-                        ]
-                    ),
-
-                "actual_last_m15_utc":
-                    iso_utc(
-                        m15[
-                            -1
-                        ][
-                            "time"
-                        ]
-                    ),
-
-                "m15_candles":
-                    len(m15),
-
-                "h1_candles":
-                    len(h1),
-
-                "h4_candles":
-                    len(h4),
-
-                "daily_candles":
-                    len(daily),
-            }],
-        )
-
+        STATUS.clear()
         STATUS.update({
-            "state":
-                "precomputing",
-
-            "message":
-                "Building no-lookahead HTF state and M15 short feature cache",
+            "state": "downloading",
+            "message": "Downloading EUR/GBP M15 history",
+            "orders_supported": False,
+            "trading_enabled": False,
         })
 
-        m15_times = [
-            candle[
-                "time"
-            ]
-            for candle in m15
-        ]
+        # Final confirmation uses M15 only. No HTF condition is being tested,
+        # so downloading H1/H4/D again adds runtime without adding evidence.
+        m15 = fetch_history("M15", START, NOW, 35)
+        if not m15:
+            raise RuntimeError("Missing required EUR_GBP M15 history")
 
-        h1_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(h1),
-            )
+        write_csv(OUT_COVERAGE, [{
+            "instrument": PAIR,
+            "requested_start_utc": iso_utc(START),
+            "actual_first_m15_utc": iso_utc(m15[0]["time"]),
+            "actual_last_m15_utc": iso_utc(m15[-1]["time"]),
+            "m15_candles": len(m15),
+            "htf_downloaded": False,
+            "purpose": "Final HIGH_SWEEP_REJECTION local confirmation only",
+        }])
+
+        STATUS.update({"state": "precomputing", "message": "Building focused M15 feature cache"})
+        features = build_features(m15, {}, {}, {})
+        features["times"] = [c["time"] for c in m15]
+        london = ZoneInfo("Europe/London")
+        features["london_weekday"] = np.array(
+            [c["time"].astimezone(london).weekday() for c in m15],
+            dtype=np.int8,
         )
-
-        h4_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(h4),
-            )
-        )
-
-        d_aligned = (
-            align_htf_to_m15(
-                m15_times,
-                build_htf_state(daily),
-            )
-        )
-
-        features = build_features(
-            m15,
-            h1_aligned,
-            h4_aligned,
-            d_aligned,
-        )
-
-        features[
-            "times"
-        ] = m15_times
 
         # ----------------------------------------------------
-        # STAGE 1
+        # HARD PARITY: previous winning finalist
         # ----------------------------------------------------
-        stage1_configs = (
-            build_stage1_configs()
+        anchor = high_sweep_cfg(
+            "ANCHOR_S3_00053", ANCHOR_SWEEP, ANCHOR_BODY,
+            ANCHOR_CLOSE, ANCHOR_WICK, ANCHOR_RR,
+            ANCHOR_WEEKDAY_EXCLUDE,
         )
-
-        stage1_by_id = {
-            cfg[
-                "config_id"
-            ]:
-                cfg
-            for cfg in stage1_configs
+        anchor_indices = focused_signal_indices(anchor, features)
+        anchor_trades = run_backtest(
+            m15, anchor_indices, ANCHOR_RR, PRIMARY_COST_PIPS,
+            START, PARITY_CUTOFF,
+        )
+        parity_status = "MATCH" if len(anchor_trades) == ANCHOR_EXPECTED_TRADES else "FAIL"
+        parity_row = {
+            "anchor": "S3_00053",
+            "sweep_lb": ANCHOR_SWEEP,
+            "body_atr_min": ANCHOR_BODY,
+            "close_loc_max": ANCHOR_CLOSE,
+            "upper_wick_body_min": ANCHOR_WICK,
+            "excluded_weekday_london": "Wednesday",
+            "rr": ANCHOR_RR,
+            "cost_pips": PRIMARY_COST_PIPS,
+            "parity_cutoff_utc": iso_utc(PARITY_CUTOFF),
+            "expected_trades": ANCHOR_EXPECTED_TRADES,
+            "actual_trades": len(anchor_trades),
+            "status": parity_status,
         }
+        write_csv(OUT_PARITY, [parity_row])
+        if parity_status != "MATCH":
+            raise RuntimeError(
+                f"Anchor parity failed: expected {ANCHOR_EXPECTED_TRADES}, got {len(anchor_trades)} through {iso_utc(PARITY_CUTOFF)}"
+            )
+
+        # ----------------------------------------------------
+        # STAGE 1: sweep/body/close neighbourhood
+        # Wick, weekday and RR frozen at the prior winner.
+        # ----------------------------------------------------
+        stage1_configs = []
+        counter = 0
+        for lb in SWEEP_GRID:
+            for body in BODY_GRID:
+                for close_loc in CLOSE_GRID:
+                    counter += 1
+                    stage1_configs.append(high_sweep_cfg(
+                        f"G_{counter:04d}", lb, body, close_loc,
+                        ANCHOR_WICK, ANCHOR_RR, ANCHOR_WEEKDAY_EXCLUDE,
+                    ))
 
         stage1_rows = []
-
-        for i, cfg in enumerate(
-            stage1_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "stage1",
-
-                "message": (
-                    f"Stage 1 "
-                    f"{i}/{len(stage1_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            cfg[
-                "context"
-            ] = {
-                "type":
-                    "NONE",
-            }
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            stage1_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        stage1_rows = sort_rows(
-            stage1_rows
-        )
-
-        write_csv(
-            OUT_STAGE1,
-            stage1_rows,
-        )
-
-        # Prefer broad family merit before context rescue.
-        eligible_stage1 = [
-            row
-            for row in stage1_rows
-            if (
-                row[
-                    "full_trades"
-                ] >= 50
-                and row[
-                    "full_pf"
-                ] >= 1.05
-                and row[
-                    "full_r"
-                ] > 0
-                and row[
-                    "positive_eras"
-                ] >= 3
-            )
-        ]
-
-        top_stage1 = (
-            eligible_stage1[
-                :STAGE1_KEEP
-            ]
-        )
-
-        if len(
-            top_stage1
-        ) < STAGE1_KEEP:
-            selected = {
-                row[
-                    "config_id"
-                ]
-                for row in top_stage1
-            }
-
-            for row in stage1_rows:
-                if row[
-                    "config_id"
-                ] in selected:
-                    continue
-
-                top_stage1.append(
-                    row
-                )
-
-                selected.add(
-                    row[
-                        "config_id"
-                    ]
-                )
-
-                if len(
-                    top_stage1
-                ) >= STAGE1_KEEP:
-                    break
+        for i, cfg in enumerate(stage1_configs, 1):
+            STATUS.update({"state": "stage1_geometry", "message": f"Geometry {i}/{len(stage1_configs)}"})
+            stage1_rows.append(evaluate_cfg(cfg, m15, features))
+        stage1_rows = sort_rows(stage1_rows)
+        write_csv(OUT_STAGE1, stage1_rows)
+        stage1_by_id = {c["config_id"]: c for c in stage1_configs}
 
         # ----------------------------------------------------
-        # STAGE 2
+        # STAGE 2: upper-wick boundary confirmation
         # ----------------------------------------------------
-        stage2_configs = (
-            build_stage2_configs(
-                stage1_by_id,
-                top_stage1,
-            )
-        )
-
-        stage2_by_id = {
-            cfg[
-                "config_id"
-            ]:
-                cfg
-            for cfg in stage2_configs
-        }
+        bases2 = selected_bases(stage1_rows, stage1_by_id, top_n=18)
+        stage2_configs = []
+        counter = 0
+        for base in bases2:
+            for wick in WICK_GRID:
+                counter += 1
+                cfg = deepcopy(base)
+                cfg["config_id"] = f"W_{counter:04d}"
+                cfg["upper_wick_body_min"] = wick
+                stage2_configs.append(cfg)
+        stage2_configs = unique_cfgs(stage2_configs)
 
         stage2_rows = []
-
-        for i, cfg in enumerate(
-            stage2_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "stage2",
-
-                "message": (
-                    f"Stage 2 "
-                    f"{i}/{len(stage2_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            stage2_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        stage2_rows = sort_rows(
-            stage2_rows
-        )
-
-        write_csv(
-            OUT_STAGE2,
-            stage2_rows,
-        )
-
-        top_stage2 = (
-            stage2_rows[
-                :STAGE2_KEEP
-            ]
-        )
+        for i, cfg in enumerate(stage2_configs, 1):
+            STATUS.update({"state": "stage2_wick", "message": f"Wick {i}/{len(stage2_configs)}"})
+            stage2_rows.append(evaluate_cfg(cfg, m15, features))
+        stage2_rows = sort_rows(stage2_rows)
+        write_csv(OUT_STAGE2, stage2_rows)
+        stage2_by_id = {c["config_id"]: c for c in stage2_configs}
 
         # ----------------------------------------------------
-        # STAGE 3
+        # STAGE 3: weekday confirmation
+        # NONE + exclude each weekday in Europe/London.
         # ----------------------------------------------------
+        bases3 = selected_bases(stage2_rows, stage2_by_id, top_n=16)
         stage3_configs = []
-        seen = set()
         counter = 0
-
-        for row in top_stage2[
-            :STAGE3_BASE_KEEP
-        ]:
-            base = deepcopy(
-                stage2_by_id[
-                    row[
-                        "config_id"
-                    ]
-                ]
-            )
-
-            for variant in local_variants(
-                base
-            ):
-                signature = tuple(
-                    (
-                        key,
-                        repr(
-                            variant.get(key)
-                        ),
-                    )
-                    for key in sorted(
-                        variant.keys()
-                    )
-                    if key != "config_id"
-                )
-
-                if signature in seen:
-                    continue
-
-                seen.add(signature)
+        for base in bases3:
+            for excluded in [None, 0, 1, 2, 3, 4]:
                 counter += 1
-
-                variant[
-                    "config_id"
-                ] = (
-                    f"S3_{counter:05d}"
-                )
-
-                stage3_configs.append(
-                    variant
-                )
-
-        stage3_by_id = {
-            cfg[
-                "config_id"
-            ]:
-                cfg
-            for cfg in stage3_configs
-        }
+                cfg = deepcopy(base)
+                cfg["config_id"] = f"D_{counter:04d}"
+                cfg["context"] = {"type": "NONE"} if excluded is None else {
+                    "type": "EXCLUDE_WEEKDAY", "weekday": excluded,
+                }
+                stage3_configs.append(cfg)
+        stage3_configs = unique_cfgs(stage3_configs)
 
         stage3_rows = []
-
-        for i, cfg in enumerate(
-            stage3_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "stage3",
-
-                "message": (
-                    f"Stage 3 "
-                    f"{i}/{len(stage3_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
-
-            indices = signal_indices(
-                cfg,
-                features,
-            )
-
-            stage3_rows.append(
-                evaluation_row(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-        stage3_rows = sort_rows(
-            stage3_rows
-        )
-
-        write_csv(
-            OUT_STAGE3,
-            stage3_rows,
-        )
+        for i, cfg in enumerate(stage3_configs, 1):
+            STATUS.update({"state": "stage3_weekday", "message": f"Weekday {i}/{len(stage3_configs)}"})
+            stage3_rows.append(evaluate_cfg(cfg, m15, features))
+        stage3_rows = sort_rows(stage3_rows)
+        write_csv(OUT_STAGE3, stage3_rows)
+        stage3_by_id = {c["config_id"]: c for c in stage3_configs}
 
         # ----------------------------------------------------
-        # FINALISTS
+        # STAGE 4: RR only around strongest geometry/context.
         # ----------------------------------------------------
-        eligible_finalists = [
-            row
-            for row in stage3_rows
-            if (
-                row[
-                    "full_trades"
-                ] >= 45
-                and row[
-                    "pre2010_trades"
-                ] >= 5
-                and row[
-                    "pre2010_r"
-                ] > 0
-                and row[
-                    "post2010_r"
-                ] > 0
-                and row[
-                    "positive_eras"
-                ] == 4
-                and row[
-                    "full_pf"
-                ] >= 1.20
-            )
-        ]
+        bases4 = selected_bases(stage3_rows, stage3_by_id, top_n=14)
+        stage4_configs = []
+        counter = 0
+        for base in bases4:
+            for rr in RR_GRID_FINAL:
+                counter += 1
+                cfg = deepcopy(base)
+                cfg["config_id"] = f"R_{counter:04d}"
+                cfg["rr"] = rr
+                stage4_configs.append(cfg)
+        stage4_configs = unique_cfgs(stage4_configs)
 
-        finalist_rows = (
-            eligible_finalists[
-                :FINALIST_KEEP
-            ]
-        )
+        stage4_rows = []
+        for i, cfg in enumerate(stage4_configs, 1):
+            STATUS.update({"state": "stage4_rr", "message": f"RR {i}/{len(stage4_configs)}"})
+            stage4_rows.append(evaluate_cfg(cfg, m15, features))
+        stage4_rows = sort_rows(stage4_rows)
+        write_csv(OUT_STAGE4, stage4_rows)
+        stage4_by_id = {c["config_id"]: c for c in stage4_configs}
 
-        if len(
-            finalist_rows
-        ) < FINALIST_KEEP:
-            selected = {
-                row[
-                    "config_id"
-                ]
-                for row in finalist_rows
-            }
+        # ----------------------------------------------------
+        # FINALISTS: prefer 4 positive eras and sane sample size.
+        # Keep anchor as a direct comparison even if it falls below top 12.
+        # ----------------------------------------------------
+        finalists = []
+        finalist_ids = set()
+        for row in stage4_rows:
+            if int(row["positive_eras"]) < 4:
+                continue
+            if int(row["full_trades"]) < 40:
+                continue
+            cid = row["config_id"]
+            finalists.append(deepcopy(stage4_by_id[cid]))
+            finalist_ids.add(cid)
+            if len(finalists) >= 12:
+                break
 
-            for row in stage3_rows:
-                if row[
-                    "config_id"
-                ] in selected:
+        if len(finalists) < 12:
+            for row in stage4_rows:
+                cid = row["config_id"]
+                if cid in finalist_ids:
                     continue
-
-                finalist_rows.append(
-                    row
-                )
-
-                selected.add(
-                    row[
-                        "config_id"
-                    ]
-                )
-
-                if len(
-                    finalist_rows
-                ) >= FINALIST_KEEP:
+                finalists.append(deepcopy(stage4_by_id[cid]))
+                finalist_ids.add(cid)
+                if len(finalists) >= 12:
                     break
 
-        write_csv(
-            OUT_FINALISTS,
-            finalist_rows,
-        )
+        # Exact prior anchor, deep-tested again under current data.
+        finalists.append(anchor)
+        finalists = unique_cfgs(finalists)
 
-        finalist_configs = [
-            stage3_by_id[
-                row[
-                    "config_id"
-                ]
-            ]
-            for row in finalist_rows
-        ]
+        finalist_rows = [evaluate_cfg(cfg, m15, features) for cfg in finalists]
+        finalist_rows = sort_rows(finalist_rows)
+        write_csv(OUT_FINALISTS, finalist_rows)
 
         # ----------------------------------------------------
-        # DEEP
+        # DEEP VALIDATION
         # ----------------------------------------------------
         period_output = []
         cost_output = []
         rolling_output = []
         calendar_output = []
-        plateau_output = []
         trade_output = []
 
-        for i, cfg in enumerate(
-            finalist_configs,
-            1,
-        ):
-            STATUS.update({
-                "state":
-                    "deep_validation",
+        for i, cfg in enumerate(finalists, 1):
+            STATUS.update({"state": "deep_validation", "message": f"Deep finalist {i}/{len(finalists)}"})
+            indices = focused_signal_indices(cfg, features)
 
-                "message": (
-                    f"Deep validation "
-                    f"{i}/{len(finalist_configs)} "
-                    f"{cfg['config_id']}"
-                ),
-            })
+            for label, start, end in period_definitions():
+                row = result_row(cfg, label, run_backtest(
+                    m15, indices, cfg["rr"], PRIMARY_COST_PIPS, start, end,
+                ))
+                period_output.append(decorate(row, cfg))
 
-            indices = signal_indices(
-                cfg,
-                features,
-            )
+            for cost in COST_GRID:
+                for label, start, end in [
+                    ("FULL_HISTORY", START, NOW),
+                    ("PRE_2010", START, datetime(2010,1,1,tzinfo=timezone.utc)),
+                    ("2010_PLUS", datetime(2010,1,1,tzinfo=timezone.utc), NOW),
+                ]:
+                    row = result_row(cfg, label, run_backtest(
+                        m15, indices, cfg["rr"], cost, start, end,
+                    ))
+                    row = decorate(row, cfg)
+                    row["cost_pips"] = cost
+                    cost_output.append(row)
 
-            for (
-                label,
-                start,
-                end,
-            ) in period_definitions():
-                trades = run_backtest(
-                    m15,
-                    indices,
-                    cfg[
-                        "rr"
-                    ],
-                    PRIMARY_COST_PIPS,
-                    start,
-                    end,
-                )
+            rr = rolling_rows(cfg, m15, indices)
+            for row in rr:
+                row.update({
+                    "context_detail": context_label(cfg),
+                    "sweep_lb": cfg["sweep_lb"],
+                    "body_atr_min": cfg["body_atr_min"],
+                    "close_loc_max": cfg["close_loc_max"],
+                    "upper_wick_body_min": cfg["upper_wick_body_min"],
+                    "rr": cfg["rr"],
+                })
+            rolling_output.extend(rr)
 
-                period_output.append(
-                    result_row(
-                        cfg,
-                        label,
-                        trades,
-                    )
-                )
+            cr = calendar_rows(cfg, m15, indices)
+            for row in cr:
+                row.update({
+                    "context_detail": context_label(cfg),
+                    "sweep_lb": cfg["sweep_lb"],
+                    "body_atr_min": cfg["body_atr_min"],
+                    "close_loc_max": cfg["close_loc_max"],
+                    "upper_wick_body_min": cfg["upper_wick_body_min"],
+                    "rr": cfg["rr"],
+                })
+            calendar_output.extend(cr)
 
-            for (
-                label,
-                start,
-                end,
-            ) in [
-                (
-                    "FULL_HISTORY",
-                    START,
-                    NOW,
-                ),
-
-                (
-                    "PRE_2010",
-                    START,
-                    datetime(
-                        2010, 1, 1,
-                        tzinfo=timezone.utc,
-                    ),
-                ),
-
-                (
-                    "2010_PLUS",
-                    datetime(
-                        2010, 1, 1,
-                        tzinfo=timezone.utc,
-                    ),
-                    NOW,
-                ),
-            ]:
-                for cost in COST_GRID:
-                    trades = run_backtest(
-                        m15,
-                        indices,
-                        cfg[
-                            "rr"
-                        ],
-                        cost,
-                        start,
-                        end,
-                    )
-
-                    row = result_row(
-                        cfg,
-                        label,
-                        trades,
-                    )
-
-                    row[
-                        "cost_pips"
-                    ] = cost
-
-                    cost_output.append(
-                        row
-                    )
-
-            rolling_output.extend(
-                rolling_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-            calendar_output.extend(
-                calendar_rows(
-                    cfg,
-                    m15,
-                    indices,
-                )
-            )
-
-            # Plateau only for first 3 deep finalists to limit runtime.
-            if i <= 3:
-                plateau_output.extend(
-                    plateau_rows(
-                        cfg,
-                        m15,
-                        features,
-                    )
-                )
-
-            full_trades = run_backtest(
-                m15,
-                indices,
-                cfg[
-                    "rr"
-                ],
-                PRIMARY_COST_PIPS,
-                START,
-                NOW,
-            )
-
+            full_trades = run_backtest(m15, indices, cfg["rr"], PRIMARY_COST_PIPS, START, NOW)
             for trade in full_trades:
                 row = dict(trade)
+                row.update({
+                    "config_id": cfg["config_id"],
+                    "family": cfg["family"],
+                    "context_detail": context_label(cfg),
+                    "sweep_lb": cfg["sweep_lb"],
+                    "body_atr_min": cfg["body_atr_min"],
+                    "close_loc_max": cfg["close_loc_max"],
+                    "upper_wick_body_min": cfg["upper_wick_body_min"],
+                    "rr": cfg["rr"],
+                })
+                trade_output.append(row)
 
-                row[
-                    "config_id"
-                ] = cfg[
-                    "config_id"
-                ]
+        write_csv(OUT_PERIODS, period_output)
+        write_csv(OUT_COST, cost_output)
+        write_csv(OUT_ROLLING, rolling_output)
+        write_csv(OUT_ROLLING_SUMMARY, rolling_summary_rows(rolling_output))
+        write_csv(OUT_CALENDAR, calendar_output)
+        write_csv(OUT_CALENDAR_SUMMARY, calendar_summary_rows(calendar_output))
+        write_csv(OUT_TRADES, trade_output)
 
-                row[
-                    "family"
-                ] = cfg[
-                    "family"
-                ]
+        parameter_summary = []
+        parameter_summary += best_by(stage1_rows, "sweep_lb")
+        parameter_summary += best_by(stage1_rows, "body_atr_min")
+        parameter_summary += best_by(stage1_rows, "close_loc_max")
+        parameter_summary += best_by(stage2_rows, "upper_wick_body_min")
+        parameter_summary += best_by(stage3_rows, "context_detail")
+        parameter_summary += best_by(stage4_rows, "rr")
+        write_csv(OUT_PLATEAU, parameter_summary)
 
-                trade_output.append(
-                    row
-                )
+        write_csv(OUT_NOTES, [
+            {"item": "Purpose", "value": "Final focused confirmation of EUR/GBP M15 SHORT HIGH_SWEEP_REJECTION only; no new archetypes."},
+            {"item": "Previous winner", "value": "Sweep100; body>=1.40ATR; close location<=0.25; upper wick/body>=0.25; exclude Wednesday Europe/London; RR4.50; 59 trades in prior broad run."},
+            {"item": "Hard parity", "value": f"Previous winner must reproduce {ANCHOR_EXPECTED_TRADES} trades through {iso_utc(PARITY_CUTOFF)} at 1-pip adverse cost."},
+            {"item": "Stage 1", "value": "Sweep 60/80/100/120/140/165/200 x body 1.10/1.20/1.25/1.30/1.40/1.50/1.60 x close location 0.20/0.25/0.30/0.35; wick0.25, Wednesday excluded, RR4.50 frozen."},
+            {"item": "Stage 2", "value": "Upper-wick/body 0.15/0.20/0.25/0.30/0.35 only around robust Stage-1 geometries."},
+            {"item": "Stage 3", "value": "No weekday exclusion versus excluding Mon/Tue/Wed/Thu/Fri, all evaluated in Europe/London local time."},
+            {"item": "Stage 4", "value": "RR3.75/4.00/4.25/4.50/4.75/5.00/5.25 only around robust geometry/context survivors."},
+            {"item": "Railway safety", "value": "M15 only; unique geometry signal indices cached and reused across weekday/RR variants; no HTF downloads; no giant Cartesian product."},
+            {"item": "Historical convention", "value": "SHORT fill = signal close - adverse cost; stop = high +10 ticks; target from reference-close risk; actual R from adverse fill; exit scan begins next bar; exact exit-candle signal eligible; pyramiding0."},
+            {"item": "Interpretation", "value": "Full-history robustness confirmation; no pristine historical OOS remains."},
+        ])
 
-        write_csv(
-            OUT_PERIODS,
-            period_output,
-        )
-
-        write_csv(
-            OUT_COST,
-            cost_output,
-        )
-
-        write_csv(
-            OUT_ROLLING,
-            rolling_output,
-        )
-
-        write_csv(
-            OUT_ROLLING_SUMMARY,
-            rolling_summary_rows(
-                rolling_output
-            ),
-        )
-
-        write_csv(
-            OUT_CALENDAR,
-            calendar_output,
-        )
-
-        write_csv(
-            OUT_CALENDAR_SUMMARY,
-            calendar_summary_rows(
-                calendar_output
-            ),
-        )
-
-        write_csv(
-            OUT_PLATEAU,
-            plateau_output,
-        )
-
-        write_csv(
-            OUT_TRADES,
-            trade_output,
-        )
-
-        write_csv(
-            OUT_NOTES,
-            [{
-                "item":
-                    "Purpose",
-
-                "value":
-                    "Fresh EUR/GBP M15 SHORT full-history re-examination from 2002+; not an inversion of the locked long strategy.",
-            }, {
-                "item":
-                    "Prior benchmark",
-
-                "value":
-                    "No previously validated EUR/GBP M15 SHORT benchmark was available in the recovered project context, so this run starts as a fresh benchmark search rather than pretending an H1 short is an M15 control.",
-            }, {
-                "item":
-                    "Stage 1",
-
-                "value":
-                    "Six distinct bearish archetypes with no HTF/session/weekday rescue.",
-            }, {
-                "item":
-                    "Stage 2",
-
-                "value":
-                    "Controlled HTF/daily/volatility contexts plus broad time diagnostics only on strongest Stage-1 geometries.",
-            }, {
-                "item":
-                    "Stage 3",
-
-                "value":
-                    "Local neighbourhood and RR confirmation only.",
-            }, {
-                "item":
-                    "No-lookahead",
-
-                "value":
-                    "H1/H4/D use next actual candle open as complete_at and bisect_right(completion_times, signal_time)-1; prior M15 momentum ends at close[i-1].",
-            }, {
-                "item":
-                    "Historical holdout",
-
-                "value":
-                    "No pristine historical holdout remains across the M15 programme; interpret as robust full-history temporal validation, not untouched OOS.",
-            }],
-        )
-
-        STATUS.update({
-            "state":
-                "packaging",
-
-            "message":
-                "Building one ZIP results bundle",
-        })
-
+        STATUS.update({"state": "packaging", "message": "Building one results ZIP"})
         build_bundle()
-
         STATUS.update({
-            "state":
-                "complete",
-
-            "message":
-                "EUR/GBP M15 SHORT full-history re-examination complete",
-
-            "stage1_configs":
-                len(stage1_configs),
-
-            "stage2_configs":
-                len(stage2_configs),
-
-            "stage3_configs":
-                len(stage3_configs),
-
-            "deep_finalists":
-                len(finalist_configs),
-
-            "results_bundle":
-                OUT_BUNDLE,
+            "state": "complete",
+            "message": "EUR/GBP M15 SHORT final high-sweep confirmation complete",
+            "stage1_geometry_configs": len(stage1_configs),
+            "stage2_wick_configs": len(stage2_configs),
+            "stage3_weekday_configs": len(stage3_configs),
+            "stage4_rr_configs": len(stage4_configs),
+            "deep_finalists": len(finalists),
+            "geometry_cache_entries": len(_GEOMETRY_INDEX_CACHE),
+            "results_bundle": OUT_BUNDLE,
+            "orders_supported": False,
+            "trading_enabled": False,
         })
 
     except Exception as error:
+        tb = traceback.format_exc()
         STATUS.update({
-            "state":
-                "error",
-
-            "message":
-                str(error),
+            "state": "error",
+            "error_type": type(error).__name__,
+            "message": str(error),
+            "traceback": tb,
+            "orders_supported": False,
+            "trading_enabled": False,
         })
+        print(tb, flush=True)
 
-        print(
-            "ERROR:",
-            error,
-            flush=True,
-        )
-
-
-# ============================================================
-# ROUTES
-# ============================================================
 
 @app.route("/")
-def root():
+def final_root():
     return jsonify({
-        "service":
-            "EURGBP M15 SHORT Full-History Re-examination",
-
-        "status":
-            STATUS[
-                "state"
-            ],
-
-        "instrument":
-            PAIR,
-
-        "timeframe":
-            "M15",
-
-        "side":
-            "SELL",
-
-        "start":
-            iso_utc(START),
-
-        "baseline_cost_pips":
-            PRIMARY_COST_PIPS,
-
-        "session_contexts": [
-            "Europe/London 4-hour blocks",
-            "America/New_York 4-hour blocks",
-        ],
-
-        "weekday_timezone":
-            "Europe/London",
-
-        "families": [
-            "BEAR_ENGULF_STRUCTURE",
-            "HIGH_SWEEP_REJECTION",
-            "FAILED_BREAKOUT_RECLAIM",
-            "BEAR_OUTSIDE_REVERSAL",
-            "COMPRESSION_BREAKDOWN",
-            "RALLY_FAILURE_BREAKDOWN",
-        ],
-
-        "orders_supported":
-            False,
-
-        "trading_enabled":
-            False,
-
+        "service": "EUR/GBP M15 SHORT Final High-Sweep Confirmation",
+        "state": STATUS.get("state"),
+        "message": STATUS.get("message"),
+        "error_type": STATUS.get("error_type"),
+        "instrument": PAIR,
+        "timeframe": "M15",
+        "side": "SELL",
+        "family": "HIGH_SWEEP_REJECTION",
+        "orders_supported": False,
+        "trading_enabled": False,
         "routes": [
-            "/eurgbp-m15-short-full-history/status",
-            "/eurgbp-m15-short-full-history/results",
+            "/eurgbp-m15-short-final-high-sweep/status",
+            "/eurgbp-m15-short-final-high-sweep/results",
         ],
     })
 
 
-@app.route(
-    "/eurgbp-m15-short-full-history/status"
-)
-def route_status():
-    return jsonify(
-        STATUS
-    )
+@app.route("/eurgbp-m15-short-final-high-sweep/status")
+def final_status():
+    return jsonify(STATUS)
 
 
-@app.route(
-    "/eurgbp-m15-short-full-history/results"
-)
-def route_results():
-    if not os.path.exists(
-        OUT_BUNDLE
-    ):
-        return jsonify({
-            "error":
-                "Results not ready yet",
-        }), 404
-
-    return send_file(
-        os.path.abspath(
-            OUT_BUNDLE
-        ),
-        as_attachment=True,
-        download_name=OUT_BUNDLE,
-    )
+@app.route("/eurgbp-m15-short-final-high-sweep/results")
+def final_results():
+    if not os.path.exists(OUT_BUNDLE):
+        return jsonify({"error": "Results not ready yet", "state": STATUS.get("state"), "message": STATUS.get("message")}), 404
+    return send_file(os.path.abspath(OUT_BUNDLE), as_attachment=True, download_name=OUT_BUNDLE)
 
 
 if __name__ == "__main__":
     thread = threading.Thread(
         target=run_research,
-        name=(
-            "eurgbp-m15-short-"
-            "full-history"
-        ),
+        name="eurgbp-m15-short-final-high-sweep",
         daemon=True,
     )
-
     thread.start()
-
-    port = int(
-        os.getenv(
-            "PORT",
-            5000,
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-    )
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
