@@ -1,1618 +1,1147 @@
-import os, csv, time, bisect, zipfile, threading
-from copy import deepcopy
+"""
+M15 FINAL LOCKED 10-STRATEGY PORTFOLIO ANALYSIS
+================================================
+
+READ-ONLY research service. NEVER sends orders.
+
+Purpose
+-------
+Rebuild and merge the FINAL full-history-validated M15 strategies for:
+    EUR/USD  LONG + SHORT
+    GBP/USD  LONG + SHORT
+    USD/JPY  LONG + SHORT
+    USD/CAD  LONG + SHORT
+    EUR/GBP  LONG + SHORT
+
+The strategy rules below are frozen. This file performs NO optimization.
+It downloads OANDA midpoint history, recreates each final locked strategy,
+then exports one ZIP containing:
+
+    - exact strategy manifest
+    - data coverage
+    - per-strategy summary and period stats
+    - per-pair summary
+    - full portfolio summary
+    - last 1/2/3/5/10Y stats
+    - calendar-year returns / trade counts
+    - rolling 12/24/36M returns and trade counts
+    - rolling-window summary / best and worst windows
+    - trade-frequency stats
+    - 0.5/1.0/1.5/2.0-pip cost stress
+    - monthly strategy returns + correlation matrix
+    - trade overlap / concurrency diagnostics
+    - all 1-pip baseline trades
+    - parity / validation-reference diagnostics
+
+Historical conventions
+----------------------
+- OANDA midpoint candles, M15 signal timestamp = candle OPEN.
+- ATR14 = Wilder/RMA, SMA seeded.
+- Reference entry = signal close.
+- Historical adverse fill: LONG close + cost; SHORT close - cost.
+- Stop buffer = 10 ticks.
+- Target is based on REFERENCE signal-close risk.
+- Actual R is measured from the adverse fill.
+- Exit testing starts on the NEXT M15 candle.
+- Signal on the exact exit candle is eligible.
+- Same-bar LONG tie: if high is closer to candle open => TARGET first;
+  otherwise STOP first.
+- Same-bar SHORT tie: if high is closer to candle open => STOP first;
+  otherwise TARGET first.
+- HTF state becomes available only at next ACTUAL HTF candle open;
+  lookup = bisect_right(completion_times, signal_time) - 1.
+- OANDA dailyAlignment=17, alignmentTimezone=America/New_York.
+- Each strategy enforces pyramiding=0 internally.
+- DIFFERENT strategy IDs are allowed to overlap/concurrently hold positions.
+  This includes opposite directions on the same pair; the analysis reports
+  those overlaps rather than suppressing them.
+
+Final full-history locks used
+-----------------------------
+EUR/USD LONG:
+    exact bullish engulf; BR>=1.20; body>=1.00 ATR; S165/D0.10;
+    exclude Tuesday (America/New_York); NO hour exclusion; RR3.75.
+EUR/USD SHORT:
+    exact bearish engulf; BR>=1.10; body>=1.30 ATR; range>=1.70 ATR;
+    S60/D0.225; NY 02:00-03:59; no weekday exclusion; RR3.50.
+GBP/USD LONG:
+    failed breakdown/reclaim of prior165 low; body>=1.00 ATR;
+    close location>=0.75; NY04:00-07:59; RR4.25.
+GBP/USD SHORT:
+    exact bearish engulf; BR>=1.30; body>=1.10 ATR; range>=1.60 ATR;
+    S100/D0.075; no time/day filters; RR3.00.
+USD/JPY LONG:
+    SWEEP30_RR4.00; bullish; NO BR filter; body>=1.25 ATR;
+    low<prior30 low; close>previous M15 high; lower wick/body>=0.25;
+    prior4h momentum<=-1.75 ATR; previous completed H1 ATR14/mean50>=0.80;
+    RR4.00.
+USD/JPY SHORT:
+    core compression-breakdown + daily EMA200, RR4.75;
+    complement prior165 high sweep/rejection + H4 EMA100, RR3.00;
+    same-candle core priority; pyramiding0 on union stream.
+USD/CAD LONG:
+    core bullish engulf S165/D0.175 + daily EMA50>EMA200, RR5.00;
+    complement compression-breakout prior5 high + H4 close>EMA100, RR5.25;
+    same-candle core priority; pyramiding0 on union stream.
+USD/CAD SHORT:
+    core bearish outside S120/D0.05 + H4 close<EMA100, RR4.00;
+    complement prior20 high sweep rejection + H1 close<EMA100, RR3.50;
+    historical half-open complement/core overlap rejection.
+EUR/GBP LONG:
+    core sweep60 displacement / body1.20 / wick0.25 / prior4h<=-1.25 /
+    NY01-03 / RR2.75;
+    complement exact bullish engulf BR1.20/body1.10/S165/D0.20 /
+    Europe/London03-07 / RR2.25;
+    historical half-open complement/core overlap rejection.
+EUR/GBP SHORT:
+    core high-sweep120 / body1.25 / closeLoc<=.20 / wick>=.40 /
+    exclude Wednesday Europe/London / RR4.50;
+    complement exact bearish engulf BR1.60/body1.00/S100/D0.15 /
+    previous completed H1 close<EMA100 / RR2.50;
+    historical half-open complement/core overlap rejection.
+"""
+
+import os
+import csv
+import json
+import math
+import time
+import bisect
+import zipfile
+import threading
+import gc
 from collections import deque, defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
-from pathlib import Path
 from zoneinfo import ZoneInfo
-from itertools import product
 
 import numpy as np
 import requests
 from flask import Flask, jsonify, send_file
 
+
 # ============================================================
-# EUR/GBP M15 SHORT — FINAL COMPLEMENT BR-ONLY CONFIRMATION
-#
-# PURPOSE
-#   Freeze the FINAL 44-trade EUR/GBP M15 SHORT core exactly,
-#   then locally confirm the only promising Trigger-B family found
-#   by the complementary-frequency search:
-#       exact bearish engulfing near a prior major high,
-#       gated by a completed H1 bearish regime.
-#
-# SOURCE-DERIVED ANCHOR FROM THE COMPLEMENT SEARCH
-#   family: BEAR_ENGULF_STRUCTURE
-#   BR >= 1.40
-#   body >= 1.00 ATR14
-#   previous 100-bar high
-#   abs(signal high - prior high) <= 0.20 ATR14
-#   previous completed H1 close < H1 EMA100
-#   RR 2.50
-#   candidate 41 / accepted 40 / overlap 1 / combined 84
-#   accepted PF ~1.613 / +14.10R
-#   combined PF ~2.554 / +73.03R / DD ~-5R
-#   accepted 2-pip PF ~1.430 / +9.89R
-#
-# FROZEN CORE — NEVER OPTIMISE / LOOSEN
-#   HIGH_SWEEP_REJECTION
-#   bearish M15 candle
-#   current high > previous 120-bar high, then close back below it
-#   body >= 1.25 ATR14
-#   close location <= 0.20
-#   upper wick/body >= 0.40
-#   exclude Wednesday in Europe/London
-#   RR 4.50
-#   stop = signal high + 10 ticks
-#   1-pip adverse historical SHORT fill
-#   pyramiding 0
-#
-# CONFIRMATION DESIGN — STAGED, NOT A GIANT CARTESIAN SEARCH
-#   Stage 1A: BR x body, with structure/H1/RR frozen to anchor
-#   Stage 1B: structure lookback x distance, with candle/H1/RR frozen
-#   Stage 2: controlled interaction of the strongest local candle and
-#            structure neighbourhoods (anchor is always retained)
-#   Stage 3: H1 bearish-regime confirmation:
-#            NONE and completed H1 close < EMA50/75/100/125/150/200
-#   Stage 4: RR confirmation 2.00/2.25/2.50/2.75/3.00
-#   Deep finalists: full/pre/post, four eras, 2018+, last5Y/2Y,
-#                    0.5-2p stress, rolling 12/24/36M, calendar years.
-#
-# SEARCH RANGES
-#   BR:       1.20 / 1.30 / 1.40 / 1.50 / 1.60
-#   body ATR: 0.80 / 0.90 / 1.00 / 1.10 / 1.20
-#   LB:       60 / 80 / 100 / 120 / 140 / 165
-#   distance: 0.10 / 0.15 / 0.20 / 0.25 / 0.30 ATR
-#   H1 EMA:   50 / 75 / 100 / 125 / 150 / 200, plus NONE ablation
-#   RR:       2.00 / 2.25 / 2.50 / 2.75 / 3.00
-#
-# ANTI-OVERFIT RULES
-#   - raw NONE H1 context is included as an ablation, not hidden
-#   - no session or weekday search for Trigger B
-#   - no target-year scoring
-#   - 2005/2009/2013/2023 are diagnostics only
-#   - candidate interval [signal, exit) overlapping a core trade is
-#     rejected; exact core exit-candle signal remains eligible
-#   - core always has priority
-#   - selection prefers broad temporal/cost robustness over max R/PF
-#
-# HARD PARITY CUTOFF
-#   2026-09-10 12:30 UTC
-#   frozen core = 44 trades
-#   anchor candidate = 41 trades
-#   anchor accepted = 40 trades
-#   anchor overlap = 1 trade
-#   anchor combined = 84 trades
-#
-# BASELINE EXECUTION
-#   OANDA midpoint, full available EUR_GBP M15 history from 2002+
-#   completed H1/H4/D states only; no lookahead
-#   ATR14 Wilder/RMA SMA-seeded
-#   signal timestamp = M15 candle OPEN
-#   stop = signal high + 10 ticks
-#   target based on REFERENCE signal-close risk
-#   short adverse fill = signal close - cost pips
-#   baseline 1.0 pip; stress 0.5/1.0/1.5/2.0
-#   exits start next M15 candle
-#   same-bar SHORT tie: high closer to open => STOP first,
-#                       otherwise TARGET first
-#
-# ONE ZIP
-#   /eurgbp-m15-short-complement-final-br-only/results
-#
-# READ ONLY. NEVER SENDS ORDERS.
+# SERVICE / GLOBAL SETTINGS
 # ============================================================
 
 app = Flask(__name__)
 
 TOKEN = os.getenv("OANDA_TOKEN")
 BASE = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com")
-PAIR = "EUR_GBP"
 
 START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
+HTF_WARMUP = START - timedelta(days=1000)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-WARMUP = START - timedelta(days=900)
-PARITY_CUTOFF = datetime(2026, 9, 10, 12, 30, tzinfo=timezone.utc)
-ANCHOR_HISTORY_CUTOFF = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
 
 NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
 
-TICK = 0.00001
-PIP = 0.0001
-STOP_TICKS = 10
-PRIMARY_COST = 1.0
+PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CAD", "EUR_GBP"]
 COSTS = [0.5, 1.0, 1.5, 2.0]
+BASELINE_COST = 1.0
 
-CORE_RR = 4.50
-ANCHOR_RR = 2.50
-RRS = [2.50]
-
-BR_VALUES = [1.40, 1.50, 1.60, 1.70, 1.80, 2.00]
-BODY_VALUES = [1.00]
-LB_VALUES = [100]
-DIST_VALUES = [0.15]
-H1_EMA_PERIODS = [100]
-
-STAGE2_CANDLE_KEEP = 6
-STAGE2_STRUCTURE_KEEP = 1
-STAGE3_GEOMETRY_KEEP = 6
-STAGE4_H1_KEEP = 6
-FINAL_KEEP = 6
-
-MEANINGFUL_CORE_INACTIVE_YEARS = [2005, 2009, 2013, 2023]
-EARLY_NON_TARGET_YEARS = [2002, 2003, 2004]
-
-OUTS = {
-    "coverage": "eurgbp_m15_short_complement_final_br_only_coverage.csv",
-    "parity": "eurgbp_m15_short_complement_final_br_only_parity.csv",
-    "core": "eurgbp_m15_short_complement_final_br_only_core_baseline.csv",
-    "stage1_br_body": "eurgbp_m15_short_complement_final_br_only_stage1_br_body.csv",
-    "stage1_structure": "eurgbp_m15_short_complement_final_br_only_stage1_structure_distance.csv",
-    "stage2_geometry": "eurgbp_m15_short_complement_final_br_only_stage2_geometry_interactions.csv",
-    "stage3_h1": "eurgbp_m15_short_complement_final_br_only_stage3_h1_regime.csv",
-    "stage4_rr": "eurgbp_m15_short_complement_final_br_only_stage4_rr.csv",
-    "finalists": "eurgbp_m15_short_complement_final_br_only_finalists.csv",
-    "periods": "eurgbp_m15_short_complement_final_br_only_periods.csv",
-    "cost": "eurgbp_m15_short_complement_final_br_only_cost_stress.csv",
-    "rolling": "eurgbp_m15_short_complement_final_br_only_rolling.csv",
-    "rolling_summary": "eurgbp_m15_short_complement_final_br_only_rolling_summary.csv",
-    "calendar": "eurgbp_m15_short_complement_final_br_only_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_short_complement_final_br_only_calendar_summary.csv",
-    "overlap": "eurgbp_m15_short_complement_final_br_only_overlap.csv",
-    "trades": "eurgbp_m15_short_complement_final_br_only_finalist_trades.csv",
-    "parameter_summary": "eurgbp_m15_short_complement_final_br_only_parameter_summary.csv",
-    "notes": "eurgbp_m15_short_complement_final_br_only_notes.csv",
+PAIR_META = {
+    "EUR_USD": {"tick": 0.00001, "pip": 0.0001},
+    "GBP_USD": {"tick": 0.00001, "pip": 0.0001},
+    "USD_JPY": {"tick": 0.001, "pip": 0.01},
+    "USD_CAD": {"tick": 0.00001, "pip": 0.0001},
+    "EUR_GBP": {"tick": 0.00001, "pip": 0.0001},
 }
-BUNDLE = "EURGBP_M15_SHORT_COMPLEMENT_FINAL_BR_ONLY_RESULTS.zip"
+
+# Only required HTFs are fetched per pair.
+PAIR_HTFS = {
+    "EUR_USD": [],
+    "GBP_USD": [],
+    "USD_JPY": ["H1", "H4", "D"],
+    "USD_CAD": ["H1", "H4", "D"],
+    "EUR_GBP": ["H1"],
+}
+
+# Safe OANDA chunk sizes; deliberately kept below 5000-candle limits.
+CHUNK_DAYS = {
+    "M15": 35,
+    "H1": 180,
+    "H4": 700,
+    "D": 3000,
+}
+
+# Diagnostic reference counts from the final validation runs.
+# A current run can legitimately be ABOVE these if new signals have appeared.
+REFERENCE_COUNTS = {
+    "EUR_USD_M15_LONG": 87,
+    "EUR_USD_M15_SHORT": 73,
+    "GBP_USD_M15_LONG": 84,
+    "GBP_USD_M15_SHORT": 74,
+    "USD_JPY_M15_LONG": 78,
+    "USD_JPY_M15_SHORT": 131,
+    "USD_CAD_M15_LONG": 149,
+    "USD_CAD_M15_SHORT": 182,
+    "EUR_GBP_M15_LONG": 92,
+    "EUR_GBP_M15_SHORT": 71,
+}
+
+OUT = {
+    "manifest": "m15_final_portfolio_manifest.csv",
+    "coverage": "m15_final_portfolio_coverage.csv",
+    "parity": "m15_final_portfolio_parity.csv",
+    "strategy_summary": "m15_final_portfolio_strategy_summary.csv",
+    "strategy_periods": "m15_final_portfolio_strategy_periods.csv",
+    "strategy_cost": "m15_final_portfolio_strategy_cost_stress.csv",
+    "strategy_calendar": "m15_final_portfolio_strategy_calendar_years.csv",
+    "strategy_rolling": "m15_final_portfolio_strategy_rolling.csv",
+    "strategy_rolling_summary": "m15_final_portfolio_strategy_rolling_summary.csv",
+    "pair_summary": "m15_final_portfolio_pair_summary.csv",
+    "portfolio_summary": "m15_final_portfolio_summary.csv",
+    "portfolio_periods": "m15_final_portfolio_periods.csv",
+    "portfolio_cost": "m15_final_portfolio_cost_stress.csv",
+    "portfolio_calendar": "m15_final_portfolio_calendar_years.csv",
+    "portfolio_rolling": "m15_final_portfolio_rolling.csv",
+    "portfolio_rolling_summary": "m15_final_portfolio_rolling_summary.csv",
+    "frequency": "m15_final_portfolio_trade_frequency.csv",
+    "monthly": "m15_final_portfolio_monthly_by_strategy.csv",
+    "correlation": "m15_final_portfolio_monthly_correlation.csv",
+    "overlap": "m15_final_portfolio_overlap.csv",
+    "concurrency": "m15_final_portfolio_concurrency.csv",
+    "trades": "m15_final_portfolio_trades.csv",
+    "notes": "m15_final_portfolio_notes.csv",
+}
+BUNDLE = "M15_FINAL_LOCKED_PORTFOLIO_ANALYSIS_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
-    "message": "Not started",
+    "message": "M15 final locked portfolio analysis not started",
     "orders_supported": False,
     "trading_enabled": False,
+    "progress": 0,
 }
 
-# ---------------- helpers ----------------
+
+# ============================================================
+# FROZEN MANIFEST — SOURCE OF TRUTH INSIDE THIS RUNNER
+# ============================================================
+
+MANIFEST = [
+    {
+        "strategy_id": "EUR_USD_M15_LONG", "pair": "EUR_USD", "side": "BUY",
+        "architecture": "single",
+        "rules": "Exact bull engulf; BR>=1.20; body>=1.00ATR; prior165-low distance<=0.10ATR; exclude Tue NY; all hours; RR3.75",
+        "source": "full-history re-examination final lock (supersedes older BR1.35/body0.75/NY07-exclusion file)",
+    },
+    {
+        "strategy_id": "EUR_USD_M15_SHORT", "pair": "EUR_USD", "side": "SELL",
+        "architecture": "single",
+        "rules": "Exact bear engulf; BR>=1.10; body>=1.30ATR; range>=1.70ATR; prior60-high distance<=0.225ATR; NY02-03; RR3.50",
+        "source": "final full-history confirmation / locked file",
+    },
+    {
+        "strategy_id": "GBP_USD_M15_LONG", "pair": "GBP_USD", "side": "BUY",
+        "architecture": "single",
+        "rules": "Failed breakdown+reclaim prior165 low; body>=1.00ATR; closeLoc>=0.75; NY04-07; RR4.25",
+        "source": "final full-history locked file",
+    },
+    {
+        "strategy_id": "GBP_USD_M15_SHORT", "pair": "GBP_USD", "side": "SELL",
+        "architecture": "single",
+        "rules": "Exact bear engulf; BR>=1.30; body>=1.10ATR; range>=1.60ATR; prior100-high distance<=0.075ATR; RR3.00",
+        "source": "GRID_0240 final full-history locked file",
+    },
+    {
+        "strategy_id": "USD_JPY_M15_LONG", "pair": "USD_JPY", "side": "BUY",
+        "architecture": "single",
+        "rules": "SWEEP30; bull; no BR; body>=1.25ATR; close>prev high; lowerWick/body>=0.25; prior4h<=-1.75ATR; completed H1 ATR/mean50>=0.80; RR4.00",
+        "source": "SWEEP30_RR4.00 final full-history locked file (supersedes older any-20/40/60/100 version)",
+    },
+    {
+        "strategy_id": "USD_JPY_M15_SHORT", "pair": "USD_JPY", "side": "SELL",
+        "architecture": "priority_union",
+        "rules": "Core compression<=0.80/body1.25/range1.60/break40/daily<EMA200/RR4.75 + complement sweep165/body1.00/closeLoc<=.20/H4<EMA100/RR3.00",
+        "source": "final full-history two-trigger locked file",
+    },
+    {
+        "strategy_id": "USD_CAD_M15_LONG", "pair": "USD_CAD", "side": "BUY",
+        "architecture": "priority_union",
+        "rules": "Core bull engulf BR1.70/body1.25/range1.50/S165D.175/daily EMA50>200/RR5 + complement compression.70/body1.0/range1.5/break5/H4>EMA100/RR5.25",
+        "source": "final full-history two-trigger locked file",
+    },
+    {
+        "strategy_id": "USD_CAD_M15_SHORT", "pair": "USD_CAD", "side": "SELL",
+        "architecture": "historical_overlay",
+        "rules": "Core bear outside/body.75/closeLoc.35/S120D.05/H4<EMA100/RR4 + complement sweep20/body1.25/closeLoc.40/wick.25/H1<EMA100/RR3.5",
+        "source": "final full-history two-trigger locked file",
+    },
+    {
+        "strategy_id": "EUR_GBP_M15_LONG", "pair": "EUR_GBP", "side": "BUY",
+        "architecture": "historical_overlay",
+        "rules": "Core sweep60/body1.20/wick.25/prior4h<=-1.25/NY01-03/RR2.75 + complement bull engulf BR1.20/body1.10/S165D.20/London03-07/RR2.25",
+        "source": "final full-history two-trigger locked file",
+    },
+    {
+        "strategy_id": "EUR_GBP_M15_SHORT", "pair": "EUR_GBP", "side": "SELL",
+        "architecture": "historical_overlay",
+        "rules": "Core sweep120/body1.25/closeLoc.20/wick.40/excl Wed London/RR4.5 + complement bear engulf BR1.60/body1.00/S100D.15/H1<EMA100/RR2.5",
+        "source": "final full-history BR-confirmed two-trigger locked file",
+    },
+]
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
 
 def iso(dt):
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-def parse_time(s):
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    if "." in s:
-        left, right = s.split(".", 1)
-        sign, off = None, None
+
+def parse_time(value):
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    if "." in value:
+        left, right = value.split(".", 1)
+        sign = None
+        offset = None
         if "+" in right:
-            frac, off = right.split("+", 1); sign = "+"
+            frac, offset = right.split("+", 1); sign = "+"
         elif "-" in right:
-            frac, off = right.split("-", 1); sign = "-"
+            frac, offset = right.split("-", 1); sign = "-"
         else:
             frac = right
-        s = left + "." + frac[:6].ljust(6, "0")
+        frac = frac[:6].ljust(6, "0")
+        value = left + "." + frac
         if sign:
-            s += sign + off
-    return datetime.fromisoformat(s).astimezone(timezone.utc)
+            value += sign + offset
+    return datetime.fromisoformat(value).astimezone(timezone.utc)
+
 
 def write_csv(path, rows):
+    rows = list(rows)
     if not rows:
-        Path(path).write_text("", encoding="utf-8")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("")
         return
     fields, seen = [], set()
-    for r in rows:
-        for k in r:
+    for row in rows:
+        for k in row:
             if k not in seen:
                 seen.add(k); fields.append(k)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader(); w.writerows(rows)
 
-def dl(path):
-    if not os.path.exists(path):
-        return jsonify({"error": "not ready"}), 404
-    return send_file(os.path.abspath(path), as_attachment=True,
-                     download_name=os.path.basename(path))
 
-def pack():
-    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in OUTS.values():
-            if os.path.exists(p):
-                z.write(p, arcname=os.path.basename(p))
+def safe_median(vals):
+    vals = [x for x in vals if x is not None and math.isfinite(x)]
+    return median(vals) if vals else 0.0
 
-def add_months(dt, n):
-    m = dt.year * 12 + dt.month - 1 + n
-    return datetime(m // 12, m % 12 + 1, 1, tzinfo=timezone.utc)
 
 def month_floor(dt):
     return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
 
-def med(x):
-    return median(x) if x else 0.0
 
-# ---------------- OANDA ----------------
+def add_months(dt, months):
+    z = dt.year * 12 + dt.month - 1 + months
+    return datetime(z // 12, z % 12 + 1, 1, tzinfo=timezone.utc)
+
+
+def pct(num, den):
+    return 100.0 * num / den if den else 0.0
+
+
+# ============================================================
+# OANDA HISTORY
+# ============================================================
 
 def headers():
     if not TOKEN:
         raise RuntimeError("OANDA_TOKEN is not configured")
     return {"Authorization": "Bearer " + TOKEN.strip()}
 
-def fetch_chunk(gran, start, end):
+
+def fetch_chunk(pair, gran, start, end):
     params = {
-        "price": "M",
-        "granularity": gran,
-        "smooth": "false",
-        "from": iso(start),
-        "to": iso(end),
-        "includeFirst": "true",
+        "price": "M", "granularity": gran,
+        "from": iso(start), "to": iso(end),
+        "smooth": "false", "includeFirst": "true",
     }
     if gran == "D":
         params["dailyAlignment"] = 17
         params["alignmentTimezone"] = "America/New_York"
-    url = f"{BASE}/v3/instruments/{PAIR}/candles"
-    r = requests.get(url, headers=headers(), params=params, timeout=60)
+    r = requests.get(
+        f"{BASE}/v3/instruments/{pair}/candles",
+        headers=headers(), params=params, timeout=45,
+    )
+    if r.status_code in (400, 404):
+        # Older unavailable-history chunks can legitimately be rejected.
+        # Coverage guards below prevent this from silently truncating M15.
+        return []
     r.raise_for_status()
     out = []
     for c in r.json().get("candles", []):
         if not c.get("complete", False):
             continue
-        m = c["mid"]
+        m = c.get("mid") or {}
+        if not all(k in m for k in ("o", "h", "l", "c")):
+            continue
         out.append({
             "time": parse_time(c["time"]),
-            "open": float(m["o"]),
-            "high": float(m["h"]),
-            "low": float(m["l"]),
-            "close": float(m["c"]),
+            "open": float(m["o"]), "high": float(m["h"]),
+            "low": float(m["l"]), "close": float(m["c"]),
         })
     return out
 
-def fetch(gran, start, end, chunk_days):
-    cur, by_time, n = start, {}, 0
-    while cur < end:
-        n += 1
-        nxt = min(cur + timedelta(days=chunk_days), end)
-        STATUS.update({
-            "state": "fetching",
-            "message": f"{gran} chunk {n}: {iso(cur)} -> {iso(nxt)}"
-        })
-        try:
-            rows = fetch_chunk(gran, cur, nxt)
-        except requests.HTTPError as e:
-            sc = e.response.status_code if e.response is not None else None
-            if sc in (400, 404):
-                rows = []
-            else:
-                raise
-        for row in rows:
-            by_time[row["time"]] = row
-        cur = nxt
-        time.sleep(0.02)
-    out = list(by_time.values())
-    out.sort(key=lambda x: x["time"])
-    return out
 
-# ---------------- indicators ----------------
+def fetch_history(pair, gran, start, end):
+    step = timedelta(days=CHUNK_DAYS[gran])
+    by_t = {}
+    cursor = start
+    empty = 0
+    while cursor < end:
+        nxt = min(cursor + step, end)
+        chunk = fetch_chunk(pair, gran, cursor, nxt)
+        if not chunk:
+            empty += 1
+        for c in chunk:
+            by_t[c["time"]] = c
+        cursor = nxt
+        time.sleep(0.015)
+    out = [by_t[k] for k in sorted(by_t)]
+    return out, empty
 
-def tr(c):
-    x = np.full(len(c), np.nan)
-    for i, b in enumerate(c):
-        if i == 0:
-            x[i] = b["high"] - b["low"]
-        else:
-            pc = c[i-1]["close"]
-            x[i] = max(
-                b["high"] - b["low"],
-                abs(b["high"] - pc),
-                abs(b["low"] - pc),
-            )
-    return x
 
-def rma(v, n):
-    o = np.full(len(v), np.nan)
-    if len(v) < n:
-        return o
-    seed = v[:n]
-    if np.isnan(seed).any():
-        return o
-    o[n-1] = seed.mean()
-    for i in range(n, len(v)):
-        if np.isfinite(v[i]) and np.isfinite(o[i-1]):
-            o[i] = (o[i-1] * (n-1) + v[i]) / n
-    return o
+# ============================================================
+# INDICATORS / FEATURE CACHE
+# ============================================================
 
-def atr(c):
-    return rma(tr(c), 14)
-
-def sma(v, n):
-    out = np.full(len(v), np.nan)
-    vals = np.nan_to_num(v, nan=0.0)
-    valid = np.isfinite(v).astype(int)
-    cs, cc = np.cumsum(vals), np.cumsum(valid)
-    for i in range(n-1, len(v)):
-        total, count = cs[i], cc[i]
-        if i >= n:
-            total -= cs[i-n]; count -= cc[i-n]
-        if count == n:
-            out[i] = total / n
-    return out
-
-def ema(vals, n):
-    out = [None] * len(vals)
-    if len(vals) < n:
+def rma(values, n):
+    x = np.asarray(values, dtype=float)
+    out = np.full(len(x), np.nan)
+    if len(x) < n:
         return out
-    out[n-1] = sum(vals[:n]) / n
+    out[n - 1] = np.mean(x[:n])
+    for i in range(n, len(x)):
+        out[i] = (out[i - 1] * (n - 1) + x[i]) / n
+    return out
+
+
+def sma(values, n):
+    x = np.asarray(values, dtype=float)
+    out = np.full(len(x), np.nan)
+    q = deque(); s = 0.0; invalid = 0
+    for i, v in enumerate(x):
+        q.append(v)
+        if math.isfinite(v): s += v
+        else: invalid += 1
+        if len(q) > n:
+            old = q.popleft()
+            if math.isfinite(old): s -= old
+            else: invalid -= 1
+        if len(q) == n and invalid == 0:
+            out[i] = s / n
+    return out
+
+
+def ema(values, n):
+    x = np.asarray(values, dtype=float)
+    out = np.full(len(x), np.nan)
+    if len(x) < n:
+        return out
+    seed = x[:n]
+    if not np.all(np.isfinite(seed)):
+        return out
+    out[n - 1] = np.mean(seed)
     a = 2.0 / (n + 1.0)
-    for i in range(n, len(vals)):
-        out[i] = a * vals[i] + (1-a) * out[i-1]
+    for i in range(n, len(x)):
+        if math.isfinite(x[i]):
+            out[i] = a * x[i] + (1.0 - a) * out[i - 1]
     return out
 
-def prev_extreme(v, lb, mode):
-    out = np.full(len(v), np.nan)
-    q = deque()
-    for i in range(len(v)):
-        oldest = i - lb
-        while q and q[0] < oldest:
-            q.popleft()
-        if i >= lb and q:
-            out[i] = v[q[0]]
-        if mode == "min":
-            while q and v[q[-1]] >= v[i]:
-                q.pop()
+
+def atr14(candles):
+    h = np.array([c["high"] for c in candles], dtype=float)
+    l = np.array([c["low"] for c in candles], dtype=float)
+    c = np.array([c["close"] for c in candles], dtype=float)
+    tr = np.full(len(c), np.nan)
+    if len(c): tr[0] = h[0] - l[0]
+    if len(c) > 1:
+        tr[1:] = np.maximum.reduce([
+            h[1:] - l[1:], np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])
+        ])
+    return rma(tr, 14)
+
+
+def prev_extreme(values, lookback, want_max):
+    x = np.asarray(values, dtype=float)
+    out = np.full(len(x), np.nan)
+    dq = deque()
+    for i in range(len(x)):
+        # At i, deque represents indices in [i-lookback, i-1].
+        min_idx = i - lookback
+        while dq and dq[0] < min_idx:
+            dq.popleft()
+        if i >= lookback and dq:
+            out[i] = x[dq[0]]
+        # add current only AFTER emitting so current candle is excluded
+        if want_max:
+            while dq and x[dq[-1]] <= x[i]: dq.pop()
         else:
-            while q and v[q[-1]] <= v[i]:
-                q.pop()
-        q.append(i)
+            while dq and x[dq[-1]] >= x[i]: dq.pop()
+        dq.append(i)
     return out
 
-# ---------------- HTF ----------------
 
-def htf_state(c):
-    closes = [x["close"] for x in c]
-    periods = [50, 75, 100, 125, 150, 200]
-    emas = {p: ema(closes, p) for p in periods}
-    a = atr(c)
-    am = sma(a, 50)
-    rows = []
-    for i, bar in enumerate(c):
-        complete_at = c[i+1]["time"] if i+1 < len(c) else None
-        row = {
-            "complete_at": complete_at,
-            "close": bar["close"],
-            "atr_ratio50": (
-                float(a[i] / am[i])
-                if np.isfinite(a[i]) and np.isfinite(am[i]) and am[i] > 0
-                else None
-            ),
-        }
-        for p in periods:
-            row[f"ema{p}"] = emas[p][i]
-        rows.append(row)
-    return rows
-
-
-def align_htf(m15_times, state):
-    rows = [r for r in state if r["complete_at"] is not None]
-    ct = [r["complete_at"] for r in rows]
-    keys = ["close", "ema50", "ema75", "ema100", "ema125", "ema150", "ema200", "atr_ratio50"]
-    out = {k: np.full(len(m15_times), np.nan) for k in keys}
-    for i, t in enumerate(m15_times):
-        p = bisect.bisect_right(ct, t) - 1
-        if p < 0:
+def htf_state(candles):
+    close = np.array([c["close"] for c in candles], dtype=float)
+    a14 = atr14(candles)
+    am50 = sma(a14, 50)
+    e50 = ema(close, 50)
+    e100 = ema(close, 100)
+    e200 = ema(close, 200)
+    states = []
+    for i, c in enumerate(candles):
+        complete_at = candles[i + 1]["time"] if i + 1 < len(candles) else None
+        if complete_at is None:
             continue
-        r = rows[p]
-        for k in keys:
-            if r.get(k) is not None:
-                out[k][i] = r[k]
+        states.append({
+            "complete_at": complete_at,
+            "close": close[i],
+            "ema50": e50[i],
+            "ema100": e100[i],
+            "ema200": e200[i],
+            "atr14": a14[i],
+            "atr_ratio50": (a14[i] / am50[i]) if math.isfinite(a14[i]) and math.isfinite(am50[i]) and am50[i] != 0 else np.nan,
+        })
+    return states
+
+
+def align_htf(m15_times, states):
+    ct = [s["complete_at"] for s in states]
+    fields = ["close", "ema50", "ema100", "ema200", "atr14", "atr_ratio50"]
+    out = {k: np.full(len(m15_times), np.nan) for k in fields}
+    for i, t in enumerate(m15_times):
+        j = bisect.bisect_right(ct, t) - 1
+        if j >= 0:
+            s = states[j]
+            for k in fields:
+                out[k][i] = s[k]
     return out
 
-# ---------------- M15 features ----------------
 
-def features(c, h1, h4, d):
-    n = len(c)
-    times = [x["time"] for x in c]
-    o = np.array([x["open"] for x in c], dtype=float)
-    h = np.array([x["high"] for x in c], dtype=float)
-    l = np.array([x["low"] for x in c], dtype=float)
-    cl = np.array([x["close"] for x in c], dtype=float)
+def build_features(pair, m15, aligned):
+    n = len(m15)
+    o = np.array([x["open"] for x in m15], dtype=float)
+    h = np.array([x["high"] for x in m15], dtype=float)
+    l = np.array([x["low"] for x in m15], dtype=float)
+    c = np.array([x["close"] for x in m15], dtype=float)
+    a = atr14(m15)
+    body = c - o
+    absbody = np.abs(body)
+    rng = h - l
+    bull_body = np.maximum(body, 0.0)
+    bear_body = np.maximum(-body, 0.0)
+    bull_atr = np.divide(bull_body, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
+    bear_atr = np.divide(bear_body, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
+    range_atr = np.divide(rng, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
+    close_loc = np.divide(c - l, rng, out=np.full(n, np.nan), where=rng > 0)
+    lower_wick = np.minimum(o, c) - l
+    upper_wick = h - np.maximum(o, c)
+    lwb = np.divide(lower_wick, bull_body, out=np.full(n, np.nan), where=bull_body > 0)
+    uwb = np.divide(upper_wick, bear_body, out=np.full(n, np.nan), where=bear_body > 0)
 
-    a = atr(c)
-    am20 = sma(a, 20)
-    bearish = cl < o
+    exact_bull = np.zeros(n, dtype=bool)
+    exact_bear = np.zeros(n, dtype=bool)
+    bull_br = np.full(n, np.nan); bear_br = np.full(n, np.nan)
+    if n > 1:
+        prev_abs = absbody[:-1]
+        exact_bull[1:] = (c[:-1] < o[:-1]) & (c[1:] > o[1:]) & (o[1:] <= c[:-1]) & (c[1:] >= o[:-1])
+        exact_bear[1:] = (c[:-1] > o[:-1]) & (c[1:] < o[1:]) & (o[1:] >= c[:-1]) & (c[1:] <= o[:-1])
+        bull_br[1:] = np.divide(bull_body[1:], prev_abs, out=np.full(n-1, np.nan), where=prev_abs > 0)
+        bear_br[1:] = np.divide(bear_body[1:], prev_abs, out=np.full(n-1, np.nan), where=prev_abs > 0)
 
-    exact = np.zeros(n, dtype=bool)
-    exact[1:] = (
-        (cl[:-1] > o[:-1]) &
-        (cl[1:] < o[1:]) &
-        (o[1:] >= cl[:-1]) &
-        (cl[1:] <= o[:-1])
-    )
+    lookbacks = {
+        "EUR_USD": {"low": [165], "high": [60]},
+        "GBP_USD": {"low": [165], "high": [100]},
+        "USD_JPY": {"low": [30, 40], "high": [165]},
+        "USD_CAD": {"low": [165], "high": [5, 20, 120]},
+        "EUR_GBP": {"low": [60, 165], "high": [100, 120]},
+    }[pair]
+    lows = {lb: prev_extreme(l, lb, False) for lb in lookbacks["low"]}
+    highs = {lb: prev_extreme(h, lb, True) for lb in lookbacks["high"]}
 
-    body = o - cl
-    prev_body = np.full(n, np.nan)
-    prev_body[1:] = np.abs(cl[:-1] - o[:-1])
+    prev_a = np.r_[np.nan, a[:-1]]
+    a_mean20 = sma(a, 20)
+    prev_a_mean20 = np.r_[np.nan, a_mean20[:-1]]
+    compression = np.divide(prev_a, prev_a_mean20, out=np.full(n, np.nan), where=np.isfinite(prev_a) & np.isfinite(prev_a_mean20) & (prev_a_mean20 != 0))
 
-    br = np.full(n, np.nan)
-    vpb = prev_body > 0
-    br[vpb] = body[vpb] / prev_body[vpb]
-    br[prev_body == 0] = 999.0
+    mom4 = np.full(n, np.nan)
+    if n > 17:
+        mom4[17:] = np.divide(c[16:-1] - c[:-17], a[17:], out=np.full(n-17, np.nan), where=np.isfinite(a[17:]) & (a[17:] > 0))
 
-    valid_atr = np.isfinite(a) & (a > 0)
-    body_atr = np.full(n, np.nan)
-    body_atr[valid_atr] = body[valid_atr] / a[valid_atr]
+    prev_high = np.r_[np.nan, h[:-1]]
+    prev_low = np.r_[np.nan, l[:-1]]
 
-    crange = h - l
-    range_atr = np.full(n, np.nan)
-    range_atr[valid_atr] = crange[valid_atr] / a[valid_atr]
-
-    close_loc = np.full(n, np.nan)
-    vr = crange > 0
-    close_loc[vr] = (cl[vr] - l[vr]) / crange[vr]
-
-    uw = h - np.maximum(o, cl)
-    uwb = np.full(n, np.nan)
-    pb = body > 0
-    uwb[pb] = uw[pb] / body[pb]
-
-    comp = np.full(n, np.nan)
-    pa = np.r_[np.nan, a[:-1]]
-    pam = np.r_[np.nan, am20[:-1]]
-    va = np.isfinite(pa) & np.isfinite(pam) & (pam > 0)
-    comp[va] = pa[va] / pam[va]
-
-    # Build extreme caches from the actual configured research lookbacks
-    # plus the small fixed lookbacks used by other trigger families. This
-    # prevents a grid value (e.g. LB140) from existing downstream without
-    # its upstream prior-high/prior-low cache being created first.
-    lbs = sorted(set([5, 10, 20, 40, 60, 80, 100, 120, 165, 200] + list(LB_VALUES)))
-    pl = {lb: prev_extreme(l, lb, "min") for lb in lbs}
-    ph = {lb: prev_extreme(h, lb, "max") for lb in lbs}
-
-    # ATR-normalised distance from current signal high to prior high.
-    sd_high = {}
-    for lb in sorted(set([40, 60, 80, 100, 120, 165, 200] + list(LB_VALUES))):
-        x = np.full(n, np.nan)
-        ok = valid_atr & np.isfinite(ph[lb])
-        x[ok] = np.abs(h[ok] - ph[lb][ok]) / a[ok]
-        sd_high[lb] = x
-
-    # Strict prior 12H rally, ending at close[i-1].
-    rally12 = np.full(n, np.nan)
-    for i in range(49, n):
-        if valid_atr[i]:
-            rally12[i] = (cl[i-1] - cl[i-49]) / a[i]
-
-    nyh = np.zeros(n, dtype=np.int16)
-    nyw = np.zeros(n, dtype=np.int16)
-    ldh = np.zeros(n, dtype=np.int16)
-    ldw = np.zeros(n, dtype=np.int16)
-    for i, t in enumerate(times):
-        z = t.astimezone(NY)
-        nyh[i], nyw[i] = z.hour, z.weekday()
-        q = t.astimezone(LONDON)
-        ldh[i], ldw[i] = q.hour, q.weekday()
+    # Time arrays only where rules need them; inexpensive relative to backtest.
+    times = [x["time"] for x in m15]
+    ny_hour = np.array([t.astimezone(NY).hour for t in times], dtype=np.int16)
+    ny_weekday = np.array([t.astimezone(NY).weekday() for t in times], dtype=np.int8)
+    london_hour = np.array([t.astimezone(LONDON).hour for t in times], dtype=np.int16)
+    london_weekday = np.array([t.astimezone(LONDON).weekday() for t in times], dtype=np.int8)
 
     return {
-        "n": n, "times": times,
-        "open": o, "high": h, "low": l, "close": cl,
-        "atr": a, "valid_atr": valid_atr, "bearish": bearish,
-        "exact": exact, "br": br, "body_atr": body_atr,
-        "range_atr": range_atr, "close_loc": close_loc,
-        "uwb": uwb, "compression": comp,
-        "prev_low": pl, "prev_high": ph,
-        "structure_dist_high": sd_high,
-        "rally12": rally12,
-        "ny_hour": nyh, "ny_weekday": nyw,
-        "ldn_hour": ldh, "ldn_weekday": ldw,
-        "h1_close": h1["close"],
-        "h1_ema50": h1["ema50"], "h1_ema75": h1["ema75"],
-        "h1_ema100": h1["ema100"], "h1_ema125": h1["ema125"],
-        "h1_ema150": h1["ema150"], "h1_ema200": h1["ema200"],
-        "h1_atr": h1["atr_ratio50"],
-        "h4_close": h4["close"], "h4_ema100": h4["ema100"],
-        "h4_ema200": h4["ema200"], "h4_atr": h4["atr_ratio50"],
-        "d_close": d["close"], "d_ema50": d["ema50"],
-        "d_ema200": d["ema200"], "d_atr": d["atr_ratio50"],
+        "o": o, "h": h, "l": l, "c": c, "atr": a,
+        "bull": body > 0, "bear": body < 0,
+        "bull_atr": bull_atr, "bear_atr": bear_atr, "range_atr": range_atr,
+        "close_loc": close_loc, "lwb": lwb, "uwb": uwb,
+        "exact_bull": exact_bull, "exact_bear": exact_bear,
+        "bull_br": bull_br, "bear_br": bear_br,
+        "low": lows, "high": highs,
+        "compression": compression, "mom4": mom4,
+        "prev_high": prev_high, "prev_low": prev_low,
+        "ny_hour": ny_hour, "ny_weekday": ny_weekday,
+        "london_hour": london_hour, "london_weekday": london_weekday,
+        "htf": aligned,
     }
 
 
-
 # ============================================================
-# CONFIGS
-# ============================================================
-
-def cfg(cid, fam="BEAR_ENGULF_STRUCTURE", rr=ANCHOR_RR, **kw):
-    x = {
-        "config_id": cid,
-        "family": fam,
-        "rr": rr,
-        "context": "H1_CLOSE_LT_EMA100",
-        "br_min": None,
-        "body_atr_min": None,
-        "range_atr_min": None,
-        "close_loc_max": None,
-        "upper_wick_body_min": None,
-        "structure_lb": None,
-        "structure_dist_atr_max": None,
-        "breakout_lb": None,
-        "compression_max": None,
-        "rally12_min": None,
-        "h1_ema_period": None,
-    }
-    x.update(kw)
-    return x
-
-
-def frozen_core_cfg():
-    return cfg(
-        "FROZEN_CORE",
-        fam="HIGH_SWEEP_REJECTION",
-        rr=CORE_RR,
-        body_atr_min=1.25,
-        close_loc_max=0.20,
-        upper_wick_body_min=0.40,
-        structure_lb=120,
-        context="EXCLUDE_WEDNESDAY",
-    )
-
-
-def anchor_cfg(cid="ANCHOR"):
-    return cfg(
-        cid,
-        br_min=1.40,
-        body_atr_min=1.00,
-        structure_lb=100,
-        structure_dist_atr_max=0.20,
-        h1_ema_period=100,
-        context="H1_CLOSE_LT_EMA100",
-        rr=ANCHOR_RR,
-    )
-
-
-def build_stage1_br_body():
-    # FINAL MICRO TEST: only BR varies.
-    # body=1.00, LB100, distance=0.15, H1 EMA100 and RR2.50 are frozen.
-    return [cfg(
-        f"BR_ONLY_{br:.2f}",
-        br_min=br,
-        body_atr_min=1.00,
-        structure_lb=100,
-        structure_dist_atr_max=0.15,
-        h1_ema_period=100,
-        context="H1_CLOSE_LT_EMA100",
-        rr=2.50,
-    ) for br in BR_VALUES]
-
-def build_stage1_structure_distance():
-    # Single frozen structure reference; no structure optimization in this run.
-    return [cfg(
-        "FROZEN_STRUCTURE_REFERENCE",
-        br_min=1.60,
-        body_atr_min=1.00,
-        structure_lb=100,
-        structure_dist_atr_max=0.15,
-        h1_ema_period=100,
-        context="H1_CLOSE_LT_EMA100",
-        rr=2.50,
-    )]
-
-
-def choose_local_rows(rows, keep):
-    ranked = sort_rows(rows)
-    eligible = [r for r in ranked if (
-        r["accepted_adds"] >= 10
-        and r["accepted_r"] > 0
-        and r["accepted_positive_eras"] >= 2
-    )]
-    selected = (eligible if eligible else ranked)[:keep]
-    return selected
-
-
-def build_stage2_geometry(rows_a, rows_b, by_a, by_b):
-    # BR-only confirmation: preserve all six BR values exactly.
-    return [cfg(
-        f"BR_ONLY_{br:.2f}",
-        br_min=br, body_atr_min=1.00, structure_lb=100,
-        structure_dist_atr_max=0.15, h1_ema_period=100,
-        context="H1_CLOSE_LT_EMA100", rr=2.50,
-    ) for br in BR_VALUES]
-
-def build_stage3_h1(rows2, by2):
-    # H1 EMA100 is frozen; no NONE ablation or alternate EMA periods here.
-    return [deepcopy(by2[r["config_id"]]) for r in rows2]
-
-def build_stage4_rr(rows3, by3):
-    # RR2.50 is frozen; only BR is under test.
-    out = []
-    for r in rows3:
-        x = deepcopy(by3[r["config_id"]])
-        x["config_id"] = x["config_id"] + "_RR2.50"
-        x["rr"] = 2.50
-        out.append(x)
-    return out
-
-def apply_context(mask, c, f):
-    ctx = c.get("context", "NONE")
-    if ctx == "NONE":
-        return mask
-    if ctx == "EXCLUDE_WEDNESDAY":
-        return mask & (f["ldn_weekday"] != 2)
-    if ctx.startswith("H1_CLOSE_LT_EMA"):
-        period = int(ctx.rsplit("EMA", 1)[1])
-        key = f"h1_ema{period}"
-        if key not in f:
-            raise KeyError(f"Missing H1 EMA feature for period {period}")
-        return mask & np.isfinite(f[key]) & (f["h1_close"] < f[key])
-    raise ValueError(f"Unknown context in focused confirmation: {ctx}")
-
-
-def signal_indices(c, f):
-    m = f["valid_atr"].copy() & f["bearish"]
-    fam = c["family"]
-
-    if fam == "HIGH_SWEEP_REJECTION":
-        # Frozen core only: high sweeps previous 120-bar high and closes
-        # back below it. No ATR-distance requirement.
-        prior_high = f["prev_high"][c["structure_lb"]]
-        m &= f["high"] > prior_high
-        m &= f["close"] < prior_high
-        m &= f["body_atr"] >= c["body_atr_min"]
-        m &= f["close_loc"] <= c["close_loc_max"]
-        m &= f["uwb"] >= c["upper_wick_body_min"]
-
-    elif fam == "COMPRESSION_BREAKDOWN":
-        m &= f["compression"] <= c["compression_max"]
-        m &= f["body_atr"] >= c["body_atr_min"]
-        m &= f["range_atr"] >= c["range_atr_min"]
-        m &= f["close"] < f["prev_low"][c["breakout_lb"]]
-
-    elif fam == "BEAR_ENGULF_STRUCTURE":
-        m &= f["exact"]
-        m &= f["br"] >= c["br_min"]
-        m &= f["body_atr"] >= c["body_atr_min"]
-        m &= (
-            f["structure_dist_high"][c["structure_lb"]]
-            <= c["structure_dist_atr_max"]
-        )
-
-    elif fam == "BEAR_OUTSIDE_REVERSAL":
-        prev_high = np.roll(f["high"], 1)
-        prev_low = np.roll(f["low"], 1)
-        m[0] = False
-        m &= f["high"] > prev_high
-        m &= f["low"] < prev_low
-        m &= f["body_atr"] >= c["body_atr_min"]
-        m &= f["range_atr"] >= c["range_atr_min"]
-        m &= f["close_loc"] <= c["close_loc_max"]
-
-    elif fam == "RALLY_FAILURE_BREAKDOWN":
-        m &= f["rally12"] >= c["rally12_min"]
-        m &= f["body_atr"] >= c["body_atr_min"]
-        m &= f["close_loc"] <= c["close_loc_max"]
-        m &= f["close"] < f["prev_low"][c["breakout_lb"]]
-
-    else:
-        raise ValueError(f"Unknown family: {fam}")
-
-    m = apply_context(m, c, f)
-    m[:220] = False
-    return np.flatnonzero(m).tolist()
-
-
-# ============================================================
-# BACKTEST
+# FROZEN SIGNAL RULES
 # ============================================================
 
-OUTCOME_CACHE = {}
+def idx_from_mask(mask):
+    return np.flatnonzero(np.asarray(mask, dtype=bool)).tolist()
 
 
-def compute_outcome(candles, i, rr, cost_pips):
-    key = (i, round(rr, 4), round(cost_pips, 4))
-    if key in OUTCOME_CACHE:
-        return OUTCOME_CACHE[key]
+def signal_sets(pair, f):
+    A = f["atr"]; C=f["c"]; H=f["h"]; L=f["l"]
+    valid = np.isfinite(A) & (A > 0)
+    htf = f["htf"]
 
-    signal = candles[i]
-    reference_entry = signal["close"]
-    stop = signal["high"] + STOP_TICKS * TICK
-    reference_risk = stop - reference_entry
-    if reference_risk <= 0:
-        OUTCOME_CACHE[key] = None
-        return None
-
-    target = reference_entry - rr * reference_risk
-    fill = reference_entry - cost_pips * PIP
-    actual_risk = stop - fill
-    if actual_risk <= 0:
-        OUTCOME_CACHE[key] = None
-        return None
-
-    for j in range(i + 1, len(candles)):
-        bar = candles[j]
-        hit_stop = bar["high"] >= stop
-        hit_target = bar["low"] <= target
-
-        if hit_stop and hit_target:
-            # Frozen SHORT tie convention: high closer to open => STOP.
-            if abs(bar["high"] - bar["open"]) < abs(bar["open"] - bar["low"]):
-                exit_price, reason = stop, "STOP"
-            else:
-                exit_price, reason = target, "TARGET"
-        elif hit_target:
-            exit_price, reason = target, "TARGET"
-        elif hit_stop:
-            exit_price, reason = stop, "STOP"
-        else:
-            continue
-
-        result_r = (fill - exit_price) / actual_risk
-        out = {
-            "signal_index": i,
-            "exit_index": j,
-            "entry_time": signal["time"],
-            "exit_time": bar["time"],
-            "entry_time_utc": iso(signal["time"]),
-            "exit_time_utc": iso(bar["time"]),
-            "reference_entry": reference_entry,
-            "historical_fill": fill,
-            "stop": stop,
-            "target": target,
-            "result_r": result_r,
-            "exit_reason": reason,
-            "rr": rr,
-            "cost_pips": cost_pips,
+    if pair == "EUR_USD":
+        d165 = np.abs(L - f["low"][165]) / A
+        long_m = valid & f["exact_bull"] & (f["bull_br"] >= 1.20) & (f["bull_atr"] >= 1.00) & (d165 <= 0.10) & (f["ny_weekday"] != 1)
+        d60 = np.abs(H - f["high"][60]) / A
+        short_m = valid & f["exact_bear"] & (f["bear_br"] >= 1.10) & (f["bear_atr"] >= 1.30) & (f["range_atr"] >= 1.70) & (d60 <= 0.225) & np.isin(f["ny_hour"], [2,3])
+        return {
+            "EUR_USD_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"CORE",3.75) for i in idx_from_mask(long_m)]},
+            "EUR_USD_M15_SHORT": {"side":"SELL","mode":"single","signals":[(i,"CORE",3.50) for i in idx_from_mask(short_m)]},
         }
-        OUTCOME_CACHE[key] = out
-        return out
 
-    OUTCOME_CACHE[key] = None
+    if pair == "GBP_USD":
+        p165=f["low"][165]
+        long_m = valid & f["bull"] & (f["bull_atr"] >= 1.00) & (f["close_loc"] >= 0.75) & (L < p165) & (C > p165) & np.isin(f["ny_hour"], [4,5,6,7])
+        d100=np.abs(H-f["high"][100])/A
+        short_m = valid & f["exact_bear"] & (f["bear_br"] >= 1.30) & (f["bear_atr"] >= 1.10) & (f["range_atr"] >= 1.60) & (d100 <= 0.075)
+        return {
+            "GBP_USD_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"CORE",4.25) for i in idx_from_mask(long_m)]},
+            "GBP_USD_M15_SHORT": {"side":"SELL","mode":"single","signals":[(i,"CORE",3.00) for i in idx_from_mask(short_m)]},
+        }
+
+    if pair == "USD_JPY":
+        h1=htf["H1"]; h4=htf["H4"]; d=htf["D"]
+        p30=f["low"][30]
+        long_m = valid & f["bull"] & (f["bull_atr"] >= 1.25) & (L < p30) & (C > f["prev_high"]) & (f["lwb"] >= 0.25) & (f["mom4"] <= -1.75) & (h1["atr_ratio50"] >= 0.80)
+        core = valid & f["bear"] & (f["compression"] <= 0.80) & (f["bear_atr"] >= 1.25) & (f["range_atr"] >= 1.60) & (C < f["low"][40]) & (d["close"] < d["ema200"])
+        p165=f["high"][165]
+        comp = valid & f["bear"] & (H > p165) & (C < p165) & (f["bear_atr"] >= 1.00) & (f["close_loc"] <= 0.20) & (h4["close"] < h4["ema100"])
+        union=[]
+        for i in sorted(set(idx_from_mask(core)) | set(idx_from_mask(comp))):
+            if core[i]: union.append((i,"CORE_GRID_0731",4.75))
+            elif comp[i]: union.append((i,"COMPLEMENT_CAND_0322",3.00))
+        return {
+            "USD_JPY_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"SWEEP30_RR4.00",4.00) for i in idx_from_mask(long_m)]},
+            "USD_JPY_M15_SHORT": {"side":"SELL","mode":"priority_union","signals":union},
+        }
+
+    if pair == "USD_CAD":
+        h1=htf["H1"]; h4=htf["H4"]; d=htf["D"]
+        d165=np.abs(L-f["low"][165])/A
+        core_l = valid & f["exact_bull"] & (f["bull_br"] >= 1.70) & (f["bull_atr"] >= 1.25) & (f["range_atr"] >= 1.50) & (d165 <= 0.175) & (d["ema50"] > d["ema200"])
+        comp_l = valid & f["bull"] & (f["compression"] <= 0.70) & (f["bull_atr"] >= 1.00) & (f["range_atr"] >= 1.50) & (C > f["high"][5]) & (h4["close"] > h4["ema100"])
+        union=[]
+        for i in sorted(set(idx_from_mask(core_l)) | set(idx_from_mask(comp_l))):
+            if core_l[i]: union.append((i,"CORE_EMA50_REGIME_BR170",5.00))
+            elif comp_l[i]: union.append((i,"COMPLEMENT_H4_COMPRESSION_BREAKOUT",5.25))
+
+        d120=np.abs(H-f["high"][120])/A
+        core_s = valid & f["bear"] & (H > f["prev_high"]) & (L < f["prev_low"]) & (f["bear_atr"] >= 0.75) & (f["close_loc"] <= 0.35) & (d120 <= 0.05) & (h4["close"] < h4["ema100"])
+        p20=f["high"][20]
+        comp_s = valid & f["bear"] & (H > p20) & (C < p20) & (f["bear_atr"] >= 1.25) & (f["close_loc"] <= 0.40) & (f["uwb"] >= 0.25) & (h1["close"] < h1["ema100"])
+        return {
+            "USD_CAD_M15_LONG": {"side":"BUY","mode":"priority_union","signals":union},
+            "USD_CAD_M15_SHORT": {"side":"SELL","mode":"overlay","core_signals":[(i,"CORE_OUTSIDE_H4EMA100",4.00) for i in idx_from_mask(core_s)],"comp_signals":[(i,"COMPLEMENT_HIGH_SWEEP_H1EMA100",3.50) for i in idx_from_mask(comp_s)]},
+        }
+
+    if pair == "EUR_GBP":
+        h1=htf["H1"]
+        p60=f["low"][60]
+        core_l = valid & f["bull"] & (f["bull_atr"] >= 1.20) & (L < p60) & (C > f["prev_high"]) & (f["lwb"] >= 0.25) & (f["mom4"] <= -1.25) & np.isin(f["ny_hour"],[1,2,3])
+        d165=np.abs(L-f["low"][165])/A
+        comp_l = valid & f["exact_bull"] & (f["bull_br"] >= 1.20) & (f["bull_atr"] >= 1.10) & (d165 <= 0.20) & np.isin(f["london_hour"],[3,4,5,6,7])
+
+        p120=f["high"][120]
+        core_s = valid & f["bear"] & (H > p120) & (C < p120) & (f["bear_atr"] >= 1.25) & (f["close_loc"] <= 0.20) & (f["uwb"] >= 0.40) & (f["london_weekday"] != 2)
+        d100=np.abs(H-f["high"][100])/A
+        comp_s = valid & f["exact_bear"] & (f["bear_br"] >= 1.60) & (f["bear_atr"] >= 1.00) & (d100 <= 0.15) & (h1["close"] < h1["ema100"])
+        return {
+            "EUR_GBP_M15_LONG": {"side":"BUY","mode":"overlay","core_signals":[(i,"CORE_SWEEP_DISPLACEMENT",2.75) for i in idx_from_mask(core_l)],"comp_signals":[(i,"COMPLEMENT_LONDON_ENGULF_STRUCTURE",2.25) for i in idx_from_mask(comp_l)]},
+            "EUR_GBP_M15_SHORT": {"side":"SELL","mode":"overlay","core_signals":[(i,"CORE_HIGH_SWEEP_REJECTION",4.50) for i in idx_from_mask(core_s)],"comp_signals":[(i,"COMPLEMENT_BEAR_ENGULF_H1EMA100",2.50) for i in idx_from_mask(comp_s)]},
+        }
+
+    raise KeyError(pair)
+
+
+# ============================================================
+# BACKTEST ENGINE
+# ============================================================
+
+def one_outcome(pair, strategy_id, trigger, side, m15, i, rr, cost_pips):
+    meta=PAIR_META[pair]; tick=meta["tick"]; pip=meta["pip"]
+    sig=m15[i]; ref=sig["close"]
+    if side == "BUY":
+        stop=sig["low"] - 10*tick
+        ref_risk=ref-stop
+        if ref_risk <= 0: return None
+        target=ref + rr*ref_risk
+        fill=ref + cost_pips*pip
+        actual_risk=fill-stop
+    else:
+        stop=sig["high"] + 10*tick
+        ref_risk=stop-ref
+        if ref_risk <= 0: return None
+        target=ref - rr*ref_risk
+        fill=ref - cost_pips*pip
+        actual_risk=stop-fill
+    if actual_risk <= 0: return None
+
+    for j in range(i+1, len(m15)):
+        x=m15[j]
+        hit_stop = x["low"] <= stop if side=="BUY" else x["high"] >= stop
+        hit_target = x["high"] >= target if side=="BUY" else x["low"] <= target
+        if not hit_stop and not hit_target:
+            continue
+        if hit_stop and hit_target:
+            high_closer = abs(x["high"] - x["open"]) < abs(x["open"] - x["low"])
+            if side=="BUY":
+                result="TARGET" if high_closer else "STOP"
+            else:
+                result="STOP" if high_closer else "TARGET"
+        else:
+            result="STOP" if hit_stop else "TARGET"
+        r = -1.0 if result=="STOP" else ((target-fill)/actual_risk if side=="BUY" else (fill-target)/actual_risk)
+        return {
+            "pair":pair, "strategy_id":strategy_id, "trigger":trigger, "side":side,
+            "signal_index":i, "exit_index":j,
+            "signal_time":sig["time"], "exit_time":x["time"],
+            "rr":rr, "reference_entry":ref, "historical_fill":fill,
+            "stop":stop, "target":target, "result":result, "r":float(r),
+            "cost_pips":cost_pips,
+        }
     return None
 
 
-def run_backtest(candles, indices, rr, cost_pips, start=None, end=None):
-    use = indices
-    if start is not None or end is not None:
-        times = [candles[i]["time"] for i in indices]
-        left = 0 if start is None else bisect.bisect_left(times, start)
-        right = len(indices) if end is None else bisect.bisect_left(times, end)
-        use = indices[left:right]
-
-    trades = []
-    p = 0
-    while p < len(use):
-        signal_index = use[p]
-        trade = compute_outcome(candles, signal_index, rr, cost_pips)
-        if trade is None:
-            p += 1
-            continue
-        trades.append(dict(trade))
-        # Exact exit candle remains eligible.
-        p = bisect.bisect_left(use, trade["exit_index"], lo=p + 1)
-    return trades
-
-
-# ============================================================
-# OVERLAY / STATS
-# ============================================================
-
-def nonoverlap_overlay(core_trades, candidate_trades):
-    core = sorted(core_trades, key=lambda x: x["signal_index"])
-    cand = sorted(candidate_trades, key=lambda x: x["signal_index"])
-    accepted, rejected = [], []
-    cp = 0
-
-    for trade in cand:
-        start = trade["signal_index"]
-        end = trade["exit_index"]
-        while cp < len(core) and core[cp]["exit_index"] <= start:
-            cp += 1
-
-        overlaps = False
-        if cp < len(core):
-            ct = core[cp]
-            overlaps = ct["signal_index"] < end and start < ct["exit_index"]
-
-        (rejected if overlaps else accepted).append(trade)
-
-    combined = []
-    for trade in core:
-        x = dict(trade); x["source"] = "CORE"; combined.append(x)
-    for trade in accepted:
-        x = dict(trade); x["source"] = "COMPLEMENT"; combined.append(x)
-    combined.sort(key=lambda x: x["signal_index"])
-    return combined, accepted, rejected
-
-
-def stats(trades):
-    values = [float(x["result_r"]) for x in trades]
-    winners = [x for x in values if x > 0]
-    losers = [x for x in values if x < 0]
-    gp = sum(winners); gl = abs(sum(losers))
-    pf = gp / gl if gl > 0 else (999.0 if gp > 0 else 0.0)
-    total = sum(values)
-    eq = peak = 0.0
-    dd = 0.0
-    streak = longest = 0
-    for r in values:
-        eq += r; peak = max(peak, eq); dd = min(dd, eq - peak)
-        if r < 0:
-            streak += 1; longest = max(longest, streak)
-        else:
-            streak = 0
-    return {
-        "trades": len(values),
-        "winners": len(winners),
-        "losers": len(losers),
-        "win_rate": 100.0 * len(winners) / len(values) if values else 0.0,
-        "profit_factor": pf,
-        "total_r": total,
-        "expectancy_r": total / len(values) if values else 0.0,
-        "max_drawdown_r": dd,
-        "longest_loss_streak": longest,
-    }
-
-
-def subset(trades, start, end):
-    return [x for x in trades if start <= x["entry_time"] < end]
-
-
-ERAS = [
-    ("ERA_2002_2007", START, datetime(2008,1,1,tzinfo=timezone.utc)),
-    ("ERA_2008_2013", datetime(2008,1,1,tzinfo=timezone.utc), datetime(2014,1,1,tzinfo=timezone.utc)),
-    ("ERA_2014_2019", datetime(2014,1,1,tzinfo=timezone.utc), datetime(2020,1,1,tzinfo=timezone.utc)),
-    ("ERA_2020_NOW", datetime(2020,1,1,tzinfo=timezone.utc), NOW),
-]
-
-
-def config_fields(c):
-    return {k: c.get(k) for k in [
-        "compression_max", "body_atr_min", "range_atr_min", "breakout_lb",
-        "br_min", "structure_lb", "structure_dist_atr_max",
-        "close_loc_max", "upper_wick_body_min", "rally12_min",
-        "h1_ema_period",
-    ]}
-
-
-def evaluation_row(c, core_trades, candidate_trades):
-    combined, accepted, rejected = nonoverlap_overlay(core_trades, candidate_trades)
-    cs = stats(candidate_trades)
-    ac = stats(accepted)
-    co = stats(combined)
-
-    pre = stats(subset(accepted, START, datetime(2010,1,1,tzinfo=timezone.utc)))
-    post = stats(subset(accepted, datetime(2010,1,1,tzinfo=timezone.utc), NOW))
-    era_stats = [stats(subset(accepted, a, b)) for _,a,b in ERAS]
-    positive_eras = sum(s["total_r"] > 0 for s in era_stats)
-
-    overlap_rate = 100.0 * len(rejected) / len(candidate_trades) if candidate_trades else 0.0
-
-    # General robustness score only. There is intentionally NO reward for
-    # 2009 / 2012 / 2016 specifically; those are diagnostics later.
-    score = (
-        0.10 * min(len(accepted), 45)
-        + 2.0 * min(max(ac["profit_factor"], 0.0), 3.0)
-        + 1.4 * min(max(co["profit_factor"], 0.0), 3.0)
-        + 0.7 * positive_eras
-        + 1.2 * (pre["total_r"] > 0)
-        + 1.2 * (post["total_r"] > 0)
-        + 0.4 * min(max(ac["total_r"], 0.0) / 10.0, 3.0)
-        - 0.40 * max(0.0, abs(co["max_drawdown_r"]) - 8.0)
-        - 0.015 * overlap_rate
-    )
-
-    row = {
-        "config_id": c["config_id"],
-        "family": c["family"],
-        "context": c.get("context", "NONE"),
-        "rr": c["rr"],
-        "candidate_trades": cs["trades"],
-        "candidate_pf": round(cs["profit_factor"], 6),
-        "candidate_r": round(cs["total_r"], 4),
-        "candidate_dd": round(cs["max_drawdown_r"], 4),
-        "accepted_adds": ac["trades"],
-        "rejected_overlap": len(rejected),
-        "overlap_rate_pct": round(overlap_rate, 4),
-        "accepted_pf": round(ac["profit_factor"], 6),
-        "accepted_r": round(ac["total_r"], 4),
-        "accepted_dd": round(ac["max_drawdown_r"], 4),
-        "accepted_pre2010_r": round(pre["total_r"], 4),
-        "accepted_post2010_r": round(post["total_r"], 4),
-        "accepted_positive_eras": positive_eras,
-        "combined_trades": co["trades"],
-        "combined_pf": round(co["profit_factor"], 6),
-        "combined_r": round(co["total_r"], 4),
-        "combined_dd": round(co["max_drawdown_r"], 4),
-        "robust_score": round(score, 6),
-        **config_fields(c),
-    }
-    for (name, _, _), es in zip(ERAS, era_stats):
-        row[name + "_trades"] = es["trades"]
-        row[name + "_r"] = round(es["total_r"], 4)
-        row[name + "_pf"] = round(es["profit_factor"], 6)
-    return row
-
-
-def sort_rows(rows):
-    return sorted(rows, key=lambda r: (
-        r["accepted_r"] > 0,
-        r["accepted_pre2010_r"] > 0,
-        r["accepted_post2010_r"] > 0,
-        r["accepted_positive_eras"],
-        r["robust_score"],
-        r["combined_pf"],
-        r["accepted_adds"],
-    ), reverse=True)
-
-
-def family_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[r["family"]].append(r)
-    out = []
-    for fam, sub in grouped.items():
-        ranked = sort_rows(sub)
-        best = ranked[0]
-        out.append({
-            "family": fam,
-            "configs": len(sub),
-            "positive_accepted_r_configs": sum(r["accepted_r"] > 0 for r in sub),
-            "positive_pre_and_post_configs": sum(
-                r["accepted_pre2010_r"] > 0 and r["accepted_post2010_r"] > 0
-                for r in sub
-            ),
-            "three_plus_positive_era_configs": sum(r["accepted_positive_eras"] >= 3 for r in sub),
-            "best_config_id": best["config_id"],
-            "best_accepted_adds": best["accepted_adds"],
-            "best_accepted_pf": best["accepted_pf"],
-            "best_accepted_r": best["accepted_r"],
-            "best_combined_pf": best["combined_pf"],
-            "best_combined_r": best["combined_r"],
-            "best_combined_dd": best["combined_dd"],
-            "best_robust_score": best["robust_score"],
-        })
-    return sorted(out, key=lambda r: (
-        r["positive_pre_and_post_configs"],
-        r["three_plus_positive_era_configs"],
-        r["best_robust_score"],
-    ), reverse=True)
-
-
-# ============================================================
-# PARAMETER / STAGE SUMMARIES
-# ============================================================
-
-def parameter_summary(rows, stage):
-    out = []
-    if not rows:
-        return out
-    for key in ["br_min", "body_atr_min", "structure_lb", "structure_dist_atr_max", "h1_ema_period", "rr"]:
-        grouped = defaultdict(list)
-        for r in rows:
-            val = r.get(key)
-            if val is not None and not (isinstance(val, float) and np.isnan(val)):
-                grouped[val].append(r)
-        for val, sub in grouped.items():
-            out.append({
-                "stage": stage,
-                "parameter": key,
-                "value": val,
-                "configs": len(sub),
-                "median_accepted_pf": round(med([r["accepted_pf"] for r in sub]), 6),
-                "median_accepted_r": round(med([r["accepted_r"] for r in sub]), 4),
-                "median_combined_pf": round(med([r["combined_pf"] for r in sub]), 6),
-                "median_combined_r": round(med([r["combined_r"] for r in sub]), 4),
-                "median_combined_dd": round(med([r["combined_dd"] for r in sub]), 4),
-                "positive_pre_post_pct": round(100.0 * sum(
-                    r["accepted_pre2010_r"] > 0 and r["accepted_post2010_r"] > 0 for r in sub
-                ) / len(sub), 4),
-                "four_positive_eras_pct": round(100.0 * sum(
-                    r["accepted_positive_eras"] == 4 for r in sub
-                ) / len(sub), 4),
-            })
+def run_stream(pair, strategy_id, side, m15, signals, cost_pips):
+    signals=sorted(signals, key=lambda z:z[0])
+    idxs=[z[0] for z in signals]
+    out=[]; p=0
+    while p < len(signals):
+        i, trig, rr = signals[p]
+        tr=one_outcome(pair,strategy_id,trig,side,m15,i,rr,cost_pips)
+        if tr is None:
+            p += 1; continue
+        out.append(tr)
+        # exact exit-candle signal eligible
+        p=bisect.bisect_left(idxs, tr["exit_index"], lo=p+1)
     return out
 
+
+def overlay(core, comp):
+    core=sorted(core,key=lambda x:x["signal_index"])
+    comp=sorted(comp,key=lambda x:x["signal_index"])
+    accepted=[]; rejected=[]; p=0
+    for tr in comp:
+        s,e=tr["signal_index"],tr["exit_index"]
+        while p<len(core) and core[p]["exit_index"] <= s:
+            p += 1
+        overlaps = p<len(core) and core[p]["signal_index"] < e and core[p]["exit_index"] > s
+        (rejected if overlaps else accepted).append(tr)
+    return sorted(core+accepted,key=lambda x:x["signal_index"]), accepted, rejected
+
+
+def evaluate_strategy(pair, strategy_id, spec, m15, cost_pips):
+    if spec["mode"] in ("single","priority_union"):
+        trades=run_stream(pair,strategy_id,spec["side"],m15,spec["signals"],cost_pips)
+        return trades,{"accepted_complement":0,"rejected_overlap":0}
+    core=run_stream(pair,strategy_id,spec["side"],m15,spec["core_signals"],cost_pips)
+    comp=run_stream(pair,strategy_id,spec["side"],m15,spec["comp_signals"],cost_pips)
+    combined,accepted,rejected=overlay(core,comp)
+    return combined,{"accepted_complement":len(accepted),"rejected_overlap":len(rejected),"core_trades":len(core),"candidate_complement":len(comp)}
+
+
 # ============================================================
-# DEEP DIAGNOSTICS
+# METRICS
 # ============================================================
 
-def period_defs(actual_start):
-    return [
-        ("FULL_HISTORY", actual_start, NOW),
-        ("PRE_2010", actual_start, datetime(2010,1,1,tzinfo=timezone.utc)),
-        ("2010_PLUS", datetime(2010,1,1,tzinfo=timezone.utc), NOW),
-        *ERAS,
-        ("DEV_2002_2017", actual_start, datetime(2018,1,1,tzinfo=timezone.utc)),
-        ("VALIDATION_2018_PLUS", datetime(2018,1,1,tzinfo=timezone.utc), NOW),
-        ("LAST_5Y", NOW - timedelta(days=365.2425*5), NOW),
-        ("LAST_2Y", NOW - timedelta(days=365.2425*2), NOW),
-    ]
-
-
-def source_trades(core, cand, start, end):
-    combined, accepted, rejected = nonoverlap_overlay(core, cand)
+def calc_stats(trades, order="signal"):
+    if not trades:
+        return {"trades":0,"winners":0,"losers":0,"win_rate_pct":0.0,"profit_factor":0.0,"total_r":0.0,"expectancy_r":0.0,"max_drawdown_r":0.0,"longest_loss_streak":0}
+    key="signal_time" if order=="signal" else "exit_time"
+    ts=sorted(trades,key=lambda x:(x[key],x["strategy_id"]))
+    rs=[x["r"] for x in ts]
+    pos=sum(x for x in rs if x>0); neg=-sum(x for x in rs if x<0)
+    pf=pos/neg if neg>0 else (999.0 if pos>0 else 0.0)
+    eq=0.0; peak=0.0; dd=0.0; streak=0; maxst=0
+    for r in rs:
+        eq += r; peak=max(peak,eq); dd=min(dd,eq-peak)
+        if r<0: streak+=1; maxst=max(maxst,streak)
+        else: streak=0
+    w=sum(r>0 for r in rs); l=sum(r<0 for r in rs)
     return {
-        "CORE": subset(core, start, end),
-        "ACCEPTED_COMPLEMENT": subset(accepted, start, end),
-        "COMBINED": subset(combined, start, end),
-    }, rejected
+        "trades":len(rs),"winners":w,"losers":l,"win_rate_pct":pct(w,len(rs)),
+        "profit_factor":pf,"total_r":sum(rs),"expectancy_r":sum(rs)/len(rs),
+        "max_drawdown_r":dd,"longest_loss_streak":maxst,
+    }
 
 
-def deep_period_rows(c, core, cand, actual_start):
-    rows = []
-    combined, accepted, _ = nonoverlap_overlay(core, cand)
-    for label, a, b in period_defs(actual_start):
-        for source, trades in [
-            ("CORE", subset(core,a,b)),
-            ("ACCEPTED_COMPLEMENT", subset(accepted,a,b)),
-            ("COMBINED", subset(combined,a,b)),
-        ]:
-            s = stats(trades)
-            rows.append({
-                "config_id": c["config_id"], "family": c["family"],
-                "context": c["context"], "rr": c["rr"],
-                "source": source, "period": label,
-                "start_utc": iso(a), "end_utc": iso(b),
-                **{k: round(v,6) if isinstance(v,float) else v for k,v in s.items()},
-            })
-    return rows
+def subset(trades,start=None,end=None):
+    return [t for t in trades if (start is None or t["signal_time"]>=start) and (end is None or t["signal_time"]<end)]
 
 
-def deep_cost_rows(c, candles, core_ix, cand_ix, actual_start):
-    rows = []
-    for cost in COSTS:
-        core = run_backtest(candles, core_ix, CORE_RR, cost, actual_start, NOW)
-        cand = run_backtest(candles, cand_ix, c["rr"], cost, actual_start, NOW)
-        combined, accepted, _ = nonoverlap_overlay(core, cand)
-        for source, trades in [
-            ("CORE", core),
-            ("ACCEPTED_COMPLEMENT", accepted),
-            ("COMBINED", combined),
-        ]:
-            s = stats(trades)
-            rows.append({
-                "config_id": c["config_id"], "family": c["family"],
-                "context": c["context"], "rr": c["rr"],
-                "source": source, "cost_pips": cost,
-                **{k: round(v,6) if isinstance(v,float) else v for k,v in s.items()},
-            })
-    return rows
+def stats_row(scope,label,trades,start=None,end=None):
+    s=calc_stats(subset(trades,start,end))
+    return {"scope":scope,"period":label,"start_utc":iso(start) if start else "","end_utc":iso(end) if end else "",**s,
+            "simple_return_pct_at_0_25pct_risk":s["total_r"]*0.25,
+            "simple_return_pct_at_0_50pct_risk":s["total_r"]*0.50,
+            "simple_return_pct_at_0_75pct_risk":s["total_r"]*0.75,
+            "simple_return_pct_at_1pct_risk":s["total_r"]*1.00}
 
 
-def rolling_rows(c, candles, core_ix, cand_ix, actual_start):
-    rows = []
-    first = month_floor(max(actual_start, START))
-    last = month_floor(NOW)
-    for months in [12,24,36]:
-        s = first
-        while add_months(s, months) <= last:
-            e = add_months(s, months)
-            core = run_backtest(candles, core_ix, CORE_RR, PRIMARY_COST, s, e)
-            cand = run_backtest(candles, cand_ix, c["rr"], PRIMARY_COST, s, e)
-            combined, accepted, _ = nonoverlap_overlay(core, cand)
-            for source, trades in [
-                ("CORE", core),
-                ("ACCEPTED_COMPLEMENT", accepted),
-                ("COMBINED", combined),
-            ]:
-                st = stats(trades)
-                rows.append({
-                    "config_id": c["config_id"], "months": months,
-                    "source": source, "start_utc": iso(s), "end_utc": iso(e),
-                    "trades": st["trades"],
-                    "profit_factor": round(st["profit_factor"],6),
-                    "total_r": round(st["total_r"],4),
-                    "positive": st["total_r"] > 0,
-                    "zero_trade": st["trades"] == 0,
-                })
-            s = add_months(s, 1)
+def rolling_rows(scope,trades,months,data_start,end_complete_month):
+    rows=[]
+    start_month=month_floor(data_start)
+    cur=start_month
+    while add_months(cur,months) <= end_complete_month:
+        end=add_months(cur,months)
+        s=calc_stats(subset(trades,cur,end))
+        rows.append({"scope":scope,"months":months,"start_utc":iso(cur),"end_utc":iso(end),**s,"simple_return_pct_at_1pct_risk":s["total_r"]})
+        cur=add_months(cur,1)
     return rows
 
 
 def rolling_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[(r["config_id"],r["source"],r["months"])].append(r)
-    out = []
-    for (cid,source,months), sub in grouped.items():
-        active = [r for r in sub if r["trades"] > 0]
+    grouped=defaultdict(list)
+    for r in rows: grouped[(r["scope"],r["months"])].append(r)
+    out=[]
+    for (scope,m),g in grouped.items():
+        active=[x for x in g if x["trades"]>0]
+        positive=[x for x in active if x["total_r"]>0]
+        pfs=[x["profit_factor"] for x in active if x["profit_factor"]<900]
+        best=max(g,key=lambda x:x["total_r"]) if g else None
+        worst=min(g,key=lambda x:x["total_r"]) if g else None
         out.append({
-            "config_id": cid, "source": source, "months": months,
-            "windows": len(sub), "active_windows": len(active),
-            "zero_trade_windows": len(sub)-len(active),
-            "positive_active_windows_pct": round(
-                100*sum(r["positive"] for r in active)/len(active),4
-            ) if active else 0.0,
-            "median_r_all": round(med([r["total_r"] for r in sub]),4),
-            "median_r_active": round(med([r["total_r"] for r in active]),4) if active else 0.0,
-            "worst_r": round(min(r["total_r"] for r in sub),4),
-            "best_r": round(max(r["total_r"] for r in sub),4),
+            "scope":scope,"months":m,"windows":len(g),"active_windows":len(active),"zero_trade_windows":len(g)-len(active),
+            "positive_windows":sum(x["total_r"]>0 for x in g),"positive_active_windows":len(positive),
+            "positive_all_windows_pct":pct(sum(x["total_r"]>0 for x in g),len(g)),
+            "positive_active_windows_pct":pct(len(positive),len(active)),
+            "median_r_active":safe_median(x["total_r"] for x in active),"median_pf_active":safe_median(pfs),
+            "median_trades_active":safe_median(x["trades"] for x in active),
+            "worst_r":worst["total_r"] if worst else 0,"worst_start_utc":worst["start_utc"] if worst else "",
+            "best_r":best["total_r"] if best else 0,"best_start_utc":best["start_utc"] if best else "",
         })
     return out
 
 
-def calendar_rows(c, candles, core_ix, cand_ix):
-    rows = []
-    for year in range(max(START.year, candles[0]["time"].year), NOW.year):
-        a = datetime(year,1,1,tzinfo=timezone.utc)
-        b = datetime(year+1,1,1,tzinfo=timezone.utc)
-        core = run_backtest(candles, core_ix, CORE_RR, PRIMARY_COST, a, b)
-        cand = run_backtest(candles, cand_ix, c["rr"], PRIMARY_COST, a, b)
-        combined, accepted, _ = nonoverlap_overlay(core, cand)
-        for source, trades in [
-            ("CORE",core),("ACCEPTED_COMPLEMENT",accepted),("COMBINED",combined)
-        ]:
-            st=stats(trades)
-            rows.append({
-                "config_id":c["config_id"],"source":source,"year":year,
-                "trades":st["trades"],"profit_factor":round(st["profit_factor"],6),
-                "total_r":round(st["total_r"],4),"positive":st["total_r"]>0,
-                "negative":st["total_r"]<0,"zero_trade":st["trades"]==0,
-                "meaningful_core_gap_year": year in MEANINGFUL_CORE_INACTIVE_YEARS,
-                "early_non_target_year": year in EARLY_NON_TARGET_YEARS,
-            })
+def calendar_rows(scope,trades,start_year,end_year):
+    out=[]
+    for y in range(start_year,end_year+1):
+        a=datetime(y,1,1,tzinfo=timezone.utc); b=datetime(y+1,1,1,tzinfo=timezone.utc)
+        s=calc_stats(subset(trades,a,b))
+        out.append({"scope":scope,"year":y,"complete_year":y<NOW.year,**s,"simple_return_pct_at_1pct_risk":s["total_r"]})
+    return out
+
+
+def frequency_row(scope,trades,start,end,label):
+    t=subset(trades,start,end)
+    days=max((end-start).total_seconds()/86400.0,1e-9)
+    times=sorted(x["signal_time"] for x in t)
+    gaps=[(b-a).total_seconds()/86400.0 for a,b in zip(times,times[1:])]
+    return {
+        "scope":scope,"period":label,"trades":len(t),"days":days,
+        "trades_per_week":len(t)/(days/7.0),"trades_per_30d":len(t)/(days/30.0),
+        "median_days_between_signals":safe_median(gaps),
+        "max_days_between_signals":max(gaps) if gaps else 0.0,
+    }
+
+
+# ============================================================
+# PORTFOLIO OVERLAP / MONTHLY
+# ============================================================
+
+def intervals_overlap(a,b):
+    return a["signal_time"] < b["exit_time"] and b["signal_time"] < a["exit_time"]
+
+
+def overlap_rows(strategy_trades):
+    ids=sorted(strategy_trades)
+    out=[]
+    for i,a in enumerate(ids):
+        for b in ids[i+1:]:
+            ta=strategy_trades[a]; tb=strategy_trades[b]
+            count_a=sum(any(intervals_overlap(x,y) for y in tb) for x in ta)
+            count_b=sum(any(intervals_overlap(y,x) for x in ta) for y in tb)
+            same_pair = (ta[0]["pair"] if ta else a.split("_M15")[0]) == (tb[0]["pair"] if tb else b.split("_M15")[0])
+            out.append({"strategy_a":a,"strategy_b":b,"a_trades_overlapping_b":count_a,"b_trades_overlapping_a":count_b,"same_pair":same_pair})
+    return out
+
+
+def concurrency_rows(all_trades):
+    events=[]
+    for t in all_trades:
+        events.append((t["signal_time"],1,t["strategy_id"]))
+        events.append((t["exit_time"],-1,t["strategy_id"]))
+    # End events before starts at same timestamp: exact exit-candle new signal eligible.
+    events.sort(key=lambda z:(z[0],z[1]))
+    active=0; max_active=0; hist=defaultdict(int); last=None
+    for ts,delta,sid in events:
+        if last is not None and ts>last:
+            hist[active] += (ts-last).total_seconds()
+        active += delta; max_active=max(max_active,active); last=ts
+    total=sum(hist.values())
+    rows=[{"metric":"max_concurrent_positions","value":max_active}]
+    for k in sorted(hist):
+        rows.append({"metric":f"pct_time_{k}_positions","value":pct(hist[k],total)})
+    # same-timestamp signals
+    clusters=defaultdict(int)
+    for t in all_trades: clusters[t["signal_time"]]+=1
+    rows.append({"metric":"signal_timestamps_with_2plus_trades","value":sum(v>=2 for v in clusters.values())})
+    rows.append({"metric":"max_same_timestamp_signals","value":max(clusters.values()) if clusters else 0})
     return rows
 
 
-def calendar_summary(rows):
-    grouped=defaultdict(list)
-    for r in rows:
-        grouped[(r["config_id"],r["source"])].append(r)
+def monthly_matrix(strategy_trades, start_month, end_month):
+    ids=sorted(strategy_trades)
+    rows=[]; cur=start_month
+    while cur < end_month:
+        nxt=add_months(cur,1); row={"month":cur.strftime("%Y-%m")}
+        for sid in ids:
+            row[sid]=sum(t["r"] for t in strategy_trades[sid] if cur<=t["signal_time"]<nxt)
+        row["PORTFOLIO"]=sum(row[sid] for sid in ids)
+        rows.append(row); cur=nxt
+    return rows
+
+
+def correlation_rows(monthly, ids):
+    cols=ids+["PORTFOLIO"]
+    arr={k:np.array([r[k] for r in monthly],dtype=float) for k in cols}
     out=[]
-    for (cid,source),sub in grouped.items():
-        active=[r for r in sub if r["trades"]>0]
-        meaningful=[r for r in sub if r["meaningful_core_gap_year"]]
-        out.append({
-            "config_id":cid,"source":source,"completed_years":len(sub),
-            "active_years":len(active),"zero_trade_years":len(sub)-len(active),
-            "positive_active_years_pct":round(
-                100*sum(r["positive"] for r in active)/len(active),4
-            ) if active else 0.0,
-            "median_trades_year":round(med([r["trades"] for r in sub]),4),
-            "median_year_r":round(med([r["total_r"] for r in sub]),4),
-            "worst_year_r":round(min(r["total_r"] for r in sub),4),
-            "meaningful_gap_years_active":",".join(str(r["year"]) for r in meaningful if r["trades"]>0),
-            "meaningful_gap_years_profitable":",".join(str(r["year"]) for r in meaningful if r["total_r"]>0),
-        })
+    for a in cols:
+        row={"strategy":a}
+        for b in cols:
+            x,y=arr[a],arr[b]
+            if len(x)<2 or np.std(x)==0 or np.std(y)==0: val=0.0
+            else: val=float(np.corrcoef(x,y)[0,1])
+            row[b]=val
+        out.append(row)
     return out
 
 
 # ============================================================
-# RUNNER
+# MAIN RESEARCH
 # ============================================================
 
 def run_research():
     try:
-        STATUS.update({"state": "download", "message": "Downloading EUR/GBP full history"})
-        m15 = fetch("M15", START, NOW, 35)
-        h1 = fetch("H1", WARMUP, NOW, 180)
-        h4 = fetch("H4", WARMUP, NOW, 700)
-        daily = fetch("D", WARMUP, NOW, 3000)
-        if not all([m15, h1, h4, daily]):
-            raise RuntimeError("Missing required EUR_GBP history")
+        STATUS.update(state="starting",message="Starting exact final-locked M15 portfolio rebuild",progress=1)
+        write_csv(OUT["manifest"],[{**r,"reference_validation_trades":REFERENCE_COUNTS.get(r["strategy_id"],"")} for r in MANIFEST])
 
-        # Hard coverage guard.  OANDA caps candles returned per request; if a
-        # future edit makes a chunk too large, the fetch loop can otherwise
-        # skip 400 responses and leave only a recent tail.  This guard makes
-        # that failure explicit before any parity/strategy logic runs.
-        if (
-            len(m15) < 500000
-            or m15[0]["time"] > datetime(2002, 6, 1, tzinfo=timezone.utc)
-            or len(h1) < 100000
-            or len(h4) < 25000
-        ):
-            raise RuntimeError(
-                "Incomplete OANDA history: "
-                f"M15={len(m15)} first={iso(m15[0]['time']) if m15 else 'NONE'}; "
-                f"H1={len(h1)}; H4={len(h4)}. "
-                "Check candle chunk sizes / OANDA download coverage."
-            )
+        strategy_trades_by_cost={cost:{} for cost in COSTS}
+        strategy_overlay_meta={}
+        coverage=[]
 
-        write_csv(OUTS["coverage"], [{
-            "instrument": PAIR,
-            "requested_start_utc": iso(START),
-            "parity_cutoff_utc": iso(PARITY_CUTOFF),
-            "actual_first_m15_utc": iso(m15[0]["time"]),
-            "actual_last_m15_utc": iso(m15[-1]["time"]),
-            "m15_candles": len(m15),
-            "h1_candles": len(h1),
-            "h4_candles": len(h4),
-            "daily_candles": len(daily),
-        }])
+        for pi,pair in enumerate(PAIRS):
+            STATUS.update(state="downloading",message=f"Downloading {pair} M15 + required HTF history",progress=5+pi*11)
+            m15,empty=fetch_history(pair,"M15",START,NOW)
+            if len(m15)<350000:
+                raise RuntimeError(f"Incomplete {pair} M15 history: only {len(m15)} candles; first={iso(m15[0]['time']) if m15 else 'NONE'}; empty_chunks={empty}")
+            if m15[0]["time"] > datetime(2003,1,1,tzinfo=timezone.utc):
+                raise RuntimeError(f"Incomplete {pair} early M15 coverage: first candle {iso(m15[0]['time'])}")
 
-        STATUS.update({"state": "precompute", "message": "Building causal HTF and M15 feature cache"})
-        times = [x["time"] for x in m15]
-        ah1 = align_htf(times, htf_state(h1))
-        ah4 = align_htf(times, htf_state(h4))
-        ad = align_htf(times, htf_state(daily))
-        f = features(m15, ah1, ah4, ad)
+            aligned={}
+            htf_counts={}
+            for gran in PAIR_HTFS[pair]:
+                hs,_=fetch_history(pair,gran,HTF_WARMUP,NOW)
+                htf_counts[gran]=len(hs)
+                if not hs: raise RuntimeError(f"Missing required {pair} {gran} history")
+                aligned[gran]=align_htf([x["time"] for x in m15],htf_state(hs))
+                del hs
 
-        core_cfg = frozen_core_cfg()
-        anchor = anchor_cfg()
-        core_ix = signal_indices(core_cfg, f)
-        anchor_ix = signal_indices(anchor, f)
+            coverage.append({"pair":pair,"requested_start_utc":iso(START),"actual_first_m15_utc":iso(m15[0]["time"]),"actual_last_m15_utc":iso(m15[-1]["time"]),"m15_candles":len(m15),"h1_candles":htf_counts.get("H1",0),"h4_candles":htf_counts.get("H4",0),"daily_candles":htf_counts.get("D",0),"empty_m15_chunks":empty})
 
-        # ----------------------------------------------------
-        # HARD PARITY
-        # ----------------------------------------------------
-        # IMPORTANT: the uploaded complementary-frequency run only hard-
-        # parity-locked the core at 2026-09-10 12:30 UTC.  Its headline
-        # 41 candidate / 40 accepted / 84 combined figures were FULL-RUN
-        # outputs at 13:01 UTC, not fixed-cutoff parity observations.
-        #
-        # The uploaded finalist trade file *does* give us a clean historical
-        # anchor: by 2026-03-01 there were exactly 43 core trades and all 40
-        # accepted engulf-complement trades had already occurred (the last
-        # accepted complement signal was 2026-02-17 03:45 UTC).  We therefore
-        # hard-check only quantities actually supported by the prior files.
-        core_cut = run_backtest(
-            m15, core_ix, CORE_RR, PRIMARY_COST,
-            m15[0]["time"], PARITY_CUTOFF,
-        )
-        core_hist = run_backtest(
-            m15, core_ix, CORE_RR, PRIMARY_COST,
-            m15[0]["time"], ANCHOR_HISTORY_CUTOFF,
-        )
-        anchor_hist = run_backtest(
-            m15, anchor_ix, ANCHOR_RR, PRIMARY_COST,
-            m15[0]["time"], ANCHOR_HISTORY_CUTOFF,
-        )
-        combined_hist, accepted_hist, rejected_hist = nonoverlap_overlay(
-            core_hist, anchor_hist
-        )
+            STATUS.update(state="precomputing",message=f"Building {pair} frozen feature cache",progress=9+pi*11)
+            f=build_features(pair,m15,aligned)
+            specs=signal_sets(pair,f)
 
-        # Current/full anchor counts are useful diagnostics, but are not a
-        # hard parity requirement because the prior 41/40/84 snapshot was
-        # taken at a later full-run timestamp rather than PARITY_CUTOFF.
-        anchor_current = run_backtest(
-            m15, anchor_ix, ANCHOR_RR, PRIMARY_COST,
-            m15[0]["time"], NOW,
-        )
-        core_current = run_backtest(
-            m15, core_ix, CORE_RR, PRIMARY_COST,
-            m15[0]["time"], NOW,
-        )
-        combined_current, accepted_current, rejected_current = nonoverlap_overlay(
-            core_current, anchor_current
-        )
+            for cost in COSTS:
+                for sid,spec in specs.items():
+                    trades,meta=evaluate_strategy(pair,sid,spec,m15,cost)
+                    strategy_trades_by_cost[cost][sid]=trades
+                    if cost==BASELINE_COST:
+                        strategy_overlay_meta[sid]=meta
 
-        parity_rows = [
-            {
-                "check": "FROZEN_CORE_44",
-                "expected": 44,
-                "actual": len(core_cut),
-                "status": "MATCH" if len(core_cut) == 44 else "MISMATCH",
-                "hard_guard": True,
-                "cutoff_utc": iso(PARITY_CUTOFF),
-            },
-            {
-                "check": "HISTORICAL_CORE_BY_2026_03_01",
-                "expected": 43,
-                "actual": len(core_hist),
-                "status": "MATCH" if len(core_hist) == 43 else "MISMATCH",
-                "hard_guard": True,
-                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
-            },
-            {
-                "check": "HISTORICAL_ENGULF_ACCEPTED_BY_2026_03_01",
-                "expected": 40,
-                "actual": len(accepted_hist),
-                "status": "MATCH" if len(accepted_hist) == 40 else "MISMATCH",
-                "hard_guard": True,
-                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
-            },
-            {
-                "check": "HISTORICAL_COMBINED_BY_2026_03_01",
-                "expected": 83,
-                "actual": len(combined_hist),
-                "status": "MATCH" if len(combined_hist) == 83 else "MISMATCH",
-                "hard_guard": True,
-                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
-            },
-            {
-                "check": "CURRENT_ENGULF_CANDIDATE_DIAGNOSTIC",
-                "expected": 41,
-                "actual": len(anchor_current),
-                "status": "MATCH" if len(anchor_current) == 41 else "CURRENT_DIFF",
-                "hard_guard": False,
-                "cutoff_utc": iso(NOW),
-            },
-            {
-                "check": "CURRENT_ENGULF_ACCEPTED_DIAGNOSTIC",
-                "expected": 40,
-                "actual": len(accepted_current),
-                "status": "MATCH" if len(accepted_current) == 40 else "CURRENT_DIFF",
-                "hard_guard": False,
-                "cutoff_utc": iso(NOW),
-            },
-            {
-                "check": "CURRENT_ENGULF_OVERLAP_DIAGNOSTIC",
-                "expected": 1,
-                "actual": len(rejected_current),
-                "status": "MATCH" if len(rejected_current) == 1 else "CURRENT_DIFF",
-                "hard_guard": False,
-                "cutoff_utc": iso(NOW),
-            },
-            {
-                "check": "CURRENT_COMBINED_DIAGNOSTIC",
-                "expected": 84,
-                "actual": len(combined_current),
-                "status": "MATCH" if len(combined_current) == 84 else "CURRENT_DIFF",
-                "hard_guard": False,
-                "cutoff_utc": iso(NOW),
-            },
+            del f, aligned, m15, specs
+            gc.collect()
+
+        write_csv(OUT["coverage"],coverage)
+        baseline=strategy_trades_by_cost[BASELINE_COST]
+        ids=[r["strategy_id"] for r in MANIFEST]
+
+        # Parity/reference diagnostics: lower-than-reference is a red flag;
+        # equal or greater can reflect newer signals after validation cutoff.
+        parity=[]
+        for sid in ids:
+            actual=len(baseline[sid]); expected=REFERENCE_COUNTS[sid]
+            parity.append({"strategy_id":sid,"reference_validation_trades":expected,"current_full_history_trades":actual,"status":"PASS_EQUAL" if actual==expected else ("PASS_NEWER_TRADES" if actual>expected else "CHECK_BELOW_REFERENCE"),**strategy_overlay_meta.get(sid,{})})
+        write_csv(OUT["parity"],parity)
+        if any(r["status"]=="CHECK_BELOW_REFERENCE" for r in parity):
+            bad=[r for r in parity if r["status"]=="CHECK_BELOW_REFERENCE"]
+            raise RuntimeError("Strategy reproduction below final reference count: "+json.dumps(bad))
+
+        STATUS.update(state="analyzing",message="Merging 10 final locked strategies",progress=68)
+        portfolio=sorted([t for sid in ids for t in baseline[sid]],key=lambda x:(x["signal_time"],x["strategy_id"]))
+
+        # Strategy summaries / periods / calendars / rolling.
+        strategy_summary=[]; strategy_periods=[]; strategy_calendar=[]; strategy_roll=[]; strategy_cost=[]
+        period_defs=[
+            ("FULL",None,None),
+            ("PRE_2010",None,datetime(2010,1,1,tzinfo=timezone.utc)),
+            ("2010_PLUS",datetime(2010,1,1,tzinfo=timezone.utc),None),
+            ("2018_PLUS",datetime(2018,1,1,tzinfo=timezone.utc),None),
+            ("LAST_10Y",NOW-timedelta(days=365.2425*10),NOW),
+            ("LAST_5Y",NOW-timedelta(days=365.2425*5),NOW),
+            ("LAST_3Y",NOW-timedelta(days=365.2425*3),NOW),
+            ("LAST_2Y",NOW-timedelta(days=365.2425*2),NOW),
+            ("LAST_1Y",NOW-timedelta(days=365.2425),NOW),
         ]
-        write_csv(OUTS["parity"], parity_rows)
-        hard_failures = [
-            r for r in parity_rows
-            if r.get("hard_guard") and r["status"] != "MATCH"
+        common_start=max(datetime.fromisoformat(r["actual_first_m15_utc"].replace("Z","+00:00")) for r in coverage)
+        end_complete=month_floor(NOW)
+
+        for sid in ids:
+            tr=baseline[sid]; s=calc_stats(tr); se=calc_stats(tr,"exit")
+            strategy_summary.append({"strategy_id":sid,**s,"exit_order_max_drawdown_r":se["max_drawdown_r"],"contribution_pct_of_portfolio_r":0.0})
+            for label,a,b in period_defs: strategy_periods.append(stats_row(sid,label,tr,a,b))
+            strategy_calendar.extend(calendar_rows(sid,tr,START.year,NOW.year))
+            for m in (12,24,36): strategy_roll.extend(rolling_rows(sid,tr,m,common_start,end_complete))
+            for cost in COSTS:
+                ss=calc_stats(strategy_trades_by_cost[cost][sid])
+                strategy_cost.append({"strategy_id":sid,"cost_pips":cost,**ss})
+
+        port_stats=calc_stats(portfolio); port_exit=calc_stats(portfolio,"exit")
+        for r in strategy_summary:
+            r["contribution_pct_of_portfolio_r"]=pct(r["total_r"],port_stats["total_r"])
+        write_csv(OUT["strategy_summary"],strategy_summary)
+        write_csv(OUT["strategy_periods"],strategy_periods)
+        write_csv(OUT["strategy_calendar"],strategy_calendar)
+        write_csv(OUT["strategy_rolling"],strategy_roll)
+        write_csv(OUT["strategy_rolling_summary"],rolling_summary(strategy_roll))
+        write_csv(OUT["strategy_cost"],strategy_cost)
+
+        # Pair summaries.
+        pair_rows=[]
+        for pair in PAIRS:
+            ts=[t for t in portfolio if t["pair"]==pair]
+            s=calc_stats(ts)
+            pair_rows.append({"pair":pair,**s,"contribution_pct_of_portfolio_r":pct(s["total_r"],port_stats["total_r"])})
+        write_csv(OUT["pair_summary"],pair_rows)
+
+        # Portfolio headline + periods.
+        write_csv(OUT["portfolio_summary"],[{"scope":"PORTFOLIO","strategies":len(ids),"pairs":len(PAIRS),**port_stats,"signal_order_max_drawdown_r":port_stats["max_drawdown_r"],"exit_order_max_drawdown_r":port_exit["max_drawdown_r"],"simple_full_return_pct_at_1pct_risk":port_stats["total_r"]}])
+        write_csv(OUT["portfolio_periods"],[stats_row("PORTFOLIO",label,portfolio,a,b) for label,a,b in period_defs])
+
+        # Portfolio cost stress.
+        pc=[]
+        for cost in COSTS:
+            pts=sorted([t for sid in ids for t in strategy_trades_by_cost[cost][sid]],key=lambda x:(x["signal_time"],x["strategy_id"]))
+            ss=calc_stats(pts); ee=calc_stats(pts,"exit")
+            pc.append({"cost_pips":cost,**ss,"exit_order_max_drawdown_r":ee["max_drawdown_r"]})
+        write_csv(OUT["portfolio_cost"],pc)
+
+        # Portfolio calendar / rolling.
+        write_csv(OUT["portfolio_calendar"],calendar_rows("PORTFOLIO",portfolio,START.year,NOW.year))
+        pr=[]
+        for m in (12,24,36): pr.extend(rolling_rows("PORTFOLIO",portfolio,m,common_start,end_complete))
+        write_csv(OUT["portfolio_rolling"],pr)
+        write_csv(OUT["portfolio_rolling_summary"],rolling_summary(pr))
+
+        STATUS.update(state="analyzing",message="Calculating trade frequency, monthly correlation and concurrency",progress=82)
+        # Frequency by portfolio, pair and strategy across useful trailing windows.
+        freq=[]
+        freq_periods=[
+            ("FULL",common_start,NOW),
+            ("LAST_10Y",NOW-timedelta(days=365.2425*10),NOW),
+            ("LAST_5Y",NOW-timedelta(days=365.2425*5),NOW),
+            ("LAST_3Y",NOW-timedelta(days=365.2425*3),NOW),
+            ("LAST_2Y",NOW-timedelta(days=365.2425*2),NOW),
+            ("LAST_1Y",NOW-timedelta(days=365.2425),NOW),
         ]
-        if hard_failures:
-            details = "; ".join(
-                f'{r["check"]}: expected {r["expected"]}, got {r["actual"]}'
-                for r in hard_failures
-            )
-            raise RuntimeError("Parity failure: " + details)
+        scopes={"PORTFOLIO":portfolio}
+        scopes.update({sid:baseline[sid] for sid in ids})
+        scopes.update({pair:[t for t in portfolio if t["pair"]==pair] for pair in PAIRS})
+        for scope,tr in scopes.items():
+            for label,a,b in freq_periods: freq.append(frequency_row(scope,tr,a,b,label))
+        write_csv(OUT["frequency"],freq)
 
-        core_full = run_backtest(m15, core_ix, CORE_RR, PRIMARY_COST, m15[0]["time"], NOW)
-        core_stats = stats(core_full)
-        write_csv(OUTS["core"], [{
-            "strategy": "FROZEN_CORE",
-            "rr": CORE_RR,
-            **{k: round(v, 6) if isinstance(v, float) else v for k, v in core_stats.items()},
-            "note": "Core is frozen. No Trigger-A parameter is searched or loosened.",
-        }])
+        monthly=monthly_matrix(baseline,month_floor(common_start),month_floor(NOW))
+        write_csv(OUT["monthly"],monthly)
+        write_csv(OUT["correlation"],correlation_rows(monthly,ids))
+        write_csv(OUT["overlap"],overlap_rows(baseline))
+        write_csv(OUT["concurrency"],concurrency_rows(portfolio))
 
-        param_rows = []
+        # All baseline trades, serializable timestamps.
+        trade_rows=[]
+        for t in portfolio:
+            r=dict(t); r["signal_time"]=iso(r["signal_time"]); r["exit_time"]=iso(r["exit_time"])
+            trade_rows.append(r)
+        write_csv(OUT["trades"],trade_rows)
 
-        # ----------------------------------------------------
-        # STAGE 1A: BR x BODY around exact anchor
-        # ----------------------------------------------------
-        stage1a = build_stage1_br_body()
-        by1a = {c["config_id"]: c for c in stage1a}
-        rows1a = []
-        for n, c in enumerate(stage1a, 1):
-            STATUS.update({"state": "stage1_br_body", "message": f"BR/body {n}/{len(stage1a)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            rows1a.append(evaluation_row(c, core_full, cand))
-        rows1a = sort_rows(rows1a)
-        write_csv(OUTS["stage1_br_body"], rows1a)
-        param_rows.extend(parameter_summary(rows1a, "STAGE1_BR_BODY"))
-
-        # ----------------------------------------------------
-        # STAGE 1B: STRUCTURE x DISTANCE around exact anchor
-        # ----------------------------------------------------
-        stage1b = build_stage1_structure_distance()
-        by1b = {c["config_id"]: c for c in stage1b}
-        rows1b = []
-        for n, c in enumerate(stage1b, 1):
-            STATUS.update({"state": "stage1_structure", "message": f"Structure/distance {n}/{len(stage1b)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            rows1b.append(evaluation_row(c, core_full, cand))
-        rows1b = sort_rows(rows1b)
-        write_csv(OUTS["stage1_structure"], rows1b)
-        param_rows.extend(parameter_summary(rows1b, "STAGE1_STRUCTURE_DISTANCE"))
-
-        # ----------------------------------------------------
-        # STAGE 2: controlled geometry interactions
-        # ----------------------------------------------------
-        stage2 = build_stage2_geometry(rows1a, rows1b, by1a, by1b)
-        by2 = {c["config_id"]: c for c in stage2}
-        rows2 = []
-        for n, c in enumerate(stage2, 1):
-            STATUS.update({"state": "stage2_geometry", "message": f"Geometry interaction {n}/{len(stage2)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            rows2.append(evaluation_row(c, core_full, cand))
-        rows2 = sort_rows(rows2)
-        write_csv(OUTS["stage2_geometry"], rows2)
-        param_rows.extend(parameter_summary(rows2, "STAGE2_GEOMETRY"))
-
-        # ----------------------------------------------------
-        # STAGE 3: H1 bearish-regime confirmation + NONE ablation
-        # ----------------------------------------------------
-        stage3 = build_stage3_h1(rows2, by2)
-        by3 = {c["config_id"]: c for c in stage3}
-        rows3 = []
-        for n, c in enumerate(stage3, 1):
-            STATUS.update({"state": "stage3_h1", "message": f"H1 regime {n}/{len(stage3)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            rows3.append(evaluation_row(c, core_full, cand))
-        rows3 = sort_rows(rows3)
-        write_csv(OUTS["stage3_h1"], rows3)
-        param_rows.extend(parameter_summary(rows3, "STAGE3_H1_REGIME"))
-
-        # ----------------------------------------------------
-        # STAGE 4: RR + explicit 2-pip survival
-        # ----------------------------------------------------
-        stage4 = build_stage4_rr(rows3, by3)
-        by4 = {c["config_id"]: c for c in stage4}
-        rows4 = []
-        core_full_2p = run_backtest(m15, core_ix, CORE_RR, 2.0, m15[0]["time"], NOW)
-        for n, c in enumerate(stage4, 1):
-            STATUS.update({"state": "stage4_rr", "message": f"RR confirmation {n}/{len(stage4)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            row = evaluation_row(c, core_full, cand)
-
-            cand_2p = run_backtest(m15, cand_ix, c["rr"], 2.0, m15[0]["time"], NOW)
-            combined_2p, accepted_2p, rejected_2p = nonoverlap_overlay(core_full_2p, cand_2p)
-            a2, c2 = stats(accepted_2p), stats(combined_2p)
-            row.update({
-                "accepted_2p_trades": a2["trades"],
-                "accepted_2p_pf": round(a2["profit_factor"], 6),
-                "accepted_2p_r": round(a2["total_r"], 4),
-                "combined_2p_pf": round(c2["profit_factor"], 6),
-                "combined_2p_r": round(c2["total_r"], 4),
-                "combined_2p_dd": round(c2["max_drawdown_r"], 4),
-                "rejected_overlap_2p": len(rejected_2p),
-            })
-            rows4.append(row)
-
-        rows4 = sorted(rows4, key=lambda r: (
-            r["accepted_2p_r"] > 0,
-            r["accepted_pre2010_r"] > 0,
-            r["accepted_post2010_r"] > 0,
-            r["accepted_positive_eras"],
-            r["accepted_pf"],
-            r["combined_pf"],
-            r["accepted_adds"],
-        ), reverse=True)
-        write_csv(OUTS["stage4_rr"], rows4)
-        param_rows.extend(parameter_summary(rows4, "STAGE4_RR"))
-        write_csv(OUTS["parameter_summary"], param_rows)
-
-        # ----------------------------------------------------
-        # ROBUST FINALISTS
-        # ----------------------------------------------------
-        eligible = [r for r in rows4 if (
-            r["accepted_adds"] >= 12
-            and r["accepted_r"] > 0
-            and r["accepted_pf"] >= 1.25
-            and r["accepted_pre2010_r"] > 0
-            and r["accepted_post2010_r"] > 0
-            and r["accepted_positive_eras"] >= 3
-            and r["accepted_2p_r"] > 0
-            and r["accepted_2p_pf"] >= 1.20
-            and r["combined_pf"] >= 2.0
-            and r["combined_2p_pf"] >= 1.75
-            and r["combined_r"] > core_stats["total_r"]
-            and r["combined_dd"] >= -10.0
-        )]
-        finalist_rows = (eligible if eligible else rows4)[:FINAL_KEEP]
-        finalists = [by4[r["config_id"]] for r in finalist_rows]
-        write_csv(OUTS["finalists"], finalist_rows)
-
-        periods, costs, rolling, calendar, overlap, trade_rows = [], [], [], [], [], []
-        for n, c in enumerate(finalists, 1):
-            STATUS.update({"state": "deep_validation", "message": f"Deep finalist {n}/{len(finalists)}"})
-            cand_ix = signal_indices(c, f)
-            cand = run_backtest(m15, cand_ix, c["rr"], PRIMARY_COST, m15[0]["time"], NOW)
-            combined, accepted, rejected = nonoverlap_overlay(core_full, cand)
-
-            periods.extend(deep_period_rows(c, core_full, cand, m15[0]["time"]))
-            costs.extend(deep_cost_rows(c, m15, core_ix, cand_ix, m15[0]["time"]))
-            rolling.extend(rolling_rows(c, m15, core_ix, cand_ix, m15[0]["time"]))
-            calendar.extend(calendar_rows(c, m15, core_ix, cand_ix))
-            overlap.append({
-                "config_id": c["config_id"],
-                "family": c["family"],
-                "context": c["context"],
-                "h1_ema_period": c.get("h1_ema_period"),
-                "rr": c["rr"],
-                "candidate_trades": len(cand),
-                "accepted_nonoverlap": len(accepted),
-                "rejected_overlap": len(rejected),
-                "overlap_rate_pct": round(100 * len(rejected) / len(cand), 4) if cand else 0.0,
-                "combined_trades": len(combined),
-            })
-            for source, trades in [("CORE", core_full), ("ACCEPTED_COMPLEMENT", accepted), ("COMBINED", combined)]:
-                for t in trades:
-                    x = dict(t)
-                    x.update({
-                        "config_id": c["config_id"],
-                        "family": c["family"],
-                        "context": c["context"],
-                        "h1_ema_period": c.get("h1_ema_period"),
-                        "source": source,
-                    })
-                    trade_rows.append(x)
-
-        write_csv(OUTS["periods"], periods)
-        write_csv(OUTS["cost"], costs)
-        write_csv(OUTS["rolling"], rolling)
-        write_csv(OUTS["rolling_summary"], rolling_summary(rolling))
-        write_csv(OUTS["calendar"], calendar)
-        write_csv(OUTS["calendar_summary"], calendar_summary(calendar))
-        write_csv(OUTS["overlap"], overlap)
-        write_csv(OUTS["trades"], trade_rows)
-        write_csv(OUTS["notes"], [
-            {"note": "BR-only test freezes body1.00/LB100/dist0.15/H1 EMA100/RR2.50 and varies only BR 1.40/1.50/1.60/1.70/1.80/2.00."},
-            {"note": "Source anchor from uploaded complement run: BR1.40/body1.00/LB100/dist0.20/H1 close<EMA100/RR2.50; prior full-run snapshot was 41 candidate, 40 accepted, 1 overlap, 84 combined at 2026-09-10 13:01 UTC."},
-            {"note": "Hard parity uses only source-supported fixed historical observations: core=44 through 2026-09-10 12:30 UTC; by 2026-03-01 core=43, accepted complement=40, combined=83. Current 41/40/1/84 figures are diagnostic only."},
-            {"note": "No session or weekday optimisation is performed for the complement."},
-            {"note": "H1 NONE is explicitly tested as an ablation to quantify how much the bearish regime gate contributes."},
-            {"note": "H1 state uses only the previous completed H1 candle via completion-time alignment; no lookahead."},
-            {"note": "2005/2009/2013/2023 activity is report-only and is not part of the selection score."},
-            {"note": "Candidate trade [signal,exit) overlapping a frozen core trade is rejected; exact core exit-candle signals remain eligible."},
-            {"note": "Choose a final complement on broad parameter/regime/RR plateau plus temporal, rolling and cost robustness, not the highest lifetime PF/R."},
-            {"note": "Historical period splits are robustness diagnostics, not pristine OOS, because the full history is now part of development."},
+        write_csv(OUT["notes"],[
+            {"item":"Frozen rules","value":"NO optimization is performed. All 10 strategy definitions are the final full-history locks listed in manifest."},
+            {"item":"Portfolio concurrency","value":"Pyramiding0 is enforced per strategy; different strategy IDs may overlap, including opposite directions on one pair. Concurrency is reported, not suppressed."},
+            {"item":"R aggregation","value":"Combined R is arithmetic across trades, treating each trade as one independent risk unit. simple_return_pct_at_1pct_risk = total_R × 1%; it is not an equity-compounded return when trades overlap."},
+            {"item":"Drawdown","value":"Signal-order DD matches the historical strategy-sequence convention; exit-order DD is also exported and is often more intuitive for concurrently open portfolio trades."},
+            {"item":"Rolling windows","value":"12/24/36M windows are month-aligned and complete only; current partial month is excluded from rolling-window endpoints."},
+            {"item":"Cost stress","value":"Every strategy is rebuilt at 0.5/1.0/1.5/2.0 pips adverse fill; signal rules are unchanged."},
+            {"item":"EURUSD legacy warning","value":"Old EURUSD files in Library are superseded. This runner uses the later full-history locks: LONG BR1.20/body1.00/no hour exclusion; SHORT BR1.10/body1.30/range1.70/S60D.225/NY02-03/no weekday."},
+            {"item":"USDJPY legacy warning","value":"This runner uses final SWEEP30_RR4.00 + completed H1 ATR ratio>=0.80 for USDJPY LONG, not the older any-20/40/60/100 sweep lock."},
         ])
 
-        pack()
-        STATUS.update({
-            "state": "complete",
-            "message": "EUR/GBP M15 SHORT final BR-only complement confirmation complete",
-            "core_trades": len(core_full),
-            "stage1_br_body_configs": len(stage1a),
-            "stage1_structure_configs": len(stage1b),
-            "stage2_geometry_configs": len(stage2),
-            "stage3_h1_configs": len(stage3),
-            "stage4_rr_configs": len(stage4),
-            "finalists": len(finalists),
-            "results_bundle": BUNDLE,
-            "orders_supported": False,
-            "trading_enabled": False,
-        })
-
+        STATUS.update(state="packaging",message="Building one ZIP results bundle",progress=95)
+        with zipfile.ZipFile(BUNDLE,"w",compression=zipfile.ZIP_DEFLATED) as z:
+            for p in OUT.values():
+                if os.path.exists(p): z.write(p,arcname=os.path.basename(p))
+        STATUS.update(state="complete",message="M15 final locked 10-strategy portfolio analysis complete",progress=100,results=BUNDLE,portfolio_trades=len(portfolio),portfolio_total_r=port_stats["total_r"],portfolio_pf=port_stats["profit_factor"])
     except Exception as e:
         import traceback
-        STATUS.update({
-            "state": "error",
-            "message": str(e),
-            "error_type": type(e).__name__,
-            "traceback": traceback.format_exc(),
-            "orders_supported": False,
-            "trading_enabled": False,
-        })
-        print("ERROR:", traceback.format_exc(), flush=True)
+        STATUS.update(state="error",message=str(e),error_type=type(e).__name__,traceback=traceback.format_exc(),progress=STATUS.get("progress",0))
 
 
 # ============================================================
-# ROUTES
+# FLASK ROUTES
 # ============================================================
-
-@app.route("/")
+@app.get("/")
 def root():
-    payload = {
-        "service": "EUR/GBP M15 SHORT Final BR-Only Complement Confirmation",
-        "state": STATUS["state"],
-        "instrument": PAIR,
-        "timeframe": "M15",
-        "side": "SELL",
-        "orders_supported": False,
-        "trading_enabled": False,
-        "routes": [
-            "/eurgbp-m15-short-complement-final-br-only/status",
-            "/eurgbp-m15-short-complement-final-br-only/results",
-        ],
-    }
-    if STATUS.get("state") == "error":
-        payload.update({
-            "error_type": STATUS.get("error_type"),
-            "message": STATUS.get("message"),
-            "traceback": STATUS.get("traceback"),
-        })
-    return jsonify(payload)
+    return jsonify({"service":"M15 Final Locked 10-Strategy Portfolio Analysis","state":STATUS.get("state"),"message":STATUS.get("message"),"orders_supported":False,"trading_enabled":False,"routes":["/m15-final-portfolio/status","/m15-final-portfolio/results"]})
 
-
-@app.route("/eurgbp-m15-short-complement-final-br-only/status")
-def route_status():
+@app.get("/m15-final-portfolio/status")
+def status():
     return jsonify(STATUS)
 
+@app.get("/m15-final-portfolio/results")
+def results():
+    if not os.path.exists(BUNDLE):
+        return jsonify({"error":"Results not ready","status":STATUS}),404
+    return send_file(os.path.abspath(BUNDLE),as_attachment=True,download_name=BUNDLE)
 
-@app.route("/eurgbp-m15-short-complement-final-br-only/results")
-def route_results():
-    return dl(BUNDLE)
 
+def start_background():
+    threading.Thread(target=run_research,daemon=True).start()
 
 if __name__ == "__main__":
-    thread = threading.Thread(
-        target=run_research,
-        name="eurgbp-m15-short-final-engulf-complement-confirmation",
-        daemon=True,
-    )
-    thread.start()
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
+    start_background()
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT","8080")),threaded=True)
