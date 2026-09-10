@@ -113,6 +113,7 @@ START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 WARMUP = START - timedelta(days=900)
 PARITY_CUTOFF = datetime(2026, 9, 10, 12, 30, tzinfo=timezone.utc)
+ANCHOR_HISTORY_CUTOFF = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
 
 NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
@@ -1306,51 +1307,126 @@ def run_research():
         anchor_ix = signal_indices(anchor, f)
 
         # ----------------------------------------------------
-        # HARD PARITY: frozen core + uploaded complement winner
+        # HARD PARITY
         # ----------------------------------------------------
-        core_cut = run_backtest(m15, core_ix, CORE_RR, PRIMARY_COST, m15[0]["time"], PARITY_CUTOFF)
-        anchor_cut = run_backtest(m15, anchor_ix, ANCHOR_RR, PRIMARY_COST, m15[0]["time"], PARITY_CUTOFF)
-        combined_cut, accepted_cut, rejected_cut = nonoverlap_overlay(core_cut, anchor_cut)
+        # IMPORTANT: the uploaded complementary-frequency run only hard-
+        # parity-locked the core at 2026-09-10 12:30 UTC.  Its headline
+        # 41 candidate / 40 accepted / 84 combined figures were FULL-RUN
+        # outputs at 13:01 UTC, not fixed-cutoff parity observations.
+        #
+        # The uploaded finalist trade file *does* give us a clean historical
+        # anchor: by 2026-03-01 there were exactly 43 core trades and all 40
+        # accepted engulf-complement trades had already occurred (the last
+        # accepted complement signal was 2026-02-17 03:45 UTC).  We therefore
+        # hard-check only quantities actually supported by the prior files.
+        core_cut = run_backtest(
+            m15, core_ix, CORE_RR, PRIMARY_COST,
+            m15[0]["time"], PARITY_CUTOFF,
+        )
+        core_hist = run_backtest(
+            m15, core_ix, CORE_RR, PRIMARY_COST,
+            m15[0]["time"], ANCHOR_HISTORY_CUTOFF,
+        )
+        anchor_hist = run_backtest(
+            m15, anchor_ix, ANCHOR_RR, PRIMARY_COST,
+            m15[0]["time"], ANCHOR_HISTORY_CUTOFF,
+        )
+        combined_hist, accepted_hist, rejected_hist = nonoverlap_overlay(
+            core_hist, anchor_hist
+        )
+
+        # Current/full anchor counts are useful diagnostics, but are not a
+        # hard parity requirement because the prior 41/40/84 snapshot was
+        # taken at a later full-run timestamp rather than PARITY_CUTOFF.
+        anchor_current = run_backtest(
+            m15, anchor_ix, ANCHOR_RR, PRIMARY_COST,
+            m15[0]["time"], NOW,
+        )
+        core_current = run_backtest(
+            m15, core_ix, CORE_RR, PRIMARY_COST,
+            m15[0]["time"], NOW,
+        )
+        combined_current, accepted_current, rejected_current = nonoverlap_overlay(
+            core_current, anchor_current
+        )
+
         parity_rows = [
             {
                 "check": "FROZEN_CORE_44",
                 "expected": 44,
                 "actual": len(core_cut),
                 "status": "MATCH" if len(core_cut) == 44 else "MISMATCH",
+                "hard_guard": True,
                 "cutoff_utc": iso(PARITY_CUTOFF),
             },
             {
-                "check": "ENGULF_ANCHOR_CANDIDATE",
-                "expected": 41,
-                "actual": len(anchor_cut),
-                "status": "MATCH" if len(anchor_cut) == 41 else "MISMATCH",
-                "cutoff_utc": iso(PARITY_CUTOFF),
+                "check": "HISTORICAL_CORE_BY_2026_03_01",
+                "expected": 43,
+                "actual": len(core_hist),
+                "status": "MATCH" if len(core_hist) == 43 else "MISMATCH",
+                "hard_guard": True,
+                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
             },
             {
-                "check": "ENGULF_ANCHOR_ACCEPTED",
+                "check": "HISTORICAL_ENGULF_ACCEPTED_BY_2026_03_01",
                 "expected": 40,
-                "actual": len(accepted_cut),
-                "status": "MATCH" if len(accepted_cut) == 40 else "MISMATCH",
-                "cutoff_utc": iso(PARITY_CUTOFF),
+                "actual": len(accepted_hist),
+                "status": "MATCH" if len(accepted_hist) == 40 else "MISMATCH",
+                "hard_guard": True,
+                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
             },
             {
-                "check": "ENGULF_ANCHOR_OVERLAP",
+                "check": "HISTORICAL_COMBINED_BY_2026_03_01",
+                "expected": 83,
+                "actual": len(combined_hist),
+                "status": "MATCH" if len(combined_hist) == 83 else "MISMATCH",
+                "hard_guard": True,
+                "cutoff_utc": iso(ANCHOR_HISTORY_CUTOFF),
+            },
+            {
+                "check": "CURRENT_ENGULF_CANDIDATE_DIAGNOSTIC",
+                "expected": 41,
+                "actual": len(anchor_current),
+                "status": "MATCH" if len(anchor_current) == 41 else "CURRENT_DIFF",
+                "hard_guard": False,
+                "cutoff_utc": iso(NOW),
+            },
+            {
+                "check": "CURRENT_ENGULF_ACCEPTED_DIAGNOSTIC",
+                "expected": 40,
+                "actual": len(accepted_current),
+                "status": "MATCH" if len(accepted_current) == 40 else "CURRENT_DIFF",
+                "hard_guard": False,
+                "cutoff_utc": iso(NOW),
+            },
+            {
+                "check": "CURRENT_ENGULF_OVERLAP_DIAGNOSTIC",
                 "expected": 1,
-                "actual": len(rejected_cut),
-                "status": "MATCH" if len(rejected_cut) == 1 else "MISMATCH",
-                "cutoff_utc": iso(PARITY_CUTOFF),
+                "actual": len(rejected_current),
+                "status": "MATCH" if len(rejected_current) == 1 else "CURRENT_DIFF",
+                "hard_guard": False,
+                "cutoff_utc": iso(NOW),
             },
             {
-                "check": "ENGULF_ANCHOR_COMBINED",
+                "check": "CURRENT_COMBINED_DIAGNOSTIC",
                 "expected": 84,
-                "actual": len(combined_cut),
-                "status": "MATCH" if len(combined_cut) == 84 else "MISMATCH",
-                "cutoff_utc": iso(PARITY_CUTOFF),
+                "actual": len(combined_current),
+                "status": "MATCH" if len(combined_current) == 84 else "CURRENT_DIFF",
+                "hard_guard": False,
+                "cutoff_utc": iso(NOW),
             },
         ]
         write_csv(OUTS["parity"], parity_rows)
-        if any(r["status"] != "MATCH" for r in parity_rows):
-            raise RuntimeError("Parity failure: frozen core or uploaded engulf anchor no longer reproduces")
+        hard_failures = [
+            r for r in parity_rows
+            if r.get("hard_guard") and r["status"] != "MATCH"
+        ]
+        if hard_failures:
+            details = "; ".join(
+                f'{r["check"]}: expected {r["expected"]}, got {r["actual"]}'
+                for r in hard_failures
+            )
+            raise RuntimeError("Parity failure: " + details)
 
         core_full = run_backtest(m15, core_ix, CORE_RR, PRIMARY_COST, m15[0]["time"], NOW)
         core_stats = stats(core_full)
@@ -1528,8 +1604,8 @@ def run_research():
         write_csv(OUTS["overlap"], overlap)
         write_csv(OUTS["trades"], trade_rows)
         write_csv(OUTS["notes"], [
-            {"note": "Source anchor from uploaded complement run: BR1.40/body1.00/LB100/dist0.20/H1 close<EMA100/RR2.50; 41 candidate, 40 accepted, 1 overlap, 84 combined."},
-            {"note": "Frozen core parity = 44 trades through 2026-09-10 12:30 UTC."},
+            {"note": "Source anchor from uploaded complement run: BR1.40/body1.00/LB100/dist0.20/H1 close<EMA100/RR2.50; prior full-run snapshot was 41 candidate, 40 accepted, 1 overlap, 84 combined at 2026-09-10 13:01 UTC."},
+            {"note": "Hard parity uses only source-supported fixed historical observations: core=44 through 2026-09-10 12:30 UTC; by 2026-03-01 core=43, accepted complement=40, combined=83. Current 41/40/1/84 figures are diagnostic only."},
             {"note": "No session or weekday optimisation is performed for the complement."},
             {"note": "H1 NONE is explicitly tested as an ablation to quantify how much the bearish regime gate contributes."},
             {"note": "H1 state uses only the previous completed H1 candle via completion-time alignment; no lookahead."},
