@@ -12,7 +12,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/GBP M15 LONG — FINAL COMPLEMENT LOCAL CONFIRMATION
+# EUR/GBP M15 LONG — FINAL COMPLEMENT DISTANCE-ONLY CONFIRMATION
 #
 # PURPOSE
 #   Preserve the FINAL LOCKED 57-trade EUR/GBP M15 LONG core
@@ -131,6 +131,19 @@ ANCHOR = {
     "structure_dist_atr_max": 0.10,
 }
 
+# Final complement geometry discovered by the local robustness run.
+# ONLY structure distance is varied in this script.
+FINAL_COMP = {
+    "family": "ENGULF_STRUCTURE",
+    "context": "LDN_BLOCK_03-07",   # 03:00-07:59 Europe/London
+    "rr": 2.25,
+    "br_min": 1.20,
+    "body_atr_min": 1.10,
+    "structure_lb": 165,
+}
+DISTANCE_VALUES = [0.10, 0.125, 0.15, 0.175, 0.20, 0.225, 0.25]
+FINAL_COMP_PARITY_CUTOFF = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+
 # Fixed historical cutoffs for hard parity.
 CORE_PARITY_CUTOFF = datetime(2026, 9, 10, 9, 49, tzinfo=timezone.utc)
 ANCHOR_PARITY_CUTOFF = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
@@ -139,24 +152,21 @@ MEANINGFUL_CORE_INACTIVE_YEARS = [2009, 2012, 2016]
 EARLY_NON_TARGET_YEARS = [2002, 2003, 2004]
 
 OUTS = {
-    "coverage": "eurgbp_m15_long_complement_final_local_coverage.csv",
-    "parity": "eurgbp_m15_long_complement_final_local_parity.csv",
-    "core": "eurgbp_m15_long_complement_final_local_core_baseline.csv",
-    "stage1": "eurgbp_m15_long_complement_final_local_stage1_geometry.csv",
-    "stage2": "eurgbp_m15_long_complement_final_local_stage2_london_windows.csv",
-    "stage3": "eurgbp_m15_long_complement_final_local_stage3_rr.csv",
-    "finalists": "eurgbp_m15_long_complement_final_local_finalists.csv",
-    "periods": "eurgbp_m15_long_complement_final_local_periods.csv",
-    "cost": "eurgbp_m15_long_complement_final_local_cost_stress.csv",
-    "rolling": "eurgbp_m15_long_complement_final_local_rolling.csv",
-    "rolling_summary": "eurgbp_m15_long_complement_final_local_rolling_summary.csv",
-    "calendar": "eurgbp_m15_long_complement_final_local_calendar_years.csv",
-    "calendar_summary": "eurgbp_m15_long_complement_final_local_calendar_summary.csv",
-    "overlap": "eurgbp_m15_long_complement_final_local_overlap.csv",
-    "trades": "eurgbp_m15_long_complement_final_local_finalist_trades.csv",
-    "notes": "eurgbp_m15_long_complement_final_local_notes.csv",
+    "coverage": "eurgbp_m15_long_complement_distance_coverage.csv",
+    "parity": "eurgbp_m15_long_complement_distance_parity.csv",
+    "core": "eurgbp_m15_long_complement_distance_core_baseline.csv",
+    "grid": "eurgbp_m15_long_complement_distance_grid.csv",
+    "periods": "eurgbp_m15_long_complement_distance_periods.csv",
+    "cost": "eurgbp_m15_long_complement_distance_cost_stress.csv",
+    "rolling": "eurgbp_m15_long_complement_distance_rolling.csv",
+    "rolling_summary": "eurgbp_m15_long_complement_distance_rolling_summary.csv",
+    "calendar": "eurgbp_m15_long_complement_distance_calendar_years.csv",
+    "calendar_summary": "eurgbp_m15_long_complement_distance_calendar_summary.csv",
+    "overlap": "eurgbp_m15_long_complement_distance_overlap.csv",
+    "trades": "eurgbp_m15_long_complement_distance_trades.csv",
+    "notes": "eurgbp_m15_long_complement_distance_notes.csv",
 }
-BUNDLE = "EURGBP_M15_LONG_COMPLEMENT_FINAL_LOCAL_RESULTS.zip"
+BUNDLE = "EURGBP_M15_LONG_COMPLEMENT_FINAL_DISTANCE_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -1194,6 +1204,7 @@ def run_research():
             "requested_start_utc":iso(START),
             "core_parity_cutoff_utc":iso(CORE_PARITY_CUTOFF),
             "anchor_parity_cutoff_utc":iso(ANCHOR_PARITY_CUTOFF),
+            "final_comp_parity_cutoff_utc":iso(FINAL_COMP_PARITY_CUTOFF),
             "actual_first_m15_utc":iso(m15[0]["time"]),
             "actual_last_m15_utc":iso(m15[-1]["time"]),
             "m15_candles":len(m15),"h1_candles":len(h1),
@@ -1213,145 +1224,90 @@ def run_research():
         core_parity=run_backtest(
             m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],CORE_PARITY_CUTOFF
         )
-
-        # ---------------- HARD PARITY: prior London Trigger B anchor ----------------
-        anchor_cfg = cfg(
-            "ANCHOR_LDN_ENGULF",
-            ANCHOR["family"],
-            rr=ANCHOR["rr"],
-            context=ANCHOR["context"],
-            br_min=ANCHOR["br_min"],
-            body_atr_min=ANCHOR["body_atr_min"],
-            structure_lb=ANCHOR["structure_lb"],
-            structure_dist_atr_max=ANCHOR["structure_dist_atr_max"],
-        )
-        anchor_ix=signal_indices(anchor_cfg,f)
-        core_anchor_cut=run_backtest(
-            m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF
-        )
-        anchor_parity=run_backtest(
-            m15,anchor_ix,ANCHOR["rr"],PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF
-        )
-        anchor_combined,anchor_accepted,anchor_rejected=nonoverlap_overlay(
-            core_anchor_cut,anchor_parity
-        )
-
-        parity_rows=[
-            {
-                "check":"FROZEN_CORE_57",
-                "expected_core_trades":57,
-                "actual_core_trades":len(core_parity),
-                "status":"MATCH" if len(core_parity)==57 else "MISMATCH",
-                "cutoff_utc":iso(CORE_PARITY_CUTOFF),
-            },
-            {
-                "check":"LONDON_ENGULF_ANCHOR_24",
-                "expected_candidate_trades":24,
-                "actual_candidate_trades":len(anchor_parity),
-                "expected_accepted_nonoverlap":24,
-                "actual_accepted_nonoverlap":len(anchor_accepted),
-                "expected_rejected_overlap":0,
-                "actual_rejected_overlap":len(anchor_rejected),
-                "expected_combined_trades":81,
-                "actual_combined_trades":len(anchor_combined),
-                "status":"MATCH" if (
-                    len(anchor_parity)==24 and len(anchor_accepted)==24
-                    and len(anchor_rejected)==0 and len(anchor_combined)==81
-                ) else "MISMATCH",
-                "cutoff_utc":iso(ANCHOR_PARITY_CUTOFF),
-            },
-        ]
-        write_csv(OUTS["parity"],parity_rows)
         if len(core_parity)!=57:
             raise RuntimeError(
                 f"Frozen EUR/GBP LONG core parity failed: expected 57, got {len(core_parity)}"
             )
-        if not (
-            len(anchor_parity)==24 and len(anchor_accepted)==24
-            and len(anchor_rejected)==0 and len(anchor_combined)==81
-        ):
+
+        # ---------------- HARD PARITY: original London anchor ----------------
+        anchor_cfg=cfg(
+            "ANCHOR_LDN_ENGULF",ANCHOR["family"],rr=ANCHOR["rr"],
+            context=ANCHOR["context"],br_min=ANCHOR["br_min"],
+            body_atr_min=ANCHOR["body_atr_min"],structure_lb=ANCHOR["structure_lb"],
+            structure_dist_atr_max=ANCHOR["structure_dist_atr_max"],
+        )
+        anchor_ix=signal_indices(anchor_cfg,f)
+        core_anchor=run_backtest(m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF)
+        anchor_cand=run_backtest(m15,anchor_ix,ANCHOR["rr"],PRIMARY_COST,m15[0]["time"],ANCHOR_PARITY_CUTOFF)
+        anchor_combined,anchor_accepted,anchor_rejected=nonoverlap_overlay(core_anchor,anchor_cand)
+        if not (len(anchor_cand)==24 and len(anchor_accepted)==24 and len(anchor_rejected)==0 and len(anchor_combined)==81):
             raise RuntimeError(
-                "London engulfing anchor parity failed: expected 24 candidate / "
-                "24 accepted / 0 overlap / 81 combined"
+                "Original London anchor parity failed: expected 24 candidate / 24 accepted / 0 overlap / 81 combined"
             )
 
+        # ---------------- HARD PARITY: new local winner at D0.15 ----------------
+        final_anchor_cfg=cfg(
+            "FINAL_COMP_D015",FINAL_COMP["family"],rr=FINAL_COMP["rr"],
+            context=FINAL_COMP["context"],br_min=FINAL_COMP["br_min"],
+            body_atr_min=FINAL_COMP["body_atr_min"],structure_lb=FINAL_COMP["structure_lb"],
+            structure_dist_atr_max=0.15,
+        )
+        final_anchor_ix=signal_indices(final_anchor_cfg,f)
+        core_final_cut=run_backtest(m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],FINAL_COMP_PARITY_CUTOFF)
+        final_anchor_cand=run_backtest(m15,final_anchor_ix,FINAL_COMP["rr"],PRIMARY_COST,m15[0]["time"],FINAL_COMP_PARITY_CUTOFF)
+        final_anchor_combined,final_anchor_accepted,final_anchor_rejected=nonoverlap_overlay(core_final_cut,final_anchor_cand)
+        if not (
+            len(final_anchor_cand)==30 and len(final_anchor_accepted)==29
+            and len(final_anchor_rejected)==1 and len(final_anchor_combined)==86
+        ):
+            raise RuntimeError(
+                "Final D0.15 complement parity failed: expected 30 candidate / 29 accepted / 1 overlap / 86 combined"
+            )
+
+        parity_rows=[
+            {"check":"FROZEN_CORE_57","expected":57,"actual":len(core_parity),"status":"MATCH","cutoff_utc":iso(CORE_PARITY_CUTOFF)},
+            {"check":"ORIGINAL_LONDON_ANCHOR","expected_candidate":24,"actual_candidate":len(anchor_cand),
+             "expected_accepted":24,"actual_accepted":len(anchor_accepted),"expected_rejected":0,"actual_rejected":len(anchor_rejected),
+             "expected_combined":81,"actual_combined":len(anchor_combined),"status":"MATCH","cutoff_utc":iso(ANCHOR_PARITY_CUTOFF)},
+            {"check":"FINAL_LOCAL_WINNER_D0.15","expected_candidate":30,"actual_candidate":len(final_anchor_cand),
+             "expected_accepted":29,"actual_accepted":len(final_anchor_accepted),"expected_rejected":1,"actual_rejected":len(final_anchor_rejected),
+             "expected_combined":86,"actual_combined":len(final_anchor_combined),"status":"MATCH","cutoff_utc":iso(FINAL_COMP_PARITY_CUTOFF)},
+        ]
+        write_csv(OUTS["parity"],parity_rows)
+
+        # Full frozen core baseline.
         core_full=run_backtest(m15,core_ix,CORE_RR,PRIMARY_COST,m15[0]["time"],NOW)
         core_stats=stats(core_full)
         write_csv(OUTS["core"],[{
             "strategy":"FROZEN_CORE","rr":CORE_RR,
             **{k:round(v,6) if isinstance(v,float) else v for k,v in core_stats.items()},
             "known_meaningful_inactive_years":"2009,2012,2016",
-            "note":"Trigger A is frozen; only Trigger B London engulfing neighbourhood is tested.",
+            "note":"Trigger A frozen. This run changes structure distance on Trigger B only.",
         }])
 
-        # STAGE 1 — local geometry, anchor London04-07, RR2.00.
-        stage1=build_stage1_configs()
-        by1={c["config_id"]:c for c in stage1}
-        rows1=[]
-        for n,c in enumerate(stage1,1):
-            STATUS.update({"state":"stage1","message":f"Local geometry {n}/{len(stage1)} {c['config_id']}"})
+        # ---------------- DISTANCE-ONLY GRID ----------------
+        configs=[]
+        rows=[]
+        for i,dist in enumerate(DISTANCE_VALUES):
+            c=cfg(
+                f"DIST_{dist:.3f}",FINAL_COMP["family"],rr=FINAL_COMP["rr"],
+                context=FINAL_COMP["context"],br_min=FINAL_COMP["br_min"],
+                body_atr_min=FINAL_COMP["body_atr_min"],structure_lb=FINAL_COMP["structure_lb"],
+                structure_dist_atr_max=dist,
+            )
+            configs.append(c)
+            STATUS.update({"state":"distance_grid","message":f"Distance {i+1}/{len(DISTANCE_VALUES)} = {dist:.3f} ATR"})
             cand_ix=signal_indices(c,f)
             cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
-            rows1.append(evaluation_row(c,core_full,cand))
-        rows1=sort_rows(rows1)
-        write_csv(OUTS["stage1"],rows1)
+            rows.append(evaluation_row(c,core_full,cand))
 
-        # STAGE 2 — adjacent London windows only.
-        stage2=stage2_configs(rows1,by1)
-        by2={c["config_id"]:c for c in stage2}
-        rows2=[]
-        for n,c in enumerate(stage2,1):
-            STATUS.update({"state":"stage2","message":f"London window {n}/{len(stage2)} {c['config_id']}"})
-            cand_ix=signal_indices(c,f)
-            cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
-            rows2.append(evaluation_row(c,core_full,cand))
-        rows2=sort_rows(rows2)
-        write_csv(OUTS["stage2"],rows2)
+        rows=sorted(rows,key=lambda r: float(r["structure_dist_atr_max"]))
+        write_csv(OUTS["grid"],rows)
 
-        # STAGE 3 — clean RR sweep 1.50 -> 2.50.
-        stage3=stage3_configs(rows2,by2)
-        by3={c["config_id"]:c for c in stage3}
-        rows3=[]
-        for n,c in enumerate(stage3,1):
-            STATUS.update({"state":"stage3","message":f"RR confirmation {n}/{len(stage3)} {c['config_id']}"})
-            cand_ix=signal_indices(c,f)
-            cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
-            rows3.append(evaluation_row(c,core_full,cand))
-        rows3=sort_rows(rows3)
-        write_csv(OUTS["stage3"],rows3)
-
-        # Robustness-first finalist selection. Gap years are NOT scored.
-        eligible=[r for r in rows3 if (
-            r["accepted_adds"]>=10
-            and r["accepted_r"]>0
-            and r["accepted_post2010_r"]>0
-            and r["accepted_positive_eras"]>=3
-            and r["combined_r"]>core_stats["total_r"]
-            and r["combined_dd"]>=-9.0
-        )]
-        finalist_rows=(eligible if eligible else rows3)[:FINAL_KEEP]
-
-        # Force exact old anchor RR2.00 into deep diagnostics if ranking omits it.
-        anchor_stage3_row = next(
-            (r for r in rows3 if (
-                abs(float(r["rr"])-2.00)<1e-12
-                and r["context"]==ANCHOR["context"]
-                and abs(float(r["br_min"])-ANCHOR["br_min"])<1e-12
-                and abs(float(r["body_atr_min"])-ANCHOR["body_atr_min"])<1e-12
-                and int(r["structure_lb"])==ANCHOR["structure_lb"]
-                and abs(float(r["structure_dist_atr_max"])-ANCHOR["structure_dist_atr_max"])<1e-12
-            )),
-            None,
-        )
-        if anchor_stage3_row is not None and anchor_stage3_row["config_id"] not in {r["config_id"] for r in finalist_rows}:
-            finalist_rows = finalist_rows[:max(0,FINAL_KEEP-1)] + [anchor_stage3_row]
-
-        finalists=[by3[r["config_id"]] for r in finalist_rows]
-        write_csv(OUTS["finalists"],finalist_rows)
-
+        # Deep-test ALL 7 distances. No ranking/pruning in this final confirmation.
         periods=[]; costs=[]; rolling=[]; calendar=[]; overlap=[]; trade_rows=[]
-        for n,c in enumerate(finalists,1):
-            STATUS.update({"state":"deep_validation","message":f"Deep finalist {n}/{len(finalists)} {c['config_id']}"})
+        for i,c in enumerate(configs,1):
+            STATUS.update({"state":"deep_validation","message":f"Deep distance {i}/{len(configs)} {c['structure_dist_atr_max']:.3f} ATR"})
             cand_ix=signal_indices(c,f)
             cand=run_backtest(m15,cand_ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW)
             combined,accepted,rejected=nonoverlap_overlay(core_full,cand)
@@ -1363,6 +1319,7 @@ def run_research():
 
             overlap.append({
                 "config_id":c["config_id"],"family":c["family"],"context":c["context"],"rr":c["rr"],
+                "structure_dist_atr_max":c["structure_dist_atr_max"],
                 "candidate_trades":len(cand),"accepted_nonoverlap":len(accepted),
                 "rejected_overlap":len(rejected),
                 "overlap_rate_pct":round(100*len(rejected)/len(cand),4) if cand else 0.0,
@@ -1371,7 +1328,10 @@ def run_research():
             for source,trades in [("CORE",core_full),("ACCEPTED_COMPLEMENT",accepted),("COMBINED",combined)]:
                 for t in trades:
                     x=dict(t)
-                    x.update({"config_id":c["config_id"],"family":c["family"],"context":c["context"],"source":source})
+                    x.update({
+                        "config_id":c["config_id"],"family":c["family"],"context":c["context"],
+                        "structure_dist_atr_max":c["structure_dist_atr_max"],"source":source,
+                    })
                     trade_rows.append(x)
 
         write_csv(OUTS["periods"],periods)
@@ -1383,39 +1343,32 @@ def run_research():
         write_csv(OUTS["overlap"],overlap)
         write_csv(OUTS["trades"],trade_rows)
         write_csv(OUTS["notes"],[
-            {"note":"Trigger A remains frozen at the 57-trade RR2.75 sweep-displacement core."},
-            {"note":"Trigger B search is restricted to the previously discovered London exact-bullish-engulfing family."},
-            {"note":"Exact prior Trigger B anchor must reproduce 24 candidate / 24 accepted / 0 overlap / 81 combined through the fixed cutoff."},
-            {"note":"Stage 1 tests body 0.90-1.20, BR 1.10-1.30, structure LB100-250 and distance 0.05-0.15 only."},
-            {"note":"Stage 2 tests only adjacent London windows around the prior 04-07 edge."},
-            {"note":"Stage 3 tests RR 1.50/1.75/2.00/2.25/2.50 only."},
-            {"note":"2009/2012/2016 are diagnostics only and do not enter candidate scoring."},
+            {"note":"FINAL distance-only confirmation. No geometry, session, RR or core parameter is optimised here."},
+            {"note":"Frozen Trigger A: EUR/GBP M15 LONG sweep-displacement core, RR2.75, 57-trade parity guard."},
+            {"note":"Frozen Trigger B except distance: exact bullish engulf, BR>=1.20, body>=1.10 ATR14, prior165 low, London03:00-07:59, RR2.25."},
+            {"note":"Distance values tested: 0.10,0.125,0.15,0.175,0.20,0.225,0.25 ATR only."},
+            {"note":"2009/2012/2016 are diagnostics only and are NOT used for selection/scoring."},
             {"note":"2002-2004 remain early-history non-target years; do not optimise specifically for them."},
             {"note":"Candidate interval [signal, exit) overlapping any core trade is rejected; exact core exit candle remains eligible."},
-            {"note":"Select on parameter plateau, era/rolling/cost robustness and combined DD, not maximum lifetime PF/R."},
+            {"note":"Choose an interior/plateau distance on era, rolling, cost and DD robustness, not maximum lifetime R/PF."},
+            {"note":"All seven distances receive full periods, 0.5-2 pip stress, 12/24/36M rolling, calendar and overlap diagnostics."},
             {"note":"Full history has been used in development; temporal splits are robustness diagnostics, not pristine OOS."},
         ])
 
         pack()
         STATUS.update({
-            "state":"complete","message":"EUR/GBP M15 LONG final complement local confirmation complete",
-            "core_trades":len(core_full),"stage1_configs":len(stage1),
-            "stage2_configs":len(stage2),"stage3_configs":len(stage3),
-            "finalists":len(finalists),"results_bundle":BUNDLE,
-            "orders_supported":False,"trading_enabled":False,
+            "state":"complete","message":"EUR/GBP M15 LONG complement final distance confirmation complete",
+            "core_trades":len(core_full),"distance_configs":len(configs),
+            "results_bundle":BUNDLE,"orders_supported":False,"trading_enabled":False,
         })
 
     except Exception as e:
-        tb = traceback.format_exc()
+        tb=traceback.format_exc()
         STATUS.update({
-            "state":"error",
-            "message":str(e),
-            "error_type":type(e).__name__,
-            "traceback":tb,
-            "orders_supported":False,
-            "trading_enabled":False,
+            "state":"error","message":str(e),"error_type":type(e).__name__,"traceback":tb,
+            "orders_supported":False,"trading_enabled":False,
         })
-        print(tb, flush=True)
+        print(tb,flush=True)
 
 
 # ============================================================
@@ -1425,28 +1378,32 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service":"EUR/GBP M15 LONG Final Complement Local Confirmation",
+        "service":"EUR/GBP M15 LONG Complement Final Distance Confirmation",
         "state":STATUS["state"],
         "message":STATUS.get("message"),
         "error_type":STATUS.get("error_type"),
         "instrument":PAIR,"timeframe":"M15","side":"BUY",
         "orders_supported":False,"trading_enabled":False,
         "routes":[
-            "/eurgbp-m15-long-complement-final-local/status",
-            "/eurgbp-m15-long-complement-final-local/results",
+            "/eurgbp-m15-long-complement-final-distance/status",
+            "/eurgbp-m15-long-complement-final-distance/results",
         ],
     })
 
-@app.route("/eurgbp-m15-long-complement-final-local/status")
+@app.route("/eurgbp-m15-long-complement-final-distance/status")
 def route_status():
     return jsonify(STATUS)
 
-@app.route("/eurgbp-m15-long-complement-final-local/results")
+@app.route("/eurgbp-m15-long-complement-final-distance/results")
 def route_results():
     return dl(BUNDLE)
 
 if __name__ == "__main__":
-    thread=threading.Thread(target=run_research,name="eurgbp-m15-long-complement-final-local",daemon=True)
+    thread=threading.Thread(
+        target=run_research,
+        name="eurgbp-m15-long-complement-final-distance",
+        daemon=True,
+    )
     thread.start()
     port=int(os.getenv("PORT",5000))
     app.run(host="0.0.0.0",port=port,debug=False)
