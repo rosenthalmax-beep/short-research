@@ -5,143 +5,112 @@ import time
 import zipfile
 import threading
 from bisect import bisect_left
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import requests
 from flask import Flask, jsonify, send_file
 
+
 # ============================================================
-# EUR/JPY H1 SHORT — COMPRESSION BREAKOUT BOUNDARY REFINEMENT
+# EUR/JPY H1 SHORT — CONTROLLED CONTEXT FILTER RESEARCH
 # ============================================================
 #
-# PURPOSE
-# -------
-# Final RAW-GEOMETRY boundary refinement of the only EUR/JPY H1 SHORT
-# family that survived the preceding two-family refinement:
+# RAW FAMILY ALREADY REFINED:
 #
 #   COMPRESSION -> DOWNSIDE BREAKOUT
 #
-# Previous leading anchor:
-#   previous ATR14 / previous-20 mean ATR <= 0.80
+# Common geometry:
+#   previous H1 ATR14 / previous-20 mean ATR <= 0.80
 #   bearish body >= 1.10 ATR14
 #   signal range >= 1.65 ATR14
-#   signal close < previous 3-bar low
-#   RR 7.50
 #
-# Previous anchor result was approximately:
-#   114 trades
-#   PF 1.95
-#   +85.9R
-#   expectancy +0.75R
-#   max DD about -15R
+# Three nearby frozen raw seeds:
 #
-# Why this stage exists:
-#   - 1.10 ATR body was the HIGHEST body threshold tested previously.
-#   - 3 bars was the SHORTEST breakout lookback tested previously.
-#   - 0.80 compression appeared materially stronger than 0.85.
-#   - 7.0R-8.0R looked like a plateau, but 8.0R was still near the
-#     previous RR boundary.
+#   SEED_A_LB2_RR7_25
+#     close < previous 2-bar low
+#     RR 7.25
 #
-# This runner deliberately tests through those boundaries before any
-# weekday/session/HTF context filters are considered.
+#   SEED_B_LB3_RR7_25
+#     close < previous 3-bar low
+#     RR 7.25
 #
-# ============================================================
-# FIXED SEARCH
-# ============================================================
+#   SEED_C_LB3_RR7_50
+#     close < previous 3-bar low
+#     RR 7.50
 #
-# Stage 1: geometry at fixed 7.50R
+# PURPOSE
+# -------
+# Test CONTEXT only.
 #
-#   compression max:
-#     0.76, 0.78, 0.80, 0.82, 0.84
-#
-#   bearish body minimum:
-#     0.90, 1.00, 1.10, 1.20, 1.30, 1.40 ATR14
-#
-#   range minimum:
-#     1.45, 1.50, 1.55, 1.60, 1.65, 1.70, 1.75 ATR14
-#
-#   downside breakout lookback:
-#     2, 3, 4, 5, 6 previous H1 bars
-#
-# Total Stage-1 geometries:
-#   5 * 6 * 7 * 5 = 1,050
+# Stage 1:
+#   every context factor is tested ONE AT A TIME on all 3 raw seeds.
 #
 # Stage 2:
-#   a diversity-constrained shortlist receives RR:
-#     6.00R .. 9.00R in 0.25R increments
+#   only factors with broad cross-seed support are eligible for limited
+#   TWO-FACTOR interactions. Same-category filters are not combined.
 #
-# This extends BOTH sides of the previous 7.0-8.0R plateau.
+# Factors:
+#   - previous completed daily close below EMA
+#   - previous completed daily EMA bearish alignment
+#   - previous completed H4 close below EMA
+#   - previous completed H4 EMA bearish alignment
+#   - daily volatility regime
+#   - previous completed H1 volatility regime
+#   - individual NY-hour exclusions
+#   - broad NY inclusion windows
+#   - weekday exclusions
 #
-# Detailed finalists receive:
-#   full-history metrics
-#   2002-2017 / 2018+ split
-#   pre-2010 / 2010+
-#   four broad eras
-#   last 5Y / last 2Y
-#   0.5x / 1x / 1.5x / 2x cost stress
-#   calendar years
-#   rolling 12 / 24 / 36M
-#   local geometry + RR plateau analysis
-#   RR-wide summaries
-#   parameter-axis summaries
+# CAUSAL / NO-LOOKAHEAD
+# ---------------------
+# H1 signal candle timestamp is its OPEN time.
 #
-# NO weekday, session, daily/H4 regime or portfolio fitting occurs here.
-# The purpose is only to decide whether the RAW compression-breakout
-# short edge is genuinely stable enough to advance.
+# Daily and H4 context state is restricted to candles whose completion
+# time is <= the H1 SIGNAL OPEN. This is intentionally stricter than
+# merely using data available at signal close.
 #
-# HISTORICAL CONVENTIONS
-# ----------------------
-# OANDA midpoint
-# ATR14 = Wilder/RMA, SMA seeded
-# signal timestamp = candle OPEN
-# reference entry = signal CLOSE
+# Previous-H1 volatility uses the previous completed H1 candle.
+# NY hour/day uses the signal candle OPEN converted with DST-aware
+# America/New_York time.
 #
-# H1 adverse fill:
-#   5 ticks = 0.5 pip on EUR/JPY
+# HISTORICAL EXECUTION
+# --------------------
+# Instrument: EUR_JPY
+# H1 midpoint candles
+# ATR14: Wilder/RMA with SMA seed
 #
-# M15 adverse fill:
-#   1.0 pip
+# Historical adverse fill:
+#   -0.5 pip for SHORT
 #
 # Stop:
-#   LONG  = signal low  - 10 ticks
-#   SHORT = signal high + 10 ticks
+#   signal high + 10 ticks
 #
 # Target:
-#   based on REFERENCE signal-close risk
+#   reference signal close - seed RR * reference-close risk
 #
-# Actual realised R:
-#   based on adverse fill
+# Realised R:
+#   measured from adverse fill
 #
-# Exit testing:
-#   begins on the NEXT candle
+# Exit:
+#   first subsequent H1 candle touching stop/target
+#
+# Same-bar target+stop SHORT convention:
+#   if high is closer to candle open => STOP first
+#   otherwise TARGET first
+#
+# Pyramiding:
+#   0 per candidate
 #
 # Exact exit-candle signal:
 #   eligible
 #
-# Pyramiding:
-#   0 PER CANDIDATE STRATEGY
-#
-# Same-bar tie:
-#   LONG:
-#       if high is closer to candle open => TARGET first
-#       otherwise STOP first
-#   SHORT:
-#       if high is closer to candle open => STOP first
-#       otherwise TARGET first
-#
-# IMPORTANT
-# ---------
-# This is a DISCOVERY runner.
-# A good candidate from this file is NOT automatically live-worthy.
-# The next stage should refine/confirm it, then test its marginal effect
-# on the existing locked 20-strategy portfolio.
-#
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
+
 
 app = Flask(__name__)
 
@@ -149,85 +118,126 @@ TOKEN = os.getenv("OANDA_TOKEN")
 BASE = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com")
 
 PAIR = "EUR_JPY"
-PAIR_LABEL = "EUR/JPY"
+NY = ZoneInfo("America/New_York")
 
 REQUESTED_START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
-NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-
+WARMUP_START = datetime(2000, 1, 1, tzinfo=timezone.utc)
 VALIDATION_START = datetime(2018, 1, 1, tzinfo=timezone.utc)
-PRE2010_END = datetime(2010, 1, 1, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
 TICK = 0.001
 PIP = 0.01
 STOP_BUFFER_TICKS = 10
+BASE_COST_PIPS = 0.50
 
-H1_PRIMARY_COST_PIPS = 0.50
-M15_PRIMARY_COST_PIPS = 1.00
-COST_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
+COMPRESSION_MAX = 0.80
+BODY_ATR_MIN = 1.10
+RANGE_ATR_MIN = 1.65
 
-STAGE1_RR = 7.50
-RR_GRID = [6.00, 6.25, 6.50, 6.75, 7.00, 7.25, 7.50, 7.75, 8.00, 8.25, 8.50, 8.75, 9.00]
+SEEDS = [
+    {
+        "seed_id": "SEED_A_LB2_RR7_25",
+        "lookback": 2,
+        "rr": 7.25,
+    },
+    {
+        "seed_id": "SEED_B_LB3_RR7_25",
+        "lookback": 3,
+        "rr": 7.25,
+    },
+    {
+        "seed_id": "SEED_C_LB3_RR7_50",
+        "lookback": 3,
+        "rr": 7.50,
+    },
+]
 
-STAGE1_KEEP_PER_FAMILY = 60
-FINAL_KEEP_PER_STREAM = 24
+SEED_BY_ID = {
+    seed["seed_id"]: seed
+    for seed in SEEDS
+}
+SEED_IDS = [seed["seed_id"] for seed in SEEDS]
+SEED_LOOKBACKS = sorted(set(seed["lookback"] for seed in SEEDS))
 
-OUTS = {
-    "coverage": "eurjpy_h1_short_boundary_coverage.csv",
-    "stage1": "eurjpy_h1_short_boundary_stage1_geometry.csv",
-    "stage1_shortlist": "eurjpy_h1_short_boundary_stage1_shortlist.csv",
-    "stage2_rr": "eurjpy_h1_short_boundary_stage2_rr.csv",
-    "rr_summary": "eurjpy_h1_short_boundary_rr_summary.csv",
-    "axis_summary": "eurjpy_h1_short_boundary_axis_summary.csv",
-    "anchor_check": "eurjpy_h1_short_boundary_anchor_check.csv",
-    "finalists": "eurjpy_h1_short_boundary_finalists.csv",
-    "family_summary": "eurjpy_h1_short_boundary_family_summary.csv",
-    "periods": "eurjpy_h1_short_boundary_periods.csv",
-    "cost_stress": "eurjpy_h1_short_boundary_cost_stress.csv",
-    "calendar": "eurjpy_h1_short_boundary_calendar_years.csv",
-    "calendar_summary": "eurjpy_h1_short_boundary_calendar_summary.csv",
-    "rolling": "eurjpy_h1_short_boundary_rolling.csv",
-    "rolling_summary": "eurjpy_h1_short_boundary_rolling_summary.csv",
-    "plateau": "eurjpy_h1_short_boundary_plateau.csv",
-    "trades": "eurjpy_h1_short_boundary_finalist_trades.csv",
-    "notes": "eurjpy_h1_short_boundary_notes.csv",
+
+OUT = {
+    "coverage": "eurjpy_short_context_coverage.csv",
+    "controls": "eurjpy_short_context_controls.csv",
+    "factor_definitions": "eurjpy_short_context_factor_definitions.csv",
+    "single_factor": "eurjpy_short_context_single_factor_results.csv",
+    "single_factor_consensus": "eurjpy_short_context_single_factor_consensus.csv",
+    "interaction": "eurjpy_short_context_interaction_results.csv",
+    "interaction_consensus": "eurjpy_short_context_interaction_consensus.csv",
+    "finalists": "eurjpy_short_context_finalists.csv",
+    "periods": "eurjpy_short_context_finalist_periods.csv",
+    "cost_stress": "eurjpy_short_context_finalist_cost_stress.csv",
+    "calendar": "eurjpy_short_context_finalist_calendar.csv",
+    "calendar_summary": "eurjpy_short_context_finalist_calendar_summary.csv",
+    "rolling": "eurjpy_short_context_finalist_rolling.csv",
+    "rolling_summary": "eurjpy_short_context_finalist_rolling_summary.csv",
+    "trades": "eurjpy_short_context_finalist_trades.csv",
+    "hour_diagnostics": "eurjpy_short_context_hour_diagnostics.csv",
+    "weekday_diagnostics": "eurjpy_short_context_weekday_diagnostics.csv",
+    "notes": "eurjpy_short_context_notes.csv",
 }
 
-BUNDLE = "EURJPY_H1_SHORT_COMPRESSION_BOUNDARY_REFINEMENT_RESULTS.zip"
+BUNDLE = "EURJPY_H1_SHORT_COMPRESSION_CONTEXT_FILTER_RESEARCH_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
     "message": "Not started",
     "pair": PAIR,
+    "timeframe": "H1",
+    "side": "SHORT",
     "orders_supported": False,
     "trading_enabled": False,
 }
 
 
 # ============================================================
-# GENERAL HELPERS
+# HELPERS
 # ============================================================
 
 def iso(dt):
-    return (
-        dt.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def parse_time(value):
-    value = value.replace("Z", "+00:00")
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def safe_pf(gross_profit, gross_loss):
+    if gross_loss > 0:
+        return gross_profit / gross_loss
+    if gross_profit > 0:
+        return 99.0
+    return 0.0
+
+
+def med(values):
+    values = list(values)
+    return median(values) if values else 0.0
+
+
+def month_floor(dt):
+    return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
+
+
+def add_months(dt, months):
+    value = dt.year * 12 + dt.month - 1 + months
+    return datetime(value // 12, value % 12 + 1, 1, tzinfo=timezone.utc)
 
 
 def write_csv(path, rows):
     rows = list(rows)
+
     if not rows:
         Path(path).write_text("", encoding="utf-8")
         return
 
     fields = []
     seen = set()
+
     for row in rows:
         for key in row:
             if key not in seen:
@@ -238,6 +248,13 @@ def write_csv(path, rows):
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def pack():
+    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in OUT.values():
+            if os.path.exists(path):
+                archive.write(path, arcname=os.path.basename(path))
 
 
 def download(path):
@@ -255,40 +272,6 @@ def download(path):
     )
 
 
-def pack():
-    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in OUTS.values():
-            if os.path.exists(path):
-                archive.write(path, arcname=os.path.basename(path))
-
-
-def safe_pf(gross_profit, gross_loss):
-    if gross_loss > 0:
-        return gross_profit / gross_loss
-    if gross_profit > 0:
-        return 99.0
-    return 0.0
-
-
-def med(values):
-    values = list(values)
-    return median(values) if values else 0.0
-
-
-def add_months(dt, months):
-    value = dt.year * 12 + dt.month - 1 + months
-    return datetime(
-        value // 12,
-        value % 12 + 1,
-        1,
-        tzinfo=timezone.utc,
-    )
-
-
-def month_floor(dt):
-    return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
-
-
 # ============================================================
 # OANDA DATA
 # ============================================================
@@ -296,13 +279,10 @@ def month_floor(dt):
 def headers():
     if not TOKEN:
         raise RuntimeError("OANDA_TOKEN is not configured")
-
-    return {
-        "Authorization": "Bearer " + TOKEN.strip(),
-    }
+    return {"Authorization": "Bearer " + TOKEN.strip()}
 
 
-def fetch_chunk(granularity, start, end):
+def candle_params(granularity, start, end):
     params = {
         "price": "M",
         "granularity": granularity,
@@ -312,16 +292,26 @@ def fetch_chunk(granularity, start, end):
         "includeFirst": "true",
     }
 
+    # Explicit New York 17:00 daily alignment for D and H4.
+    # H4 alignment then occurs on the aligned trading-day grid.
+    if granularity in {"D", "H4"}:
+        params["alignmentTimezone"] = "America/New_York"
+        params["dailyAlignment"] = 17
+
+    return params
+
+
+def fetch_chunk(granularity, start, end):
     response = requests.get(
         f"{BASE}/v3/instruments/{PAIR}/candles",
         headers=headers(),
-        params=params,
+        params=candle_params(granularity, start, end),
         timeout=60,
     )
-
     response.raise_for_status()
 
     rows = []
+
     for raw in response.json().get("candles", []):
         if not raw.get("complete", False):
             continue
@@ -344,35 +334,28 @@ def fetch_chunk(granularity, start, end):
 def fetch_history(granularity, start, end, chunk_days):
     cursor = start
     by_time = {}
-    chunk_number = 0
+    chunk_no = 0
 
     while cursor < end:
-        chunk_number += 1
-        chunk_end = min(
-            cursor + timedelta(days=chunk_days),
-            end,
-        )
+        chunk_no += 1
+        chunk_end = min(cursor + timedelta(days=chunk_days), end)
 
         STATUS.update({
             "state": "fetching",
             "message": (
-                f"{granularity} chunk {chunk_number}: "
+                f"{granularity} chunk {chunk_no}: "
                 f"{iso(cursor)} -> {iso(chunk_end)}"
             ),
         })
 
+        rows = None
         last_error = None
 
         for attempt in range(1, 4):
             try:
-                rows = fetch_chunk(
-                    granularity,
-                    cursor,
-                    chunk_end,
-                )
+                rows = fetch_chunk(granularity, cursor, chunk_end)
                 last_error = None
                 break
-
             except requests.HTTPError as error:
                 status_code = (
                     error.response.status_code
@@ -380,15 +363,12 @@ def fetch_history(granularity, start, end, chunk_days):
                     else None
                 )
 
-                # OANDA can return 400/404 for a period before an
-                # instrument has history. Treat that chunk as empty.
                 if status_code in (400, 404):
                     rows = []
                     last_error = None
                     break
 
                 last_error = error
-
             except Exception as error:
                 last_error = error
 
@@ -398,92 +378,85 @@ def fetch_history(granularity, start, end, chunk_days):
         if last_error is not None:
             raise last_error
 
-        for candle in rows:
+        for candle in rows or []:
             by_time[candle["time"]] = candle
 
         cursor = chunk_end
-
-        # Gentle pacing for a long full-history fetch.
         time.sleep(0.02)
 
-    result = list(by_time.values())
-    result.sort(key=lambda item: item["time"])
-    return result
+    return sorted(by_time.values(), key=lambda row: row["time"])
 
 
 # ============================================================
-# INDICATORS / FEATURE CACHE
+# INDICATORS
 # ============================================================
 
-def atr14_array(candles):
-    n = 14
-    length = len(candles)
+def atr_array(candles, period=14):
+    n = len(candles)
+    result = np.full(n, np.nan, dtype=float)
+
+    if n == 0:
+        return result
 
     high = np.array([c["high"] for c in candles], dtype=float)
     low = np.array([c["low"] for c in candles], dtype=float)
     close = np.array([c["close"] for c in candles], dtype=float)
 
-    tr = np.empty(length, dtype=float)
-    tr[:] = np.nan
-
-    if length == 0:
-        return tr
-
+    tr = np.full(n, np.nan, dtype=float)
     tr[0] = high[0] - low[0]
 
-    for i in range(1, length):
+    for i in range(1, n):
         tr[i] = max(
             high[i] - low[i],
             abs(high[i] - close[i - 1]),
             abs(low[i] - close[i - 1]),
         )
 
-    atr = np.empty(length, dtype=float)
-    atr[:] = np.nan
+    if n < period:
+        return result
 
-    if length < n:
-        return atr
+    result[period - 1] = float(np.mean(tr[:period]))
 
-    seed = float(np.mean(tr[:n]))
-    atr[n - 1] = seed
-
-    for i in range(n, length):
-        atr[i] = (
-            atr[i - 1] * (n - 1)
+    for i in range(period, n):
+        result[i] = (
+            result[i - 1] * (period - 1)
             + tr[i]
-        ) / n
+        ) / period
 
-    return atr
+    return result
 
 
-def rolling_previous_extreme(values, lookback, want_max):
-    """
-    For each index i:
-        result[i] = extreme(values[i-lookback:i])
-    Current candle is excluded.
-    """
+def ema_array(values, period):
     values = np.asarray(values, dtype=float)
     n = len(values)
+    result = np.full(n, np.nan, dtype=float)
 
-    result = np.empty(n, dtype=float)
-    result[:] = np.nan
+    if n < period:
+        return result
 
+    seed = float(np.mean(values[:period]))
+    result[period - 1] = seed
+    alpha = 2.0 / (period + 1.0)
+
+    for i in range(period, n):
+        result[i] = alpha * values[i] + (1.0 - alpha) * result[i - 1]
+
+    return result
+
+
+def rolling_previous_low(values, lookback):
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    result = np.full(n, np.nan, dtype=float)
     dq = deque()
 
     for i in range(n):
-        # Add prior candle i-1.
         add_index = i - 1
 
         if add_index >= 0:
-            add_value = values[add_index]
-
-            if want_max:
-                while dq and values[dq[-1]] <= add_value:
-                    dq.pop()
-            else:
-                while dq and values[dq[-1]] >= add_value:
-                    dq.pop()
-
+            value = values[add_index]
+            while dq and values[dq[-1]] >= value:
+                dq.pop()
             dq.append(add_index)
 
         minimum_index = i - lookback
@@ -496,18 +469,10 @@ def rolling_previous_extreme(values, lookback, want_max):
     return result
 
 
-def rolling_previous_mean(values, lookback):
-    """
-    For each i:
-        mean(values[i-lookback:i])
-    Current value excluded.
-    NaNs make the window unavailable.
-    """
+def previous_mean(values, lookback):
     values = np.asarray(values, dtype=float)
     n = len(values)
-
-    result = np.empty(n, dtype=float)
-    result[:] = np.nan
+    result = np.full(n, np.nan, dtype=float)
 
     q = deque()
     total = 0.0
@@ -519,7 +484,6 @@ def rolling_previous_mean(values, lookback):
         if add_index >= 0:
             value = values[add_index]
             q.append(value)
-
             if math.isfinite(value):
                 total += value
             else:
@@ -538,75 +502,29 @@ def rolling_previous_mean(values, lookback):
     return result
 
 
-def build_features(candles, timeframe):
+# ============================================================
+# H1 RAW SEED FEATURES
+# ============================================================
+
+def build_h1_features(candles):
     opens = np.array([c["open"] for c in candles], dtype=float)
     highs = np.array([c["high"] for c in candles], dtype=float)
     lows = np.array([c["low"] for c in candles], dtype=float)
     closes = np.array([c["close"] for c in candles], dtype=float)
-
     times = [c["time"] for c in candles]
 
-    atr = atr14_array(candles)
-    atr_mean20_prev = rolling_previous_mean(atr, 20)
+    atr = atr_array(candles, 14)
+    atr_mean20_prev = previous_mean(atr, 20)
+    atr_mean50_prev = previous_mean(atr, 50)
 
-    previous_open = np.empty(len(candles), dtype=float)
-    previous_high = np.empty(len(candles), dtype=float)
-    previous_low = np.empty(len(candles), dtype=float)
-    previous_close = np.empty(len(candles), dtype=float)
-
-    previous_open[:] = np.nan
-    previous_high[:] = np.nan
-    previous_low[:] = np.nan
-    previous_close[:] = np.nan
-
-    if len(candles) > 1:
-        previous_open[1:] = opens[:-1]
-        previous_high[1:] = highs[:-1]
-        previous_low[1:] = lows[:-1]
-        previous_close[1:] = closes[:-1]
-
-    bullish_body = closes - opens
-    bearish_body = opens - closes
-    previous_body = np.abs(previous_close - previous_open)
-
+    body = opens - closes
     candle_range = highs - lows
 
-    close_location = np.divide(
-        closes - lows,
-        candle_range,
-        out=np.zeros_like(closes),
-        where=candle_range > 0,
-    )
-
-    lower_wick = np.minimum(opens, closes) - lows
-    upper_wick = highs - np.maximum(opens, closes)
-
-    lower_wick_body = np.divide(
-        lower_wick,
-        bullish_body,
-        out=np.zeros_like(closes),
-        where=bullish_body > 0,
-    )
-
-    upper_wick_body = np.divide(
-        upper_wick,
-        bearish_body,
-        out=np.zeros_like(closes),
-        where=bearish_body > 0,
-    )
-
-    bullish_body_atr = np.divide(
-        bullish_body,
+    body_atr = np.divide(
+        body,
         atr,
         out=np.zeros_like(closes),
-        where=(bullish_body > 0) & np.isfinite(atr) & (atr > 0),
-    )
-
-    bearish_body_atr = np.divide(
-        bearish_body,
-        atr,
-        out=np.zeros_like(closes),
-        where=(bearish_body > 0) & np.isfinite(atr) & (atr > 0),
+        where=(body > 0) & np.isfinite(atr) & (atr > 0),
     )
 
     range_atr = np.divide(
@@ -616,419 +534,383 @@ def build_features(candles, timeframe):
         where=np.isfinite(atr) & (atr > 0),
     )
 
-    bull_ratio = np.divide(
-        bullish_body,
-        previous_body,
-        out=np.zeros_like(closes),
-        where=(bullish_body > 0) & (previous_body > 0),
+    # Exact carry-forward convention from raw refinement:
+    # previous completed ATR14 / previous-20 mean ATR <= 0.80.
+    compression = np.full(len(candles), np.nan, dtype=float)
+    for i in range(1, len(candles)):
+        prev_atr = atr[i - 1]
+        mean20 = atr_mean20_prev[i]
+        if (
+            math.isfinite(prev_atr)
+            and math.isfinite(mean20)
+            and mean20 > 0
+        ):
+            compression[i] = prev_atr / mean20
+
+    prior_lows = {
+        lookback: rolling_previous_low(lows, lookback)
+        for lookback in SEED_LOOKBACKS
+    }
+
+    # Previous completed H1 ATR14 / previous-50 mean ATR.
+    h1_prev_atr_ratio = np.full(len(candles), np.nan, dtype=float)
+    for i in range(1, len(candles)):
+        prev_atr = atr[i - 1]
+        prev_mean = atr_mean50_prev[i - 1]
+        if (
+            math.isfinite(prev_atr)
+            and math.isfinite(prev_mean)
+            and prev_mean > 0
+        ):
+            h1_prev_atr_ratio[i] = prev_atr / prev_mean
+
+    ny_hour = np.array(
+        [t.astimezone(NY).hour for t in times],
+        dtype=int,
     )
-
-    bear_ratio = np.divide(
-        bearish_body,
-        previous_body,
-        out=np.zeros_like(closes),
-        where=(bearish_body > 0) & (previous_body > 0),
+    ny_weekday = np.array(
+        [t.astimezone(NY).weekday() for t in times],
+        dtype=int,
     )
-
-    exact_bull = (
-        (previous_close < previous_open)
-        & (closes > opens)
-        & (opens <= previous_close)
-        & (closes >= previous_open)
-    )
-
-    exact_bear = (
-        (previous_close > previous_open)
-        & (closes < opens)
-        & (opens >= previous_close)
-        & (closes <= previous_open)
-    )
-
-    outside = (
-        (highs > previous_high)
-        & (lows < previous_low)
-    )
-
-    compression = np.divide(
-        np.roll(atr, 1),
-        atr_mean20_prev,
-        out=np.full(len(candles), np.nan, dtype=float),
-        where=np.isfinite(atr_mean20_prev) & (atr_mean20_prev > 0),
-    )
-    if len(compression):
-        compression[0] = np.nan
-
-    if timeframe == "M15":
-        structure_lbs = [30, 60, 120, 165]
-        sweep_lbs = [20, 60, 120]
-        outside_lbs = [30, 60, 120]
-        breakout_lbs = [5, 10, 20]
-    else:
-        # Exact H1 lookbacks required by this compression-boundary refinement.
-        # Other arrays are retained only because the common feature builder
-        # constructs both prior highs and lows.
-        structure_lbs = [2, 3, 4, 5, 6]
-        sweep_lbs = [2, 3, 4, 5, 6]
-        outside_lbs = [2, 3, 4, 5, 6]
-        breakout_lbs = [2, 3, 4, 5, 6]
-
-    needed_lbs = sorted(
-        set(
-            structure_lbs
-            + sweep_lbs
-            + outside_lbs
-            + breakout_lbs
-        )
-    )
-
-    prev_lows = {}
-    prev_highs = {}
-
-    for lookback in needed_lbs:
-        prev_lows[lookback] = rolling_previous_extreme(
-            lows,
-            lookback,
-            want_max=False,
-        )
-        prev_highs[lookback] = rolling_previous_extreme(
-            highs,
-            lookback,
-            want_max=True,
-        )
 
     return {
-        "timeframe": timeframe,
         "times": times,
         "open": opens,
         "high": highs,
         "low": lows,
         "close": closes,
         "atr": atr,
-        "bull_body_atr": bullish_body_atr,
-        "bear_body_atr": bearish_body_atr,
+        "body_atr": body_atr,
         "range_atr": range_atr,
-        "close_location": close_location,
-        "lower_wick_body": lower_wick_body,
-        "upper_wick_body": upper_wick_body,
-        "bull_ratio": bull_ratio,
-        "bear_ratio": bear_ratio,
-        "exact_bull": exact_bull,
-        "exact_bear": exact_bear,
-        "outside": outside,
         "compression": compression,
-        "previous_high": previous_high,
-        "previous_low": previous_low,
-        "prev_lows": prev_lows,
-        "prev_highs": prev_highs,
-        "structure_lbs": structure_lbs,
-        "sweep_lbs": sweep_lbs,
-        "outside_lbs": outside_lbs,
-        "breakout_lbs": breakout_lbs,
+        "prior_lows": prior_lows,
+        "h1_prev_atr_ratio": h1_prev_atr_ratio,
+        "ny_hour": ny_hour,
+        "ny_weekday": ny_weekday,
     }
 
 
-# ============================================================
-# BROAD DISCOVERY CONFIGS
-# ============================================================
+def raw_seed_signals(features, seed):
+    lookback = seed["lookback"]
+    prior_low = features["prior_lows"][lookback]
 
-def config_id(config):
-    parts = [
-        config["timeframe"],
-        config["side"],
-        config["family"],
-    ]
-
-    ordered = [
-        "br_min",
-        "body_atr_min",
-        "range_atr_min",
-        "lookback",
-        "distance_atr_max",
-        "close_location",
-        "wick_body_min",
-        "compression_max",
-        "breakout_lookback",
-        "rr",
-    ]
-
-    for field in ordered:
-        value = config.get(field)
-        if value is None:
-            continue
-
-        if isinstance(value, float):
-            rendered = (
-                f"{value:.3f}"
-                .rstrip("0")
-                .rstrip(".")
-            )
-        else:
-            rendered = str(value)
-
-        parts.append(f"{field}={rendered}")
-
-    return "|".join(parts)
-
-
-def stage1_configs(timeframe, side, features):
-    """
-    Final raw-boundary refinement for COMPRESSION_BREAKOUT only.
-
-    No context filters.
-    """
-    if timeframe != "H1" or side != "SHORT":
-        return []
-
-    configs = []
-
-    for compression_max in [0.76, 0.78, 0.80, 0.82, 0.84]:
-        for body_atr_min in [0.90, 1.00, 1.10, 1.20, 1.30, 1.40]:
-            for range_atr_min in [1.45, 1.50, 1.55, 1.60, 1.65, 1.70, 1.75]:
-                for breakout_lookback in [2, 3, 4, 5, 6]:
-                    config = {
-                        "timeframe": timeframe,
-                        "side": side,
-                        "family": "COMPRESSION_BREAKOUT",
-                        "compression_max": compression_max,
-                        "body_atr_min": body_atr_min,
-                        "range_atr_min": range_atr_min,
-                        "breakout_lookback": breakout_lookback,
-                        "rr": STAGE1_RR,
-                    }
-                    config["config_id"] = config_id(config)
-                    configs.append(config)
-
-    return configs
-
-
-# ============================================================
-# SIGNAL MASKS
-# ============================================================
-
-def signal_indices(config, features):
-    side = config["side"]
-    family = config["family"]
-
-    atr = features["atr"]
-    high = features["high"]
-    low = features["low"]
-    close = features["close"]
-
-    valid = np.isfinite(atr) & (atr > 0)
-
-    if side == "LONG":
-        body_atr = features["bull_body_atr"]
-        candle_direction = body_atr > 0
-        close_location = features["close_location"]
-    else:
-        body_atr = features["bear_body_atr"]
-        candle_direction = body_atr > 0
-        close_location = features["close_location"]
-
-    mask = valid & candle_direction
-
-    # --------------------------------------------------------
-    # ENGULF_STRUCTURE
-    # --------------------------------------------------------
-    if family == "ENGULF_STRUCTURE":
-        lookback = config["lookback"]
-
-        if side == "LONG":
-            structure = features["prev_lows"][lookback]
-            distance = np.abs(low - structure) / atr
-
-            mask &= features["exact_bull"]
-            mask &= features["bull_ratio"] >= config["br_min"]
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= distance <= config["distance_atr_max"]
-
-        else:
-            structure = features["prev_highs"][lookback]
-            distance = np.abs(high - structure) / atr
-
-            mask &= features["exact_bear"]
-            mask &= features["bear_ratio"] >= config["br_min"]
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= distance <= config["distance_atr_max"]
-
-    # --------------------------------------------------------
-    # SWEEP_DISPLACEMENT
-    # --------------------------------------------------------
-    elif family == "SWEEP_DISPLACEMENT":
-        lookback = config["lookback"]
-
-        if side == "LONG":
-            structure = features["prev_lows"][lookback]
-
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= low < structure
-            mask &= close > features["previous_high"]
-            mask &= (
-                features["lower_wick_body"]
-                >= config["wick_body_min"]
-            )
-
-        else:
-            structure = features["prev_highs"][lookback]
-
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= high > structure
-            mask &= close < features["previous_low"]
-            mask &= (
-                features["upper_wick_body"]
-                >= config["wick_body_min"]
-            )
-
-    # --------------------------------------------------------
-    # FAILED_BREAK_RECLAIM
-    # --------------------------------------------------------
-    elif family == "FAILED_BREAK_RECLAIM":
-        lookback = config["lookback"]
-
-        if side == "LONG":
-            structure = features["prev_lows"][lookback]
-
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= low < structure
-            mask &= close > structure
-            mask &= (
-                close_location
-                >= config["close_location"]
-            )
-
-        else:
-            structure = features["prev_highs"][lookback]
-
-            mask &= body_atr >= config["body_atr_min"]
-            mask &= np.isfinite(structure)
-            mask &= high > structure
-            mask &= close < structure
-            mask &= (
-                close_location
-                <= config["close_location"]
-            )
-
-    # --------------------------------------------------------
-    # OUTSIDE_REVERSAL
-    # --------------------------------------------------------
-    elif family == "OUTSIDE_REVERSAL":
-        lookback = config["lookback"]
-
-        mask &= features["outside"]
-        mask &= body_atr >= config["body_atr_min"]
-
-        if side == "LONG":
-            structure = features["prev_lows"][lookback]
-            distance = np.abs(low - structure) / atr
-
-            mask &= np.isfinite(structure)
-            mask &= distance <= config["distance_atr_max"]
-            mask &= (
-                close_location
-                >= config["close_location"]
-            )
-
-        else:
-            structure = features["prev_highs"][lookback]
-            distance = np.abs(high - structure) / atr
-
-            mask &= np.isfinite(structure)
-            mask &= distance <= config["distance_atr_max"]
-            mask &= (
-                close_location
-                <= config["close_location"]
-            )
-
-    # --------------------------------------------------------
-    # BREAKDOWN_DISPLACEMENT
-    # --------------------------------------------------------
-    elif family == "BREAKDOWN_DISPLACEMENT":
-        lookback = config["breakout_lookback"]
-        structure = features["prev_lows"][lookback]
-
-        mask &= np.isfinite(structure)
-        mask &= body_atr >= config["body_atr_min"]
-        mask &= features["range_atr"] >= config["range_atr_min"]
-        mask &= close_location <= config["close_location"]
-        mask &= close < structure
-
-    # --------------------------------------------------------
-    # COMPRESSION_BREAKOUT
-    # --------------------------------------------------------
-    elif family == "COMPRESSION_BREAKOUT":
-        lookback = config["breakout_lookback"]
-        compression = features["compression"]
-
-        mask &= np.isfinite(compression)
-        mask &= compression <= config["compression_max"]
-        mask &= body_atr >= config["body_atr_min"]
-        mask &= features["range_atr"] >= config["range_atr_min"]
-
-        if side == "LONG":
-            structure = features["prev_highs"][lookback]
-            mask &= np.isfinite(structure)
-            mask &= close > structure
-        else:
-            structure = features["prev_lows"][lookback]
-            mask &= np.isfinite(structure)
-            mask &= close < structure
-
-    else:
-        raise ValueError(f"Unknown family: {family}")
+    mask = (
+        (features["close"] < features["open"])
+        & (features["body_atr"] >= BODY_ATR_MIN)
+        & (features["range_atr"] >= RANGE_ATR_MIN)
+        & np.isfinite(features["compression"])
+        & (features["compression"] <= COMPRESSION_MAX)
+        & np.isfinite(prior_low)
+        & (features["close"] < prior_low)
+    )
 
     return np.flatnonzero(mask).astype(int)
 
 
 # ============================================================
-# HISTORICAL TRADE SIMULATION
+# HTF STATE — STRICTLY AVAILABLE BEFORE H1 SIGNAL OPEN
 # ============================================================
 
-def cost_pips_for(timeframe, multiplier=1.0):
-    base = (
-        H1_PRIMARY_COST_PIPS
-        if timeframe == "H1"
-        else M15_PRIMARY_COST_PIPS
-    )
-    return base * multiplier
+def htf_feature_table(candles):
+    times = [c["time"] for c in candles]
+    closes = np.array([c["close"] for c in candles], dtype=float)
+
+    table = {
+        "times": times,
+        "close": closes,
+        "atr14": atr_array(candles, 14),
+    }
+
+    for period in [20, 50, 100, 200]:
+        table[f"ema{period}"] = ema_array(closes, period)
+
+    table["atr50mean_prev"] = previous_mean(table["atr14"], 50)
+    return table
 
 
-def find_exit_index(
-    features,
-    entry_index,
-    stop,
-    target,
-    side,
-):
+def completed_at_times(candles, granularity):
     """
-    Vectorised block search for the first future candle touching
-    either stop or target.
+    Each candle becomes usable at its actual next candle open.
+    This respects weekends / gaps rather than assuming fixed timedelta.
+    The final candle gets a theoretical duration only as a terminal fallback.
     """
+    times = [c["time"] for c in candles]
+    result = []
+
+    fallback = timedelta(hours=4) if granularity == "H4" else timedelta(days=1)
+
+    for i, t in enumerate(times):
+        if i + 1 < len(times):
+            result.append(times[i + 1])
+        else:
+            result.append(t + fallback)
+
+    return result
+
+
+def map_strict_previous_htf_state(h1_times, htf_candles, granularity):
+    table = htf_feature_table(htf_candles)
+    complete_times = completed_at_times(htf_candles, granularity)
+
+    # State index for an H1 signal open time t is the latest HTF candle with
+    # completion_time <= t.
+    state_index = np.full(len(h1_times), -1, dtype=int)
+
+    j = -1
+
+    for i, signal_open in enumerate(h1_times):
+        while (
+            j + 1 < len(complete_times)
+            and complete_times[j + 1] <= signal_open
+        ):
+            j += 1
+
+        state_index[i] = j
+
+    mapped = {
+        "close": np.full(len(h1_times), np.nan, dtype=float),
+        "atr_ratio": np.full(len(h1_times), np.nan, dtype=float),
+    }
+
+    for period in [20, 50, 100, 200]:
+        mapped[f"ema{period}"] = np.full(
+            len(h1_times),
+            np.nan,
+            dtype=float,
+        )
+
+    for i, j in enumerate(state_index):
+        if j < 0:
+            continue
+
+        mapped["close"][i] = table["close"][j]
+
+        atr = table["atr14"][j]
+        atr_mean = table["atr50mean_prev"][j]
+
+        if math.isfinite(atr) and math.isfinite(atr_mean) and atr_mean > 0:
+            mapped["atr_ratio"][i] = atr / atr_mean
+
+        for period in [20, 50, 100, 200]:
+            mapped[f"ema{period}"][i] = table[f"ema{period}"][j]
+
+    mapped["state_index"] = state_index
+    return mapped
+
+
+# ============================================================
+# CONTEXT FACTORS
+# ============================================================
+
+def factor_id(category, name):
+    return f"{category}|{name}"
+
+
+def build_factors():
+    factors = [{
+        "factor_id": "CONTROL",
+        "category": "CONTROL",
+        "kind": "CONTROL",
+        "label": "No context filter",
+    }]
+
+    # Previous completed DAILY close below EMA.
+    for period in [20, 50, 100, 200]:
+        factors.append({
+            "factor_id": factor_id("DAILY_TREND", f"CLOSE_LT_EMA{period}"),
+            "category": "DAILY_TREND",
+            "kind": "HTF_CLOSE_LT_EMA",
+            "tf": "D",
+            "ema_period": period,
+            "label": f"Previous completed daily close < EMA{period}",
+        })
+
+    # Previous completed DAILY bearish EMA alignment.
+    for fast, slow in [
+        (20, 100),
+        (50, 100),
+        (20, 200),
+        (50, 200),
+        (100, 200),
+    ]:
+        factors.append({
+            "factor_id": factor_id("DAILY_ALIGNMENT", f"EMA{fast}_LT_EMA{slow}"),
+            "category": "DAILY_ALIGNMENT",
+            "kind": "HTF_EMA_LT_EMA",
+            "tf": "D",
+            "fast": fast,
+            "slow": slow,
+            "label": f"Previous completed daily EMA{fast} < EMA{slow}",
+        })
+
+    # Previous completed H4 close below EMA.
+    for period in [20, 50, 100, 200]:
+        factors.append({
+            "factor_id": factor_id("H4_TREND", f"CLOSE_LT_EMA{period}"),
+            "category": "H4_TREND",
+            "kind": "HTF_CLOSE_LT_EMA",
+            "tf": "H4",
+            "ema_period": period,
+            "label": f"Previous completed H4 close < EMA{period}",
+        })
+
+    # Previous completed H4 bearish EMA alignment.
+    for fast, slow in [
+        (20, 100),
+        (50, 100),
+        (20, 200),
+        (50, 200),
+        (100, 200),
+    ]:
+        factors.append({
+            "factor_id": factor_id("H4_ALIGNMENT", f"EMA{fast}_LT_EMA{slow}"),
+            "category": "H4_ALIGNMENT",
+            "kind": "HTF_EMA_LT_EMA",
+            "tf": "H4",
+            "fast": fast,
+            "slow": slow,
+            "label": f"Previous completed H4 EMA{fast} < EMA{slow}",
+        })
+
+    # Higher-timeframe volatility regime.
+    for threshold in [0.80, 1.00, 1.20]:
+        factors.append({
+            "factor_id": factor_id("DAILY_VOL", f"ATR_RATIO_GE_{threshold:.2f}"),
+            "category": "DAILY_VOL",
+            "kind": "HTF_ATR_RATIO_GE",
+            "tf": "D",
+            "threshold": threshold,
+            "label": (
+                "Previous completed daily ATR14 / "
+                f"previous-50 mean ATR >= {threshold:.2f}"
+            ),
+        })
+
+    for threshold in [0.80, 1.00, 1.20]:
+        factors.append({
+            "factor_id": factor_id("H1_VOL", f"ATR_RATIO_GE_{threshold:.2f}"),
+            "category": "H1_VOL",
+            "kind": "H1_PREV_ATR_RATIO_GE",
+            "threshold": threshold,
+            "label": (
+                "Previous completed H1 ATR14 / "
+                f"previous-50 mean ATR >= {threshold:.2f}"
+            ),
+        })
+
+    # Exclude one New York signal-open hour at a time.
+    for hour in range(24):
+        factors.append({
+            "factor_id": factor_id("NY_HOUR_EXCLUDE", f"HOUR_{hour:02d}"),
+            "category": "NY_HOUR_EXCLUDE",
+            "kind": "NY_HOUR_EXCLUDE",
+            "hour": hour,
+            "label": f"Exclude NY signal-open hour {hour:02d}:00",
+        })
+
+    # Broad NY inclusion windows. Half-open [start,end).
+    for start, end in [
+        (0, 8),
+        (4, 12),
+        (8, 16),
+        (12, 20),
+        (16, 24),
+        (7, 17),
+        (8, 17),
+    ]:
+        factors.append({
+            "factor_id": factor_id("NY_SESSION_INCLUDE", f"{start:02d}_{end:02d}"),
+            "category": "NY_SESSION_INCLUDE",
+            "kind": "NY_SESSION_INCLUDE",
+            "start_hour": start,
+            "end_hour": end,
+            "label": f"Include NY hours [{start:02d}:00,{end:02d}:00)",
+        })
+
+    weekday_names = ["MON", "TUE", "WED", "THU", "FRI"]
+    for weekday, name in enumerate(weekday_names):
+        factors.append({
+            "factor_id": factor_id("WEEKDAY_EXCLUDE", name),
+            "category": "WEEKDAY_EXCLUDE",
+            "kind": "WEEKDAY_EXCLUDE",
+            "weekday": weekday,
+            "label": f"Exclude {name} signal-open day in New York",
+        })
+
+    return factors
+
+
+FACTORS = build_factors()
+FACTOR_BY_ID = {factor["factor_id"]: factor for factor in FACTORS}
+
+
+def factor_mask(factor, features, daily_state, h4_state):
+    n = len(features["times"])
+
+    if factor["kind"] == "CONTROL":
+        return np.ones(n, dtype=bool)
+
+    if factor["kind"] == "HTF_CLOSE_LT_EMA":
+        state = daily_state if factor["tf"] == "D" else h4_state
+        close = state["close"]
+        ema = state[f"ema{factor['ema_period']}"]
+        return (
+            np.isfinite(close)
+            & np.isfinite(ema)
+            & (close < ema)
+        )
+
+    if factor["kind"] == "HTF_EMA_LT_EMA":
+        state = daily_state if factor["tf"] == "D" else h4_state
+        fast = state[f"ema{factor['fast']}"]
+        slow = state[f"ema{factor['slow']}"]
+        return (
+            np.isfinite(fast)
+            & np.isfinite(slow)
+            & (fast < slow)
+        )
+
+    if factor["kind"] == "HTF_ATR_RATIO_GE":
+        state = daily_state if factor["tf"] == "D" else h4_state
+        ratio = state["atr_ratio"]
+        return np.isfinite(ratio) & (ratio >= factor["threshold"])
+
+    if factor["kind"] == "H1_PREV_ATR_RATIO_GE":
+        ratio = features["h1_prev_atr_ratio"]
+        return np.isfinite(ratio) & (ratio >= factor["threshold"])
+
+    if factor["kind"] == "NY_HOUR_EXCLUDE":
+        return features["ny_hour"] != factor["hour"]
+
+    if factor["kind"] == "NY_SESSION_INCLUDE":
+        hour = features["ny_hour"]
+        return (
+            (hour >= factor["start_hour"])
+            & (hour < factor["end_hour"])
+        )
+
+    if factor["kind"] == "WEEKDAY_EXCLUDE":
+        return features["ny_weekday"] != factor["weekday"]
+
+    raise ValueError(f"Unknown factor kind: {factor['kind']}")
+
+
+# ============================================================
+# TRADE ENGINE
+# ============================================================
+
+def find_exit_index(features, signal_index, stop, target):
     high = features["high"]
     low = features["low"]
     n = len(high)
-
-    start = entry_index + 1
     block = 2048
 
-    for left in range(start, n, block):
+    for left in range(signal_index + 1, n, block):
         right = min(left + block, n)
-
-        if side == "LONG":
-            touched = (
-                (low[left:right] <= stop)
-                | (high[left:right] >= target)
-            )
-        else:
-            touched = (
-                (high[left:right] >= stop)
-                | (low[left:right] <= target)
-            )
-
+        touched = (
+            (high[left:right] >= stop)
+            | (low[left:right] <= target)
+        )
         hits = np.flatnonzero(touched)
 
         if len(hits):
@@ -1037,112 +919,62 @@ def find_exit_index(
     return None
 
 
-def determine_exit_reason(features, index, stop, target, side):
+def exit_reason(features, index, stop, target):
     o = features["open"][index]
     h = features["high"][index]
     l = features["low"][index]
 
-    if side == "LONG":
-        stop_touched = l <= stop
-        target_touched = h >= target
+    stop_hit = h >= stop
+    target_hit = l <= target
 
-        if stop_touched and not target_touched:
-            return "STOP"
+    if stop_hit and not target_hit:
+        return "STOP"
 
-        if target_touched and not stop_touched:
-            return "TARGET"
+    if target_hit and not stop_hit:
+        return "TARGET"
 
-        if stop_touched and target_touched:
-            distance_to_high = abs(h - o)
-            distance_to_low = abs(o - l)
-
-            return (
-                "TARGET"
-                if distance_to_high < distance_to_low
-                else "STOP"
-            )
-
-    else:
-        stop_touched = h >= stop
-        target_touched = l <= target
-
-        if stop_touched and not target_touched:
-            return "STOP"
-
-        if target_touched and not stop_touched:
-            return "TARGET"
-
-        if stop_touched and target_touched:
-            distance_to_high = abs(h - o)
-            distance_to_low = abs(o - l)
-
-            return (
-                "STOP"
-                if distance_to_high < distance_to_low
-                else "TARGET"
-            )
+    if stop_hit and target_hit:
+        # Locked SHORT same-bar convention:
+        # high closer to candle open => stop first, else target first.
+        return (
+            "STOP"
+            if abs(h - o) < abs(o - l)
+            else "TARGET"
+        )
 
     return None
 
 
-def backtest(
-    config,
-    features,
-    raw_signal_indices,
-    rr=None,
-    cost_multiplier=1.0,
-):
-    timeframe = config["timeframe"]
-    side = config["side"]
+def backtest(seed_id, features, filtered_signals, cost_multiplier=1.0):
+    seed = SEED_BY_ID[seed_id]
+    rr = seed["rr"]
+    lookback = seed["lookback"]
 
-    if rr is None:
-        rr = config["rr"]
-
-    cost_pips = cost_pips_for(
-        timeframe,
-        multiplier=cost_multiplier,
-    )
-    adverse_cost = cost_pips * PIP
-
-    high = features["high"]
-    low = features["low"]
+    adverse_cost = BASE_COST_PIPS * cost_multiplier * PIP
     close = features["close"]
+    high = features["high"]
     times = features["times"]
 
+    signals = np.asarray(filtered_signals, dtype=int)
     trades = []
-
     pointer = 0
-    raw_signal_indices = np.asarray(
-        raw_signal_indices,
-        dtype=int,
-    )
 
-    while pointer < len(raw_signal_indices):
-        signal_index = int(raw_signal_indices[pointer])
+    while pointer < len(signals):
+        signal_index = int(signals[pointer])
 
         reference_entry = float(close[signal_index])
+        stop = float(high[signal_index]) + STOP_BUFFER_TICKS * TICK
+        reference_risk = stop - reference_entry
 
-        if side == "LONG":
-            stop = (
-                float(low[signal_index])
-                - STOP_BUFFER_TICKS * TICK
-            )
-            reference_risk = reference_entry - stop
-            target = reference_entry + rr * reference_risk
-            fill = reference_entry + adverse_cost
-            actual_risk = fill - stop
+        if reference_risk <= 0:
+            pointer += 1
+            continue
 
-        else:
-            stop = (
-                float(high[signal_index])
-                + STOP_BUFFER_TICKS * TICK
-            )
-            reference_risk = stop - reference_entry
-            target = reference_entry - rr * reference_risk
-            fill = reference_entry - adverse_cost
-            actual_risk = stop - fill
+        target = reference_entry - rr * reference_risk
+        fill = reference_entry - adverse_cost
+        actual_risk = stop - fill
 
-        if reference_risk <= 0 or actual_risk <= 0:
+        if actual_risk <= 0:
             pointer += 1
             continue
 
@@ -1151,67 +983,45 @@ def backtest(
             signal_index,
             stop,
             target,
-            side,
         )
 
         if exit_index is None:
-            # Still open at end of data. Do not count as closed trade.
             break
 
-        reason = determine_exit_reason(
+        reason = exit_reason(
             features,
             exit_index,
             stop,
             target,
-            side,
         )
 
         if reason is None:
-            raise RuntimeError(
-                "Exit search found a candle but exit reason was None"
-            )
+            raise RuntimeError("Could not resolve exit reason")
 
-        exit_price = (
-            target
-            if reason == "TARGET"
-            else stop
-        )
-
-        if side == "LONG":
-            realised_r = (
-                exit_price - fill
-            ) / actual_risk
-        else:
-            realised_r = (
-                fill - exit_price
-            ) / actual_risk
-
-        duration_bars = exit_index - signal_index
+        exit_price = target if reason == "TARGET" else stop
+        result_r = (fill - exit_price) / actual_risk
 
         trades.append({
-            "signal_index": signal_index,
-            "exit_index": exit_index,
+            "seed_id": seed_id,
+            "lookback": lookback,
             "signal_time": times[signal_index],
             "exit_time": times[exit_index],
-            "side": side,
-            "timeframe": timeframe,
-            "family": config["family"],
-            "config_id": config["config_id"],
-            "rr": rr,
-            "cost_pips": cost_pips,
+            "signal_index": signal_index,
+            "exit_index": exit_index,
             "reference_entry": reference_entry,
             "historical_fill": fill,
             "stop": stop,
             "target": target,
+            "rr": rr,
+            "cost_pips": BASE_COST_PIPS * cost_multiplier,
             "exit_reason": reason,
-            "result_r": realised_r,
-            "duration_bars": duration_bars,
+            "result_r": result_r,
+            "duration_bars": exit_index - signal_index,
         })
 
-        # Pyramiding=0 with exact exit-candle signal eligibility:
-        # next signal may be on exit_index itself.
+        # Pyramiding=0, exact exit-candle re-entry eligible.
         pointer = bisect_left(
-            raw_signal_indices,
+            signals,
             exit_index,
             lo=pointer + 1,
         )
@@ -1241,218 +1051,123 @@ def metrics(trades):
         }
 
     values = [float(t["result_r"]) for t in trades]
+    winners = sum(value > 0 for value in values)
+    losers = len(values) - winners
 
-    winners = sum(1 for value in values if value > 0)
-    losers = sum(1 for value in values if value <= 0)
-
-    gross_profit = sum(
-        value for value in values
-        if value > 0
-    )
-    gross_loss = -sum(
-        value for value in values
-        if value < 0
-    )
+    gross_profit = sum(value for value in values if value > 0)
+    gross_loss = -sum(value for value in values if value < 0)
 
     cumulative = 0.0
     peak = 0.0
     max_dd = 0.0
-
-    current_loss_streak = 0
-    longest_loss_streak = 0
+    streak = 0
+    max_streak = 0
 
     for value in values:
         cumulative += value
         peak = max(peak, cumulative)
-        max_dd = min(
-            max_dd,
-            cumulative - peak,
-        )
+        max_dd = min(max_dd, cumulative - peak)
 
         if value <= 0:
-            current_loss_streak += 1
-            longest_loss_streak = max(
-                longest_loss_streak,
-                current_loss_streak,
-            )
+            streak += 1
+            max_streak = max(max_streak, streak)
         else:
-            current_loss_streak = 0
+            streak = 0
 
     return {
         "trades": len(trades),
         "winners": winners,
         "losers": losers,
         "win_rate_pct": 100.0 * winners / len(trades),
-        "profit_factor": safe_pf(
-            gross_profit,
-            gross_loss,
-        ),
+        "profit_factor": safe_pf(gross_profit, gross_loss),
         "total_r": sum(values),
         "expectancy_r": sum(values) / len(values),
         "max_drawdown_r": max_dd,
-        "longest_losing_streak": longest_loss_streak,
-        "median_duration_bars": med(
-            t["duration_bars"]
-            for t in trades
-        ),
+        "longest_losing_streak": max_streak,
+        "median_duration_bars": med(t["duration_bars"] for t in trades),
     }
 
 
-def trades_in_period(trades, start=None, end=None):
-    result = []
+def period_trades(trades, start=None, end=None):
+    output = []
 
     for trade in trades:
-        signal_time = trade["signal_time"]
+        t = trade["signal_time"]
 
-        if start is not None and signal_time < start:
+        if start is not None and t < start:
+            continue
+        if end is not None and t >= end:
             continue
 
-        if end is not None and signal_time >= end:
-            continue
+        output.append(trade)
 
-        result.append(trade)
-
-    return result
+    return output
 
 
 def period_metrics(trades, start=None, end=None):
-    return metrics(
-        trades_in_period(
-            trades,
-            start,
-            end,
-        )
-    )
+    return metrics(period_trades(trades, start, end))
 
 
-def evaluate_candidate(config, features, raw_indices):
-    trades = backtest(
-        config,
-        features,
-        raw_indices,
-        rr=config["rr"],
-        cost_multiplier=1.0,
-    )
-
+def evaluate_result(seed_id, lookback, factor_label, trades, control_metrics=None):
     full = metrics(trades)
+
     dev = period_metrics(
         trades,
         None,
         VALIDATION_START,
     )
+
     validation = period_metrics(
         trades,
         VALIDATION_START,
         None,
     )
-    pre2010 = period_metrics(
-        trades,
-        None,
-        PRE2010_END,
-    )
-    post2010 = period_metrics(
-        trades,
-        PRE2010_END,
-        None,
-    )
 
     era_ranges = [
         (
-            "2002_2007",
             datetime(2002, 1, 1, tzinfo=timezone.utc),
             datetime(2008, 1, 1, tzinfo=timezone.utc),
         ),
         (
-            "2008_2013",
             datetime(2008, 1, 1, tzinfo=timezone.utc),
             datetime(2014, 1, 1, tzinfo=timezone.utc),
         ),
         (
-            "2014_2019",
             datetime(2014, 1, 1, tzinfo=timezone.utc),
             datetime(2020, 1, 1, tzinfo=timezone.utc),
         ),
         (
-            "2020_now",
             datetime(2020, 1, 1, tzinfo=timezone.utc),
             None,
         ),
     ]
 
-    era_metrics = []
-    positive_eras = 0
+    era_results = [
+        period_metrics(trades, start, end)
+        for start, end in era_ranges
+    ]
 
-    for _, start, end in era_ranges:
-        result = period_metrics(
-            trades,
-            start,
-            end,
-        )
-        era_metrics.append(result)
-
-        if (
-            result["trades"] > 0
-            and result["total_r"] > 0
-        ):
-            positive_eras += 1
-
-    last5_start = NOW - timedelta(days=365.25 * 5)
-    last2_start = NOW - timedelta(days=365.25 * 2)
+    positive_eras = sum(
+        result["trades"] > 0 and result["total_r"] > 0
+        for result in era_results
+    )
 
     last5 = period_metrics(
         trades,
-        last5_start,
+        NOW - timedelta(days=365.25 * 5),
         None,
     )
+
     last2 = period_metrics(
         trades,
-        last2_start,
+        NOW - timedelta(days=365.25 * 2),
         None,
-    )
-
-    min_split_pf = min(
-        dev["profit_factor"]
-        if dev["trades"] else 0.0,
-        validation["profit_factor"]
-        if validation["trades"] else 0.0,
-    )
-
-    both_split_positive = (
-        dev["trades"] > 0
-        and validation["trades"] > 0
-        and dev["total_r"] > 0
-        and validation["total_r"] > 0
-    )
-
-    min_trade_requirement = (
-        40
-        if config["timeframe"] == "H1"
-        else 50
-    )
-
-    promising_pass = (
-        full["trades"] >= min_trade_requirement
-        and full["profit_factor"] >= 1.20
-        and both_split_positive
-        and positive_eras >= 3
     )
 
     row = {
-        "config_id": config["config_id"],
-        "pair": PAIR,
-        "timeframe": config["timeframe"],
-        "side": config["side"],
-        "family": config["family"],
-        "rr": config["rr"],
-        "br_min": config.get("br_min"),
-        "body_atr_min": config.get("body_atr_min"),
-        "range_atr_min": config.get("range_atr_min"),
-        "lookback": config.get("lookback"),
-        "distance_atr_max": config.get("distance_atr_max"),
-        "close_location": config.get("close_location"),
-        "wick_body_min": config.get("wick_body_min"),
-        "compression_max": config.get("compression_max"),
-        "breakout_lookback": config.get("breakout_lookback"),
+        "seed_id": seed_id,
+        "lookback": lookback,
+        "factor": factor_label,
         "full_trades": full["trades"],
         "full_winners": full["winners"],
         "full_win_rate_pct": full["win_rate_pct"],
@@ -1460,226 +1175,305 @@ def evaluate_candidate(config, features, raw_indices):
         "full_total_r": full["total_r"],
         "full_expectancy_r": full["expectancy_r"],
         "full_max_dd_r": full["max_drawdown_r"],
-        "full_longest_loss_streak": full["longest_losing_streak"],
+        "full_longest_losing_streak": full["longest_losing_streak"],
         "dev_2002_2017_trades": dev["trades"],
         "dev_2002_2017_pf": dev["profit_factor"],
         "dev_2002_2017_r": dev["total_r"],
         "validation_2018_plus_trades": validation["trades"],
         "validation_2018_plus_pf": validation["profit_factor"],
         "validation_2018_plus_r": validation["total_r"],
-        "pre2010_trades": pre2010["trades"],
-        "pre2010_pf": pre2010["profit_factor"],
-        "pre2010_r": pre2010["total_r"],
-        "post2010_trades": post2010["trades"],
-        "post2010_pf": post2010["profit_factor"],
-        "post2010_r": post2010["total_r"],
+        "both_temporal_splits_positive": (
+            dev["trades"] > 0
+            and validation["trades"] > 0
+            and dev["total_r"] > 0
+            and validation["total_r"] > 0
+        ),
+        "min_temporal_split_pf": min(
+            dev["profit_factor"] if dev["trades"] else 0.0,
+            validation["profit_factor"] if validation["trades"] else 0.0,
+        ),
         "positive_eras": positive_eras,
-        "era_2002_2007_r": era_metrics[0]["total_r"],
-        "era_2008_2013_r": era_metrics[1]["total_r"],
-        "era_2014_2019_r": era_metrics[2]["total_r"],
-        "era_2020_now_r": era_metrics[3]["total_r"],
+        "era_2002_2007_r": era_results[0]["total_r"],
+        "era_2008_2013_r": era_results[1]["total_r"],
+        "era_2014_2019_r": era_results[2]["total_r"],
+        "era_2020_now_r": era_results[3]["total_r"],
         "last5y_trades": last5["trades"],
         "last5y_pf": last5["profit_factor"],
         "last5y_r": last5["total_r"],
         "last2y_trades": last2["trades"],
         "last2y_pf": last2["profit_factor"],
         "last2y_r": last2["total_r"],
-        "both_temporal_splits_positive": both_split_positive,
-        "min_temporal_split_pf": min_split_pf,
-        "promising_pass": promising_pass,
     }
 
-    return row, trades
+    if control_metrics:
+        row.update({
+            "control_trades": control_metrics["trades"],
+            "control_pf": control_metrics["profit_factor"],
+            "control_total_r": control_metrics["total_r"],
+            "control_expectancy_r": control_metrics["expectancy_r"],
+            "control_max_dd_r": control_metrics["max_drawdown_r"],
+            "trade_retention_pct": (
+                100.0 * full["trades"] / control_metrics["trades"]
+                if control_metrics["trades"] else 0.0
+            ),
+            "delta_pf": full["profit_factor"] - control_metrics["profit_factor"],
+            "delta_total_r": full["total_r"] - control_metrics["total_r"],
+            "delta_expectancy_r": (
+                full["expectancy_r"] - control_metrics["expectancy_r"]
+            ),
+            "delta_max_dd_r": (
+                full["max_drawdown_r"] - control_metrics["max_drawdown_r"]
+            ),
+        })
 
-
-def candidate_sort_key(row):
-    # Robustness-first, not "highest full-history PF wins".
-    return (
-        1 if row["promising_pass"] else 0,
-        1 if row["both_temporal_splits_positive"] else 0,
-        row["positive_eras"],
-        row["min_temporal_split_pf"],
-        row["full_pf"],
-        row["full_total_r"],
-        row["full_trades"],
-    )
+    return row
 
 
 # ============================================================
-# STAGE 1 SHORTLIST
+# DIAGNOSTICS
 # ============================================================
 
-def shortlist_stage1(rows):
-    """
-    Robustness-first, but deliberately geometry-diverse.
+def diagnostics_by_bucket(seed_id, lookback, trades, features, field, labels):
+    grouped = defaultdict(list)
 
-    Initial pass allows at most one candidate per:
-        (compression_max, body_atr_min, breakout_lookback)
+    for trade in trades:
+        index = trade["signal_index"]
+        bucket = int(features[field][index])
+        grouped[bucket].append(trade)
 
-    This prevents one exact range threshold from crowding out neighbouring
-    body/compression/lookback regions before the RR sweep.
+    rows = []
 
-    Remaining slots are then filled by global robustness rank.
-    """
-    eligible = [
-        row for row in rows
-        if row["full_trades"] >= 40
-    ] or list(rows)
+    for bucket, label in labels:
+        result = metrics(grouped.get(bucket, []))
 
-    eligible.sort(key=candidate_sort_key, reverse=True)
+        rows.append({
+            "seed_id": seed_id,
+            "lookback": lookback,
+            "bucket": bucket,
+            "label": label,
+            **result,
+        })
 
-    chosen = []
-    chosen_ids = set()
-    seen_cells = set()
+    return rows
 
-    for row in eligible:
-        cell = (
-            row.get("compression_max"),
-            row.get("body_atr_min"),
-            row.get("breakout_lookback"),
-        )
 
-        if cell in seen_cells:
+# ============================================================
+# SINGLE FACTOR CONSENSUS
+# ============================================================
+
+def build_consensus(single_rows):
+    by_factor = defaultdict(list)
+
+    for row in single_rows:
+        if row["factor_id"] == "CONTROL":
+            continue
+        by_factor[row["factor_id"]].append(row)
+
+    output = []
+
+    for factor_id, rows in by_factor.items():
+        if len(rows) != len(SEEDS):
             continue
 
-        chosen.append(row)
-        chosen_ids.add(row["config_id"])
-        seen_cells.add(cell)
+        pf_improved = sum(row["delta_pf"] > 0 for row in rows)
+        exp_improved = sum(row["delta_expectancy_r"] > 0 for row in rows)
+        dd_not_worse = sum(row["delta_max_dd_r"] >= -1e-9 for row in rows)
+        split_positive = sum(row["both_temporal_splits_positive"] for row in rows)
+        recent_positive = sum(row["last5y_r"] > 0 for row in rows)
+        recent2_positive = sum(row["last2y_r"] > 0 for row in rows)
 
-        if len(chosen) >= STAGE1_KEEP_PER_FAMILY:
+        median_retention = med(row["trade_retention_pct"] for row in rows)
+        median_delta_pf = med(row["delta_pf"] for row in rows)
+        median_delta_exp = med(row["delta_expectancy_r"] for row in rows)
+        median_delta_r = med(row["delta_total_r"] for row in rows)
+        median_pf = med(row["full_pf"] for row in rows)
+        min_split_pf = min(row["min_temporal_split_pf"] for row in rows)
+        min_eras = min(row["positive_eras"] for row in rows)
+
+        # Predeclared cross-seed support gate.
+        #
+        # We allow total R to fall because a useful filter can improve
+        # risk quality / expectancy while removing trades. But we require:
+        # - PF improves in >=2/3 seeds
+        # - expectancy improves in >=2/3 seeds
+        # - all 3 remain positive in both temporal splits
+        # - >=3 positive eras in every seed
+        # - recent 5Y positive in every seed
+        # - median trade retention >= 45%
+        # - median PF improvement > 0
+        eligible = (
+            pf_improved >= 2
+            and exp_improved >= 2
+            and split_positive == 3
+            and min_eras >= 3
+            and recent_positive == 3
+            and recent2_positive == 3
+            and median_retention >= 45.0
+            and median_delta_pf > 0
+        )
+
+        factor = FACTOR_BY_ID[factor_id]
+
+        output.append({
+            "factor_id": factor_id,
+            "category": factor["category"],
+            "label": factor["label"],
+            "seed_rows": len(rows),
+            "pf_improved_seeds": pf_improved,
+            "expectancy_improved_seeds": exp_improved,
+            "dd_not_worse_seeds": dd_not_worse,
+            "both_split_positive_seeds": split_positive,
+            "recent5y_positive_seeds": recent_positive,
+            "recent2y_positive_seeds": recent2_positive,
+            "recent2y_positive_seeds": recent2_positive,
+            "minimum_positive_eras": min_eras,
+            "median_trade_retention_pct": median_retention,
+            "median_pf": median_pf,
+            "median_delta_pf": median_delta_pf,
+            "median_delta_expectancy_r": median_delta_exp,
+            "median_delta_total_r": median_delta_r,
+            "minimum_temporal_split_pf": min_split_pf,
+            "interaction_eligible": eligible,
+        })
+
+    output.sort(
+        key=lambda row: (
+            1 if row["interaction_eligible"] else 0,
+            row["pf_improved_seeds"],
+            row["expectancy_improved_seeds"],
+            row["median_delta_pf"],
+            row["minimum_temporal_split_pf"],
+            row["median_delta_expectancy_r"],
+        ),
+        reverse=True,
+    )
+
+    return output
+
+
+# ============================================================
+# INTERACTIONS
+# ============================================================
+
+def interaction_id(a, b):
+    ids = sorted([a["factor_id"], b["factor_id"]])
+    return " + ".join(ids)
+
+
+def compatible_factors(a, b):
+    if a["category"] == b["category"]:
+        return False
+
+    # Avoid redundant trend/alignment conditions within the same HTF
+    # in the automatic interaction stage.
+    daily_categories = {"DAILY_TREND", "DAILY_ALIGNMENT"}
+    h4_categories = {"H4_TREND", "H4_ALIGNMENT"}
+
+    if a["category"] in daily_categories and b["category"] in daily_categories:
+        return False
+
+    if a["category"] in h4_categories and b["category"] in h4_categories:
+        return False
+
+    # Do not combine session include with hour exclusion automatically.
+    if {
+        a["category"],
+        b["category"],
+    } == {"NY_SESSION_INCLUDE", "NY_HOUR_EXCLUDE"}:
+        return False
+
+    return True
+
+
+def choose_interaction_factors(consensus_rows, maximum=12):
+    chosen = []
+    category_counts = defaultdict(int)
+
+    for row in consensus_rows:
+        if not row["interaction_eligible"]:
+            continue
+
+        # Preserve variety. Maximum 2 from a category.
+        if category_counts[row["category"]] >= 2:
+            continue
+
+        chosen.append(FACTOR_BY_ID[row["factor_id"]])
+        category_counts[row["category"]] += 1
+
+        if len(chosen) >= maximum:
             break
-
-    if len(chosen) < STAGE1_KEEP_PER_FAMILY:
-        for row in eligible:
-            if row["config_id"] in chosen_ids:
-                continue
-            chosen.append(row)
-            chosen_ids.add(row["config_id"])
-
-            if len(chosen) >= STAGE1_KEEP_PER_FAMILY:
-                break
 
     return chosen
 
 
-# ============================================================
-# STAGE 2 RR SWEEP / FINALISTS
-# ============================================================
-
-def copy_geometry_from_row(row, rr):
-    config = {
-        "timeframe": row["timeframe"],
-        "side": row["side"],
-        "family": row["family"],
-        "rr": rr,
-    }
-
-    for field in [
-        "br_min",
-        "body_atr_min",
-        "range_atr_min",
-        "lookback",
-        "distance_atr_max",
-        "close_location",
-        "wick_body_min",
-        "compression_max",
-        "breakout_lookback",
-    ]:
-        value = row.get(field)
-        if value not in (None, ""):
-            config[field] = value
-
-    config["config_id"] = config_id(config)
-    return config
-
-
-def select_finalists(rows):
+def interaction_consensus(rows):
     grouped = defaultdict(list)
 
     for row in rows:
-        grouped[
-            (
-                row["timeframe"],
-                row["side"],
-            )
-        ].append(row)
+        grouped[row["interaction_id"]].append(row)
 
-    finalists = []
+    output = []
 
-    for _, stream_rows in grouped.items():
-        stream_rows.sort(
-            key=candidate_sort_key,
-            reverse=True,
-        )
+    for iid, group in grouped.items():
+        if len(group) != 3:
+            continue
 
-        # First take the strongest candidate from each family so the final
-        # output is not eight tiny variants of one archetype.
-        by_family = defaultdict(list)
-        for row in stream_rows:
-            by_family[row["family"]].append(row)
+        pf_improved = sum(row["delta_pf"] > 0 for row in group)
+        exp_improved = sum(row["delta_expectancy_r"] > 0 for row in group)
+        split_positive = sum(row["both_temporal_splits_positive"] for row in group)
+        recent_positive = sum(row["last5y_r"] > 0 for row in group)
+        recent2_positive = sum(row["last2y_r"] > 0 for row in group)
 
-        first_pass = []
-        for family_rows in by_family.values():
-            family_rows.sort(
-                key=candidate_sort_key,
-                reverse=True,
-            )
-            first_pass.append(family_rows[0])
+        output.append({
+            "interaction_id": iid,
+            "factor_a_id": group[0]["factor_a_id"],
+            "factor_b_id": group[0]["factor_b_id"],
+            "factor_a_category": group[0]["factor_a_category"],
+            "factor_b_category": group[0]["factor_b_category"],
+            "pf_improved_seeds": pf_improved,
+            "expectancy_improved_seeds": exp_improved,
+            "both_split_positive_seeds": split_positive,
+            "recent5y_positive_seeds": recent_positive,
+            "median_trade_retention_pct": med(
+                row["trade_retention_pct"] for row in group
+            ),
+            "median_pf": med(row["full_pf"] for row in group),
+            "median_delta_pf": med(row["delta_pf"] for row in group),
+            "median_delta_expectancy_r": med(
+                row["delta_expectancy_r"] for row in group
+            ),
+            "median_delta_total_r": med(row["delta_total_r"] for row in group),
+            "minimum_temporal_split_pf": min(
+                row["min_temporal_split_pf"] for row in group
+            ),
+            "minimum_positive_eras": min(
+                row["positive_eras"] for row in group
+            ),
+        })
 
-        first_pass.sort(
-            key=candidate_sort_key,
-            reverse=True,
-        )
+    output.sort(
+        key=lambda row: (
+            row["pf_improved_seeds"],
+            row["expectancy_improved_seeds"],
+            row["minimum_temporal_split_pf"],
+            row["median_delta_pf"],
+            row["median_delta_expectancy_r"],
+        ),
+        reverse=True,
+    )
 
-        selected_ids = set()
-        selected = []
-
-        for row in first_pass:
-            if len(selected) >= FINAL_KEEP_PER_STREAM:
-                break
-            selected.append(row)
-            selected_ids.add(row["config_id"])
-
-        for row in stream_rows:
-            if len(selected) >= FINAL_KEEP_PER_STREAM:
-                break
-            if row["config_id"] in selected_ids:
-                continue
-            selected.append(row)
-            selected_ids.add(row["config_id"])
-
-        finalists.extend(selected)
-
-    return finalists
+    return output
 
 
 # ============================================================
 # DETAILED FINALIST ANALYSIS
 # ============================================================
 
-def detailed_period_rows(config, trades):
+def period_rows(candidate_id, seed_id, trades):
     periods = [
         ("FULL", None, None),
-        (
-            "DEV_2002_2017",
-            None,
-            VALIDATION_START,
-        ),
-        (
-            "VALIDATION_2018_PLUS",
-            VALIDATION_START,
-            None,
-        ),
-        (
-            "PRE_2010",
-            None,
-            PRE2010_END,
-        ),
-        (
-            "2010_PLUS",
-            PRE2010_END,
-            None,
-        ),
+        ("DEV_2002_2017", None, VALIDATION_START),
+        ("VALIDATION_2018_PLUS", VALIDATION_START, None),
         (
             "2002_2007",
             datetime(2002, 1, 1, tzinfo=timezone.utc),
@@ -1714,147 +1508,102 @@ def detailed_period_rows(config, trades):
 
     rows = []
 
-    for name, start, end in periods:
-        result = period_metrics(
-            trades,
-            start,
-            end,
-        )
-
+    for label, start, end in periods:
         rows.append({
-            "config_id": config["config_id"],
-            "timeframe": config["timeframe"],
-            "side": config["side"],
-            "family": config["family"],
-            "period": name,
-            **result,
+            "candidate_id": candidate_id,
+            "seed_id": seed_id,
+            "period": label,
+            **period_metrics(trades, start, end),
         })
 
     return rows
 
 
-def cost_stress_rows(config, features, raw_indices):
-    rows = []
-
-    for multiplier in COST_MULTIPLIERS:
-        trades = backtest(
-            config,
-            features,
-            raw_indices,
-            rr=config["rr"],
-            cost_multiplier=multiplier,
-        )
-
-        result = metrics(trades)
-
-        rows.append({
-            "config_id": config["config_id"],
-            "timeframe": config["timeframe"],
-            "side": config["side"],
-            "family": config["family"],
-            "cost_multiplier": multiplier,
-            "cost_pips": cost_pips_for(
-                config["timeframe"],
-                multiplier,
-            ),
-            **result,
-        })
-
-    return rows
-
-
-def calendar_rows(config, trades):
+def calendar_rows(candidate_id, seed_id, trades):
     if not trades:
         return []
 
     first_year = trades[0]["signal_time"].year
     last_year = trades[-1]["signal_time"].year
-
     rows = []
 
     for year in range(first_year, last_year + 1):
-        start = datetime(
-            year,
-            1,
-            1,
-            tzinfo=timezone.utc,
-        )
-        end = datetime(
-            year + 1,
-            1,
-            1,
-            tzinfo=timezone.utc,
-        )
-
-        result = period_metrics(
-            trades,
-            start,
-            end,
-        )
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
 
         rows.append({
-            "config_id": config["config_id"],
-            "timeframe": config["timeframe"],
-            "side": config["side"],
-            "family": config["family"],
+            "candidate_id": candidate_id,
+            "seed_id": seed_id,
             "year": year,
-            **result,
+            **period_metrics(trades, start, end),
         })
 
     return rows
 
 
-def rolling_rows(config, trades):
+def rolling_rows(candidate_id, seed_id, trades):
     if not trades:
         return []
 
-    first_month = month_floor(
-        trades[0]["signal_time"]
-    )
-    last_month = month_floor(
-        trades[-1]["signal_time"]
-    )
-
+    first_month = month_floor(trades[0]["signal_time"])
+    last_month = month_floor(trades[-1]["signal_time"])
     rows = []
 
     for months in [12, 24, 36]:
-        window_start = first_month
+        start = first_month
 
         while True:
-            window_end = add_months(
-                window_start,
-                months,
-            )
+            end = add_months(start, months)
 
-            if window_end > add_months(
-                last_month,
-                1,
-            ):
+            if end > add_months(last_month, 1):
                 break
 
-            result = period_metrics(
-                trades,
-                window_start,
-                window_end,
-            )
-
             rows.append({
-                "config_id": config["config_id"],
-                "timeframe": config["timeframe"],
-                "side": config["side"],
-                "family": config["family"],
+                "candidate_id": candidate_id,
+                "seed_id": seed_id,
                 "window_months": months,
-                "window_start": iso(window_start),
-                "window_end": iso(window_end),
-                **result,
+                "window_start": iso(start),
+                "window_end": iso(end),
+                **period_metrics(trades, start, end),
             })
 
-            window_start = add_months(
-                window_start,
-                1,
-            )
+            start = add_months(start, 1)
 
     return rows
+
+
+def calendar_summary(rows):
+    grouped = defaultdict(list)
+
+    for row in rows:
+        grouped[(row["candidate_id"], row["seed_id"])].append(row)
+
+    output = []
+
+    for (cid, sid), group in grouped.items():
+        completed = [
+            row for row in group
+            if row["year"] < NOW.year and row["trades"] > 0
+        ]
+
+        values = [row["total_r"] for row in completed]
+        positive = [value for value in values if value > 0]
+
+        output.append({
+            "candidate_id": cid,
+            "seed_id": sid,
+            "active_completed_years": len(values),
+            "positive_active_years": len(positive),
+            "positive_active_years_pct": (
+                100.0 * len(positive) / len(values)
+                if values else 0.0
+            ),
+            "median_active_year_r": med(values),
+            "worst_active_year_r": min(values) if values else 0.0,
+            "best_active_year_r": max(values) if values else 0.0,
+        })
+
+    return output
 
 
 def rolling_summary(rows):
@@ -1863,569 +1612,33 @@ def rolling_summary(rows):
     for row in rows:
         grouped[
             (
-                row["config_id"],
-                row["timeframe"],
-                row["side"],
-                row["family"],
+                row["candidate_id"],
+                row["seed_id"],
                 row["window_months"],
             )
         ].append(row)
 
     output = []
 
-    for key, group in grouped.items():
-        active = [
-            row for row in group
-            if row["trades"] > 0
-        ]
-
-        positive = [
-            row for row in active
-            if row["total_r"] > 0
-        ]
-
-        total_rs = [
-            row["total_r"]
-            for row in active
-        ]
+    for (cid, sid, months), group in grouped.items():
+        active = [row for row in group if row["trades"] > 0]
+        values = [row["total_r"] for row in active]
+        positive = [value for value in values if value > 0]
 
         output.append({
-            "config_id": key[0],
-            "timeframe": key[1],
-            "side": key[2],
-            "family": key[3],
-            "window_months": key[4],
-            "windows": len(group),
+            "candidate_id": cid,
+            "seed_id": sid,
+            "window_months": months,
             "active_windows": len(active),
             "positive_active_windows": len(positive),
             "positive_active_windows_pct": (
                 100.0 * len(positive) / len(active)
                 if active else 0.0
             ),
-            "median_r_active": med(total_rs),
-            "worst_r_active": (
-                min(total_rs)
-                if total_rs else 0.0
-            ),
-            "best_r_active": (
-                max(total_rs)
-                if total_rs else 0.0
-            ),
+            "median_r_active": med(values),
+            "worst_r_active": min(values) if values else 0.0,
+            "best_r_active": max(values) if values else 0.0,
         })
-
-    return output
-
-
-def calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[
-            (
-                row["config_id"],
-                row["timeframe"],
-                row["side"],
-                row["family"],
-            )
-        ].append(row)
-
-    output = []
-
-    for key, group in grouped.items():
-        completed = [
-            row for row in group
-            if row["year"] < NOW.year
-        ]
-
-        active = [
-            row for row in completed
-            if row["trades"] > 0
-        ]
-
-        positive = [
-            row for row in active
-            if row["total_r"] > 0
-        ]
-
-        values = [
-            row["total_r"]
-            for row in active
-        ]
-
-        output.append({
-            "config_id": key[0],
-            "timeframe": key[1],
-            "side": key[2],
-            "family": key[3],
-            "completed_years": len(completed),
-            "active_completed_years": len(active),
-            "positive_active_years": len(positive),
-            "positive_active_years_pct": (
-                100.0 * len(positive) / len(active)
-                if active else 0.0
-            ),
-            "median_active_year_r": med(values),
-            "worst_active_year_r": (
-                min(values)
-                if values else 0.0
-            ),
-            "best_active_year_r": (
-                max(values)
-                if values else 0.0
-            ),
-        })
-
-    return output
-
-
-# ============================================================
-# PARAMETER PLATEAU
-# ============================================================
-
-PARAM_FIELDS = [
-    "br_min",
-    "body_atr_min",
-    "range_atr_min",
-    "lookback",
-    "distance_atr_max",
-    "close_location",
-    "wick_body_min",
-    "compression_max",
-    "breakout_lookback",
-]
-
-
-def geometry_tuple(row):
-    return tuple(
-        row.get(field)
-        for field in PARAM_FIELDS
-    )
-
-
-def difference_count(a, b):
-    count = 0
-
-    for field in PARAM_FIELDS:
-        av = a.get(field)
-        bv = b.get(field)
-
-        if av != bv:
-            count += 1
-
-    return count
-
-
-def plateau_rows(finalists, stage2_rows):
-    rows = []
-
-    by_stream_family = defaultdict(list)
-
-    for row in stage2_rows:
-        by_stream_family[
-            (
-                row["timeframe"],
-                row["side"],
-                row["family"],
-            )
-        ].append(row)
-
-    for finalist in finalists:
-        pool = by_stream_family[
-            (
-                finalist["timeframe"],
-                finalist["side"],
-                finalist["family"],
-            )
-        ]
-
-        neighbours = [
-            row for row in pool
-            if (
-                abs(row["rr"] - finalist["rr"]) <= 0.500001
-                and difference_count(
-                    row,
-                    finalist,
-                ) <= 1
-            )
-        ]
-
-        if not neighbours:
-            neighbours = [finalist]
-
-        positive = [
-            row for row in neighbours
-            if row["full_total_r"] > 0
-        ]
-
-        split_positive = [
-            row for row in neighbours
-            if row["both_temporal_splits_positive"]
-        ]
-
-        pfs = [
-            row["full_pf"]
-            for row in neighbours
-        ]
-
-        total_rs = [
-            row["full_total_r"]
-            for row in neighbours
-        ]
-
-        rows.append({
-            "config_id": finalist["config_id"],
-            "timeframe": finalist["timeframe"],
-            "side": finalist["side"],
-            "family": finalist["family"],
-            "neighbour_count": len(neighbours),
-            "positive_neighbours": len(positive),
-            "positive_neighbours_pct": (
-                100.0 * len(positive) / len(neighbours)
-            ),
-            "both_split_positive_neighbours": len(split_positive),
-            "both_split_positive_neighbours_pct": (
-                100.0 * len(split_positive) / len(neighbours)
-            ),
-            "median_neighbour_pf": med(pfs),
-            "min_neighbour_pf": min(pfs),
-            "max_neighbour_pf": max(pfs),
-            "median_neighbour_total_r": med(total_rs),
-            "min_neighbour_total_r": min(total_rs),
-            "max_neighbour_total_r": max(total_rs),
-        })
-
-    return rows
-
-
-# ============================================================
-# FAMILY SUMMARY
-# ============================================================
-
-def family_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[
-            (
-                row["timeframe"],
-                row["side"],
-                row["family"],
-            )
-        ].append(row)
-
-    output = []
-
-    for key, group in grouped.items():
-        positive = [
-            row for row in group
-            if row["full_total_r"] > 0
-        ]
-
-        promising = [
-            row for row in group
-            if row["promising_pass"]
-        ]
-
-        split_positive = [
-            row for row in group
-            if row["both_temporal_splits_positive"]
-        ]
-
-        sorted_group = sorted(
-            group,
-            key=candidate_sort_key,
-            reverse=True,
-        )
-        best = sorted_group[0]
-
-        output.append({
-            "timeframe": key[0],
-            "side": key[1],
-            "family": key[2],
-            "configs_tested": len(group),
-            "positive_full_configs": len(positive),
-            "positive_full_pct": (
-                100.0 * len(positive) / len(group)
-            ),
-            "both_split_positive_configs": len(split_positive),
-            "both_split_positive_pct": (
-                100.0 * len(split_positive) / len(group)
-            ),
-            "promising_configs": len(promising),
-            "promising_pct": (
-                100.0 * len(promising) / len(group)
-            ),
-            "best_config_id": best["config_id"],
-            "best_full_trades": best["full_trades"],
-            "best_full_pf": best["full_pf"],
-            "best_full_total_r": best["full_total_r"],
-            "best_min_temporal_split_pf": best["min_temporal_split_pf"],
-            "best_validation_2018_plus_r": best[
-                "validation_2018_plus_r"
-            ],
-            "best_last5y_r": best["last5y_r"],
-        })
-
-    output.sort(
-        key=lambda row: (
-            row["timeframe"],
-            row["side"],
-            -row["promising_pct"],
-            -row["best_full_pf"],
-        )
-    )
-
-    return output
-
-
-
-def rr_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[(row["family"], row["rr"])].append(row)
-
-    output = []
-
-    for (family, rr), group in grouped.items():
-        output.append({
-            "family": family,
-            "rr": rr,
-            "configs": len(group),
-            "median_trades": med(row["full_trades"] for row in group),
-            "median_pf": med(row["full_pf"] for row in group),
-            "median_total_r": med(row["full_total_r"] for row in group),
-            "median_expectancy_r": med(row["full_expectancy_r"] for row in group),
-            "positive_full_pct": (
-                100.0 * sum(row["full_total_r"] > 0 for row in group) / len(group)
-            ),
-            "both_temporal_splits_positive_pct": (
-                100.0
-                * sum(row["both_temporal_splits_positive"] for row in group)
-                / len(group)
-            ),
-            "promising_pct": (
-                100.0 * sum(row["promising_pass"] for row in group) / len(group)
-            ),
-            "median_min_temporal_split_pf": med(
-                row["min_temporal_split_pf"] for row in group
-            ),
-            "median_last5y_r": med(row["last5y_r"] for row in group),
-            "median_last2y_r": med(row["last2y_r"] for row in group),
-        })
-
-    output.sort(key=lambda row: (row["family"], row["rr"]))
-    return output
-
-
-def axis_summary(rows):
-    """
-    Descriptive parameter-axis summaries at fixed Stage-1 RR.
-    Never used directly to choose the winner.
-    """
-    fields = [
-        "compression_max",
-        "body_atr_min",
-        "range_atr_min",
-        "breakout_lookback",
-    ]
-
-    output = []
-
-    for field in fields:
-        grouped = defaultdict(list)
-
-        for row in rows:
-            grouped[row.get(field)].append(row)
-
-        for value, group in grouped.items():
-            output.append({
-                "family": "COMPRESSION_BREAKOUT",
-                "parameter": field,
-                "value": value,
-                "configs": len(group),
-                "median_trades": med(row["full_trades"] for row in group),
-                "median_pf": med(row["full_pf"] for row in group),
-                "median_total_r": med(row["full_total_r"] for row in group),
-                "median_expectancy_r": med(
-                    row["full_expectancy_r"] for row in group
-                ),
-                "positive_full_pct": (
-                    100.0
-                    * sum(row["full_total_r"] > 0 for row in group)
-                    / len(group)
-                ),
-                "both_split_positive_pct": (
-                    100.0
-                    * sum(
-                        row["both_temporal_splits_positive"]
-                        for row in group
-                    )
-                    / len(group)
-                ),
-                "promising_pct": (
-                    100.0
-                    * sum(row["promising_pass"] for row in group)
-                    / len(group)
-                ),
-                "median_min_temporal_split_pf": med(
-                    row["min_temporal_split_pf"] for row in group
-                ),
-                "median_last5y_r": med(row["last5y_r"] for row in group),
-                "median_last2y_r": med(row["last2y_r"] for row in group),
-            })
-
-    output.sort(
-        key=lambda row: (
-            row["parameter"],
-            float(row["value"]),
-        )
-    )
-    return output
-
-
-# ============================================================
-# ROBUST FINAL PASS
-# ============================================================
-
-def add_final_robustness(
-    finalist_rows,
-    cost_rows,
-    rolling_summary_rows,
-    calendar_summary_rows,
-    plateau_summary_rows,
-):
-    cost_map = {}
-    for row in cost_rows:
-        if abs(row["cost_multiplier"] - 2.0) < 1e-9:
-            cost_map[row["config_id"]] = row
-
-    rolling_map = defaultdict(dict)
-    for row in rolling_summary_rows:
-        rolling_map[row["config_id"]][
-            row["window_months"]
-        ] = row
-
-    calendar_map = {
-        row["config_id"]: row
-        for row in calendar_summary_rows
-    }
-
-    plateau_map = {
-        row["config_id"]: row
-        for row in plateau_summary_rows
-    }
-
-    output = []
-
-    for row in finalist_rows:
-        row = dict(row)
-
-        cost2 = cost_map.get(
-            row["config_id"],
-            {},
-        )
-        r12 = rolling_map[
-            row["config_id"]
-        ].get(12, {})
-        r24 = rolling_map[
-            row["config_id"]
-        ].get(24, {})
-        r36 = rolling_map[
-            row["config_id"]
-        ].get(36, {})
-        cal = calendar_map.get(
-            row["config_id"],
-            {},
-        )
-        plateau = plateau_map.get(
-            row["config_id"],
-            {},
-        )
-
-        row.update({
-            "cost_2x_pf": cost2.get("profit_factor", 0.0),
-            "cost_2x_total_r": cost2.get("total_r", 0.0),
-            "rolling12_positive_pct": r12.get(
-                "positive_active_windows_pct",
-                0.0,
-            ),
-            "rolling12_worst_r": r12.get(
-                "worst_r_active",
-                0.0,
-            ),
-            "rolling24_positive_pct": r24.get(
-                "positive_active_windows_pct",
-                0.0,
-            ),
-            "rolling24_worst_r": r24.get(
-                "worst_r_active",
-                0.0,
-            ),
-            "rolling36_positive_pct": r36.get(
-                "positive_active_windows_pct",
-                0.0,
-            ),
-            "rolling36_worst_r": r36.get(
-                "worst_r_active",
-                0.0,
-            ),
-            "positive_calendar_year_pct": cal.get(
-                "positive_active_years_pct",
-                0.0,
-            ),
-            "worst_calendar_year_r": cal.get(
-                "worst_active_year_r",
-                0.0,
-            ),
-            "plateau_positive_neighbours_pct": plateau.get(
-                "positive_neighbours_pct",
-                0.0,
-            ),
-            "plateau_split_positive_neighbours_pct": plateau.get(
-                "both_split_positive_neighbours_pct",
-                0.0,
-            ),
-            "plateau_median_pf": plateau.get(
-                "median_neighbour_pf",
-                0.0,
-            ),
-        })
-
-        min_trade_requirement = (
-            40
-            if row["timeframe"] == "H1"
-            else 50
-        )
-
-        row["robust_pass"] = (
-            row["full_trades"] >= min_trade_requirement
-            and row["full_pf"] >= 1.40
-            and row["both_temporal_splits_positive"]
-            and row["min_temporal_split_pf"] >= 1.10
-            and row["positive_eras"] >= 3
-            and row["last5y_r"] > 0
-            and row["last2y_r"] > 0
-            and row["cost_2x_pf"] >= 1.20
-            and row["cost_2x_total_r"] > 0
-            and row["rolling24_positive_pct"] >= 65.0
-            and row["rolling36_positive_pct"] >= 75.0
-            and row["plateau_positive_neighbours_pct"] >= 80.0
-            and row["plateau_split_positive_neighbours_pct"] >= 80.0
-        )
-
-        output.append(row)
-
-    output.sort(
-        key=lambda row: (
-            1 if row["robust_pass"] else 0,
-            row["min_temporal_split_pf"],
-            row["cost_2x_pf"],
-            row["full_pf"],
-            row["full_total_r"],
-        ),
-        reverse=True,
-    )
 
     return output
 
@@ -2436,11 +1649,9 @@ def add_final_robustness(
 
 def run_research():
     try:
-        STATUS.update({
-            "state": "fetching",
-            "message": "Fetching full EUR/JPY H1 history",
-        })
-
+        # ----------------------------------------------------
+        # FETCH
+        # ----------------------------------------------------
         h1 = fetch_history(
             "H1",
             REQUESTED_START,
@@ -2448,474 +1659,639 @@ def run_research():
             chunk_days=180,
         )
 
-        if len(h1) < 5000:
+        h4 = fetch_history(
+            "H4",
+            WARMUP_START,
+            NOW,
+            chunk_days=365,
+        )
+
+        daily = fetch_history(
+            "D",
+            WARMUP_START,
+            NOW,
+            chunk_days=1500,
+        )
+
+        if len(h1) < 50000:
             raise RuntimeError(
-                f"Unexpectedly small H1 history: {len(h1)} candles"
+                f"Unexpectedly small H1 history: {len(h1)}"
             )
 
-        coverage_rows = [
-            {
-                "pair": PAIR,
-                "timeframe": "H1",
-                "side": "SHORT",
-                "candles": len(h1),
-                "first_candle_utc": iso(h1[0]["time"]),
-                "last_candle_utc": iso(h1[-1]["time"]),
-                "primary_adverse_cost_pips": H1_PRIMARY_COST_PIPS,
-                "stop_buffer_ticks": STOP_BUFFER_TICKS,
-            },
-        ]
-        write_csv(OUTS["coverage"], coverage_rows)
+        if len(h4) < 10000:
+            raise RuntimeError(
+                f"Unexpectedly small H4 history: {len(h4)}"
+            )
 
+        if len(daily) < 5000:
+            raise RuntimeError(
+                f"Unexpectedly small daily history: {len(daily)}"
+            )
+
+        write_csv(
+            OUT["coverage"],
+            [
+                {
+                    "granularity": "H1",
+                    "candles": len(h1),
+                    "first_utc": iso(h1[0]["time"]),
+                    "last_utc": iso(h1[-1]["time"]),
+                },
+                {
+                    "granularity": "H4",
+                    "candles": len(h4),
+                    "first_utc": iso(h4[0]["time"]),
+                    "last_utc": iso(h4[-1]["time"]),
+                    "alignment_timezone": "America/New_York",
+                    "daily_alignment": 17,
+                },
+                {
+                    "granularity": "D",
+                    "candles": len(daily),
+                    "first_utc": iso(daily[0]["time"]),
+                    "last_utc": iso(daily[-1]["time"]),
+                    "alignment_timezone": "America/New_York",
+                    "daily_alignment": 17,
+                },
+            ],
+        )
+
+        # ----------------------------------------------------
+        # FEATURES / STRICT HTF STATE
+        # ----------------------------------------------------
         STATUS.update({
             "state": "features",
-            "message": "Building EUR/JPY H1 short feature cache",
+            "message": "Building H1 short compression features and strict HTF state",
         })
-        h1_features = build_features(h1, "H1")
 
-        feature_map = {
-            "H1": h1_features,
-        }
+        features = build_h1_features(h1)
+
+        daily_state = map_strict_previous_htf_state(
+            features["times"],
+            daily,
+            "D",
+        )
+
+        h4_state = map_strict_previous_htf_state(
+            features["times"],
+            h4,
+            "H4",
+        )
+
+        start_index = bisect_left(
+            features["times"],
+            REQUESTED_START,
+        )
+
+        raw_by_seed = {}
+
+        for seed in SEEDS:
+            raw = raw_seed_signals(features, seed)
+            raw = raw[raw >= start_index]
+            raw_by_seed[seed["seed_id"]] = raw
 
         # ----------------------------------------------------
-        # STAGE 1
+        # FACTOR DEFINITIONS
         # ----------------------------------------------------
-        stage1_rows = []
-        config_map = {}
-        signal_cache = {}
+        factor_rows = []
 
-        streams = [
-            ("H1", "SHORT"),
-        ]
-
-        total_configs = 0
-        stream_configs = {}
-
-        for timeframe, side in streams:
-            configs = stage1_configs(
-                timeframe,
-                side,
-                feature_map[timeframe],
-            )
-            stream_configs[(timeframe, side)] = configs
-            total_configs += len(configs)
-
-        completed = 0
-
-        for timeframe, side in streams:
-            features = feature_map[timeframe]
-
-            for config in stream_configs[(timeframe, side)]:
-                completed += 1
-
-                STATUS.update({
-                    "state": "stage1",
-                    "message": (
-                        f"{completed}/{total_configs} "
-                        f"{config['config_id']}"
-                    ),
-                })
-
-                raw_indices = signal_indices(
-                    config,
-                    features,
-                )
-
-                signal_cache[
-                    config["config_id"]
-                ] = raw_indices
-
-                row, _ = evaluate_candidate(
-                    config,
-                    features,
-                    raw_indices,
-                )
-
-                stage1_rows.append(row)
-                config_map[config["config_id"]] = config
-
-        stage1_rows.sort(
-            key=lambda row: (
-                row["timeframe"],
-                row["side"],
-                row["family"],
-                -row["full_pf"],
-            )
-        )
-
-        write_csv(
-            OUTS["stage1"],
-            stage1_rows,
-        )
-
-        stage1_shortlist = shortlist_stage1(
-            stage1_rows
-        )
-
-        write_csv(
-            OUTS["stage1_shortlist"],
-            stage1_shortlist,
-        )
-        write_csv(
-            OUTS["axis_summary"],
-            axis_summary(stage1_rows),
-        )
-
-        # ----------------------------------------------------
-        # STAGE 2 — RR SWEEP ONLY
-        # ----------------------------------------------------
-        stage2_rows = []
-        stage2_config_map = {}
-        stage2_signal_cache = {}
-
-        total_stage2 = len(stage1_shortlist) * len(RR_GRID)
-        stage2_completed = 0
-
-        for base_row in stage1_shortlist:
-            base_config = config_map[
-                base_row["config_id"]
-            ]
-            raw_indices = signal_cache[
-                base_row["config_id"]
-            ]
-            features = feature_map[
-                base_row["timeframe"]
-            ]
-
-            for rr in RR_GRID:
-                stage2_completed += 1
-
-                config = dict(base_config)
-                config["rr"] = rr
-                config["config_id"] = config_id(config)
-
-                STATUS.update({
-                    "state": "stage2_rr",
-                    "message": (
-                        f"{stage2_completed}/{total_stage2} "
-                        f"{config['config_id']}"
-                    ),
-                })
-
-                row, _ = evaluate_candidate(
-                    config,
-                    features,
-                    raw_indices,
-                )
-
-                stage2_rows.append(row)
-                stage2_config_map[
-                    config["config_id"]
-                ] = config
-                stage2_signal_cache[
-                    config["config_id"]
-                ] = raw_indices
-
-        stage2_rows.sort(
-            key=lambda row: (
-                row["timeframe"],
-                row["side"],
-                row["family"],
-                -row["full_pf"],
-            )
-        )
-
-        write_csv(
-            OUTS["stage2_rr"],
-            stage2_rows,
-        )
-        write_csv(
-            OUTS["rr_summary"],
-            rr_summary(stage2_rows),
-        )
-
-        # ----------------------------------------------------
-        # PREVIOUS WINNER / ANCHOR REPRODUCTION CHECK
-        # ----------------------------------------------------
-        anchor_rows = [
-            row for row in stage2_rows
-            if (
-                row["family"] == "COMPRESSION_BREAKOUT"
-                and abs(float(row.get("compression_max") or 0) - 0.80) < 1e-9
-                and abs(float(row.get("body_atr_min") or 0) - 1.10) < 1e-9
-                and abs(float(row.get("range_atr_min") or 0) - 1.65) < 1e-9
-                and int(row.get("breakout_lookback") or 0) == 3
-                and abs(float(row["rr"]) - 7.50) < 1e-9
-            )
-        ]
-
-        # The diversity shortlist should include the previous anchor. If it
-        # does not, evaluate it directly so this refinement always reports
-        # a clean continuity check against the preceding run.
-        if not anchor_rows:
-            anchor_config = {
-                "timeframe": "H1",
-                "side": "SHORT",
-                "family": "COMPRESSION_BREAKOUT",
-                "compression_max": 0.80,
-                "body_atr_min": 1.10,
-                "range_atr_min": 1.65,
-                "breakout_lookback": 3,
-                "rr": 7.50,
+        for factor in FACTORS:
+            row = {
+                "factor_id": factor["factor_id"],
+                "category": factor["category"],
+                "kind": factor["kind"],
+                "label": factor["label"],
             }
-            anchor_config["config_id"] = config_id(anchor_config)
-            anchor_raw = signal_indices(
-                anchor_config,
-                feature_map["H1"],
-            )
-            anchor_row, _ = evaluate_candidate(
-                anchor_config,
-                feature_map["H1"],
-                anchor_raw,
-            )
-            anchor_rows = [anchor_row]
 
-        for row in anchor_rows:
-            row["previous_reference_trades"] = 114
-            row["previous_reference_pf"] = 1.954
-            row["previous_reference_total_r"] = 85.88
-            row["trade_count_not_below_previous"] = (
-                row["full_trades"] >= 114
-            )
+            for key in [
+                "tf",
+                "ema_period",
+                "fast",
+                "slow",
+                "threshold",
+                "hour",
+                "start_hour",
+                "end_hour",
+                "weekday",
+            ]:
+                row[key] = factor.get(key)
+
+            factor_rows.append(row)
 
         write_csv(
-            OUTS["anchor_check"],
-            anchor_rows,
+            OUT["factor_definitions"],
+            factor_rows,
         )
 
         # ----------------------------------------------------
-        # FINALIST SELECTION
+        # CONTROLS
         # ----------------------------------------------------
-        finalist_seed_rows = select_finalists(
-            stage2_rows
-        )
+        controls = {}
+        control_metrics = {}
+        control_rows = []
+        hour_diag = []
+        weekday_diag = []
 
-        periods = []
-        costs = []
-        calendar = []
-        rolling = []
-        all_trades = []
-
-        finalist_trade_map = {}
-
-        for number, row in enumerate(
-            finalist_seed_rows,
-            1,
-        ):
-            config = stage2_config_map[
-                row["config_id"]
-            ]
-            features = feature_map[
-                row["timeframe"]
-            ]
-            raw_indices = stage2_signal_cache[
-                row["config_id"]
-            ]
-
-            STATUS.update({
-                "state": "final_analysis",
-                "message": (
-                    f"{number}/{len(finalist_seed_rows)} "
-                    f"{row['config_id']}"
-                ),
-            })
+        for seed in SEEDS:
+            seed_id = seed["seed_id"]
 
             trades = backtest(
-                config,
+                seed_id,
                 features,
-                raw_indices,
-                rr=config["rr"],
+                raw_by_seed[seed_id],
                 cost_multiplier=1.0,
             )
 
-            finalist_trade_map[
-                row["config_id"]
-            ] = trades
+            controls[seed_id] = trades
+            control_metrics[seed_id] = metrics(trades)
 
-            periods.extend(
-                detailed_period_rows(
-                    config,
+            row = evaluate_result(
+                seed_id,
+                seed["lookback"],
+                "CONTROL",
+                trades,
+            )
+            row["rr"] = seed["rr"]
+            control_rows.append(row)
+
+            hour_diag.extend(
+                diagnostics_by_bucket(
+                    seed_id,
+                    seed["lookback"],
                     trades,
-                )
-            )
-
-            costs.extend(
-                cost_stress_rows(
-                    config,
                     features,
-                    raw_indices,
+                    "ny_hour",
+                    [(hour, f"{hour:02d}:00") for hour in range(24)],
                 )
             )
 
-            cal_rows = calendar_rows(
-                config,
-                trades,
+            weekday_diag.extend(
+                diagnostics_by_bucket(
+                    seed_id,
+                    seed["lookback"],
+                    trades,
+                    features,
+                    "ny_weekday",
+                    [
+                        (0, "MON"),
+                        (1, "TUE"),
+                        (2, "WED"),
+                        (3, "THU"),
+                        (4, "FRI"),
+                    ],
+                )
             )
-            calendar.extend(cal_rows)
 
-            roll_rows = rolling_rows(
-                config,
-                trades,
+        write_csv(OUT["controls"], control_rows)
+        write_csv(OUT["hour_diagnostics"], hour_diag)
+        write_csv(OUT["weekday_diagnostics"], weekday_diag)
+
+        # Carry-forward guard against the exact boundary-refinement results.
+        expected = {
+            "SEED_A_LB2_RR7_25": {
+                "trades": 116,
+                "pf": 2.150900,
+                "total_r": 102.430109,
+            },
+            "SEED_B_LB3_RR7_25": {
+                "trades": 114,
+                "pf": 1.990868,
+                "total_r": 88.187249,
+            },
+            "SEED_C_LB3_RR7_50": {
+                "trades": 114,
+                "pf": 1.954187,
+                "total_r": 85.876819,
+            },
+        }
+
+        parity_rows = []
+
+        for seed in SEEDS:
+            seed_id = seed["seed_id"]
+            exp = expected[seed_id]
+            actual = control_metrics[seed_id]
+
+            parity_rows.append({
+                "seed_id": seed_id,
+                "lookback": seed["lookback"],
+                "rr": seed["rr"],
+                "expected_min_trades": exp["trades"],
+                "actual_trades": actual["trades"],
+                "expected_pf_reference": exp["pf"],
+                "actual_pf": actual["profit_factor"],
+                "expected_total_r_reference": exp["total_r"],
+                "actual_total_r": actual["total_r"],
+                "trade_count_pass": actual["trades"] >= exp["trades"],
+            })
+
+            if actual["trades"] < exp["trades"]:
+                raise RuntimeError(
+                    f"{seed_id} control fell below prior boundary-refinement "
+                    f"trade count: {actual['trades']} < {exp['trades']}"
+                )
+
+        # ----------------------------------------------------
+        # SINGLE FACTORS
+        # ----------------------------------------------------
+        single_rows = []
+
+        noncontrol_factors = [
+            factor for factor in FACTORS
+            if factor["factor_id"] != "CONTROL"
+        ]
+
+        factor_masks = {}
+
+        for factor in noncontrol_factors:
+            factor_masks[factor["factor_id"]] = factor_mask(
+                factor,
+                features,
+                daily_state,
+                h4_state,
             )
-            rolling.extend(roll_rows)
 
-            for trade in trades:
-                output = dict(trade)
+        total_jobs = len(noncontrol_factors) * len(SEEDS)
+        job = 0
 
-                for key in [
-                    "signal_time",
-                    "exit_time",
-                ]:
-                    output[key] = iso(output[key])
+        for factor in noncontrol_factors:
+            mask = factor_masks[factor["factor_id"]]
 
-                output.update({
-                    "pair": PAIR,
-                    "candidate_timeframe": config["timeframe"],
-                    "candidate_side": config["side"],
-                    "candidate_family": config["family"],
+            for seed in SEEDS:
+                job += 1
+                seed_id = seed["seed_id"]
+
+                STATUS.update({
+                    "state": "single_factor",
+                    "message": (
+                        f"{job}/{total_jobs} "
+                        f"{seed_id} {factor['factor_id']}"
+                    ),
                 })
 
-                all_trades.append(output)
+                raw = raw_by_seed[seed_id]
+                filtered = raw[mask[raw]]
 
-        rolling_summaries = rolling_summary(
-            rolling
-        )
-        calendar_summaries = calendar_summary(
-            calendar
-        )
-        plateau_summaries = plateau_rows(
-            finalist_seed_rows,
-            stage2_rows,
-        )
+                trades = backtest(
+                    seed_id,
+                    features,
+                    filtered,
+                    cost_multiplier=1.0,
+                )
 
-        final_rows = add_final_robustness(
-            finalist_seed_rows,
-            costs,
-            rolling_summaries,
-            calendar_summaries,
-            plateau_summaries,
-        )
+                row = evaluate_result(
+                    seed_id,
+                    seed["lookback"],
+                    factor["factor_id"],
+                    trades,
+                    control_metrics=control_metrics[seed_id],
+                )
+
+                row.update({
+                    "rr": seed["rr"],
+                    "factor_id": factor["factor_id"],
+                    "category": factor["category"],
+                    "label": factor["label"],
+                })
+
+                single_rows.append(row)
 
         write_csv(
-            OUTS["finalists"],
-            final_rows,
-        )
-        write_csv(
-            OUTS["family_summary"],
-            family_summary(stage2_rows),
-        )
-        write_csv(
-            OUTS["periods"],
-            periods,
-        )
-        write_csv(
-            OUTS["cost_stress"],
-            costs,
-        )
-        write_csv(
-            OUTS["calendar"],
-            calendar,
-        )
-        write_csv(
-            OUTS["calendar_summary"],
-            calendar_summaries,
-        )
-        write_csv(
-            OUTS["rolling"],
-            rolling,
-        )
-        write_csv(
-            OUTS["rolling_summary"],
-            rolling_summaries,
-        )
-        write_csv(
-            OUTS["plateau"],
-            plateau_summaries,
-        )
-        write_csv(
-            OUTS["trades"],
-            all_trades,
+            OUT["single_factor"],
+            single_rows,
         )
 
-        robust = [
-            row for row in final_rows
-            if row["robust_pass"]
+        consensus = build_consensus(single_rows)
+
+        write_csv(
+            OUT["single_factor_consensus"],
+            consensus,
+        )
+
+        # ----------------------------------------------------
+        # LIMITED TWO-FACTOR INTERACTIONS
+        # ----------------------------------------------------
+        interaction_factors = choose_interaction_factors(
+            consensus,
+            maximum=12,
+        )
+
+        pairs = []
+
+        for i in range(len(interaction_factors)):
+            for j in range(i + 1, len(interaction_factors)):
+                fa = interaction_factors[i]
+                fb = interaction_factors[j]
+
+                if compatible_factors(fa, fb):
+                    pairs.append((fa, fb))
+
+        interaction_rows = []
+
+        total_jobs = len(pairs) * len(SEEDS)
+        job = 0
+
+        for fa, fb in pairs:
+            mask = (
+                factor_masks[fa["factor_id"]]
+                & factor_masks[fb["factor_id"]]
+            )
+
+            iid = interaction_id(fa, fb)
+
+            for seed in SEEDS:
+                job += 1
+                seed_id = seed["seed_id"]
+
+                STATUS.update({
+                    "state": "interactions",
+                    "message": (
+                        f"{job}/{max(total_jobs, 1)} "
+                        f"{seed_id} {iid}"
+                    ),
+                })
+
+                raw = raw_by_seed[seed_id]
+                filtered = raw[mask[raw]]
+
+                trades = backtest(
+                    seed_id,
+                    features,
+                    filtered,
+                    cost_multiplier=1.0,
+                )
+
+                row = evaluate_result(
+                    seed_id,
+                    seed["lookback"],
+                    iid,
+                    trades,
+                    control_metrics=control_metrics[seed_id],
+                )
+
+                row.update({
+                    "rr": seed["rr"],
+                    "interaction_id": iid,
+                    "factor_a_id": fa["factor_id"],
+                    "factor_b_id": fb["factor_id"],
+                    "factor_a_category": fa["category"],
+                    "factor_b_category": fb["category"],
+                    "factor_a_label": fa["label"],
+                    "factor_b_label": fb["label"],
+                })
+
+                interaction_rows.append(row)
+
+        write_csv(
+            OUT["interaction"],
+            interaction_rows,
+        )
+
+        interaction_cons = interaction_consensus(
+            interaction_rows
+        )
+
+        write_csv(
+            OUT["interaction_consensus"],
+            interaction_cons,
+        )
+
+        # ----------------------------------------------------
+        # FINALISTS
+        # ----------------------------------------------------
+        candidate_specs = [{
+            "candidate_id": "CONTROL",
+            "type": "CONTROL",
+            "factor_ids": [],
+        }]
+
+        for row in [
+            r for r in consensus
+            if r["interaction_eligible"]
+        ][:5]:
+            candidate_specs.append({
+                "candidate_id": row["factor_id"],
+                "type": "SINGLE",
+                "factor_ids": [row["factor_id"]],
+            })
+
+        # Interaction finalists must preserve recent positivity across
+        # all three raw seeds and avoid severe over-pruning.
+        eligible_interactions = [
+            row for row in interaction_cons
+            if (
+                row["pf_improved_seeds"] >= 2
+                and row["expectancy_improved_seeds"] >= 2
+                and row["both_split_positive_seeds"] == 3
+                and row.get("recent5y_positive_seeds", 0) == 3
+                and row.get("recent2y_positive_seeds", 0) == 3
+                and row["median_trade_retention_pct"] >= 35.0
+                and row["minimum_positive_eras"] >= 3
+            )
         ]
+
+        for row in eligible_interactions[:5]:
+            candidate_specs.append({
+                "candidate_id": row["interaction_id"],
+                "type": "INTERACTION",
+                "factor_ids": [
+                    row["factor_a_id"],
+                    row["factor_b_id"],
+                ],
+            })
+
+        # Deduplicate.
+        unique_specs = {}
+        for spec in candidate_specs:
+            unique_specs[spec["candidate_id"]] = spec
+        candidate_specs = list(unique_specs.values())
+
+        finalist_rows = []
+        detailed_periods = []
+        cost_rows = []
+        calendar = []
+        rolling = []
+        trade_rows = []
+
+        for candidate_no, spec in enumerate(candidate_specs, 1):
+            for seed in SEEDS:
+                seed_id = seed["seed_id"]
+
+                STATUS.update({
+                    "state": "final_analysis",
+                    "message": (
+                        f"{candidate_no}/{len(candidate_specs)} "
+                        f"{spec['candidate_id']} {seed_id}"
+                    ),
+                })
+
+                raw = raw_by_seed[seed_id]
+
+                if spec["type"] == "CONTROL":
+                    filtered = raw
+                else:
+                    combined_mask = np.ones(
+                        len(features["times"]),
+                        dtype=bool,
+                    )
+
+                    for fid in spec["factor_ids"]:
+                        combined_mask &= factor_masks[fid]
+
+                    filtered = raw[combined_mask[raw]]
+
+                trades = backtest(
+                    seed_id,
+                    features,
+                    filtered,
+                    cost_multiplier=1.0,
+                )
+
+                row = evaluate_result(
+                    seed_id,
+                    seed["lookback"],
+                    spec["candidate_id"],
+                    trades,
+                    control_metrics=control_metrics[seed_id],
+                )
+
+                row.update({
+                    "rr": seed["rr"],
+                    "candidate_id": spec["candidate_id"],
+                    "candidate_type": spec["type"],
+                    "factor_ids": ";".join(spec["factor_ids"]),
+                })
+
+                finalist_rows.append(row)
+
+                detailed_periods.extend(
+                    period_rows(
+                        spec["candidate_id"],
+                        seed_id,
+                        trades,
+                    )
+                )
+
+                for multiplier in [0.5, 1.0, 1.5, 2.0]:
+                    stressed = backtest(
+                        seed_id,
+                        features,
+                        filtered,
+                        cost_multiplier=multiplier,
+                    )
+
+                    cost_rows.append({
+                        "candidate_id": spec["candidate_id"],
+                        "seed_id": seed_id,
+                        "lookback": seed["lookback"],
+                        "rr": seed["rr"],
+                        "cost_multiplier": multiplier,
+                        "cost_pips": BASE_COST_PIPS * multiplier,
+                        **metrics(stressed),
+                    })
+
+                calendar.extend(
+                    calendar_rows(
+                        spec["candidate_id"],
+                        seed_id,
+                        trades,
+                    )
+                )
+
+                rolling.extend(
+                    rolling_rows(
+                        spec["candidate_id"],
+                        seed_id,
+                        trades,
+                    )
+                )
+
+                for trade in trades:
+                    output = dict(trade)
+                    output["signal_time"] = iso(output["signal_time"])
+                    output["exit_time"] = iso(output["exit_time"])
+                    output.update({
+                        "candidate_id": spec["candidate_id"],
+                        "candidate_type": spec["type"],
+                        "factor_ids": ";".join(spec["factor_ids"]),
+                    })
+                    trade_rows.append(output)
+
+        write_csv(OUT["finalists"], finalist_rows)
+        write_csv(OUT["periods"], detailed_periods)
+        write_csv(OUT["cost_stress"], cost_rows)
+        write_csv(OUT["calendar"], calendar)
+        write_csv(OUT["calendar_summary"], calendar_summary(calendar))
+        write_csv(OUT["rolling"], rolling)
+        write_csv(OUT["rolling_summary"], rolling_summary(rolling))
+        write_csv(OUT["trades"], trade_rows)
 
         notes = [
             {
-                "topic": "scope",
+                "topic": "frozen_raw_geometry",
                 "note": (
-                    "Final raw-geometry boundary refinement for EUR/JPY H1 "
-                    "SHORT COMPRESSION_BREAKOUT only. No context filters and "
-                    "no portfolio fitting are performed."
+                    "All seeds use compression<=0.80, bearish body>=1.10 ATR14, "
+                    "range>=1.65 ATR14. Seed A uses LB2/RR7.25, Seed B LB3/RR7.25, "
+                    "Seed C LB3/RR7.50."
                 ),
             },
             {
-                "topic": "previous_anchor",
+                "topic": "causal_htf",
                 "note": (
-                    "Previous leader: compression<=0.80, body>=1.10 ATR14, "
-                    "range>=1.65 ATR14, close below prior 3-bar low, RR7.50. "
-                    "Reference approximately 114 trades, PF1.954, +85.88R."
+                    "Daily and H4 states are restricted to candles whose completion "
+                    "time is <= H1 signal OPEN, preventing simultaneous HTF closes "
+                    "from affecting a signal."
                 ),
             },
             {
-                "topic": "stage1_grid",
+                "topic": "single_factor_first",
                 "note": (
-                    "1050 geometries at fixed 7.50R: compression .76-.84, "
-                    "body .90-1.40 ATR, range 1.45-1.75 ATR, breakout LB2-6."
+                    "Every bearish daily/H4 trend/alignment, volatility, NY hour, "
+                    "broad session and weekday condition is tested independently "
+                    "on all three frozen raw seeds before interaction eligibility."
                 ),
             },
             {
-                "topic": "rr_grid",
+                "topic": "interaction_gate",
                 "note": (
-                    "Diversity-constrained Stage-1 shortlist receives RR "
-                    "6.00R-9.00R in 0.25R increments, explicitly extending "
-                    "past both sides of the prior 7-8R plateau."
+                    "Two-factor interactions are limited to cross-category factors "
+                    "with broad single-factor support. Final interaction candidates "
+                    "must also keep all three seeds positive in the last 5Y and 2Y."
                 ),
             },
             {
-                "topic": "robust_pass",
+                "topic": "control_reference",
                 "note": (
-                    "Final robust_pass requires >=40 trades, PF>=1.40, both "
-                    "major temporal splits positive, minimum split PF>=1.10, "
-                    ">=3 positive broad eras, positive last5Y and last2Y, "
-                    "2x-cost PF>=1.20 and positive R, rolling24 >=65% positive, "
-                    "rolling36 >=75% positive, and >=80% positive + split-positive "
-                    "local neighbours."
+                    "Boundary-refinement references: A LB2/RR7.25 = 116 trades, "
+                    "PF2.150900, +102.430109R; B LB3/RR7.25 = 114 trades, "
+                    "PF1.990868, +88.187249R; C LB3/RR7.50 = 114 trades, "
+                    "PF1.954187, +85.876819R. Current history may add trades."
                 ),
             },
             {
-                "topic": "selection_warning",
+                "topic": "selection_rule",
                 "note": (
-                    "Do not automatically choose the highest PF configuration. "
-                    "Prefer an interior geometry/RR region where nearby body, "
-                    "compression, range, breakout-lookback and RR settings all "
-                    "retain the edge."
+                    "Do not select on headline PF alone. Prefer a context effect "
+                    "that improves at least two seeds, preserves all three temporal "
+                    "splits and recent periods, retains a meaningful trade sample, "
+                    "and survives 2x cost and rolling-window checks."
                 ),
             },
             {
                 "topic": "next_step",
                 "note": (
-                    "If the raw edge survives this boundary refinement, carry "
-                    "several nearby seed geometries into a controlled context "
-                    "filter test. Only after that freeze one short strategy and "
-                    "test 21-vs-22 portfolio marginal value."
+                    "After context selection, freeze one EUR/JPY H1 SHORT candidate "
+                    "and test its marginal effect against the existing 21-strategy "
+                    "portfolio before any live deployment."
                 ),
             },
             {
-                "topic": "robust_finalists",
-                "note": (
-                    f"{len(robust)} of {len(final_rows)} detailed finalists "
-                    "met the predeclared boundary-refinement robust_pass."
-                ),
+                "topic": "control_parity",
+                "note": str(parity_rows),
             },
         ]
 
-        write_csv(
-            OUTS["notes"],
-            notes,
-        )
+        write_csv(OUT["notes"], notes)
 
         STATUS.update({
             "state": "packaging",
@@ -2926,17 +2302,17 @@ def run_research():
 
         STATUS.update({
             "state": "complete",
-            "message": "EUR/JPY H1 SHORT compression boundary refinement complete",
-            "pair": PAIR,
-            "timeframe": "H1",
-            "side": "SHORT",
-            "family": "COMPRESSION_BREAKOUT",
+            "message": "EUR/JPY H1 SHORT compression context-filter research complete",
             "h1_candles": len(h1),
-            "stage1_configs": len(stage1_rows),
-            "stage1_shortlist": len(stage1_shortlist),
-            "stage2_rr_configs": len(stage2_rows),
-            "detailed_finalists": len(final_rows),
-            "robust_finalists": len(robust),
+            "h4_candles": len(h4),
+            "daily_candles": len(daily),
+            "seed_controls": len(SEEDS),
+            "single_factors_tested": len(noncontrol_factors),
+            "single_factor_seed_tests": len(single_rows),
+            "interaction_factors_selected": len(interaction_factors),
+            "interaction_pairs_tested": len(pairs),
+            "interaction_seed_tests": len(interaction_rows),
+            "detailed_candidate_specs": len(candidate_specs),
             "bundle": BUNDLE,
         })
 
@@ -2945,8 +2321,9 @@ def run_research():
             "state": "error",
             "message": str(error),
         })
+
         print(
-            "EURJPY H1 SHORT BOUNDARY ERROR:",
+            "EURJPY SHORT CONTEXT RESEARCH ERROR:",
             repr(error),
             flush=True,
         )
@@ -2959,36 +2336,36 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service": "EUR/JPY H1 SHORT Compression Boundary Refinement",
+        "service": "EUR/JPY H1 SHORT Compression Controlled Context Research",
         "status": STATUS["state"],
         "instrument": PAIR,
         "timeframe": "H1",
         "side": "SHORT",
-        "research_stage": "compression_boundary_geometry_and_rr_refinement",
-        "families": [
-            "COMPRESSION_BREAKOUT",
-        ],
-        "requested_start_utc": iso(REQUESTED_START),
-        "validation_start_utc": iso(VALIDATION_START),
-        "primary_cost_pips": H1_PRIMARY_COST_PIPS,
-        "stage1_rr": STAGE1_RR,
-        "rr_grid": RR_GRID,
+        "raw_family": {
+            "family": "COMPRESSION_BREAKOUT",
+            "compression_max": COMPRESSION_MAX,
+            "body_atr_min": BODY_ATR_MIN,
+            "range_atr_min": RANGE_ATR_MIN,
+            "seeds": SEEDS,
+            "stop_buffer_ticks": STOP_BUFFER_TICKS,
+            "historical_adverse_cost_pips": BASE_COST_PIPS,
+        },
         "orders_supported": False,
         "trading_enabled": False,
         "routes": [
-            "/eurjpy-h1-short-boundary/status",
-            "/eurjpy-h1-short-boundary/results",
+            "/eurjpy-short-context/status",
+            "/eurjpy-short-context/results",
         ],
     })
 
 
-@app.route("/eurjpy-h1-short-boundary/status")
-def status():
+@app.route("/eurjpy-short-context/status")
+def context_status():
     return jsonify(STATUS)
 
 
-@app.route("/eurjpy-h1-short-boundary/results")
-def results():
+@app.route("/eurjpy-short-context/results")
+def context_results():
     return download(BUNDLE)
 
 
