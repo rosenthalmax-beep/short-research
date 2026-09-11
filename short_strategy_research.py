@@ -95,24 +95,22 @@ STAGE3_BASE_KEEP = 4
 FINAL_KEEP = 8
 
 OUTS = {
-    "coverage": "eurjpy_m15_long_full_history_coverage.csv",
-    "stage1": "eurjpy_m15_long_full_history_stage1.csv",
-    "stage1_family_summary": "eurjpy_m15_long_full_history_stage1_family_summary.csv",
-    "stage2": "eurjpy_m15_long_full_history_stage2.csv",
-    "stage3": "eurjpy_m15_long_full_history_stage3.csv",
-    "final": "eurjpy_m15_long_full_history_finalists.csv",
-    "periods": "eurjpy_m15_long_full_history_periods.csv",
-    "cost": "eurjpy_m15_long_full_history_cost_stress.csv",
-    "rolling": "eurjpy_m15_long_full_history_rolling.csv",
-    "rolling_summary": "eurjpy_m15_long_full_history_rolling_summary.csv",
-    "calendar": "eurjpy_m15_long_full_history_calendar_years.csv",
-    "calendar_summary": "eurjpy_m15_long_full_history_calendar_summary.csv",
-    "ablation": "eurjpy_m15_long_full_history_ablation.csv",
-    "plateau": "eurjpy_m15_long_full_history_plateau.csv",
-    "trades": "eurjpy_m15_long_full_history_finalist_trades.csv",
-    "notes": "eurjpy_m15_long_full_history_notes.csv",
+    "coverage": "eurjpy_m15_long_final_deep_coverage.csv",
+    "parity": "eurjpy_m15_long_final_deep_parity.csv",
+    "summary": "eurjpy_m15_long_final_deep_summary.csv",
+    "periods": "eurjpy_m15_long_final_deep_periods.csv",
+    "cost": "eurjpy_m15_long_final_deep_cost_stress.csv",
+    "rolling": "eurjpy_m15_long_final_deep_rolling.csv",
+    "rolling_summary": "eurjpy_m15_long_final_deep_rolling_summary.csv",
+    "calendar": "eurjpy_m15_long_final_deep_calendar_years.csv",
+    "calendar_summary": "eurjpy_m15_long_final_deep_calendar_summary.csv",
+    "trades": "eurjpy_m15_long_final_deep_trades.csv",
+    "overlap": "eurjpy_m15_long_final_deep_overlap.csv",
+    "ablation": "eurjpy_m15_long_final_deep_ablation.csv",
+    "decision": "eurjpy_m15_long_final_deep_decision_matrix.csv",
+    "notes": "eurjpy_m15_long_final_deep_notes.csv",
 }
-BUNDLE = "EURJPY_M15_LONG_FULL_HISTORY_RESEARCH_RESULTS.zip"
+BUNDLE = "EURJPY_M15_LONG_FINAL_DEEP_VALIDATION_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -977,180 +975,589 @@ def calendar_summary(rows):
         })
     return out
 
-# ---------------- runner ----------------
 
-def run():
+# ============================================================
+# FIXED FINAL DEEP-VALIDATION CANDIDATES
+# ============================================================
+#
+# This is NOT another optimisation/search.
+#
+# It freezes exactly nine contenders selected from the prior full-history
+# research:
+#
+# ENGULF family:
+#   E1  BR1.50 / body0.75 / structure100 / dist0.10 / H1 EMA50>EMA200 / RR3.00
+#   E2  same / RR4.25
+#   E3  same / RR4.50
+#   E4  BR1.45 / body0.75 / structure100 / dist0.10 / H1 EMA50>EMA200 / RR4.25
+#   E5  BR1.35 / body0.75 / structure100 / dist0.10 / H1 EMA50>EMA200 / RR4.25
+#   E6  BR1.50 / body0.75 / structure120 / dist0.10 / H1 EMA50>EMA200 / RR4.25
+#
+# SWEEP family:
+#   S1  sweep60 / body1.00 / lowerwick0.35 / prior4h<=-1.00ATR
+#       exclude Tuesday NY / RR4.50
+#   S2  same / RR4.75
+#   S3  sweep80 / same geometry/context / RR4.75
+#
+# Purpose:
+#   - reproduce known central controls
+#   - get proper 0.5/1/1.5/2-pip cost stress
+#   - full temporal periods including 2018+, 2020+, last5Y/2Y
+#   - true monthly-start rolling 12/24/36M
+#   - calendar/no-trade years
+#   - H1-trend and Tuesday-filter ablations
+#   - exact-entry and holding-interval overlap between contenders
+#
+# Selection rule:
+#   choose robustness/consistency, not maximum PF.
+# ============================================================
+
+def fixed_finalists():
+    out = []
+
+    def eng(cid, br, lb, rr):
+        return cfg(
+            cid,
+            "ENGULF_STRUCTURE",
+            rr=rr,
+            br_min=br,
+            body_atr_min=0.75,
+            structure_lb=lb,
+            structure_dist_atr_max=0.10,
+            context="H1_EMA50_GT_EMA200",
+        )
+
+    def sweep(cid, lb, rr):
+        return cfg(
+            cid,
+            "SWEEP_DISPLACEMENT",
+            rr=rr,
+            sweep_lb=lb,
+            body_atr_min=1.00,
+            lower_wick_body_min=0.35,
+            mom4_max=-1.00,
+            context="EXCLUDE_WEEKDAY_1",
+        )
+
+    out.extend([
+        eng("E1_ENG_BR150_S100_RR300", 1.50, 100, 3.00),
+        eng("E2_ENG_BR150_S100_RR425", 1.50, 100, 4.25),
+        eng("E3_ENG_BR150_S100_RR450", 1.50, 100, 4.50),
+        eng("E4_ENG_BR145_S100_RR425", 1.45, 100, 4.25),
+        eng("E5_ENG_BR135_S100_RR425", 1.35, 100, 4.25),
+        eng("E6_ENG_BR150_S120_RR425", 1.50, 120, 4.25),
+        sweep("S1_SWEEP60_RR450", 60, 4.50),
+        sweep("S2_SWEEP60_RR475", 60, 4.75),
+        sweep("S3_SWEEP80_RR475", 80, 4.75),
+    ])
+
+    return out
+
+
+KNOWN_PARITY = {
+    # Exact configurations already observed in the broad search.
+    "E1_ENG_BR150_S100_RR300": {"trades": 74, "pf": 1.775494, "r": 34.8972},
+    "E2_ENG_BR150_S100_RR425": {"trades": 74, "pf": 1.889369, "r": 44.4685},
+    "E3_ENG_BR150_S100_RR450": {"trades": 74, "pf": 1.878250, "r": 44.7907},
+    "S1_SWEEP60_RR450": {"trades": 94, "pf": 1.451461, "r": 31.6023},
+    "S2_SWEEP60_RR475": {"trades": 94, "pf": 1.450955, "r": 32.0178},
+}
+
+
+def deep_periods(c, candles, ix):
+    periods = [
+        ("FULL", candles[0]["time"], NOW),
+        ("PRE_2010", candles[0]["time"], datetime(2010,1,1,tzinfo=timezone.utc)),
+        ("2010_PLUS", datetime(2010,1,1,tzinfo=timezone.utc), NOW),
+        ("DEV_2002_17", candles[0]["time"], datetime(2018,1,1,tzinfo=timezone.utc)),
+        ("VALIDATION_2018_PLUS", datetime(2018,1,1,tzinfo=timezone.utc), NOW),
+        ("ERA_2002_07", START, datetime(2008,1,1,tzinfo=timezone.utc)),
+        ("ERA_2008_13", datetime(2008,1,1,tzinfo=timezone.utc), datetime(2014,1,1,tzinfo=timezone.utc)),
+        ("ERA_2014_19", datetime(2014,1,1,tzinfo=timezone.utc), datetime(2020,1,1,tzinfo=timezone.utc)),
+        ("ERA_2020_NOW", datetime(2020,1,1,tzinfo=timezone.utc), NOW),
+        ("LAST_5Y", NOW-timedelta(days=365.2425*5), NOW),
+        ("LAST_2Y", NOW-timedelta(days=365.2425*2), NOW),
+        ("LAST_1Y", NOW-timedelta(days=365.2425), NOW),
+    ]
+
+    out = []
+    for label, a, b in periods:
+        r = stat_row(c, label, backtest(candles, ix, c["rr"], PRIMARY_COST, a, b))
+        r["start_utc"] = iso(a)
+        r["end_utc"] = iso(b)
+        out.append(r)
+    return out
+
+
+def deep_summary(c, candles, ix):
+    full = stats(backtest(candles, ix, c["rr"], PRIMARY_COST, candles[0]["time"], NOW))
+    pre = stats(backtest(candles, ix, c["rr"], PRIMARY_COST, candles[0]["time"],
+                         datetime(2010,1,1,tzinfo=timezone.utc)))
+    post = stats(backtest(candles, ix, c["rr"], PRIMARY_COST,
+                          datetime(2010,1,1,tzinfo=timezone.utc), NOW))
+    dev = stats(backtest(candles, ix, c["rr"], PRIMARY_COST, candles[0]["time"],
+                         datetime(2018,1,1,tzinfo=timezone.utc)))
+    val = stats(backtest(candles, ix, c["rr"], PRIMARY_COST,
+                         datetime(2018,1,1,tzinfo=timezone.utc), NOW))
+    y20 = stats(backtest(candles, ix, c["rr"], PRIMARY_COST,
+                         datetime(2020,1,1,tzinfo=timezone.utc), NOW))
+    l5 = stats(backtest(candles, ix, c["rr"], PRIMARY_COST,
+                        NOW-timedelta(days=365.2425*5), NOW))
+    l2 = stats(backtest(candles, ix, c["rr"], PRIMARY_COST,
+                        NOW-timedelta(days=365.2425*2), NOW))
+
+    era_stats = []
+    for _, a, b in ERAS:
+        era_stats.append(stats(backtest(candles, ix, c["rr"], PRIMARY_COST, a, b)))
+
+    return {
+        "config_id": c["config_id"],
+        "family": c["family"],
+        "context": c.get("context","NONE"),
+        "rr": c["rr"],
+        **cfields(c),
+        "full_trades": full["trades"],
+        "full_pf": round(full["profit_factor"],6),
+        "full_r": round(full["total_r"],4),
+        "full_exp": round(full["expectancy_r"],6),
+        "full_dd": round(full["max_drawdown_r"],4),
+        "full_win_rate": round(full["win_rate"],4),
+        "pre2010_trades": pre["trades"],
+        "pre2010_pf": round(pre["profit_factor"],6),
+        "pre2010_r": round(pre["total_r"],4),
+        "post2010_trades": post["trades"],
+        "post2010_pf": round(post["profit_factor"],6),
+        "post2010_r": round(post["total_r"],4),
+        "dev2002_17_pf": round(dev["profit_factor"],6),
+        "dev2002_17_r": round(dev["total_r"],4),
+        "validation2018_plus_trades": val["trades"],
+        "validation2018_plus_pf": round(val["profit_factor"],6),
+        "validation2018_plus_r": round(val["total_r"],4),
+        "era2020_plus_trades": y20["trades"],
+        "era2020_plus_pf": round(y20["profit_factor"],6),
+        "era2020_plus_r": round(y20["total_r"],4),
+        "last5y_trades": l5["trades"],
+        "last5y_pf": round(l5["profit_factor"],6),
+        "last5y_r": round(l5["total_r"],4),
+        "last2y_trades": l2["trades"],
+        "last2y_pf": round(l2["profit_factor"],6),
+        "last2y_r": round(l2["total_r"],4),
+        "positive_eras": sum(x["trades"] > 0 and x["total_r"] > 0 for x in era_stats),
+        "min_era_pf": round(min(x["profit_factor"] for x in era_stats),6),
+    }
+
+
+def deep_cost_rows(c, candles, ix):
+    rows = []
+    for cost in COSTS:
+        for label, a, b in [
+            ("FULL", candles[0]["time"], NOW),
+            ("VALIDATION_2018_PLUS", datetime(2018,1,1,tzinfo=timezone.utc), NOW),
+            ("LAST_5Y", NOW-timedelta(days=365.2425*5), NOW),
+            ("LAST_2Y", NOW-timedelta(days=365.2425*2), NOW),
+        ]:
+            r = stat_row(c, label, backtest(candles, ix, c["rr"], cost, a, b))
+            r["cost_pips"] = cost
+            rows.append(r)
+    return rows
+
+
+def serialise_trade(c, t):
+    row = dict(t)
+    row.update({
+        "config_id": c["config_id"],
+        "family": c["family"],
+        "context": c.get("context","NONE"),
+    })
+    return row
+
+
+def interval_overlap_count(a, b):
+    """
+    Count trades in A whose [entry,exit) interval overlaps >=1 trade in B.
+    Diagnostic only; does not imply the trades could coexist under p0.
+    """
+    if not a or not b:
+        return 0
+
+    b_sorted = sorted(b, key=lambda x: x["entry_time"])
+    starts = [x["entry_time"] for x in b_sorted]
+    count = 0
+
+    for x in a:
+        i = bisect.bisect_left(starts, x["exit_time"])
+        overlap = False
+        for y in b_sorted[max(0, i-4):i+1]:
+            if y["entry_time"] < x["exit_time"] and x["entry_time"] < y["exit_time"]:
+                overlap = True
+                break
+        if overlap:
+            count += 1
+
+    return count
+
+
+def overlap_rows(trade_map):
+    rows = []
+    ids = list(trade_map)
+
+    for i, a_id in enumerate(ids):
+        a = trade_map[a_id]
+        a_times = {x["entry_time"] for x in a}
+
+        for b_id in ids[i+1:]:
+            b = trade_map[b_id]
+            b_times = {x["entry_time"] for x in b}
+
+            shared = a_times & b_times
+            a_interval = interval_overlap_count(a, b)
+            b_interval = interval_overlap_count(b, a)
+
+            rows.append({
+                "config_a": a_id,
+                "config_b": b_id,
+                "a_trades": len(a),
+                "b_trades": len(b),
+                "exact_same_entry": len(shared),
+                "exact_same_entry_pct_a": round(100*len(shared)/len(a),4) if a else 0.0,
+                "exact_same_entry_pct_b": round(100*len(shared)/len(b),4) if b else 0.0,
+                "a_trades_with_any_interval_overlap_b": a_interval,
+                "a_interval_overlap_pct": round(100*a_interval/len(a),4) if a else 0.0,
+                "b_trades_with_any_interval_overlap_a": b_interval,
+                "b_interval_overlap_pct": round(100*b_interval/len(b),4) if b else 0.0,
+            })
+
+    return rows
+
+
+def ablation_rows(candidates, candles, f):
+    rows = []
+
+    # Central engulf: remove the H1 trend regime only.
+    core = next(x for x in candidates if x["config_id"] == "E2_ENG_BR150_S100_RR425")
+    x = deepcopy(core)
+    x["config_id"] = "ABLATE_ENG_REMOVE_H1_EMA50_GT_EMA200"
+    x["context"] = "NONE"
+    r = deep_summary(x, candles, indices(x,f))
+    r["ablation"] = "REMOVE_H1_EMA50_GT_EMA200"
+    r["parent_config"] = core["config_id"]
+    rows.append(r)
+
+    # Sweep: remove Tuesday exclusion only.
+    core = next(x for x in candidates if x["config_id"] == "S2_SWEEP60_RR475")
+    x = deepcopy(core)
+    x["config_id"] = "ABLATE_SWEEP_REMOVE_EXCLUDE_TUESDAY"
+    x["context"] = "NONE"
+    r = deep_summary(x, candles, indices(x,f))
+    r["ablation"] = "REMOVE_EXCLUDE_TUESDAY"
+    r["parent_config"] = core["config_id"]
+    rows.append(r)
+
+    return rows
+
+
+def decision_rows(summary, costs, rollsum, calsum, parity_rows):
+    cost2 = {
+        r["config_id"]: r
+        for r in costs
+        if r["period"] == "FULL" and abs(float(r["cost_pips"]) - 2.0) < 1e-9
+    }
+    rolls = {
+        (r["config_id"], int(r["months"])): r
+        for r in rollsum
+    }
+    cals = {r["config_id"]: r for r in calsum}
+    parity = {r["config_id"]: r for r in parity_rows}
+
+    out = []
+
+    for r in summary:
+        cid = r["config_id"]
+        r12 = rolls.get((cid,12),{})
+        r24 = rolls.get((cid,24),{})
+        r36 = rolls.get((cid,36),{})
+        cal = cals.get(cid,{})
+        c2 = cost2.get(cid,{})
+
+        out.append({
+            "config_id": cid,
+            "family": r["family"],
+            "rr": r["rr"],
+            "full_trades": r["full_trades"],
+            "full_pf": r["full_pf"],
+            "full_r": r["full_r"],
+            "full_exp": r["full_exp"],
+            "full_dd": r["full_dd"],
+            "validation2018_plus_pf": r["validation2018_plus_pf"],
+            "validation2018_plus_r": r["validation2018_plus_r"],
+            "era2020_plus_pf": r["era2020_plus_pf"],
+            "era2020_plus_r": r["era2020_plus_r"],
+            "last5y_pf": r["last5y_pf"],
+            "last5y_r": r["last5y_r"],
+            "last2y_pf": r["last2y_pf"],
+            "last2y_r": r["last2y_r"],
+            "cost_2pip_pf": c2.get("profit_factor",0.0),
+            "cost_2pip_r": c2.get("total_r",0.0),
+            "rolling12_positive_active_pct": r12.get("positive_active_windows_pct",0.0),
+            "rolling12_median_r": r12.get("median_r_active",0.0),
+            "rolling12_worst_r": r12.get("worst_r",0.0),
+            "rolling24_positive_active_pct": r24.get("positive_active_windows_pct",0.0),
+            "rolling24_median_r": r24.get("median_r_active",0.0),
+            "rolling24_worst_r": r24.get("worst_r",0.0),
+            "rolling36_positive_active_pct": r36.get("positive_active_windows_pct",0.0),
+            "rolling36_median_r": r36.get("median_r_active",0.0),
+            "rolling36_worst_r": r36.get("worst_r",0.0),
+            "active_calendar_years": cal.get("active_years",0),
+            "positive_active_years_pct": cal.get("positive_active_years_pct",0.0),
+            "zero_trade_years": cal.get("zero_trade_years",0),
+            "worst_calendar_year_r": cal.get("worst_year_r",0.0),
+            "parity_status": parity.get(cid,{}).get("status","NEW_COMBINATION"),
+        })
+
+    return out
+
+
+# ============================================================
+# FINAL DEEP-VALIDATION RUNNER
+# ============================================================
+
+def run_final_deep_validation():
     try:
-        m15=fetch("M15",START,NOW,35)
-        h1=fetch("H1",WARMUP,NOW,180)
-        h4=fetch("H4",WARMUP,NOW,700)
-        d=fetch("D",WARMUP,NOW,3500)
+        STATUS.update({
+            "state":"fetch",
+            "message":"Fetching EUR/JPY M15 + strict completed HTF history",
+        })
+
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        d = fetch("D", WARMUP, NOW, 3500)
+
         if not all([m15,h1,h4,d]):
             raise RuntimeError("Missing required history")
 
         write_csv(OUTS["coverage"], [{
-            "instrument":PAIR,"requested_start_utc":iso(START),
-            "actual_first_m15_utc":iso(m15[0]["time"]),
-            "actual_last_m15_utc":iso(m15[-1]["time"]),
-            "m15_candles":len(m15),"h1_candles":len(h1),
-            "h4_candles":len(h4),"daily_candles":len(d),
+            "instrument": PAIR,
+            "requested_start_utc": iso(START),
+            "actual_first_m15_utc": iso(m15[0]["time"]),
+            "actual_last_m15_utc": iso(m15[-1]["time"]),
+            "m15_candles": len(m15),
+            "h1_candles": len(h1),
+            "h4_candles": len(h4),
+            "daily_candles": len(d),
+            "baseline_cost_pips": PRIMARY_COST,
         }])
 
-        STATUS.update({"state":"precompute","message":"HTF completion alignment"})
-        t=[x["time"] for x in m15]
-        ah1=align_htf(t,htf_state(h1))
-        ah4=align_htf(t,htf_state(h4))
-        ad=align_htf(t,htf_state(d))
+        STATUS.update({
+            "state":"precompute",
+            "message":"Strict HTF completion alignment + M15 feature cache",
+        })
 
-        STATUS.update({"state":"precompute","message":"M15 feature cache"})
-        f=features(m15,ah1,ah4,ad)
+        times = [x["time"] for x in m15]
+        ah1 = align_htf(times, htf_state(h1))
+        ah4 = align_htf(times, htf_state(h4))
+        ad = align_htf(times, htf_state(d))
+        f = features(m15, ah1, ah4, ad)
 
-        # Stage 1: broad archetypes with no inherited benchmark.
-        s1=stage1_configs()
-        s1map={x["config_id"]:x for x in s1}
-        s1rows=[]
-        for n,c in enumerate(s1,1):
-            STATUS.update({"state":"stage1","message":f"{n}/{len(s1)} {c['config_id']}"})
-            s1rows.append(evaluate(c,m15,indices(c,f)))
-        s1rows=sortrows(s1rows)
-        write_csv(OUTS["stage1"],s1rows)
-        write_csv(OUTS["stage1_family_summary"],family_summary(s1rows))
-        top1=[r for r in s1rows if r["full_trades"]>=45][:STAGE1_KEEP]
-        if len(top1)<STAGE1_KEEP: top1=s1rows[:STAGE1_KEEP]
+        candidates = fixed_finalists()
 
-        # stage 2
-        s2=stage2(top1,s1map)
-        s2map={x["config_id"]:x for x in s2}
-        s2rows=[]
-        for n,c in enumerate(s2,1):
-            STATUS.update({"state":"stage2","message":f"{n}/{len(s2)} {c['config_id']}"})
-            s2rows.append(evaluate(c,m15,indices(c,f)))
-        s2rows=sortrows(s2rows)
-        write_csv(OUTS["stage2"],s2rows)
-        top2=[r for r in s2rows if r["full_trades"]>=45][:STAGE2_KEEP]
-        if len(top2)<STAGE2_KEEP: top2=s2rows[:STAGE2_KEEP]
+        summary = []
+        periods = []
+        costs = []
+        rolling = []
+        calendar = []
+        trade_rows = []
+        trade_map = {}
+        parity_rows = []
 
-        # stage 3
-        s3=stage3(top2,s2map)
-        s3map={x["config_id"]:x for x in s3}
-        s3rows=[]
-        for n,c in enumerate(s3,1):
-            STATUS.update({"state":"stage3","message":f"{n}/{len(s3)} {c['config_id']}"})
-            s3rows.append(evaluate(c,m15,indices(c,f)))
-        s3rows=sortrows(s3rows)
-        write_csv(OUTS["stage3"],s3rows)
+        for n, c in enumerate(candidates, 1):
+            STATUS.update({
+                "state":"deep_validation",
+                "message":f"{n}/{len(candidates)} {c['config_id']}",
+            })
 
-        eligible=[
-            r for r in s3rows
-            if r["full_trades"]>=55 and r["pre2010_r"]>0
-            and r["post2010_r"]>0 and r["positive_eras"]>=3
-        ]
-        finalrows=(eligible if eligible else s3rows)[:FINAL_KEEP]
-        finals=[s3map[r["config_id"]] for r in finalrows]
-        write_csv(OUTS["final"],finalrows)
+            ix = indices(c, f)
+            trades = backtest(
+                m15, ix, c["rr"], PRIMARY_COST,
+                m15[0]["time"], NOW
+            )
+            trade_map[c["config_id"]] = trades
 
-        periods=[]; costs=[]; rolling=[]; cal=[]; trades=[]
-        for n,c in enumerate(finals,1):
-            STATUS.update({"state":"final","message":f"{n}/{len(finals)} {c['config_id']}"})
-            ix=indices(c,f)
-            periods.extend(final_periods(c,m15,ix))
-            costs.extend(cost_rows(c,m15,ix))
-            rolling.extend(rolling_rows(c,m15,ix))
-            cal.extend(calendar_rows(c,m15,ix))
-            for t0 in backtest(m15,ix,c["rr"],PRIMARY_COST,m15[0]["time"],NOW):
-                z=dict(t0)
-                z.update({
-                    "config_id":c["config_id"],
-                    "family":c["family"],
-                    "context":c.get("context","NONE"),
+            s = deep_summary(c, m15, ix)
+            summary.append(s)
+            periods.extend(deep_periods(c, m15, ix))
+            costs.extend(deep_cost_rows(c, m15, ix))
+            rolling.extend(rolling_rows(c, m15, ix))
+            calendar.extend(calendar_rows(c, m15, ix))
+
+            for t0 in trades:
+                trade_rows.append(serialise_trade(c, t0))
+
+            ref = KNOWN_PARITY.get(c["config_id"])
+            if ref:
+                pf_diff = abs(s["full_pf"] - ref["pf"])
+                r_diff = abs(s["full_r"] - ref["r"])
+                status = (
+                    "PASS"
+                    if (
+                        s["full_trades"] == ref["trades"]
+                        and pf_diff <= 0.00002
+                        and r_diff <= 0.01
+                    )
+                    else "FAIL"
+                )
+                parity_rows.append({
+                    "config_id": c["config_id"],
+                    "reference_trades": ref["trades"],
+                    "current_trades": s["full_trades"],
+                    "reference_pf": ref["pf"],
+                    "current_pf": s["full_pf"],
+                    "pf_abs_diff": round(pf_diff,8),
+                    "reference_r": ref["r"],
+                    "current_r": s["full_r"],
+                    "r_abs_diff": round(r_diff,6),
+                    "status": status,
                 })
-                trades.append(z)
 
-        write_csv(OUTS["periods"],periods)
-        write_csv(OUTS["cost"],costs)
-        write_csv(OUTS["rolling"],rolling)
-        write_csv(OUTS["rolling_summary"],rolling_summary(rolling))
-        write_csv(OUTS["calendar"],cal)
-        write_csv(OUTS["calendar_summary"],calendar_summary(cal))
-        write_csv(OUTS["trades"],trades)
+                if status != "PASS":
+                    raise RuntimeError(
+                        f"Parity failure for {c['config_id']}: "
+                        f"{parity_rows[-1]}"
+                    )
+            else:
+                parity_rows.append({
+                    "config_id": c["config_id"],
+                    "reference_trades": "",
+                    "current_trades": s["full_trades"],
+                    "reference_pf": "",
+                    "current_pf": s["full_pf"],
+                    "pf_abs_diff": "",
+                    "reference_r": "",
+                    "current_r": s["full_r"],
+                    "r_abs_diff": "",
+                    "status": "NEW_COMBINATION",
+                })
 
-        # top finalist ablation + plateau
-        if finals:
-            top=finals[0]
-            ab=[]
-            if top.get("context","NONE")!="NONE":
-                x=deepcopy(top); x["config_id"]=top["config_id"]+"_NO_CONTEXT"; x["context"]="NONE"
-                r=evaluate(x,m15,indices(x,f)); r["ablation"]="REMOVE_CONTEXT"; ab.append(r)
-            for fld in ["br_min","body_atr_min","range_atr_min","close_loc_min","lower_wick_body_min","mom4_max"]:
-                if top.get(fld) is None: continue
-                x=deepcopy(top); x["config_id"]=top["config_id"]+"_NO_"+fld; x[fld]=None
-                try:
-                    r=evaluate(x,m15,indices(x,f)); r["ablation"]="REMOVE_"+fld; ab.append(r)
-                except Exception:
-                    pass
-            write_csv(OUTS["ablation"],sortrows(ab))
+        rollsum = rolling_summary(rolling)
+        calsum = calendar_summary(calendar)
+        overlap = overlap_rows(trade_map)
+        ablation = ablation_rows(candidates, m15, f)
+        decision = decision_rows(
+            summary, costs, rollsum, calsum, parity_rows
+        )
 
-            plateau=[]
-            for x in local_variants(top,99):
-                x["rr"]=top["rr"]
-                try:
-                    plateau.append(evaluate(x,m15,indices(x,f)))
-                except Exception:
-                    pass
-            write_csv(OUTS["plateau"],sortrows(plateau))
-        else:
-            write_csv(OUTS["ablation"],[])
-            write_csv(OUTS["plateau"],[])
+        write_csv(OUTS["parity"], parity_rows)
+        write_csv(OUTS["summary"], summary)
+        write_csv(OUTS["periods"], periods)
+        write_csv(OUTS["cost"], costs)
+        write_csv(OUTS["rolling"], rolling)
+        write_csv(OUTS["rolling_summary"], rollsum)
+        write_csv(OUTS["calendar"], calendar)
+        write_csv(OUTS["calendar_summary"], calsum)
+        write_csv(OUTS["trades"], trade_rows)
+        write_csv(OUTS["overlap"], overlap)
+        write_csv(OUTS["ablation"], ablation)
+        write_csv(OUTS["decision"], decision)
 
         write_csv(OUTS["notes"], [
-            {"item":"Research status","value":"Fresh EUR/JPY M15 LONG full-history search from first principles; no inherited M15 benchmark."},
-            {"item":"Universe","value":"Requested from 2002-05-06 20:00 UTC to current completed OANDA candles; actual coverage reported separately."},
-            {"item":"Families","value":"ENGULF_STRUCTURE; SWEEP_DISPLACEMENT; FAILED_BREAKDOWN_RECLAIM; OUTSIDE_REVERSAL; COMPRESSION_BREAKOUT; WASHOUT_RECLAIM."},
-            {"item":"Stage 2 contexts","value":"Single-factor H1/H4/D trend and volatility contexts, New York/London/Tokyo 4-hour blocks, and weekday exclusions (weekday measured America/New_York for live-system consistency)."},
-            {"item":"Historical cost","value":"1.0 pip adverse long fill baseline; stress 0.5/1.0/1.5/2.0 pips."},
-            {"item":"Risk geometry","value":"Reference entry = signal close; stop = signal low - 10 ticks; target from reference signal-close risk; pyramiding 0."},
-            {"item":"HTF causality","value":"complete_at = next actual HTF candle open; lookup = bisect_right(completion_times, signal_time)-1."},
-            {"item":"Selection philosophy","value":"Prefer positive pre/post-2010 and multi-era robustness; final local plateau and ablation are diagnostics, not permission to overfit."},
-            {"item":"Holdout caveat","value":"Full history is the research universe. DEV/2018+ splits are temporal robustness views, not a pristine untouched OOS set."},
+            {
+                "item":"Scope",
+                "value":"Fixed final deep validation only. No parameter search or automatic finalist selection."
+            },
+            {
+                "item":"Engulf family",
+                "value":"Exact bullish engulf; body>=0.75 ATR14; absolute distance to previous structure low; previous strictly completed H1 EMA50>EMA200."
+            },
+            {
+                "item":"Sweep family",
+                "value":"Bullish displacement after sweeping prior low; close>previous M15 high; body>=1.00 ATR14; lower wick/body>=0.35; prior 4h momentum<=-1.00 ATR; exclude Tuesday America/New_York."
+            },
+            {
+                "item":"Historical execution",
+                "value":"OANDA midpoint; signal timestamp M15 open; reference entry signal close; fill=close+1 pip baseline; stop=signal low-10 ticks; target from reference-close risk; pyramiding 0; exact exit-candle signal eligible."
+            },
+            {
+                "item":"Cost stress",
+                "value":"0.5 / 1.0 / 1.5 / 2.0 pip adverse entry, including recent-period diagnostics."
+            },
+            {
+                "item":"HTF causality",
+                "value":"H1/H4/D state becomes usable only at next actual HTF candle open; lookup uses bisect_right(completion_times, signal_time)-1."
+            },
+            {
+                "item":"Overlap",
+                "value":"Exact-entry overlap and holding-interval overlap are diagnostics to assess whether sweep displacement is genuinely complementary to engulf."
+            },
+            {
+                "item":"Selection",
+                "value":"Do not choose maximum PF mechanically. Prefer broad RR/geometry stability, recent-period survival, 2-pip survival, stronger rolling 24/36M consistency, fewer no-trade years and manageable drawdown."
+            },
+            {
+                "item":"Next gate",
+                "value":"Only after one M15 LONG candidate is frozen should it be added to the current 22-strategy portfolio under exact non-hedging behaviour."
+            },
         ])
 
-        STATUS.update({"state":"packaging","message":"Building ZIP"})
+        STATUS.update({
+            "state":"packaging",
+            "message":"Packaging final EUR/JPY M15 LONG deep-validation results",
+        })
+
         pack()
+
         STATUS.update({
             "state":"complete",
-            "message":"EUR/JPY M15 LONG full-history research complete",
-            "stage1_configs":len(s1),"stage2_configs":len(s2),
-            "stage3_configs":len(s3),"finalists":len(finals),
-            "bundle":BUNDLE,
+            "message":"EUR/JPY M15 LONG final deep validation complete",
+            "candidates": len(candidates),
+            "known_parity_controls": len(KNOWN_PARITY),
+            "bundle": BUNDLE,
         })
 
     except Exception as e:
-        STATUS.update({"state":"error","message":str(e)})
-        print("ERROR:",e,flush=True)
+        STATUS.update({
+            "state":"error",
+            "message":str(e),
+        })
+        print("ERROR:", repr(e), flush=True)
+
 
 @app.route("/")
 def root():
     return jsonify({
-        "service":"EURJPY M15 LONG Full-History Research",
+        "service":"EURJPY M15 LONG Final Deep Validation",
         "status":STATUS["state"],
-        "instrument":PAIR,"timeframe":"M15","side":"BUY",
-        "requested_start_utc":iso(START),
+        "instrument":PAIR,
+        "timeframe":"M15",
+        "side":"BUY",
+        "candidates":[x["config_id"] for x in fixed_finalists()],
         "primary_cost_pips":PRIMARY_COST,
-        "orders_supported":False,"trading_enabled":False,
+        "orders_supported":False,
+        "trading_enabled":False,
         "routes":[
-            "/eurjpy-m15-long-research/status",
-            "/eurjpy-m15-long-research/results",
+            "/eurjpy-m15-long-final/status",
+            "/eurjpy-m15-long-final/results",
         ],
     })
 
-@app.route("/eurjpy-m15-long-research/status")
-def status():
+
+@app.route("/eurjpy-m15-long-final/status")
+def final_status():
     return jsonify(STATUS)
 
-@app.route("/eurjpy-m15-long-research/results")
-def results():
+
+@app.route("/eurjpy-m15-long-final/results")
+def final_results():
     return dl(BUNDLE)
 
+
 if __name__=="__main__":
-    threading.Thread(target=run,daemon=True).start()
-    app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
+    threading.Thread(
+        target=run_final_deep_validation,
+        daemon=True,
+    ).start()
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT","5000")),
+        debug=False,
+    )
