@@ -15,52 +15,74 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/JPY H1 SHORT — DEDICATED DISCOVERY V2
+# EUR/JPY H1 SHORT — TWO-FAMILY LOCAL REFINEMENT
 # ============================================================
 #
 # PURPOSE
 # -------
-# First-pass discovery on a NEW currency pair.
+# Dedicated local refinement of the TWO raw EUR/JPY H1 SHORT families that
+# survived the preceding discovery run:
 #
-# This is deliberately NOT a fine optimiser and does NOT reuse the
-# existing EUR/USD / GBP/USD / USD/JPY / USD/CAD / EUR/GBP parameters.
+#   1) COMPRESSION_BREAKOUT
+#      Discovery anchor:
+#        compression <= 0.80
+#        body >= 0.75 ATR14
+#        range >= 1.50 ATR14
+#        close below previous 5-bar low
+#        RR 6.0
+#        160 trades, PF ~1.52, +66R
 #
-# We scan broad, economically interpretable archetypes:
+#   2) OUTSIDE_REVERSAL
+#      Discovery anchor:
+#        bearish outside bar
+#        body >= 0.90 ATR14
+#        near previous 30-bar high within 0.05 ATR
+#        close location <= 0.30
+#        RR 6.0
+#        57 trades, PF ~1.74, +32R
 #
-#   1) ENGULF_STRUCTURE
-#   2) SWEEP_DISPLACEMENT
-#   3) FAILED_BREAK_RECLAIM
-#   4) OUTSIDE_REVERSAL
-#   5) COMPRESSION_BREAKOUT
+# The outside-reversal branch had poor last-2Y performance in discovery,
+# while compression-breakout had the larger and more recent sample.
+# This runner therefore does NOT assume either family is live-worthy.
 #
-# Each family is tested:
-#   - H1 LONG
-#   - H1 SHORT
-#   - M15 LONG
-#   - M15 SHORT
+# PROCESS
+# -------
+# Stage 1 — LOCAL GEOMETRY at fixed 5.5R:
 #
-# STAGED PROCESS
-# --------------
-# Stage 1:
-#   broad raw geometry at fixed 3.5R
-#   NO session filter
-#   NO weekday filter
-#   NO H1/H4/D regime filter
+#   COMPRESSION_BREAKOUT
+#     compression max: 0.65 .. 0.90
+#     body min:        0.60 .. 1.10 ATR
+#     range min:       1.20 .. 1.80 ATR
+#     breakout LB:     3 .. 15 bars
 #
-# Stage 2:
-#   only the strongest broad geometries receive an RR sweep
-#   RR = 2.5 / 3.0 / 3.5 / 4.0 / 4.5 / 5.0
+#   OUTSIDE_REVERSAL
+#     body min:        0.70 .. 1.10 ATR
+#     high lookback:   20 .. 45 bars
+#     distance max:    0.025 .. 0.15 ATR
+#     close location:  0.20 .. 0.40
 #
-# Final:
+# Stage 1 shortlist is deliberately diversity-constrained so one tiny
+# parameter pocket cannot consume the entire RR sweep.
+#
+# Stage 2 — RR SWEEP:
+#   3.0R through 8.0R in 0.5R steps.
+#
+# Finalists receive:
 #   full-history metrics
 #   2002-2017 / 2018+ temporal split
 #   pre-2010 / 2010+
 #   four broad eras
 #   last 5Y / last 2Y
-#   0.5x / 1x / 1.5x / 2x adverse-cost stress
-#   calendar years
-#   rolling 12 / 24 / 36M
-#   parameter-neighbourhood / plateau summary
+#   0.5x / 1x / 1.5x / 2x cost stress
+#   calendar-year analysis
+#   rolling 12 / 24 / 36M analysis
+#   local parameter/RR plateau analysis
+#   family-by-RR summary
+#   parameter-axis summaries
+#
+# NO session, weekday, daily/H4 regime or portfolio fitting occurs here.
+# If a raw short family survives, context filtering is a later controlled
+# stage and portfolio addition is only tested after a final freeze.
 #
 # HISTORICAL CONVENTIONS
 # ----------------------
@@ -134,31 +156,33 @@ H1_PRIMARY_COST_PIPS = 0.50
 M15_PRIMARY_COST_PIPS = 1.00
 COST_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
 
-STAGE1_RR = 3.50
-RR_GRID = [2.00, 2.50, 3.00, 3.50, 4.00, 4.50, 5.00, 5.50, 6.00]
+STAGE1_RR = 5.50
+RR_GRID = [3.00, 3.50, 4.00, 4.50, 5.00, 5.50, 6.00, 6.50, 7.00, 7.50, 8.00]
 
-STAGE1_KEEP_PER_FAMILY = 10
-FINAL_KEEP_PER_STREAM = 12
+STAGE1_KEEP_PER_FAMILY = 36
+FINAL_KEEP_PER_STREAM = 20
 
 OUTS = {
-    "coverage": "eurjpy_h1_short_v2_coverage.csv",
-    "stage1": "eurjpy_h1_short_v2_stage1.csv",
-    "stage1_shortlist": "eurjpy_h1_short_v2_stage1_shortlist.csv",
-    "stage2_rr": "eurjpy_h1_short_v2_stage2_rr.csv",
-    "finalists": "eurjpy_h1_short_v2_finalists.csv",
-    "family_summary": "eurjpy_h1_short_v2_family_summary.csv",
-    "periods": "eurjpy_h1_short_v2_periods.csv",
-    "cost_stress": "eurjpy_h1_short_v2_cost_stress.csv",
-    "calendar": "eurjpy_h1_short_v2_calendar_years.csv",
-    "calendar_summary": "eurjpy_h1_short_v2_calendar_summary.csv",
-    "rolling": "eurjpy_h1_short_v2_rolling.csv",
-    "rolling_summary": "eurjpy_h1_short_v2_rolling_summary.csv",
-    "plateau": "eurjpy_h1_short_v2_plateau.csv",
-    "trades": "eurjpy_h1_short_v2_finalist_trades.csv",
-    "notes": "eurjpy_h1_short_v2_notes.csv",
+    "coverage": "eurjpy_h1_short_refinement_coverage.csv",
+    "stage1": "eurjpy_h1_short_refinement_stage1_geometry.csv",
+    "stage1_shortlist": "eurjpy_h1_short_refinement_stage1_shortlist.csv",
+    "stage2_rr": "eurjpy_h1_short_refinement_stage2_rr.csv",
+    "rr_summary": "eurjpy_h1_short_refinement_rr_summary.csv",
+    "axis_summary": "eurjpy_h1_short_refinement_axis_summary.csv",
+    "finalists": "eurjpy_h1_short_refinement_finalists.csv",
+    "family_summary": "eurjpy_h1_short_refinement_family_summary.csv",
+    "periods": "eurjpy_h1_short_refinement_periods.csv",
+    "cost_stress": "eurjpy_h1_short_refinement_cost_stress.csv",
+    "calendar": "eurjpy_h1_short_refinement_calendar_years.csv",
+    "calendar_summary": "eurjpy_h1_short_refinement_calendar_summary.csv",
+    "rolling": "eurjpy_h1_short_refinement_rolling.csv",
+    "rolling_summary": "eurjpy_h1_short_refinement_rolling_summary.csv",
+    "plateau": "eurjpy_h1_short_refinement_plateau.csv",
+    "trades": "eurjpy_h1_short_refinement_finalist_trades.csv",
+    "notes": "eurjpy_h1_short_refinement_notes.csv",
 }
 
-BUNDLE = "EURJPY_H1_SHORT_DISCOVERY_V2_RESULTS.zip"
+BUNDLE = "EURJPY_H1_SHORT_TWO_FAMILY_REFINEMENT_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -630,10 +654,11 @@ def build_features(candles, timeframe):
         outside_lbs = [30, 60, 120]
         breakout_lbs = [5, 10, 20]
     else:
-        structure_lbs = [15, 30, 60, 100]
-        sweep_lbs = [15, 30, 60]
-        outside_lbs = [15, 30, 60]
-        breakout_lbs = [5, 10, 20]
+        # Exact H1 lookbacks required by this two-family refinement.
+        structure_lbs = [20, 25, 30, 35, 40, 45]
+        sweep_lbs = [20, 25, 30, 35, 40, 45]
+        outside_lbs = [20, 25, 30, 35, 40, 45]
+        breakout_lbs = [3, 4, 5, 6, 8, 10, 12, 15]
 
     needed_lbs = sorted(
         set(
@@ -735,18 +760,9 @@ def config_id(config):
 
 def stage1_configs(timeframe, side, features):
     """
-    Dedicated EUR/JPY H1 SHORT discovery.
+    Two-family LOCAL refinement only.
 
-    The original broad new-pair scan showed the most credible short-side
-    behaviour in:
-      - FAILED_BREAK_RECLAIM (large sample, mild but persistent edge)
-      - SWEEP_DISPLACEMENT
-      - exact bearish engulf near prior highs
-
-    This V2 expands those areas and adds a clean downside-displacement
-    breakout family. No session, weekday or HTF regime filters are used
-    here; those belong in a later controlled-context stage only if a raw
-    family first survives geometry/RR refinement.
+    No context filters are permitted in this stage.
     """
     if timeframe != "H1" or side != "SHORT":
         return []
@@ -754,113 +770,14 @@ def stage1_configs(timeframe, side, features):
     configs = []
 
     # --------------------------------------------------------
-    # 1) EXACT BEARISH ENGULF + PRIOR HIGH
+    # 1) COMPRESSION -> DOWNSIDE BREAKOUT
+    # Discovery anchor:
+    # compression .80 / body .75 / range 1.50 / LB5 / RR6
     # --------------------------------------------------------
-    for br_min in [1.00, 1.15, 1.30, 1.45, 1.60]:
-        for body_atr_min in [0.75, 0.90, 1.00, 1.10, 1.25, 1.40]:
-            for lookback in features["structure_lbs"]:
-                for distance in [0.05, 0.10, 0.15, 0.225, 0.30]:
-                    config = {
-                        "timeframe": timeframe,
-                        "side": side,
-                        "family": "ENGULF_STRUCTURE",
-                        "br_min": br_min,
-                        "body_atr_min": body_atr_min,
-                        "lookback": lookback,
-                        "distance_atr_max": distance,
-                        "rr": STAGE1_RR,
-                    }
-                    config["config_id"] = config_id(config)
-                    configs.append(config)
-
-    # --------------------------------------------------------
-    # 2) FAILED BREAK / RECLAIM OF PRIOR HIGH
-    # high > prior high, close back below prior high
-    # --------------------------------------------------------
-    for body_atr_min in [0.60, 0.75, 0.90, 1.00, 1.10, 1.25, 1.40]:
-        for lookback in features["sweep_lbs"]:
-            for close_location in [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]:
-                config = {
-                    "timeframe": timeframe,
-                    "side": side,
-                    "family": "FAILED_BREAK_RECLAIM",
-                    "body_atr_min": body_atr_min,
-                    "lookback": lookback,
-                    "close_location": close_location,
-                    "rr": STAGE1_RR,
-                }
-                config["config_id"] = config_id(config)
-                configs.append(config)
-
-    # --------------------------------------------------------
-    # 3) HIGH SWEEP + DISPLACEMENT THROUGH PREVIOUS LOW
-    # --------------------------------------------------------
-    for body_atr_min in [0.75, 0.90, 1.00, 1.10, 1.25, 1.40]:
-        for lookback in features["sweep_lbs"]:
-            for wick_body_min in [0.00, 0.10, 0.25, 0.40]:
-                config = {
-                    "timeframe": timeframe,
-                    "side": side,
-                    "family": "SWEEP_DISPLACEMENT",
-                    "body_atr_min": body_atr_min,
-                    "lookback": lookback,
-                    "wick_body_min": wick_body_min,
-                    "rr": STAGE1_RR,
-                }
-                config["config_id"] = config_id(config)
-                configs.append(config)
-
-    # --------------------------------------------------------
-    # 4) BEARISH OUTSIDE REVERSAL NEAR PRIOR HIGH
-    # --------------------------------------------------------
-    for body_atr_min in [0.60, 0.75, 0.90, 1.00, 1.10, 1.25]:
-        for lookback in features["outside_lbs"]:
-            for distance in [0.05, 0.10, 0.20, 0.30]:
-                for close_location in [0.10, 0.20, 0.30, 0.40]:
-                    config = {
-                        "timeframe": timeframe,
-                        "side": side,
-                        "family": "OUTSIDE_REVERSAL",
-                        "body_atr_min": body_atr_min,
-                        "lookback": lookback,
-                        "distance_atr_max": distance,
-                        "close_location": close_location,
-                        "rr": STAGE1_RR,
-                    }
-                    config["config_id"] = config_id(config)
-                    configs.append(config)
-
-    # --------------------------------------------------------
-    # 5) PURE DOWNSIDE DISPLACEMENT / BREAKDOWN
-    # bearish body + range expansion + close below prior low
-    # --------------------------------------------------------
-    for body_atr_min in [0.75, 0.90, 1.00, 1.10, 1.25, 1.40]:
-        for range_atr_min in [1.00, 1.20, 1.40, 1.60, 1.80]:
-            for breakout_lookback in features["breakout_lbs"]:
-                for close_location in [0.15, 0.25, 0.35]:
-                    config = {
-                        "timeframe": timeframe,
-                        "side": side,
-                        "family": "BREAKDOWN_DISPLACEMENT",
-                        "body_atr_min": body_atr_min,
-                        "range_atr_min": range_atr_min,
-                        "breakout_lookback": breakout_lookback,
-                        "close_location": close_location,
-                        "rr": STAGE1_RR,
-                    }
-                    config["config_id"] = config_id(config)
-                    configs.append(config)
-
-    # --------------------------------------------------------
-    # 6) COMPRESSION -> DOWNSIDE BREAKOUT
-    # Kept as a secondary control family. The previous broad scan had
-    # attractive headline PF but poor temporal coverage, so this family
-    # must earn its way through the same split/era filters as everything else.
-    # --------------------------------------------------------
-    for compression_max in [0.60, 0.70, 0.80, 0.90]:
-        for body_atr_min in [0.75, 0.90, 1.00, 1.10, 1.25]:
-            for range_atr_min in [1.00, 1.20, 1.50]:
-                for breakout_lookback in features["breakout_lbs"]:
+    for compression_max in [0.65, 0.70, 0.75, 0.80, 0.85, 0.90]:
+        for body_atr_min in [0.60, 0.70, 0.75, 0.80, 0.90, 1.00, 1.10]:
+            for range_atr_min in [1.20, 1.35, 1.50, 1.65, 1.80]:
+                for breakout_lookback in [3, 4, 5, 6, 8, 10, 12, 15]:
                     config = {
                         "timeframe": timeframe,
                         "side": side,
@@ -869,6 +786,28 @@ def stage1_configs(timeframe, side, features):
                         "body_atr_min": body_atr_min,
                         "range_atr_min": range_atr_min,
                         "breakout_lookback": breakout_lookback,
+                        "rr": STAGE1_RR,
+                    }
+                    config["config_id"] = config_id(config)
+                    configs.append(config)
+
+    # --------------------------------------------------------
+    # 2) BEARISH OUTSIDE REVERSAL NEAR PRIOR HIGH
+    # Discovery anchor:
+    # body .90 / LB30 / distance .05 / closeLoc .30 / RR6
+    # --------------------------------------------------------
+    for body_atr_min in [0.70, 0.80, 0.90, 1.00, 1.10]:
+        for lookback in [20, 25, 30, 35, 40, 45]:
+            for distance in [0.025, 0.05, 0.075, 0.10, 0.15]:
+                for close_location in [0.20, 0.25, 0.30, 0.35, 0.40]:
+                    config = {
+                        "timeframe": timeframe,
+                        "side": side,
+                        "family": "OUTSIDE_REVERSAL",
+                        "body_atr_min": body_atr_min,
+                        "lookback": lookback,
+                        "distance_atr_max": distance,
+                        "close_location": close_location,
                         "rr": STAGE1_RR,
                     }
                     config["config_id"] = config_id(config)
@@ -1586,42 +1525,71 @@ def candidate_sort_key(row):
 # ============================================================
 
 def shortlist_stage1(rows):
+    """
+    Robustness-first + geometry diversity.
+
+    COMPRESSION:
+      no more than 2 initial selections per
+      (compression_max, breakout_lookback) cell.
+
+    OUTSIDE:
+      no more than 2 initial selections per
+      (lookback, distance_atr_max) cell.
+
+    Then fill remaining family quota by global robustness rank.
+    """
     grouped = defaultdict(list)
 
     for row in rows:
-        grouped[
-            (
-                row["timeframe"],
-                row["side"],
-                row["family"],
-            )
-        ].append(row)
+        grouped[(row["timeframe"], row["side"], row["family"])].append(row)
 
     selected = []
 
     for _, family_rows in grouped.items():
-        family_rows.sort(
-            key=candidate_sort_key,
-            reverse=True,
-        )
-
-        timeframe = family_rows[0]["timeframe"]
-        minimum_trades = (
-            30
-            if timeframe == "H1"
-            else 40
-        )
-
-        eligible = [
+        family_rows = [
             row for row in family_rows
-            if row["full_trades"] >= minimum_trades
-        ]
+            if row["full_trades"] >= 35
+        ] or list(family_rows)
 
-        pool = eligible if eligible else family_rows
+        family_rows.sort(key=candidate_sort_key, reverse=True)
+        family = family_rows[0]["family"]
 
-        selected.extend(
-            pool[:STAGE1_KEEP_PER_FAMILY]
-        )
+        chosen = []
+        chosen_ids = set()
+        cell_counts = defaultdict(int)
+
+        for row in family_rows:
+            if family == "COMPRESSION_BREAKOUT":
+                cell = (
+                    row.get("compression_max"),
+                    row.get("breakout_lookback"),
+                )
+            else:
+                cell = (
+                    row.get("lookback"),
+                    row.get("distance_atr_max"),
+                )
+
+            if cell_counts[cell] >= 2:
+                continue
+
+            chosen.append(row)
+            chosen_ids.add(row["config_id"])
+            cell_counts[cell] += 1
+
+            if len(chosen) >= STAGE1_KEEP_PER_FAMILY:
+                break
+
+        if len(chosen) < STAGE1_KEEP_PER_FAMILY:
+            for row in family_rows:
+                if row["config_id"] in chosen_ids:
+                    continue
+                chosen.append(row)
+                chosen_ids.add(row["config_id"])
+                if len(chosen) >= STAGE1_KEEP_PER_FAMILY:
+                    break
+
+        selected.extend(chosen)
 
     return selected
 
@@ -2242,6 +2210,124 @@ def family_summary(rows):
     return output
 
 
+
+def rr_summary(rows):
+    grouped = defaultdict(list)
+
+    for row in rows:
+        grouped[(row["family"], row["rr"])].append(row)
+
+    output = []
+
+    for (family, rr), group in grouped.items():
+        output.append({
+            "family": family,
+            "rr": rr,
+            "configs": len(group),
+            "median_trades": med(row["full_trades"] for row in group),
+            "median_pf": med(row["full_pf"] for row in group),
+            "median_total_r": med(row["full_total_r"] for row in group),
+            "median_expectancy_r": med(row["full_expectancy_r"] for row in group),
+            "positive_full_pct": (
+                100.0 * sum(row["full_total_r"] > 0 for row in group) / len(group)
+            ),
+            "both_temporal_splits_positive_pct": (
+                100.0
+                * sum(row["both_temporal_splits_positive"] for row in group)
+                / len(group)
+            ),
+            "promising_pct": (
+                100.0 * sum(row["promising_pass"] for row in group) / len(group)
+            ),
+            "median_min_temporal_split_pf": med(
+                row["min_temporal_split_pf"] for row in group
+            ),
+            "median_last5y_r": med(row["last5y_r"] for row in group),
+            "median_last2y_r": med(row["last2y_r"] for row in group),
+        })
+
+    output.sort(key=lambda row: (row["family"], row["rr"]))
+    return output
+
+
+def axis_summary(rows):
+    """
+    Summarise Stage-1 fixed-RR geometry by individual parameter axes.
+    This is descriptive only; it is not used to select finalists.
+    """
+    family_fields = {
+        "COMPRESSION_BREAKOUT": [
+            "compression_max",
+            "body_atr_min",
+            "range_atr_min",
+            "breakout_lookback",
+        ],
+        "OUTSIDE_REVERSAL": [
+            "body_atr_min",
+            "lookback",
+            "distance_atr_max",
+            "close_location",
+        ],
+    }
+
+    output = []
+
+    for family, fields in family_fields.items():
+        family_rows = [row for row in rows if row["family"] == family]
+
+        for field in fields:
+            grouped = defaultdict(list)
+
+            for row in family_rows:
+                grouped[row.get(field)].append(row)
+
+            for value, group in grouped.items():
+                output.append({
+                    "family": family,
+                    "parameter": field,
+                    "value": value,
+                    "configs": len(group),
+                    "median_trades": med(row["full_trades"] for row in group),
+                    "median_pf": med(row["full_pf"] for row in group),
+                    "median_total_r": med(row["full_total_r"] for row in group),
+                    "median_expectancy_r": med(
+                        row["full_expectancy_r"] for row in group
+                    ),
+                    "positive_full_pct": (
+                        100.0
+                        * sum(row["full_total_r"] > 0 for row in group)
+                        / len(group)
+                    ),
+                    "both_split_positive_pct": (
+                        100.0
+                        * sum(
+                            row["both_temporal_splits_positive"]
+                            for row in group
+                        )
+                        / len(group)
+                    ),
+                    "promising_pct": (
+                        100.0
+                        * sum(row["promising_pass"] for row in group)
+                        / len(group)
+                    ),
+                    "median_min_temporal_split_pf": med(
+                        row["min_temporal_split_pf"] for row in group
+                    ),
+                    "median_last5y_r": med(row["last5y_r"] for row in group),
+                    "median_last2y_r": med(row["last2y_r"] for row in group),
+                })
+
+    output.sort(
+        key=lambda row: (
+            row["family"],
+            row["parameter"],
+            str(row["value"]),
+        )
+    )
+    return output
+
+
 # ============================================================
 # ROBUST FINAL PASS
 # ============================================================
@@ -2362,10 +2448,12 @@ def add_final_robustness(
             and row["both_temporal_splits_positive"]
             and row["positive_eras"] >= 3
             and row["last5y_r"] > 0
+            and row["last2y_r"] > 0
             and row["cost_2x_pf"] >= 1.10
             and row["cost_2x_total_r"] > 0
-            and row["rolling24_positive_pct"] >= 70.0
+            and row["rolling24_positive_pct"] >= 65.0
             and row["plateau_positive_neighbours_pct"] >= 70.0
+            and row["plateau_split_positive_neighbours_pct"] >= 70.0
         )
 
         output.append(row)
@@ -2510,6 +2598,10 @@ def run_research():
             OUTS["stage1_shortlist"],
             stage1_shortlist,
         )
+        write_csv(
+            OUTS["axis_summary"],
+            axis_summary(stage1_rows),
+        )
 
         # ----------------------------------------------------
         # STAGE 2 — RR SWEEP ONLY
@@ -2573,6 +2665,10 @@ def run_research():
         write_csv(
             OUTS["stage2_rr"],
             stage2_rows,
+        )
+        write_csv(
+            OUTS["rr_summary"],
+            rr_summary(stage2_rows),
         )
 
         # ----------------------------------------------------
@@ -2738,53 +2834,66 @@ def run_research():
             {
                 "topic": "purpose",
                 "note": (
-                    "Broad first-pass EUR/JPY discovery on H1 and M15, "
-                    "long and short. No candidate is automatically live-worthy."
+                    "Local EUR/JPY H1 SHORT refinement of only the two raw "
+                    "families that survived discovery: COMPRESSION_BREAKOUT "
+                    "and OUTSIDE_REVERSAL."
                 ),
             },
             {
                 "topic": "stage1",
                 "note": (
-                    "Stage 1 uses H1 SHORT raw price/volatility families only with "
-                    "RR fixed at 3.5. No session, weekday or HTF trend filters."
+                    "Stage 1 holds RR at 5.5 and densely refines geometry "
+                    "around the discovery anchors. No session, weekday or HTF "
+                    "regime filters are tested."
+                ),
+            },
+            {
+                "topic": "stage1_diversity",
+                "note": (
+                    "Shortlist is cell-constrained before filling by rank so "
+                    "one tiny geometry pocket cannot dominate the RR sweep."
                 ),
             },
             {
                 "topic": "stage2",
                 "note": (
-                    "Only shortlisted Stage-1 geometries receive the RR sweep "
-                    "2.5/3.0/3.5/4.0/4.5/5.0."
+                    "Shortlisted geometries receive an RR sweep from 3.0R to "
+                    "8.0R in 0.5R steps. This explicitly tests whether the "
+                    "previous 6R winners were merely upper-bound artefacts."
                 ),
             },
             {
                 "topic": "temporal_split",
                 "note": (
-                    "2002-2017 and 2018+ are used as temporal robustness "
-                    "splits. Because the whole history is visible during "
-                    "discovery, 2018+ is not claimed to be pristine OOS."
+                    "2002-2017 and 2018+ are robustness splits, not pristine "
+                    "out-of-sample periods because the full history has already "
+                    "been used during research."
                 ),
             },
             {
-                "topic": "costs",
+                "topic": "robust_pass",
                 "note": (
-                    "H1 native adverse cost = 0.5 pip (5 ticks); "
-                    "M15 native adverse cost = 1.0 pip. Cost stress reaches 2x."
+                    "Final robust_pass requires >=40 trades, PF>=1.35, both "
+                    "temporal splits positive, >=3 positive eras, positive last "
+                    "5Y AND last 2Y, 2x-cost PF>=1.10, positive 2x total R, "
+                    "rolling24 positive >=65%, and >=70% positive + split-positive "
+                    "local neighbours."
                 ),
             },
             {
                 "topic": "next_step",
                 "note": (
-                    "If robust candidates exist, refine only those families "
-                    "with broad HTF/session/weekday contexts and local geometry. "
-                    "Then test the frozen finalist against the existing "
-                    "20-strategy portfolio for marginal diversification."
+                    "If a raw family survives, do a controlled context-filter "
+                    "test across several nearby geometries. Only after that "
+                    "freeze one EUR/JPY short and test marginal value against "
+                    "the live 21-strategy portfolio."
                 ),
             },
             {
                 "topic": "robust_finalists",
                 "note": (
                     f"{len(robust)} of {len(final_rows)} detailed finalists "
-                    "met the predeclared robust_pass screen."
+                    "met the predeclared refinement robust_pass screen."
                 ),
             },
         ]
@@ -2803,10 +2912,11 @@ def run_research():
 
         STATUS.update({
             "state": "complete",
-            "message": "EUR/JPY H1+M15 discovery complete",
+            "message": "EUR/JPY H1 SHORT two-family refinement complete",
             "pair": PAIR,
+            "timeframe": "H1",
+            "side": "SHORT",
             "h1_candles": len(h1),
-            "m15_candles": len(m15),
             "stage1_configs": len(stage1_rows),
             "stage1_shortlist": len(stage1_shortlist),
             "stage2_rr_configs": len(stage2_rows),
@@ -2821,7 +2931,7 @@ def run_research():
             "message": str(error),
         })
         print(
-            "EURJPY H1 SHORT V2 ERROR:",
+            "EURJPY H1 SHORT REFINEMENT ERROR:",
             repr(error),
             flush=True,
         )
@@ -2834,18 +2944,15 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service": "EUR/JPY H1 SHORT Dedicated Discovery V2",
+        "service": "EUR/JPY H1 SHORT Two-Family Local Refinement",
         "status": STATUS["state"],
         "instrument": PAIR,
         "timeframe": "H1",
         "side": "SHORT",
+        "research_stage": "local_geometry_and_rr_refinement",
         "families": [
-            "ENGULF_STRUCTURE",
-            "FAILED_BREAK_RECLAIM",
-            "SWEEP_DISPLACEMENT",
-            "OUTSIDE_REVERSAL",
-            "BREAKDOWN_DISPLACEMENT",
             "COMPRESSION_BREAKOUT",
+            "OUTSIDE_REVERSAL",
         ],
         "requested_start_utc": iso(REQUESTED_START),
         "validation_start_utc": iso(VALIDATION_START),
@@ -2855,18 +2962,18 @@ def root():
         "orders_supported": False,
         "trading_enabled": False,
         "routes": [
-            "/eurjpy-h1-short-discovery/status",
-            "/eurjpy-h1-short-discovery/results",
+            "/eurjpy-h1-short-refinement/status",
+            "/eurjpy-h1-short-refinement/results",
         ],
     })
 
 
-@app.route("/eurjpy-h1-short-discovery/status")
+@app.route("/eurjpy-h1-short-refinement/status")
 def status():
     return jsonify(STATUS)
 
 
-@app.route("/eurjpy-h1-short-discovery/results")
+@app.route("/eurjpy-h1-short-refinement/results")
 def results():
     return download(BUNDLE)
 
