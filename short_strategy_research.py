@@ -4760,13 +4760,41 @@ def simulate_mixed_equity(
     ordered = sorted(trades, key=lambda t: (t["entry_time"], t["strategy_id"]))
 
     events = []
-    for n, t in enumerate(ordered):
-        key = (t["strategy_id"], t["entry_time"], t["exit_event_time"], n)
-        events.append((t["entry_time"], 1, t["strategy_id"], key, t))
-        events.append((t["exit_event_time"], 0, t["strategy_id"], key, t))
+    effective_exit_times = []
+    nonpositive_duration_trades = 0
 
-    # 0 exit, 1 entry
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+    for n, t in enumerate(ordered):
+        entry_ts = t["entry_time"]
+        raw_exit_ts = t["exit_event_time"]
+        key = (t["strategy_id"], entry_ts, raw_exit_ts, n)
+
+        # Normal convention remains unchanged: an already-open trade that
+        # exits at timestamp T is realised before a different trade entering
+        # at T.  A small number of historical/bar-boundary records can have
+        # exit_event_time <= entry_time (and the Friday-flat diagnostic can
+        # deliberately create exit_event_time == entry_time).  Those records
+        # must not be allowed to generate an EXIT event before their own ENTRY.
+        # Treat them as atomic same-timestamp trades for equity bookkeeping:
+        # enter at T, then realise their existing R immediately at T.  This
+        # preserves the trade result without inventing holding time or weekend
+        # exposure.
+        if raw_exit_ts <= entry_ts:
+            effective_exit_ts = entry_ts
+            nonpositive_duration_trades += 1
+            events.append((entry_ts, 1, "ENTRY", t["strategy_id"], key, t))
+            events.append((effective_exit_ts, 2, "EXIT", t["strategy_id"], key, t))
+        else:
+            effective_exit_ts = raw_exit_ts
+            events.append((entry_ts, 1, "ENTRY", t["strategy_id"], key, t))
+            events.append((effective_exit_ts, 0, "EXIT", t["strategy_id"], key, t))
+
+        effective_exit_times.append(effective_exit_ts)
+
+    # Priority at an exact timestamp:
+    #   0 = exits from positions that were already open
+    #   1 = new entries
+    #   2 = atomic exit for a non-positive-duration record just entered above
+    events.sort(key=lambda e: (e[0], e[1], e[3], e[4]))
 
     balance = float(starting_balance)
     peak = balance
@@ -4781,8 +4809,8 @@ def simulate_mixed_equity(
     exit_times = []
     exit_balances = []
 
-    for ts, kind, sid, key, t in events:
-        if kind == 0:
+    for ts, priority, event_type, sid, key, t in events:
+        if event_type == "EXIT":
             rec = open_trades.pop(key, None)
             if rec is None:
                 raise RuntimeError(
@@ -4896,7 +4924,7 @@ def simulate_mixed_equity(
         )
 
     first_entry = min(t["entry_time"] for t in ordered)
-    last_exit = max(t["exit_event_time"] for t in ordered)
+    last_exit = max(effective_exit_times)
     years = max(
         (last_exit - first_entry).total_seconds() / (365.2425 * 86400.0),
         1e-9,
@@ -4921,6 +4949,7 @@ def simulate_mixed_equity(
             "simulation_end_utc": iso(last_exit),
             "simulation_years": years,
             "trades": len(ordered),
+            "nonpositive_duration_trades_normalized": nonpositive_duration_trades,
             "max_closed_equity_dd_pct": max_closed_dd,
             "max_open_risk_floor_dd_pct": max_floor_dd,
             "max_open_positions": max_open_positions,
