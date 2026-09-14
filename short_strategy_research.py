@@ -9802,7 +9802,8 @@ def eurjpy_m15_long_portfolio_info():
 
 
 # ============================================================
-# CURRENT23 WEEKEND / MARKET-CLOSURE GAP RISK STUDY
+# CURRENT23 BILATERAL WEEKEND / MARKET-CLOSURE GAP STUDY (v4)
+# STOP gaps + TARGET gaps are modelled symmetrically.
 # ============================================================
 # This study deliberately reuses every frozen strategy and portfolio helper
 # above. The only history-fetch change is that M15 requests ask OANDA for
@@ -9820,25 +9821,28 @@ def eurjpy_m15_long_portfolio_info():
 
 WG_STATUS = {
     "state": "not_started",
-    "message": "Current23 weekend-gap risk study not started",
+    "message": "Current23 bilateral weekend-gap study not started",
     "progress": 0,
 }
 
-WG_BUNDLE = "EURJPY_CURRENT23_WEEKEND_GAP_RISK_STUDY_RESULTS.zip"
+WG_BUNDLE = "EURJPY_CURRENT23_WEEKEND_GAP_BILATERAL_STUDY_RESULTS.zip"
 WG_OUT = {
     "parity": "weekend_gap_current23_parity.csv",
-    "portfolio_summary": "weekend_gap_portfolio_summary.csv",
+    "portfolio_summary": "weekend_gap_bilateral_portfolio_summary.csv",
     "closure_calendar": "weekend_gap_closure_calendar.csv",
-    "exposures": "weekend_gap_exposures.csv",
+    "exposures": "weekend_gap_bilateral_exposures.csv",
+    "events": "weekend_gap_bilateral_events.csv",
     "breaches": "weekend_gap_stop_breaches.csv",
-    "strategy_summary": "weekend_gap_strategy_summary.csv",
-    "pair_summary": "weekend_gap_pair_summary.csv",
-    "year_summary": "weekend_gap_year_summary.csv",
-    "thresholds": "weekend_gap_loss_thresholds.csv",
+    "target_breaches": "weekend_gap_target_breaches.csv",
+    "strategy_summary": "weekend_gap_bilateral_strategy_summary.csv",
+    "pair_summary": "weekend_gap_bilateral_pair_summary.csv",
+    "year_summary": "weekend_gap_bilateral_year_summary.csv",
+    "thresholds": "weekend_gap_bilateral_event_thresholds.csv",
     "friday_flat": "weekend_gap_friday_flat_diagnostic.csv",
     "gate_rejections": "weekend_gap_gate_rejections.csv",
-    "notes": "weekend_gap_notes.csv",
+    "notes": "weekend_gap_bilateral_notes.csv",
 }
+
 
 # M15 market-closure metadata captured during the exact portfolio rebuild.
 WG_CLOSURES = defaultdict(list)
@@ -10035,32 +10039,90 @@ def wg_closures_crossed(t):
 
 
 def wg_exposure_row(t, c, portfolio_mode):
+    """One carried-position / market-closure observation.
+
+    Quote-side execution is deliberately symmetric:
+      * LONG stop/TP are tested on BID.
+      * SHORT stop/TP are tested on ASK.
+
+    The position is counted as a genuine closure exposure only if the final
+    executable quote immediately before closure is still strictly BETWEEN its
+    stop and target.  If it is already through either boundary, that is a
+    pre-close execution mismatch rather than weekend-gap risk.
+    """
     fill, stop, risk = wg_trade_risk(t)
+    target = float(t["target"])
     pip = wg_pip(t["pair"])
     side = t["side"]
+    baseline_r = float(t["r"])
 
     if side == "BUY":
         pre_exec = c["pre_bid_close"]
         reopen_exec = c["reopen_bid_open"]
         side_gap_pips = (reopen_exec - pre_exec) / pip
-        adverse_gap_pips = -side_gap_pips
+        adverse_gap_pips = max(0.0, -side_gap_pips)
+        favorable_gap_pips = max(0.0, side_gap_pips)
         stop_cushion_preclose_pips = (pre_exec - stop) / pip
-        mid_breach = c["reopen_mid_open"] <= stop
-        quote_breach = reopen_exec <= stop
+        target_cushion_preclose_pips = (target - pre_exec) / pip
+
+        preclose_stop_breached = pre_exec <= stop
+        preclose_target_breached = pre_exec >= target
+        weekend_carry_eligible = stop < pre_exec < target
+
+        mid_stop_breach = weekend_carry_eligible and c["reopen_mid_open"] <= stop
+        quote_stop_breach = weekend_carry_eligible and reopen_exec <= stop
+        mid_target_breach = weekend_carry_eligible and c["reopen_mid_open"] >= target
+        quote_target_breach = weekend_carry_eligible and reopen_exec >= target
+
         quote_gap_r = (reopen_exec - fill) / risk
         mid_gap_r = (c["reopen_mid_open"] - fill) / risk
+        exact_target_r = (target - fill) / risk
         friday_flat_r = (pre_exec - fill) / risk
     else:
         pre_exec = c["pre_ask_close"]
         reopen_exec = c["reopen_ask_open"]
         side_gap_pips = (reopen_exec - pre_exec) / pip
-        adverse_gap_pips = side_gap_pips
+        adverse_gap_pips = max(0.0, side_gap_pips)
+        favorable_gap_pips = max(0.0, -side_gap_pips)
         stop_cushion_preclose_pips = (stop - pre_exec) / pip
-        mid_breach = c["reopen_mid_open"] >= stop
-        quote_breach = reopen_exec >= stop
+        target_cushion_preclose_pips = (pre_exec - target) / pip
+
+        preclose_stop_breached = pre_exec >= stop
+        preclose_target_breached = pre_exec <= target
+        weekend_carry_eligible = target < pre_exec < stop
+
+        mid_stop_breach = weekend_carry_eligible and c["reopen_mid_open"] >= stop
+        quote_stop_breach = weekend_carry_eligible and reopen_exec >= stop
+        mid_target_breach = weekend_carry_eligible and c["reopen_mid_open"] <= target
+        quote_target_breach = weekend_carry_eligible and reopen_exec <= target
+
         quote_gap_r = (fill - reopen_exec) / risk
         mid_gap_r = (fill - c["reopen_mid_open"]) / risk
+        exact_target_r = (fill - target) / risk
         friday_flat_r = (fill - pre_exec) / risk
+
+    if quote_stop_breach:
+        quote_event = "STOP_GAP"
+    elif quote_target_breach:
+        quote_event = "TARGET_GAP"
+    else:
+        quote_event = "NONE"
+
+    if mid_stop_breach:
+        mid_event = "STOP_GAP"
+    elif mid_target_breach:
+        mid_event = "TARGET_GAP"
+    else:
+        mid_event = "NONE"
+
+    quote_delta_vs_baseline = (
+        float(quote_gap_r) - baseline_r
+        if quote_event != "NONE" else 0.0
+    )
+    mid_delta_vs_baseline = (
+        float(mid_gap_r) - baseline_r
+        if mid_event != "NONE" else 0.0
+    )
 
     return {
         "portfolio_mode": portfolio_mode,
@@ -10078,8 +10140,10 @@ def wg_exposure_row(t, c, portfolio_mode):
         "reference_entry": t.get("reference_entry"),
         "historical_fill": fill,
         "stop": stop,
+        "target": target,
+        "exact_target_r_from_historical_fill": float(exact_target_r),
         "baseline_result": t.get("result"),
-        "baseline_r": float(t["r"]),
+        "baseline_r": baseline_r,
         "pre_exec_close": pre_exec,
         "reopen_exec_open": reopen_exec,
         "pre_mid_close": c["pre_mid_close"],
@@ -10087,14 +10151,32 @@ def wg_exposure_row(t, c, portfolio_mode):
         "mid_gap_pips": c["mid_gap_pips"],
         "side_exec_gap_pips": side_gap_pips,
         "adverse_gap_pips": adverse_gap_pips,
+        "favorable_gap_pips": favorable_gap_pips,
         "stop_cushion_preclose_pips": stop_cushion_preclose_pips,
+        "target_cushion_preclose_pips": target_cushion_preclose_pips,
+        "weekend_carry_eligible": bool(weekend_carry_eligible),
+        "preclose_quote_stop_already_breached": bool(preclose_stop_breached),
+        "preclose_quote_target_already_breached": bool(preclose_target_breached),
         "preclose_spread_pips": c["preclose_spread_pips"],
         "reopen_spread_pips": c["reopen_spread_pips"],
-        "mid_gap_stop_breach": bool(mid_breach),
-        "quote_gap_stop_breach": bool(quote_breach),
+        "mid_gap_stop_breach": bool(mid_stop_breach),
+        "quote_gap_stop_breach": bool(quote_stop_breach),
+        "mid_gap_target_breach": bool(mid_target_breach),
+        "quote_gap_target_breach": bool(quote_target_breach),
+        "mid_gap_event_type": mid_event,
+        "quote_gap_event_type": quote_event,
         "mid_gap_r_if_closed": float(mid_gap_r),
         "quote_gap_r_if_closed": float(quote_gap_r),
-        "extra_loss_beyond_1r_quote": max(0.0, -float(quote_gap_r) - 1.0),
+        "mid_delta_r_vs_baseline": float(mid_delta_vs_baseline),
+        "quote_delta_r_vs_baseline": float(quote_delta_vs_baseline),
+        "extra_loss_beyond_1r_quote": (
+            max(0.0, -float(quote_gap_r) - 1.0)
+            if quote_stop_breach else 0.0
+        ),
+        "extra_gain_beyond_exact_target_quote": (
+            max(0.0, float(quote_gap_r) - float(exact_target_r))
+            if quote_target_breach else 0.0
+        ),
         "friday_flat_r": float(friday_flat_r),
     }
 
@@ -10103,38 +10185,91 @@ def wg_collect_exposures(trades, portfolio_mode):
     rows = []
     for t in trades:
         for c in wg_closures_crossed(t):
-            rows.append(wg_exposure_row(t, c, portfolio_mode))
+            row = wg_exposure_row(t, c, portfolio_mode)
+            # The weekend denominator only contains positions that were still
+            # executable and between BOTH boundaries at the final quote before
+            # the closure. Pre-close boundary mismatches are not weekend gaps.
+            if row.get("weekend_carry_eligible", False):
+                rows.append(row)
     return rows
 
 
 def wg_adjust_trade_for_gap(t, use_quote=True):
-    """Return a copy with the first adverse gap-through-stop applied."""
+    """Apply the FIRST bilateral closure gap through STOP or TARGET.
+
+    This is the key v4 change.  A reopening beyond the stop receives adverse
+    slippage at the first executable reopening quote.  A reopening beyond the
+    target receives favorable slippage at that same executable quote.
+
+    If the final pre-close executable quote is already outside either boundary,
+    the validated midpoint trade is left unchanged and flagged as a pre-close
+    mismatch; it is not labelled as a weekend event.
+    """
     x = dict(t)
     fill, stop, risk = wg_trade_risk(x)
+    target = float(x["target"])
+    baseline_r = float(x["r"])
+
     for c in wg_closures_crossed(x):
         if x["side"] == "BUY":
+            pre_exec = c["pre_bid_close"]
+            if pre_exec <= stop:
+                x["weekend_gap_adjusted"] = False
+                x["preclose_quote_stop_already_breached"] = True
+                x["preclose_quote_target_already_breached"] = False
+                return x
+            if pre_exec >= target:
+                x["weekend_gap_adjusted"] = False
+                x["preclose_quote_stop_already_breached"] = False
+                x["preclose_quote_target_already_breached"] = True
+                return x
+
             px = c["reopen_bid_open"] if use_quote else c["reopen_mid_open"]
-            breached = px <= stop
+            stop_breach = px <= stop
+            target_breach = px >= target
             r = (px - fill) / risk
         else:
+            pre_exec = c["pre_ask_close"]
+            if pre_exec >= stop:
+                x["weekend_gap_adjusted"] = False
+                x["preclose_quote_stop_already_breached"] = True
+                x["preclose_quote_target_already_breached"] = False
+                return x
+            if pre_exec <= target:
+                x["weekend_gap_adjusted"] = False
+                x["preclose_quote_stop_already_breached"] = False
+                x["preclose_quote_target_already_breached"] = True
+                return x
+
             px = c["reopen_ask_open"] if use_quote else c["reopen_mid_open"]
-            breached = px >= stop
+            stop_breach = px >= stop
+            target_breach = px <= target
             r = (fill - px) / risk
 
-        if not breached:
+        if not stop_breach and not target_breach:
             continue
 
+        event_type = "STOP" if stop_breach else "TARGET"
+        source = "QUOTE" if use_quote else "MID"
         x["exit_time"] = c["reopen_time"]
         x["exit_event_time"] = c["reopen_time"]
         x["exit_price"] = float(px)
-        x["result"] = "WEEKEND_GAP_STOP_QUOTE" if use_quote else "WEEKEND_GAP_STOP_MID"
+        x["result"] = f"WEEKEND_GAP_{event_type}_{source}"
         x["r"] = float(r)
         x["weekend_gap_adjusted"] = True
+        x["weekend_gap_event_type"] = event_type
+        x["weekend_gap_price_source"] = source
+        x["weekend_gap_delta_r_vs_baseline"] = float(r) - baseline_r
+        x["weekend_gap_baseline_r"] = baseline_r
         x["weekend_gap_market_close"] = c["market_close_time"]
         x["weekend_gap_reopen"] = c["reopen_time"]
+        x["preclose_quote_stop_already_breached"] = False
+        x["preclose_quote_target_already_breached"] = False
         return x
 
     x["weekend_gap_adjusted"] = False
+    x["weekend_gap_event_type"] = None
+    x["weekend_gap_delta_r_vs_baseline"] = 0.0
     return x
 
 
@@ -10177,39 +10312,140 @@ def wg_group_summary(exposures, key):
 
     out = []
     for value, rows in sorted(groups.items(), key=lambda kv: str(kv[0])):
-        breached = [r for r in rows if r["quote_gap_stop_breach"]]
+        stop_events = [r for r in rows if r["quote_gap_stop_breach"]]
+        target_events = [r for r in rows if r["quote_gap_target_breach"]]
+        events = stop_events + target_events
         unique_trades = {
             (r["strategy_id"], r["entry_time"], r["baseline_exit_time"])
             for r in rows
         }
+        stop_delta = sum(r["quote_delta_r_vs_baseline"] for r in stop_events)
+        target_delta = sum(r["quote_delta_r_vs_baseline"] for r in target_events)
         out.append({
             key: value,
             "weekend_exposure_instances": len(rows),
             "unique_trades_held_over_closure": len(unique_trades),
-            "quote_gap_stop_breaches": len(breached),
-            "breach_pct_of_exposures": pct(len(breached), len(rows)),
-            "total_extra_loss_beyond_1r": sum(r["extra_loss_beyond_1r_quote"] for r in breached),
-            "worst_gap_r": min([r["quote_gap_r_if_closed"] for r in breached], default=0.0),
-            "largest_adverse_gap_pips": max([r["adverse_gap_pips"] for r in rows], default=0.0),
-            "median_reopen_spread_pips": safe_median([r["reopen_spread_pips"] for r in rows]),
+            "quote_gap_stop_breaches": len(stop_events),
+            "quote_gap_target_breaches": len(target_events),
+            "quote_gap_total_events": len(events),
+            "stop_breach_pct_of_exposures": pct(len(stop_events), len(rows)),
+            "target_breach_pct_of_exposures": pct(len(target_events), len(rows)),
+            "any_event_pct_of_exposures": pct(len(events), len(rows)),
+            "stop_gap_delta_r_vs_baseline": stop_delta,
+            "target_gap_delta_r_vs_baseline": target_delta,
+            "net_gap_delta_r_vs_baseline": stop_delta + target_delta,
+            "total_extra_loss_beyond_1r": sum(
+                r["extra_loss_beyond_1r_quote"] for r in stop_events
+            ),
+            "total_extra_gain_beyond_exact_target": sum(
+                r["extra_gain_beyond_exact_target_quote"] for r in target_events
+            ),
+            "worst_stop_gap_r": min(
+                [r["quote_gap_r_if_closed"] for r in stop_events], default=0.0
+            ),
+            "best_target_gap_r": max(
+                [r["quote_gap_r_if_closed"] for r in target_events], default=0.0
+            ),
+            "worst_event_delta_r_vs_baseline": min(
+                [r["quote_delta_r_vs_baseline"] for r in events], default=0.0
+            ),
+            "best_event_delta_r_vs_baseline": max(
+                [r["quote_delta_r_vs_baseline"] for r in events], default=0.0
+            ),
+            "largest_adverse_gap_pips": max(
+                [r["adverse_gap_pips"] for r in rows], default=0.0
+            ),
+            "largest_favorable_gap_pips": max(
+                [r["favorable_gap_pips"] for r in rows], default=0.0
+            ),
+            "median_reopen_spread_pips": safe_median(
+                [r["reopen_spread_pips"] for r in rows]
+            ),
         })
     return out
 
 
 def wg_threshold_rows(exposures, mode):
-    breached = [r for r in exposures if r["quote_gap_stop_breach"]]
-    thresholds = [1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 5.0]
+    stop_events = [r for r in exposures if r["quote_gap_stop_breach"]]
+    target_events = [r for r in exposures if r["quote_gap_target_breach"]]
     out = []
-    for th in thresholds:
-        n = sum(1 for r in breached if r["quote_gap_r_if_closed"] <= -th)
+
+    for th in [1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 5.0]:
+        n = sum(1 for r in stop_events if r["quote_gap_r_if_closed"] <= -th)
         out.append({
             "portfolio_mode": mode,
-            "loss_threshold_r_or_worse": -th,
+            "event_type": "STOP_GAP",
+            "threshold_label": f"R <= -{th}",
+            "threshold_value_r": -th,
             "events": n,
-            "pct_of_gap_breaches": pct(n, len(breached)),
+            "pct_of_same_type_events": pct(n, len(stop_events)),
+            "pct_of_all_weekend_exposures": pct(n, len(exposures)),
+        })
+
+    # Favourable target-gap thresholds are expressed as ADDITIONAL R beyond
+    # the exact target value from the historical fill, not absolute trade R.
+    for th in [0.0, 0.05, 0.10, 0.25, 0.50, 1.0, 2.0]:
+        n = sum(
+            1 for r in target_events
+            if r["extra_gain_beyond_exact_target_quote"] >= th - 1e-12
+        )
+        out.append({
+            "portfolio_mode": mode,
+            "event_type": "TARGET_GAP",
+            "threshold_label": f"extra R beyond target >= {th}",
+            "threshold_value_r": th,
+            "events": n,
+            "pct_of_same_type_events": pct(n, len(target_events)),
             "pct_of_all_weekend_exposures": pct(n, len(exposures)),
         })
     return out
+
+
+def wg_gap_adjustment_stats(original, adjusted):
+    if len(original) != len(adjusted):
+        raise RuntimeError("Gap-adjustment ledger length mismatch")
+
+    stop_events = []
+    target_events = []
+    for base, adj in zip(original, adjusted):
+        if not adj.get("weekend_gap_adjusted"):
+            continue
+        delta = float(adj["r"]) - float(base["r"])
+        rec = {
+            "strategy_id": base["strategy_id"],
+            "pair": base["pair"],
+            "entry_time": base["entry_time"],
+            "baseline_r": float(base["r"]),
+            "adjusted_r": float(adj["r"]),
+            "delta_r": delta,
+        }
+        if adj.get("weekend_gap_event_type") == "STOP":
+            stop_events.append(rec)
+        elif adj.get("weekend_gap_event_type") == "TARGET":
+            target_events.append(rec)
+
+    stop_delta = sum(x["delta_r"] for x in stop_events)
+    target_delta = sum(x["delta_r"] for x in target_events)
+    return {
+        "gap_stop_events": len(stop_events),
+        "gap_target_events": len(target_events),
+        "gap_total_events": len(stop_events) + len(target_events),
+        "gap_stop_delta_r_vs_baseline": stop_delta,
+        "gap_target_delta_r_vs_baseline": target_delta,
+        "gap_net_delta_r_vs_baseline": stop_delta + target_delta,
+        "worst_stop_event_r": min(
+            [x["adjusted_r"] for x in stop_events], default=0.0
+        ),
+        "best_target_event_r": max(
+            [x["adjusted_r"] for x in target_events], default=0.0
+        ),
+        "worst_event_delta_r": min(
+            [x["delta_r"] for x in stop_events + target_events], default=0.0
+        ),
+        "best_event_delta_r": max(
+            [x["delta_r"] for x in stop_events + target_events], default=0.0
+        ),
+    }
 
 
 def wg_portfolio_scenario_rows(mode, accepted, independent, candidate_before_gate, rejected):
@@ -10217,45 +10453,73 @@ def wg_portfolio_scenario_rows(mode, accepted, independent, candidate_before_gat
 
     baseline = wg_summary_row("CURRENT23_BASELINE", mode, accepted)
     baseline.update({
-        "scenario": "BASELINE_MIDPOINT_STOPS",
+        "scenario": "BASELINE_MIDPOINT_STOPS_TARGETS",
         "candidate_m15_long_before_gate": candidate_before_gate,
         "gate_rejections": len(rejected),
+        "gap_stop_events": 0,
+        "gap_target_events": 0,
+        "gap_total_events": 0,
+        "gap_stop_delta_r_vs_baseline": 0.0,
+        "gap_target_delta_r_vs_baseline": 0.0,
+        "gap_net_delta_r_vs_baseline": 0.0,
     })
     rows.append(baseline)
 
-    # Direct risk answer: same accepted trades, but stop breaches at the first
-    # post-weekend executable quote instead of pretending the stop filled at
-    # its exact level.
+    # Main answer: hold the exact accepted-trade ledger fixed, but execute the
+    # first post-closure STOP OR TARGET gap at the first executable quote.
     quote_fixed = [wg_adjust_trade_for_gap(t, use_quote=True) for t in accepted]
-    qrow = wg_summary_row("CURRENT23_GAP_QUOTE_FIXED_LEDGER", mode, quote_fixed)
+    qstats = wg_gap_adjustment_stats(accepted, quote_fixed)
+    qrow = wg_summary_row("CURRENT23_BILATERAL_GAP_QUOTE_FIXED", mode, quote_fixed)
     qrow.update({
-        "scenario": "GAP_ADJUSTED_BID_ASK_FIXED_ACCEPTED_LEDGER",
+        "scenario": "BILATERAL_GAP_BID_ASK_FIXED_ACCEPTED_LEDGER",
         "candidate_m15_long_before_gate": candidate_before_gate,
         "gate_rejections": len(rejected),
+        **qstats,
     })
     rows.append(qrow)
 
+    # Mid-open counterpart separates underlying price gaps from bid/ask spread
+    # effects at the reopening.
     mid_fixed = [wg_adjust_trade_for_gap(t, use_quote=False) for t in accepted]
-    mrow = wg_summary_row("CURRENT23_GAP_MID_FIXED_LEDGER", mode, mid_fixed)
+    mstats = wg_gap_adjustment_stats(accepted, mid_fixed)
+    mrow = wg_summary_row("CURRENT23_BILATERAL_GAP_MID_FIXED", mode, mid_fixed)
     mrow.update({
-        "scenario": "GAP_ADJUSTED_MID_FIXED_ACCEPTED_LEDGER",
+        "scenario": "BILATERAL_GAP_MID_FIXED_ACCEPTED_LEDGER",
         "candidate_m15_long_before_gate": candidate_before_gate,
         "gate_rejections": len(rejected),
+        **mstats,
     })
     rows.append(mrow)
 
-    # Structural approximation: adjust independent trades first, then rerun
-    # the live non-hedging gate. This captures a gap-stopped trade freeing the
-    # pair earlier for another strategy. It still cannot resurrect a signal
-    # that a strategy's own pyramiding=0 suppressed before trade generation.
+    # Structural approximation: apply bilateral gap exits to independent
+    # trades first and then rerun the live non-hedging gate.  As before, this
+    # cannot regenerate signals suppressed by each strategy's own pyramiding=0.
     priority = "H1_FIRST" if mode == "LIVE_SAFE_H1_FIRST" else "M15_FIRST"
     quote_ind = [wg_adjust_trade_for_gap(t, use_quote=True) for t in independent]
     quote_regated, quote_rej = apply_live_safe_nonhedging_gate(quote_ind, priority)
-    qr = wg_summary_row("CURRENT23_GAP_QUOTE_REGATED", mode, quote_regated)
+    qr = wg_summary_row("CURRENT23_BILATERAL_GAP_QUOTE_REGATED", mode, quote_regated)
     qr.update({
-        "scenario": "GAP_ADJUSTED_BID_ASK_REGATED_APPROX",
+        "scenario": "BILATERAL_GAP_BID_ASK_REGATED_APPROX",
         "candidate_m15_long_before_gate": candidate_before_gate,
         "gate_rejections": len(quote_rej),
+        # Direct before/after pairing is no longer one-to-one after regating.
+        "gap_stop_events": sum(
+            1 for t in quote_ind
+            if t.get("weekend_gap_adjusted")
+            and t.get("weekend_gap_event_type") == "STOP"
+        ),
+        "gap_target_events": sum(
+            1 for t in quote_ind
+            if t.get("weekend_gap_adjusted")
+            and t.get("weekend_gap_event_type") == "TARGET"
+        ),
+        "gap_total_events": sum(1 for t in quote_ind if t.get("weekend_gap_adjusted")),
+        "gap_stop_delta_r_vs_baseline": None,
+        "gap_target_delta_r_vs_baseline": None,
+        "gap_net_delta_r_vs_baseline": (
+            sum(float(t["r"]) for t in quote_regated)
+            - sum(float(t["r"]) for t in accepted)
+        ),
     })
     rows.append(qr)
 
@@ -10279,7 +10543,7 @@ def run_weekend_gap_study():
             progress=2,
         )
 
-        # Fetch EUR/JPY explicitly. The current20 rebuild below fetches the five
+        # Fetch EUR/JPY explicitly. The current22 rebuild below fetches the five
         # original pairs and automatically captures their weekly M15 closures.
         eurjpy_m15, _ = fetch_history(PV_PAIR, "M15", START, NOW)
         eurjpy_h1, _ = fetch_history(PV_PAIR, "H1", PV_H1_WARMUP, NOW)
@@ -10344,6 +10608,10 @@ def run_weekend_gap_study():
                     "gap_hours": c["gap_hours"],
                     "pre_mid_close": c["pre_mid_close"],
                     "reopen_mid_open": c["reopen_mid_open"],
+                    "pre_bid_close": c["pre_bid_close"],
+                    "pre_ask_close": c["pre_ask_close"],
+                    "reopen_bid_open": c["reopen_bid_open"],
+                    "reopen_ask_open": c["reopen_ask_open"],
                     "mid_gap_pips": c["mid_gap_pips"],
                     "preclose_spread_pips": c["preclose_spread_pips"],
                     "reopen_spread_pips": c["reopen_spread_pips"],
@@ -10352,7 +10620,9 @@ def run_weekend_gap_study():
 
         all_scenario_rows = []
         all_exposure_rows = []
-        all_breach_rows = []
+        all_event_rows = []
+        all_stop_rows = []
+        all_target_rows = []
         all_strategy_rows = []
         all_pair_rows = []
         all_year_rows = []
@@ -10366,25 +10636,27 @@ def run_weekend_gap_study():
         ]:
             WG_STATUS.update(
                 state="analyse",
-                message=f"Analysing weekend risk: {mode}",
+                message=f"Analysing bilateral weekend gaps: {mode}",
                 progress=72 if priority == "H1_FIRST" else 84,
             )
 
             accepted, rejected = apply_live_safe_nonhedging_gate(independent23, priority)
             accepted_candidate = sum(1 for t in accepted if t["strategy_id"] == locked_sid)
 
-            # Preserve the known 22->23 baseline relationship. Newer trades may
-            # legitimately push counts above the old 2515 reference.
             if len(accepted) < 2515:
                 raise RuntimeError(
                     f"Current23 {mode} fell below prior 2515-trade reference: {len(accepted)}"
                 )
 
             exposures = wg_collect_exposures(accepted, mode)
-            breached = [r for r in exposures if r["quote_gap_stop_breach"]]
+            stop_events = [r for r in exposures if r["quote_gap_stop_breach"]]
+            target_events = [r for r in exposures if r["quote_gap_target_breach"]]
+            events = stop_events + target_events
 
             all_exposure_rows.extend(exposures)
-            all_breach_rows.extend(breached)
+            all_event_rows.extend(events)
+            all_stop_rows.extend(stop_events)
+            all_target_rows.extend(target_events)
 
             for r in rejected:
                 all_gate_rows.append({"portfolio_mode": mode, **r})
@@ -10413,6 +10685,9 @@ def run_weekend_gap_study():
                 len(m15_long),
                 rejected,
             )
+
+            stop_delta = sum(e["quote_delta_r_vs_baseline"] for e in stop_events)
+            target_delta = sum(e["quote_delta_r_vs_baseline"] for e in target_events)
             for r in scen:
                 r["accepted_locked_eurjpy_m15_long"] = accepted_candidate
                 r["weekend_exposure_instances"] = len(exposures)
@@ -10420,13 +10695,33 @@ def run_weekend_gap_study():
                     (e["strategy_id"], e["entry_time"], e["baseline_exit_time"])
                     for e in exposures
                 })
-                r["quote_gap_stop_breaches"] = len(breached)
-                r["mid_gap_stop_breaches"] = sum(1 for e in exposures if e["mid_gap_stop_breach"])
-                r["total_extra_loss_beyond_1r_quote"] = sum(e["extra_loss_beyond_1r_quote"] for e in breached)
-                r["worst_gap_r"] = min([e["quote_gap_r_if_closed"] for e in breached], default=0.0)
+                r["quote_gap_stop_breaches"] = len(stop_events)
+                r["quote_gap_target_breaches"] = len(target_events)
+                r["quote_gap_total_events"] = len(events)
+                r["mid_gap_stop_breaches"] = sum(
+                    1 for e in exposures if e["mid_gap_stop_breach"]
+                )
+                r["mid_gap_target_breaches"] = sum(
+                    1 for e in exposures if e["mid_gap_target_breach"]
+                )
+                r["observed_quote_stop_delta_r_vs_baseline"] = stop_delta
+                r["observed_quote_target_delta_r_vs_baseline"] = target_delta
+                r["observed_quote_net_delta_r_vs_baseline"] = stop_delta + target_delta
+                r["total_extra_loss_beyond_1r_quote"] = sum(
+                    e["extra_loss_beyond_1r_quote"] for e in stop_events
+                )
+                r["total_extra_gain_beyond_exact_target_quote"] = sum(
+                    e["extra_gain_beyond_exact_target_quote"] for e in target_events
+                )
+                r["worst_stop_gap_r"] = min(
+                    [e["quote_gap_r_if_closed"] for e in stop_events], default=0.0
+                )
+                r["best_target_gap_r"] = max(
+                    [e["quote_gap_r_if_closed"] for e in target_events], default=0.0
+                )
             all_scenario_rows.extend(scen)
 
-            # Friday-flat diagnostic summary on the fixed accepted-entry set.
+            # Friday-flat remains a diagnostic comparison only.
             ff = [wg_friday_flat_trade(t) for t in accepted]
             adjusted = [t for t in ff if t.get("friday_flat_adjusted")]
             all_friday_rows.append({
@@ -10436,13 +10731,18 @@ def run_weekend_gap_study():
                 "pct_of_accepted_trades_forced_flat": pct(len(adjusted), len(accepted)),
                 "baseline_total_r": sum(float(t["r"]) for t in accepted),
                 "friday_flat_same_entry_total_r": sum(float(t["r"]) for t in ff),
-                "delta_total_r": sum(float(t["r"]) for t in ff) - sum(float(t["r"]) for t in accepted),
+                "delta_total_r": (
+                    sum(float(t["r"]) for t in ff)
+                    - sum(float(t["r"]) for t in accepted)
+                ),
                 "note": "Diagnostic only: later same-strategy signals suppressed by original pyramiding=0 are not regenerated.",
             })
 
         write_csv(WG_OUT["portfolio_summary"], all_scenario_rows)
         write_csv(WG_OUT["exposures"], all_exposure_rows)
-        write_csv(WG_OUT["breaches"], all_breach_rows)
+        write_csv(WG_OUT["events"], all_event_rows)
+        write_csv(WG_OUT["breaches"], all_stop_rows)
+        write_csv(WG_OUT["target_breaches"], all_target_rows)
         write_csv(WG_OUT["strategy_summary"], all_strategy_rows)
         write_csv(WG_OUT["pair_summary"], all_pair_rows)
         write_csv(WG_OUT["year_summary"], all_year_rows)
@@ -10456,20 +10756,32 @@ def run_weekend_gap_study():
                 "value": "Exact current22 portfolio plus locked EUR/JPY M15 LONG RR4.25 as prospective strategy #23. Both H1_FIRST and M15_FIRST live-safe non-hedging orderings reported.",
             },
             {
+                "item": "bilateral_change_v4",
+                "value": "Unlike v3, reopening gaps are symmetric: LONG uses BID for both stop and target; SHORT uses ASK for both stop and target. First reopening quote beyond STOP is adverse slippage; first reopening quote beyond TARGET is favorable slippage.",
+            },
+            {
                 "item": "weekend_detection",
                 "value": "OANDA M15 gaps of 24-96 hours are treated as weekly/holiday market closures. >96h gaps are treated as likely data-coverage holes and excluded.",
             },
             {
-                "item": "execution_price",
-                "value": "Baseline strategy signals/exits remain midpoint-based exactly as validated. Gap-stop execution uses first post-closure BID open for longs and ASK open for shorts from OANDA MBA candles.",
+                "item": "preclose_filter",
+                "value": "A closure exposure is counted only when the final executable pre-close quote is strictly between stop and target. If already outside either boundary, it is a pre-close execution mismatch and not classified as a weekend gap.",
             },
             {
-                "item": "main_risk_metric",
-                "value": "GAP_ADJUSTED_BID_ASK_FIXED_ACCEPTED_LEDGER is the cleanest answer to historical tail risk: same trades the live-safe portfolio accepted, but any weekend gap through stop exits at first executable quote rather than at the stop.",
+                "item": "execution_price",
+                "value": "Baseline strategy signals/exits remain midpoint-based exactly as validated. Reopening gap execution uses first post-closure BID open for longs and ASK open for shorts from OANDA MBA candles.",
+            },
+            {
+                "item": "main_metric",
+                "value": "BILATERAL_GAP_BID_ASK_FIXED_ACCEPTED_LEDGER is the cleanest direct answer: exact live-safe accepted entries are held fixed, while the first closure reopening beyond either stop or target exits at the first executable quote.",
+            },
+            {
+                "item": "target_delta_interpretation",
+                "value": "TARGET gap delta versus baseline can exceed mere slippage beyond target because a weekend target gap can close a trade profitably even when the original midpoint path later stopped out.",
             },
             {
                 "item": "regated_limit",
-                "value": "The REGATED approximation reruns the non-hedging portfolio gate after earlier gap exits. It cannot resurrect same-strategy signals that the original strategy backtest suppressed under pyramiding=0.",
+                "value": "The REGATED approximation reruns the non-hedging portfolio gate after earlier bilateral gap exits. It cannot resurrect same-strategy signals that the original strategy backtest suppressed under pyramiding=0.",
             },
             {
                 "item": "friday_flat_limit",
@@ -10477,7 +10789,7 @@ def run_weekend_gap_study():
             },
             {
                 "item": "gslo",
-                "value": "This study quantifies ordinary-stop weekend gap risk. It does not assume Guaranteed Stop Losses or their premiums/minimum-distance constraints.",
+                "value": "This study quantifies ordinary-stop/take-profit closure-gap execution. It does not assume Guaranteed Stop Losses or their premiums/minimum-distance constraints.",
             },
             {
                 "item": "data_gap_count",
@@ -10487,7 +10799,7 @@ def run_weekend_gap_study():
 
         WG_STATUS.update(
             state="packaging",
-            message="Packaging weekend-gap risk results",
+            message="Packaging bilateral weekend-gap results",
             progress=96,
         )
         with zipfile.ZipFile(WG_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -10495,20 +10807,28 @@ def run_weekend_gap_study():
                 if os.path.exists(path):
                     z.write(path, arcname=os.path.basename(path))
 
-        h1_rows = [r for r in all_scenario_rows if r.get("portfolio_mode") == "LIVE_SAFE_H1_FIRST" and r.get("scenario") == "GAP_ADJUSTED_BID_ASK_FIXED_ACCEPTED_LEDGER"]
+        h1_rows = [
+            r for r in all_scenario_rows
+            if r.get("portfolio_mode") == "LIVE_SAFE_H1_FIRST"
+            and r.get("scenario") == "BILATERAL_GAP_BID_ASK_FIXED_ACCEPTED_LEDGER"
+        ]
         main = h1_rows[0] if h1_rows else {}
 
         WG_STATUS.update(
             state="complete",
-            message="Current23 weekend-gap risk study complete",
+            message="Current23 bilateral weekend-gap study complete",
             progress=100,
             results=WG_BUNDLE,
             current23_reference_min_trades=2515,
             h1_first_trades=main.get("trades"),
             h1_first_weekend_exposure_instances=main.get("weekend_exposure_instances"),
-            h1_first_gap_stop_breaches=main.get("quote_gap_stop_breaches"),
-            h1_first_worst_gap_r=main.get("worst_gap_r"),
-            h1_first_total_extra_loss_beyond_1r=main.get("total_extra_loss_beyond_1r_quote"),
+            h1_first_gap_stop_events=main.get("gap_stop_events"),
+            h1_first_gap_target_events=main.get("gap_target_events"),
+            h1_first_gap_stop_delta_r=main.get("gap_stop_delta_r_vs_baseline"),
+            h1_first_gap_target_delta_r=main.get("gap_target_delta_r_vs_baseline"),
+            h1_first_gap_net_delta_r=main.get("gap_net_delta_r_vs_baseline"),
+            h1_first_worst_stop_gap_r=main.get("worst_stop_event_r"),
+            h1_first_best_target_gap_r=main.get("best_target_event_r"),
         )
 
     except Exception as e:
@@ -10517,7 +10837,7 @@ def run_weekend_gap_study():
             message=str(e),
             progress=WG_STATUS.get("progress", 0),
         )
-        print("WEEKEND GAP STUDY ERROR:", repr(e), flush=True)
+        print("WEEKEND BILATERAL GAP STUDY ERROR:", repr(e), flush=True)
 
 
 @app.route("/weekend-gap/status")
@@ -10543,12 +10863,12 @@ def weekend_gap_results():
 @app.route("/weekend-gap/info")
 def weekend_gap_info():
     return jsonify({
-        "service": "Current23 weekend / market-closure gap risk study",
+        "service": "Current23 bilateral weekend / market-closure gap study",
         "read_only": True,
         "orders_supported": False,
         "portfolio": "current22 + locked EURJPY M15 LONG RR4.25 (#23 prospective)",
         "history": "OANDA midpoint for validated strategy logic; M15 bid/ask opens/closes for closure execution",
-        "main_scenario": "GAP_ADJUSTED_BID_ASK_FIXED_ACCEPTED_LEDGER",
+        "main_scenario": "BILATERAL_GAP_BID_ASK_FIXED_ACCEPTED_LEDGER",
         "routes": [
             "/weekend-gap/status",
             "/weekend-gap/results",
