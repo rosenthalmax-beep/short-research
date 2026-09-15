@@ -2676,10 +2676,12 @@ def run_deep_validation():
         OUTCOME_CACHE.clear()
 
         # Same market-data conventions as the broad runner.
-        m15 = fetch_range(PAIR, "M15", WARMUP, NOW, "M")
-        h1 = fetch_range(PAIR, "H1", WARMUP, NOW, "M")
-        h4 = fetch_range(PAIR, "H4", WARMUP, NOW, "M")
-        daily = fetch_range(PAIR, "D", WARMUP, NOW, "M")
+        # Use the exact history-fetch helper/chunking from the successful
+        # EUR/JPY M15 SHORT broad-research runner.
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        daily = fetch("D", WARMUP, NOW, 3500)
 
         # Keep study sample at/after the declared start.
         m15 = [x for x in m15 if x["time"] >= START]
