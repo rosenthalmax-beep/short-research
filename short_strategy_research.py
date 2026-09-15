@@ -12407,14 +12407,1137 @@ def eurjpy_m15_short_24_risk_sweep_info():
     })
 
 
-if __name__ == "__main__":
+
+# ============================================================
+# FULL 24-STRATEGY ONE-AT-A-TIME RISK SENSITIVITY MATRIX
+# ============================================================
+#
+# CONTROL PORTFOLIO
+# -----------------
+#   Existing strategies #1-#23: 1.00% of then-realised equity per trade.
+#   Frozen EUR_JPY_M15_SHORT #24: 0.75% per trade.
+#
+# ONE-AT-A-TIME SWEEP
+# -------------------
+# For EACH of the 24 accepted strategy IDs, vary only that strategy through:
+#       0.50%, 0.75%, 1.00%, 1.25%
+# while every other strategy remains at its CONTROL weight.
+#
+# Signals, trade outcomes, A+B/B-priority logic, and the exact live-safe
+# non-hedging gate are frozen. Risk size never changes which trades are
+# historically accepted.
+#
+# This is deliberately NOT a global optimiser. It is a marginal sensitivity
+# map designed to show which strategies are expensive/cheap in drawdown terms
+# at different risk sizes before any combined weighted portfolio is proposed.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+W24_STATUS = {
+    'state': 'not_started',
+    'message': '24-strategy one-at-a-time risk sensitivity not started',
+    'progress': 0,
+    'orders_supported': False,
+    'trading_enabled': False,
+}
+
+W24_SWEEP_RISKS = [0.0050, 0.0075, 0.0100, 0.0125]
+W24_DEFAULT_RISK = 0.0100
+W24_Q24_CONTROL_RISK = 0.0075
+W24_CONTROL_VARIANT = 'CONTROL_24_Q24_075'
+W24_BUNDLE = 'FULL_24_STRATEGY_ONE_AT_A_TIME_RISK_SENSITIVITY_RESULTS.zip'
+
+W24_CONTROL_REFERENCE = {
+    'trades': 2666,
+    'candidate24_accepted': 152,
+    'historical_cagr_pct': 102.599436,
+    'closed_dd_pct': -18.144324,
+    'floor_dd_pct': -18.971149,
+    'max_open_positions': 6,
+}
+
+W24_OUT = {
+    'portfolio_parity': 'full24_risk_sensitivity_portfolio_parity.csv',
+    'strategy_manifest': 'full24_risk_sensitivity_strategy_manifest.csv',
+    'control_summary': 'full24_risk_sensitivity_control_summary.csv',
+    'sensitivity_matrix': 'full24_risk_sensitivity_matrix.csv',
+    'marginal_steps': 'full24_risk_sensitivity_marginal_steps.csv',
+    'strategy_diagnostics': 'full24_risk_sensitivity_strategy_diagnostics.csv',
+    'strategy_frontier': 'full24_risk_sensitivity_strategy_frontier.csv',
+    'rolling': 'full24_risk_sensitivity_rolling.csv',
+    'rolling_summary': 'full24_risk_sensitivity_rolling_summary.csv',
+    'calendar': 'full24_risk_sensitivity_calendar.csv',
+    'calendar_summary': 'full24_risk_sensitivity_calendar_summary.csv',
+    'periods': 'full24_risk_sensitivity_periods.csv',
+    'drawdown_events': 'full24_risk_sensitivity_drawdown_events.csv',
+    'gate_summary': 'full24_risk_sensitivity_gate_summary.csv',
+    'notes': 'full24_risk_sensitivity_notes.csv',
+}
+
+
+def w24_control_risk_map(strategy_ids):
+    risks = {sid: W24_DEFAULT_RISK for sid in strategy_ids}
+    if Q24_STRATEGY_ID not in risks:
+        raise RuntimeError(f'Missing frozen #24 strategy id: {Q24_STRATEGY_ID}')
+    risks[Q24_STRATEGY_ID] = W24_Q24_CONTROL_RISK
+    return risks
+
+
+def w24_simulate_equity(trades, risk_by_strategy, starting_balance=100.0):
+    '''
+    Generic event-driven weighted portfolio simulator.
+
+    Risk cash is fixed on ENTRY from then-realised equity:
+        risk_cash = realised_equity * risk_by_strategy[strategy_id]
+
+    EXIT events are processed before ENTRY events at identical timestamps.
+
+    Conservative open-risk floor:
+        realised equity - sum(fixed cash risk of all open positions)
+
+    This exactly generalises the candidate-only risk simulator used in the
+    completed #24 0.50/0.75/1.00 study.
+    '''
+    if not trades:
+        raise RuntimeError('Weighted simulation received no trades')
+
+    ordered = sorted(
+        trades,
+        key=lambda t: (t['entry_time'], t['strategy_id']),
+    )
+
+    strategy_ids = sorted({t['strategy_id'] for t in ordered})
+    missing = [sid for sid in strategy_ids if sid not in risk_by_strategy]
+    if missing:
+        raise RuntimeError(f'Risk map missing strategies: {missing}')
+
+    events = []
+    for n, t in enumerate(ordered):
+        key = (t['strategy_id'], t['entry_time'], t['exit_event_time'], n)
+        events.append((t['entry_time'], 1, t['strategy_id'], key, t))
+        events.append((t['exit_event_time'], 0, t['strategy_id'], key, t))
+
+    # EXIT before ENTRY at exact same timestamp.
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+
+    balance = float(starting_balance)
+    peak = balance
+    max_closed_dd = 0.0
+    max_floor_dd = 0.0
+    max_open_positions = 0
+    max_open_risk_pct = 0.0
+
+    open_trades = {}
+    open_risk_cash = 0.0
+
+    exit_times = []
+    exit_balances = []
+
+    closed_dd_event = None
+    floor_dd_event = None
+    max_open_risk_event = None
+
+    for ts, kind, sid, key, t in events:
+        if kind == 0:  # EXIT
+            rec = open_trades.pop(key, None)
+            if rec is None:
+                raise RuntimeError(
+                    f'Weighted exit without entry: {sid} {iso(ts)}'
+                )
+
+            balance += rec['risk_cash'] * float(t['r'])
+            open_risk_cash -= rec['risk_cash']
+            if abs(open_risk_cash) < 1e-12:
+                open_risk_cash = 0.0
+
+            peak = max(peak, balance)
+            closed_dd = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+
+            if closed_dd < max_closed_dd:
+                max_closed_dd = closed_dd
+                closed_dd_event = {
+                    'event_time_utc': iso(ts),
+                    'strategy_id': sid,
+                    'event': 'EXIT',
+                    'balance': balance,
+                    'peak_balance': peak,
+                    'drawdown_pct': closed_dd,
+                    'open_positions': len(open_trades),
+                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
+                }
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            if floor_dd < max_floor_dd:
+                max_floor_dd = floor_dd
+                floor_dd_event = {
+                    'event_time_utc': iso(ts),
+                    'strategy_id': sid,
+                    'event': 'EXIT',
+                    'balance': balance,
+                    'peak_balance': peak,
+                    'floor_equity': floor_equity,
+                    'open_risk_cash': open_risk_cash,
+                    'drawdown_pct': floor_dd,
+                    'open_positions': len(open_trades),
+                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
+                }
+
+            open_risk_pct = (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
+            if open_risk_pct > max_open_risk_pct:
+                max_open_risk_pct = open_risk_pct
+                max_open_risk_event = {
+                    'event_time_utc': iso(ts),
+                    'strategy_id': sid,
+                    'event': 'EXIT',
+                    'balance': balance,
+                    'open_risk_cash': open_risk_cash,
+                    'open_risk_pct': open_risk_pct,
+                    'open_positions': len(open_trades),
+                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
+                }
+
+            exit_times.append(ts)
+            exit_balances.append(balance)
+
+        else:  # ENTRY
+            if balance <= 0:
+                raise RuntimeError(
+                    f'Weighted equity depleted before {sid} at {iso(ts)}'
+                )
+
+            risk_fraction = float(risk_by_strategy[sid])
+            if risk_fraction <= 0 or risk_fraction > 0.05:
+                raise RuntimeError(
+                    f'Invalid risk fraction for {sid}: {risk_fraction}'
+                )
+
+            risk_cash = balance * risk_fraction
+            rec = {
+                'risk_cash': risk_cash,
+                'risk_fraction': risk_fraction,
+                'entry_equity': balance,
+                'strategy_id': sid,
+            }
+            open_trades[key] = rec
+            open_risk_cash += risk_cash
+
+            max_open_positions = max(max_open_positions, len(open_trades))
+            open_risk_pct = (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
+            if open_risk_pct > max_open_risk_pct:
+                max_open_risk_pct = open_risk_pct
+                max_open_risk_event = {
+                    'event_time_utc': iso(ts),
+                    'strategy_id': sid,
+                    'event': 'ENTRY',
+                    'balance': balance,
+                    'open_risk_cash': open_risk_cash,
+                    'open_risk_pct': open_risk_pct,
+                    'open_positions': len(open_trades),
+                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
+                }
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
+            if floor_dd < max_floor_dd:
+                max_floor_dd = floor_dd
+                floor_dd_event = {
+                    'event_time_utc': iso(ts),
+                    'strategy_id': sid,
+                    'event': 'ENTRY',
+                    'balance': balance,
+                    'peak_balance': peak,
+                    'floor_equity': floor_equity,
+                    'open_risk_cash': open_risk_cash,
+                    'drawdown_pct': floor_dd,
+                    'open_positions': len(open_trades),
+                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
+                }
+
+    if open_trades:
+        raise RuntimeError(f'Weighted simulation ended with {len(open_trades)} open trades')
+
+    first_entry = min(t['entry_time'] for t in ordered)
+    last_exit = max(t['exit_event_time'] for t in ordered)
+    years = max(
+        (last_exit - first_entry).total_seconds() / (365.2425 * 86400.0),
+        1e-9,
+    )
+
+    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
+    cagr_pct = (
+        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
+        if balance > 0 and starting_balance > 0
+        else -100.0
+    )
+
+    weighted_r_equivalent = sum(
+        float(t['r']) * (float(risk_by_strategy[t['strategy_id']]) / 0.01)
+        for t in ordered
+    )
+
+    return {
+        'summary': {
+            'starting_balance': starting_balance,
+            'ending_balance': balance,
+            'ending_multiple': balance / starting_balance,
+            'total_return_pct': total_return_pct,
+            'historical_cagr_pct': cagr_pct,
+            'simulation_start_utc': iso(first_entry),
+            'simulation_end_utc': iso(last_exit),
+            'simulation_years': years,
+            'trades': len(ordered),
+            'weighted_r_equivalent_at_1pct': weighted_r_equivalent,
+            'max_closed_equity_dd_pct': max_closed_dd,
+            'max_open_risk_floor_dd_pct': max_floor_dd,
+            'max_open_positions': max_open_positions,
+            'max_open_risk_pct_of_realised_equity': max_open_risk_pct,
+        },
+        'exit_times': exit_times,
+        'exit_balances': exit_balances,
+        'closed_dd_event': closed_dd_event,
+        'floor_dd_event': floor_dd_event,
+        'max_open_risk_event': max_open_risk_event,
+    }
+
+
+def w24_balance_before(sim, ts):
+    j = bisect.bisect_left(sim['exit_times'], ts) - 1
+    return sim['exit_balances'][j] if j >= 0 else STARTING_BALANCE
+
+
+def w24_period_row(variant, mode, tested_sid, tested_risk, control_risk, sim, trades, label, start, end):
+    sb = w24_balance_before(sim, start)
+    eb = w24_balance_before(sim, end)
+    exits = [t for t in trades if start <= t['exit_event_time'] < end]
+    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
+    years = max((end - start).total_seconds() / (365.2425 * 86400.0), 1e-9)
+    annualized = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0 else 0.0
+    )
+    return {
+        'variant': variant,
+        'portfolio_mode': mode,
+        'tested_strategy_id': tested_sid,
+        'tested_risk_pct': tested_risk * 100.0,
+        'control_risk_pct': control_risk * 100.0,
+        'period': label,
+        'start_utc': iso(start),
+        'end_utc': iso(end),
+        'start_balance': sb,
+        'end_balance': eb,
+        'compounded_return_pct': ret,
+        'annualized_return_pct': annualized,
+        'realized_exits': len(exits),
+    }
+
+
+def w24_rolling_rows(variant, mode, tested_sid, tested_risk, control_risk, sim, trades):
+    first_entry = min(t['entry_time'] for t in trades)
+    start_month = month_floor(first_entry)
+    end_complete = month_floor(NOW)
+    rows = []
+
+    for months in (12, 24, 36):
+        cur = start_month
+        while add_months(cur, months) <= end_complete:
+            end = add_months(cur, months)
+            row = w24_period_row(
+                variant, mode, tested_sid, tested_risk, control_risk,
+                sim, trades, f'ROLLING_{months}M', cur, end,
+            )
+            row['months'] = months
+            rows.append(row)
+            cur = add_months(cur, 1)
+
+    return rows
+
+
+def w24_rolling_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(
+            r['variant'],
+            r['portfolio_mode'],
+            r['tested_strategy_id'],
+            r['tested_risk_pct'],
+            r['control_risk_pct'],
+            r['months'],
+        )].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, mode, sid, risk_pct, control_pct, months = key
+        active = [x for x in group if x['realized_exits'] > 0]
+        positive = [x for x in active if x['compounded_return_pct'] > 0]
+        vals = [x['compounded_return_pct'] for x in active]
+        out.append({
+            'variant': variant,
+            'portfolio_mode': mode,
+            'tested_strategy_id': sid,
+            'tested_risk_pct': risk_pct,
+            'control_risk_pct': control_pct,
+            'months': months,
+            'total_windows': len(group),
+            'active_windows': len(active),
+            'positive_active_windows': len(positive),
+            'positive_active_windows_pct': pct(len(positive), len(active)),
+            'median_compounded_return_pct_active': safe_median(vals),
+            'worst_compounded_return_pct_active': min(vals) if vals else 0.0,
+            'best_compounded_return_pct_active': max(vals) if vals else 0.0,
+        })
+    return out
+
+
+def w24_calendar_rows(variant, mode, tested_sid, tested_risk, control_risk, sim, trades):
+    first_year = min(t['entry_time'] for t in trades).year
+    rows = []
+    for year in range(first_year, NOW.year + 1):
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        nominal_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        end = min(nominal_end, NOW)
+        if end <= start:
+            continue
+        row = w24_period_row(
+            variant, mode, tested_sid, tested_risk, control_risk,
+            sim, trades, str(year), start, end,
+        )
+        row['year'] = year
+        row['complete_year'] = nominal_end <= NOW
+        rows.append(row)
+    return rows
+
+
+def w24_calendar_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(
+            r['variant'],
+            r['portfolio_mode'],
+            r['tested_strategy_id'],
+            r['tested_risk_pct'],
+            r['control_risk_pct'],
+        )].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, mode, sid, risk_pct, control_pct = key
+        complete = [x for x in group if x['complete_year']]
+        active = [x for x in complete if x['realized_exits'] > 0]
+        positive = [x for x in active if x['compounded_return_pct'] > 0]
+        worst = min(active, key=lambda x: x['compounded_return_pct']) if active else None
+        best = max(active, key=lambda x: x['compounded_return_pct']) if active else None
+        out.append({
+            'variant': variant,
+            'portfolio_mode': mode,
+            'tested_strategy_id': sid,
+            'tested_risk_pct': risk_pct,
+            'control_risk_pct': control_pct,
+            'completed_years': len(complete),
+            'active_completed_years': len(active),
+            'positive_active_completed_years': len(positive),
+            'positive_active_completed_years_pct': pct(len(positive), len(active)),
+            'median_return_pct_active': safe_median(x['compounded_return_pct'] for x in active),
+            'worst_year': worst['year'] if worst else '',
+            'worst_year_return_pct': worst['compounded_return_pct'] if worst else 0.0,
+            'best_year': best['year'] if best else '',
+            'best_year_return_pct': best['compounded_return_pct'] if best else 0.0,
+        })
+    return out
+
+
+def w24_summary_row(variant, mode, tested_sid, tested_risk, control_risk, trade_count, sim, control_summary):
+    s = sim['summary']
+    row = {
+        'variant': variant,
+        'portfolio_mode': mode,
+        'tested_strategy_id': tested_sid,
+        'tested_strategy_trade_count': trade_count,
+        'tested_risk_pct': tested_risk * 100.0,
+        'control_risk_pct': control_risk * 100.0,
+        'is_control_weight': abs(tested_risk - control_risk) < 1e-12,
+        **s,
+    }
+
+    if control_summary is not None:
+        row.update({
+            'delta_cagr_pp_vs_control': s['historical_cagr_pct'] - control_summary['historical_cagr_pct'],
+            'delta_closed_dd_pp_vs_control': s['max_closed_equity_dd_pct'] - control_summary['max_closed_equity_dd_pct'],
+            'delta_floor_dd_pp_vs_control': s['max_open_risk_floor_dd_pct'] - control_summary['max_open_risk_floor_dd_pct'],
+            'delta_max_open_risk_pp_vs_control': s['max_open_risk_pct_of_realised_equity'] - control_summary['max_open_risk_pct_of_realised_equity'],
+            'delta_ending_multiple_vs_control': s['ending_multiple'] - control_summary['ending_multiple'],
+        })
+    else:
+        row.update({
+            'delta_cagr_pp_vs_control': 0.0,
+            'delta_closed_dd_pp_vs_control': 0.0,
+            'delta_floor_dd_pp_vs_control': 0.0,
+            'delta_max_open_risk_pp_vs_control': 0.0,
+            'delta_ending_multiple_vs_control': 0.0,
+        })
+
+    return row
+
+
+def w24_drawdown_event_rows(variant, mode, sid, tested_risk, control_risk, sim):
+    rows = []
+    for event_type, event in [
+        ('MAX_CLOSED_DD', sim.get('closed_dd_event')),
+        ('MAX_OPEN_RISK_FLOOR_DD', sim.get('floor_dd_event')),
+        ('MAX_OPEN_RISK_PCT', sim.get('max_open_risk_event')),
+    ]:
+        if event is None:
+            continue
+        rows.append({
+            'variant': variant,
+            'portfolio_mode': mode,
+            'tested_strategy_id': sid,
+            'tested_risk_pct': tested_risk * 100.0,
+            'control_risk_pct': control_risk * 100.0,
+            'event_type': event_type,
+            **event,
+        })
+    return rows
+
+
+def w24_strategy_diagnostics(trades, mode, control_risks):
+    by_sid = defaultdict(list)
+    for t in trades:
+        by_sid[t['strategy_id']].append(t)
+
+    all_monthly = pv_monthly_r(trades)
+    rows = []
+    for sid in sorted(by_sid):
+        g = by_sid[sid]
+        rest = [t for t in trades if t['strategy_id'] != sid]
+        s = calc_stats(g)
+        monthly = pv_monthly_r(g)
+        rest_monthly = pv_monthly_r(rest)
+        sample = g[0]
+        rows.append({
+            'portfolio_mode': mode,
+            'strategy_id': sid,
+            'pair': sample['pair'],
+            'timeframe': sample['timeframe'],
+            'side': sample['side'],
+            'control_risk_pct': control_risks[sid] * 100.0,
+            'accepted_trades': len(g),
+            'total_r_unscaled': s['total_r'],
+            'profit_factor_unscaled': s['profit_factor'],
+            'expectancy_r_unscaled': s['expectancy_r'],
+            'max_drawdown_r_unscaled': s['max_drawdown_r'],
+            'monthly_r_corr_vs_rest': pv_corr(monthly, rest_monthly),
+            'monthly_r_corr_vs_full_portfolio': pv_corr(monthly, all_monthly),
+            'months_with_nonzero_r': len(monthly),
+        })
+    return rows
+
+
+def w24_marginal_step_rows(matrix_rows):
+    grouped = defaultdict(list)
+    for r in matrix_rows:
+        grouped[(r['portfolio_mode'], r['tested_strategy_id'])].append(r)
+
+    out = []
+    for (mode, sid), group in grouped.items():
+        group = sorted(group, key=lambda x: x['tested_risk_pct'])
+        for lo, hi in zip(group[:-1], group[1:]):
+            cagr_gain = hi['historical_cagr_pct'] - lo['historical_cagr_pct']
+            closed_change = hi['max_closed_equity_dd_pct'] - lo['max_closed_equity_dd_pct']
+            floor_change = hi['max_open_risk_floor_dd_pct'] - lo['max_open_risk_floor_dd_pct']
+            extra_closed_dd = max(0.0, -closed_change)
+            extra_floor_dd = max(0.0, -floor_change)
+            out.append({
+                'portfolio_mode': mode,
+                'strategy_id': sid,
+                'from_risk_pct': lo['tested_risk_pct'],
+                'to_risk_pct': hi['tested_risk_pct'],
+                'cagr_gain_pp': cagr_gain,
+                'closed_dd_change_pp': closed_change,
+                'extra_closed_dd_magnitude_pp': extra_closed_dd,
+                'floor_dd_change_pp': floor_change,
+                'extra_floor_dd_magnitude_pp': extra_floor_dd,
+                'cagr_gain_per_extra_closed_dd_pp': (
+                    cagr_gain / extra_closed_dd if extra_closed_dd > 0 else (999.0 if cagr_gain > 0 else 0.0)
+                ),
+                'cagr_gain_per_extra_floor_dd_pp': (
+                    cagr_gain / extra_floor_dd if extra_floor_dd > 0 else (999.0 if cagr_gain > 0 else 0.0)
+                ),
+                'ending_multiple_change': hi['ending_multiple'] - lo['ending_multiple'],
+                'max_open_risk_change_pp': hi['max_open_risk_pct_of_realised_equity'] - lo['max_open_risk_pct_of_realised_equity'],
+            })
+    return out
+
+
+def w24_strategy_frontier_rows(matrix_rows, rolling_summary, diagnostics_rows):
+    roll = {
+        (r['portfolio_mode'], r['tested_strategy_id'], r['tested_risk_pct'], int(r['months'])): r
+        for r in rolling_summary
+    }
+    diag = {
+        (r['portfolio_mode'], r['strategy_id']): r
+        for r in diagnostics_rows
+    }
+
+    grouped = defaultdict(list)
+    for r in matrix_rows:
+        grouped[(r['portfolio_mode'], r['tested_strategy_id'])].append(r)
+
+    out = []
+    for (mode, sid), group in grouped.items():
+        group = sorted(group, key=lambda x: x['tested_risk_pct'])
+        control = next((x for x in group if x['is_control_weight']), None)
+        if control is None:
+            raise RuntimeError(f'No control-weight row for {mode} {sid}')
+
+        lower = [x for x in group if x['tested_risk_pct'] < control['tested_risk_pct']]
+        higher = [x for x in group if x['tested_risk_pct'] > control['tested_risk_pct']]
+        one_step_down = max(lower, key=lambda x: x['tested_risk_pct']) if lower else None
+        one_step_up = min(higher, key=lambda x: x['tested_risk_pct']) if higher else None
+
+        def valid_under_floor(x, limit_abs):
+            r12 = roll.get((mode, sid, x['tested_risk_pct'], 12), {})
+            r24 = roll.get((mode, sid, x['tested_risk_pct'], 24), {})
+            r36 = roll.get((mode, sid, x['tested_risk_pct'], 36), {})
+            return (
+                x['max_open_risk_floor_dd_pct'] >= -float(limit_abs)
+                and r24.get('positive_active_windows_pct', 0.0) == 100.0
+                and r36.get('positive_active_windows_pct', 0.0) == 100.0
+                and r12.get('positive_active_windows_pct', 0.0) == 100.0
+            )
+
+        under19 = [x for x in group if valid_under_floor(x, 19.0)]
+        under20 = [x for x in group if valid_under_floor(x, 20.0)]
+        best19 = max(under19, key=lambda x: x['historical_cagr_pct']) if under19 else None
+        best20 = max(under20, key=lambda x: x['historical_cagr_pct']) if under20 else None
+
+        d = diag[(mode, sid)]
+
+        row = {
+            'portfolio_mode': mode,
+            'strategy_id': sid,
+            'pair': d['pair'],
+            'timeframe': d['timeframe'],
+            'side': d['side'],
+            'accepted_trades': d['accepted_trades'],
+            'profit_factor_unscaled': d['profit_factor_unscaled'],
+            'total_r_unscaled': d['total_r_unscaled'],
+            'monthly_r_corr_vs_rest': d['monthly_r_corr_vs_rest'],
+            'control_risk_pct': control['tested_risk_pct'],
+            'control_cagr_pct': control['historical_cagr_pct'],
+            'control_floor_dd_pct': control['max_open_risk_floor_dd_pct'],
+            'control_closed_dd_pct': control['max_closed_equity_dd_pct'],
+            'one_step_down_risk_pct': one_step_down['tested_risk_pct'] if one_step_down else '',
+            'one_step_down_cagr_loss_pp': (
+                control['historical_cagr_pct'] - one_step_down['historical_cagr_pct']
+                if one_step_down else ''
+            ),
+            'one_step_down_floor_dd_saved_pp': (
+                one_step_down['max_open_risk_floor_dd_pct'] - control['max_open_risk_floor_dd_pct']
+                if one_step_down else ''
+            ),
+            'one_step_down_closed_dd_saved_pp': (
+                one_step_down['max_closed_equity_dd_pct'] - control['max_closed_equity_dd_pct']
+                if one_step_down else ''
+            ),
+            'one_step_up_risk_pct': one_step_up['tested_risk_pct'] if one_step_up else '',
+            'one_step_up_cagr_gain_pp': (
+                one_step_up['historical_cagr_pct'] - control['historical_cagr_pct']
+                if one_step_up else ''
+            ),
+            'one_step_up_extra_floor_dd_pp': (
+                max(0.0, control['max_open_risk_floor_dd_pct'] - one_step_up['max_open_risk_floor_dd_pct'])
+                if one_step_up else ''
+            ),
+            'one_step_up_extra_closed_dd_pp': (
+                max(0.0, control['max_closed_equity_dd_pct'] - one_step_up['max_closed_equity_dd_pct'])
+                if one_step_up else ''
+            ),
+            'best_tested_risk_under_19pct_floor_dd': best19['tested_risk_pct'] if best19 else '',
+            'best_tested_cagr_under_19pct_floor_dd': best19['historical_cagr_pct'] if best19 else '',
+            'best_tested_risk_under_20pct_floor_dd': best20['tested_risk_pct'] if best20 else '',
+            'best_tested_cagr_under_20pct_floor_dd': best20['historical_cagr_pct'] if best20 else '',
+        }
+
+        if one_step_down:
+            loss = control['historical_cagr_pct'] - one_step_down['historical_cagr_pct']
+            save = one_step_down['max_open_risk_floor_dd_pct'] - control['max_open_risk_floor_dd_pct']
+            row['floor_dd_saved_per_cagr_pp_lost_on_downshift'] = (
+                save / loss if loss > 0 else (999.0 if save > 0 else 0.0)
+            )
+        else:
+            row['floor_dd_saved_per_cagr_pp_lost_on_downshift'] = ''
+
+        if one_step_up:
+            gain = one_step_up['historical_cagr_pct'] - control['historical_cagr_pct']
+            cost = max(0.0, control['max_open_risk_floor_dd_pct'] - one_step_up['max_open_risk_floor_dd_pct'])
+            row['cagr_pp_gained_per_extra_floor_dd_pp_on_upshift'] = (
+                gain / cost if cost > 0 else (999.0 if gain > 0 else 0.0)
+            )
+        else:
+            row['cagr_pp_gained_per_extra_floor_dd_pp_on_upshift'] = ''
+
+        out.append(row)
+
+    return out
+
+
+def run_full24_one_at_a_time_risk_sensitivity():
+    try:
+        global EV_STATUS
+        EV_STATUS = W24_STATUS
+
+        W24_STATUS.update(
+            state='fetch',
+            message='Fetching EUR/JPY M15 + H1 history',
+            progress=2,
+        )
+
+        eurjpy_m15, _ = fetch_history(Q24_PAIR, 'M15', START, NOW)
+        eurjpy_h1, _ = fetch_history(Q24_PAIR, 'H1', PV_H1_WARMUP, NOW)
+
+        if len(eurjpy_m15) < 400000:
+            raise RuntimeError(f'Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}')
+        if len(eurjpy_h1) < 100000:
+            raise RuntimeError(f'Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}')
+
+        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
+
+        W24_STATUS.update(
+            state='rebuild',
+            message='Rebuilding exact current23 plus frozen #24 trade set',
+            progress=8,
+        )
+
+        current23 = q24_rebuild_current23(
+            eurjpy_m15,
+            eurjpy_h1,
+            eurjpy_h1_atr,
+        )
+
+        short_features = q24_features(eurjpy_m15, eurjpy_h1)
+        raw_q24 = q24_build_candidate_trades(eurjpy_m15, short_features)
+        q24_summary = q24_candidate_summary(raw_q24)
+
+        # Frozen standalone candidate parity.
+        if q24_summary['trades'] < Q24_REFERENCE['trades']:
+            raise RuntimeError(
+                f'#24 candidate fell below frozen reference: {q24_summary}'
+            )
+        if q24_summary['trades'] == Q24_REFERENCE['trades']:
+            if (
+                abs(q24_summary['profit_factor'] - Q24_REFERENCE['pf']) > 0.0001
+                or abs(q24_summary['total_r'] - Q24_REFERENCE['r']) > 0.03
+            ):
+                raise RuntimeError(
+                    f'#24 candidate metric parity drift: {q24_summary}'
+                )
+
+        combined_independent = sorted(
+            current23['independent'] + raw_q24,
+            key=lambda t: (t['entry_time'], t['strategy_id']),
+        )
+
+        gate_sets = {}
+        gate_rows = []
+        for priority, mode in [
+            ('H1_FIRST', 'LIVE_SAFE_H1_FIRST'),
+            ('M15_FIRST', 'LIVE_SAFE_M15_FIRST'),
+        ]:
+            accepted, rejected = apply_live_safe_nonhedging_gate(
+                combined_independent,
+                priority,
+            )
+            accepted_q24 = [
+                t for t in accepted
+                if t['strategy_id'] == Q24_STRATEGY_ID
+            ]
+            gate_sets[mode] = {
+                'accepted': accepted,
+                'rejected': rejected,
+                'accepted_q24': accepted_q24,
+            }
+            gate_rows.append({
+                'portfolio_mode': mode,
+                'accepted_portfolio_trades': len(accepted),
+                'raw_q24_trades': len(raw_q24),
+                'accepted_q24_trades': len(accepted_q24),
+                'rejected_q24_trades': len(raw_q24) - len(accepted_q24),
+                'unique_strategy_ids': len({t['strategy_id'] for t in accepted}),
+            })
+
+            if len(accepted) < W24_CONTROL_REFERENCE['trades']:
+                raise RuntimeError(
+                    f'Current24 gate fell below reference in {mode}: {len(accepted)}'
+                )
+            if len(accepted_q24) < W24_CONTROL_REFERENCE['candidate24_accepted']:
+                raise RuntimeError(
+                    f'#24 accepted gate trades fell below reference in {mode}: {len(accepted_q24)}'
+                )
+
+        write_csv(W24_OUT['gate_summary'], gate_rows)
+
+        all_matrix = []
+        all_rolling = []
+        all_calendar = []
+        all_periods = []
+        all_drawdowns = []
+        all_diagnostics = []
+        all_manifest = []
+        control_rows = []
+        parity_rows = []
+
+        modes = ['LIVE_SAFE_H1_FIRST', 'LIVE_SAFE_M15_FIRST']
+
+        total_variants = 0
+        for mode in modes:
+            ids = sorted({t['strategy_id'] for t in gate_sets[mode]['accepted']})
+            total_variants += len(ids) * len(W24_SWEEP_RISKS)
+
+        completed_variants = 0
+
+        for mode in modes:
+            trades = gate_sets[mode]['accepted']
+            strategy_ids = sorted({t['strategy_id'] for t in trades})
+
+            if len(strategy_ids) != 24:
+                raise RuntimeError(
+                    f'Expected 24 strategy IDs in {mode}, got {len(strategy_ids)}: {strategy_ids}'
+                )
+
+            control_risks = w24_control_risk_map(strategy_ids)
+            by_sid = defaultdict(list)
+            for t in trades:
+                by_sid[t['strategy_id']].append(t)
+
+            for sid in strategy_ids:
+                g = by_sid[sid]
+                first = g[0]
+                all_manifest.append({
+                    'portfolio_mode': mode,
+                    'strategy_id': sid,
+                    'pair': first['pair'],
+                    'timeframe': first['timeframe'],
+                    'side': first['side'],
+                    'control_risk_pct': control_risks[sid] * 100.0,
+                    'accepted_trades': len(g),
+                })
+
+            all_diagnostics.extend(
+                w24_strategy_diagnostics(trades, mode, control_risks)
+            )
+
+            control_sim = w24_simulate_equity(
+                trades,
+                control_risks,
+                STARTING_BALANCE,
+            )
+            cs = control_sim['summary']
+            control_row = {
+                'variant': W24_CONTROL_VARIANT,
+                'portfolio_mode': mode,
+                'strategies': len(strategy_ids),
+                'trades': len(trades),
+                'q24_control_risk_pct': W24_Q24_CONTROL_RISK * 100.0,
+                'other_strategy_control_risk_pct': W24_DEFAULT_RISK * 100.0,
+                **cs,
+            }
+            control_rows.append(control_row)
+
+            parity_status = 'PASS'
+            parity_notes = []
+            if len(trades) == W24_CONTROL_REFERENCE['trades']:
+                if abs(cs['historical_cagr_pct'] - W24_CONTROL_REFERENCE['historical_cagr_pct']) > 0.002:
+                    parity_status = 'FAIL'
+                    parity_notes.append('CAGR drift')
+                if abs(cs['max_closed_equity_dd_pct'] - W24_CONTROL_REFERENCE['closed_dd_pct']) > 0.002:
+                    parity_status = 'FAIL'
+                    parity_notes.append('closed DD drift')
+                if abs(cs['max_open_risk_floor_dd_pct'] - W24_CONTROL_REFERENCE['floor_dd_pct']) > 0.002:
+                    parity_status = 'FAIL'
+                    parity_notes.append('floor DD drift')
+                if cs['max_open_positions'] != W24_CONTROL_REFERENCE['max_open_positions']:
+                    parity_status = 'FAIL'
+                    parity_notes.append('concurrency drift')
+            else:
+                parity_status = 'PASS_NEWER_TRADES'
+
+            parity_rows.append({
+                'portfolio_mode': mode,
+                'reference_trades': W24_CONTROL_REFERENCE['trades'],
+                'current_trades': len(trades),
+                'reference_cagr_pct': W24_CONTROL_REFERENCE['historical_cagr_pct'],
+                'current_cagr_pct': cs['historical_cagr_pct'],
+                'reference_closed_dd_pct': W24_CONTROL_REFERENCE['closed_dd_pct'],
+                'current_closed_dd_pct': cs['max_closed_equity_dd_pct'],
+                'reference_floor_dd_pct': W24_CONTROL_REFERENCE['floor_dd_pct'],
+                'current_floor_dd_pct': cs['max_open_risk_floor_dd_pct'],
+                'status': parity_status,
+                'notes': '|'.join(parity_notes),
+            })
+
+            if parity_status == 'FAIL':
+                raise RuntimeError(
+                    f'24-strategy control parity failure in {mode}: {parity_rows[-1]}'
+                )
+
+            all_drawdowns.extend(
+                w24_drawdown_event_rows(
+                    W24_CONTROL_VARIANT,
+                    mode,
+                    'CONTROL_PORTFOLIO',
+                    W24_Q24_CONTROL_RISK,
+                    W24_Q24_CONTROL_RISK,
+                    control_sim,
+                )
+            )
+
+            period_defs = [
+                ('FULL', min(t['entry_time'] for t in trades), NOW),
+                ('LAST_5Y', NOW - timedelta(days=365.2425 * 5), NOW),
+                ('LAST_3Y', NOW - timedelta(days=365.2425 * 3), NOW),
+                ('LAST_2Y', NOW - timedelta(days=365.2425 * 2), NOW),
+                ('LAST_1Y', NOW - timedelta(days=365.2425), NOW),
+            ]
+
+            for sid in strategy_ids:
+                control_risk = control_risks[sid]
+                trade_count = len(by_sid[sid])
+
+                for tested_risk in W24_SWEEP_RISKS:
+                    variant = f'{sid}__RISK_{tested_risk*100:.2f}PCT'
+
+                    if abs(tested_risk - control_risk) < 1e-12:
+                        sim = control_sim
+                    else:
+                        risk_map = dict(control_risks)
+                        risk_map[sid] = tested_risk
+                        sim = w24_simulate_equity(
+                            trades,
+                            risk_map,
+                            STARTING_BALANCE,
+                        )
+
+                    matrix_row = w24_summary_row(
+                        variant,
+                        mode,
+                        sid,
+                        tested_risk,
+                        control_risk,
+                        trade_count,
+                        sim,
+                        cs,
+                    )
+                    all_matrix.append(matrix_row)
+
+                    all_drawdowns.extend(
+                        w24_drawdown_event_rows(
+                            variant,
+                            mode,
+                            sid,
+                            tested_risk,
+                            control_risk,
+                            sim,
+                        )
+                    )
+
+                    all_rolling.extend(
+                        w24_rolling_rows(
+                            variant,
+                            mode,
+                            sid,
+                            tested_risk,
+                            control_risk,
+                            sim,
+                            trades,
+                        )
+                    )
+
+                    all_calendar.extend(
+                        w24_calendar_rows(
+                            variant,
+                            mode,
+                            sid,
+                            tested_risk,
+                            control_risk,
+                            sim,
+                            trades,
+                        )
+                    )
+
+                    for label, a, b in period_defs:
+                        all_periods.append(
+                            w24_period_row(
+                                variant,
+                                mode,
+                                sid,
+                                tested_risk,
+                                control_risk,
+                                sim,
+                                trades,
+                                label,
+                                a,
+                                b,
+                            )
+                        )
+
+                    completed_variants += 1
+                    if completed_variants % 4 == 0 or completed_variants == total_variants:
+                        W24_STATUS.update(
+                            state='risk_matrix',
+                            message=f'Completed {completed_variants}/{total_variants} one-at-a-time risk variants',
+                            progress=72 + int(23 * completed_variants / total_variants),
+                        )
+
+        rolling_summary = w24_rolling_summary(all_rolling)
+        calendar_summary = w24_calendar_summary(all_calendar)
+        marginal_steps = w24_marginal_step_rows(all_matrix)
+        frontier = w24_strategy_frontier_rows(
+            all_matrix,
+            rolling_summary,
+            all_diagnostics,
+        )
+
+        write_csv(W24_OUT['portfolio_parity'], parity_rows)
+        write_csv(W24_OUT['strategy_manifest'], all_manifest)
+        write_csv(W24_OUT['control_summary'], control_rows)
+        write_csv(W24_OUT['sensitivity_matrix'], all_matrix)
+        write_csv(W24_OUT['marginal_steps'], marginal_steps)
+        write_csv(W24_OUT['strategy_diagnostics'], all_diagnostics)
+        write_csv(W24_OUT['strategy_frontier'], frontier)
+        write_csv(W24_OUT['rolling'], all_rolling)
+        write_csv(W24_OUT['rolling_summary'], rolling_summary)
+        write_csv(W24_OUT['calendar'], all_calendar)
+        write_csv(W24_OUT['calendar_summary'], calendar_summary)
+        write_csv(W24_OUT['periods'], all_periods)
+        write_csv(W24_OUT['drawdown_events'], all_drawdowns)
+
+        write_csv(W24_OUT['notes'], [
+            {
+                'item': 'control_portfolio',
+                'value': 'Proposed frozen 24-strategy control: current #1-#23 at 1.00% each and EUR_JPY_M15_SHORT #24 at 0.75%. This is a research control, not a claim that #24 has already been deployed.',
+            },
+            {
+                'item': 'one_at_a_time_rule',
+                'value': 'Each strategy is tested at 0.50%, 0.75%, 1.00%, 1.25% while every other strategy remains at its control weight. No two strategy weights are changed together in this runner.',
+            },
+            {
+                'item': 'not_an_optimizer',
+                'value': 'This runner does not choose a globally optimal weight vector. It maps marginal sensitivity only, reducing the risk of fitting one historical portfolio optimum.',
+            },
+            {
+                'item': 'frozen_trades',
+                'value': 'All signal rules, historical fills, stops/targets, A+B/B-priority logic and live-safe non-hedging acceptance are frozen before the risk sweep. Risk changes do not change the accepted historical trade set.',
+            },
+            {
+                'item': 'equity_model',
+                'value': 'Event-driven realised-equity compounding. Each trade fixes cash risk at entry. Exit events process before entries at equal timestamps. Conservative DD floor assumes all open positions lose their fixed cash risk simultaneously.',
+            },
+            {
+                'item': 'nav_limitation',
+                'value': 'Live OANDA sizing uses current NAV including unrealised P/L. Exact historical intra-trade NAV cannot be reconstructed from outcome-only ledgers, so realised equity is used consistently with prior portfolio studies.',
+            },
+            {
+                'item': 'frontier_file',
+                'value': 'strategy_frontier.csv is diagnostic only. It reports one-step up/down effects and highest tested CAGR satisfying 100% positive 12/24/36M windows plus <19% or <20% conservative DD. It is not a final combined allocation.',
+            },
+            {
+                'item': 'next_stage',
+                'value': 'After reviewing this matrix, choose a small number of sensible under/overweights and run one or two combined weighted portfolio candidates against the unchanged control.',
+            },
+        ])
+
+        W24_STATUS.update(
+            state='packaging',
+            message='Packaging 24-strategy risk sensitivity matrix',
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            W24_BUNDLE,
+            'w',
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in W24_OUT.values():
+                if os.path.exists(path):
+                    z.write(path, arcname=os.path.basename(path))
+
+        W24_STATUS.update(
+            state='complete',
+            message='24-strategy one-at-a-time risk sensitivity complete',
+            progress=100,
+            results=W24_BUNDLE,
+            strategies_tested=24,
+            risk_levels_pct=[x * 100.0 for x in W24_SWEEP_RISKS],
+            control_existing23_risk_pct=1.0,
+            control_q24_risk_pct=0.75,
+            total_variants=total_variants,
+        )
+
+    except Exception as e:
+        W24_STATUS.update(
+            state='error',
+            message=str(e),
+        )
+        print('FULL24 RISK SENSITIVITY ERROR:', repr(e), flush=True)
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route('/full24-risk-sensitivity/status')
+def full24_risk_sensitivity_status():
+    return jsonify(W24_STATUS)
+
+
+@app.route('/full24-risk-sensitivity/results')
+def full24_risk_sensitivity_results():
+    if not os.path.exists(W24_BUNDLE):
+        return jsonify({
+            'status': 'not_ready',
+            'state': W24_STATUS.get('state'),
+            'message': W24_STATUS.get('message'),
+        }), 404
+
+    return send_file(
+        os.path.abspath(W24_BUNDLE),
+        as_attachment=True,
+        download_name=W24_BUNDLE,
+    )
+
+
+@app.route('/full24-risk-sensitivity/info')
+def full24_risk_sensitivity_info():
+    return jsonify({
+        'service': 'Full 24-strategy one-at-a-time risk sensitivity matrix',
+        'read_only': True,
+        'orders_supported': False,
+        'control': {
+            'strategies_1_to_23_risk_pct': 1.00,
+            'eur_jpy_m15_short_24_risk_pct': 0.75,
+        },
+        'sweep_each_strategy_pct': [0.50, 0.75, 1.00, 1.25],
+        'method': 'change one strategy at a time; all others fixed at control weight',
+        'portfolio_gate': 'frozen live-safe non-hedging gate',
+        'routes': [
+            '/full24-risk-sensitivity/status',
+            '/full24-risk-sensitivity/results',
+            '/full24-risk-sensitivity/info',
+        ],
+    })
+
+
+if __name__ == '__main__':
     threading.Thread(
-        target=run_q24_candidate_only_risk_sweep,
+        target=run_full24_one_at_a_time_risk_sensitivity,
         daemon=True,
     ).start()
 
     app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
+        host='0.0.0.0',
+        port=int(os.getenv('PORT', '5000')),
         debug=False,
     )
