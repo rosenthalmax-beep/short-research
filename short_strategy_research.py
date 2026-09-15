@@ -16,7 +16,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# EUR/JPY M15 SHORT #24 — FRESH BROAD RESEARCH
+# EUR/JPY M15 SHORT #24 — FROZEN DEEP VALIDATION
 #
 # Purpose:
 #   Search EUR/JPY M15 SHORT from first principles. This runner does NOT
@@ -88,7 +88,7 @@ PIP = 0.01
 STOP_TICKS = 10
 
 PRIMARY_COST = 1.0
-COSTS = [0.5, 1.0, 1.5, 2.0]
+COSTS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 
 # Diversity is intentional: do not let one family monopolise the next stage.
 STAGE1_PER_FAMILY = 2
@@ -1904,6 +1904,1135 @@ def run_research():
         print("ERROR:", repr(error), flush=True)
 
 
+
+
+# ============================================================
+# FROZEN DEEP-VALIDATION STUDY
+# ============================================================
+#
+# Basis: the completed broad-search results.
+#
+# Candidate A (main):
+#   RALLY_REJECTION
+#   sweep previous 40-bar high
+#   close back below previous 10-bar high
+#   bearish body >= 0.75 ATR14
+#   prior 4-hour M15 momentum >= +1.25 ATR14
+#   close location <= 0.30
+#   include 16:00-19:59 America/New_York
+#   RR 4.75
+#
+# Candidate B (sparse complement):
+#   HIGH_SWEEP_DISPLACEMENT
+#   sweep previous 60-bar high
+#   close below previous candle low
+#   bearish body >= 1.00 ATR14
+#   upper wick/body >= 0.35
+#   prior 4-hour M15 momentum >= +1.00 ATR14
+#   previous strictly completed H1 close < H1 EMA100
+#   RR 3.00
+#
+# This runner is NOT another broad optimiser. It performs controlled
+# neighbourhood/stability tests around A and B, then tests A+B with exact
+# p0 overlap handling. It does not auto-deploy or send orders.
+# ============================================================
+
+OUTS = {
+    "coverage": "eurjpy_m15_short_24_deep_coverage.csv",
+    "parity": "eurjpy_m15_short_24_deep_parity.csv",
+    "local_summary": "eurjpy_m15_short_24_deep_local_summary.csv",
+    "rr_plateau": "eurjpy_m15_short_24_deep_rr_plateau.csv",
+    "session_stability": "eurjpy_m15_short_24_deep_session_stability.csv",
+    "hour_diagnostic": "eurjpy_m15_short_24_deep_hour_diagnostic.csv",
+    "weekday_diagnostic": "eurjpy_m15_short_24_deep_weekday_diagnostic.csv",
+    "geometry_rr": "eurjpy_m15_short_24_deep_geometry_rr_matrix.csv",
+    "candidate_b": "eurjpy_m15_short_24_deep_candidate_b_robustness.csv",
+    "primary_summary": "eurjpy_m15_short_24_deep_primary_summary.csv",
+    "periods": "eurjpy_m15_short_24_deep_periods.csv",
+    "cost": "eurjpy_m15_short_24_deep_cost_stress.csv",
+    "rolling": "eurjpy_m15_short_24_deep_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_deep_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_deep_calendar_years.csv",
+    "calendar_summary": "eurjpy_m15_short_24_deep_calendar_summary.csv",
+    "trades": "eurjpy_m15_short_24_deep_trades.csv",
+    "overlap": "eurjpy_m15_short_24_deep_overlap.csv",
+    "combined_rejections": "eurjpy_m15_short_24_deep_combined_rejections.csv",
+    "decision": "eurjpy_m15_short_24_deep_decision_matrix.csv",
+    "notes": "eurjpy_m15_short_24_deep_notes.csv",
+}
+BUNDLE = "EURJPY_M15_SHORT_24_DEEP_VALIDATION_RESULTS.zip"
+
+STATUS = {
+    "state": "not_started",
+    "message": "Not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+
+def a_cfg(
+    config_id,
+    rr=4.75,
+    sweep_lb=40,
+    body_atr_min=0.75,
+    mom4_min=1.25,
+    close_loc_max=0.30,
+    context="NY_BLOCK_16-19",
+    excluded_weekdays=None,
+    test_group="A_CONTROL",
+):
+    return cfg(
+        config_id,
+        "RALLY_REJECTION",
+        rr=rr,
+        sweep_lb=sweep_lb,
+        body_atr_min=body_atr_min,
+        mom4_min=mom4_min,
+        close_loc_max=close_loc_max,
+        context=context,
+        excluded_weekdays=set(excluded_weekdays or set()),
+        test_group=test_group,
+    )
+
+
+def b_cfg(
+    config_id,
+    rr=3.00,
+    sweep_lb=60,
+    body_atr_min=1.00,
+    upper_wick_body_min=0.35,
+    mom4_min=1.00,
+    context="H1_CLOSE_LT_EMA100",
+    test_group="B_CONTROL",
+):
+    return cfg(
+        config_id,
+        "HIGH_SWEEP_DISPLACEMENT",
+        rr=rr,
+        sweep_lb=sweep_lb,
+        body_atr_min=body_atr_min,
+        upper_wick_body_min=upper_wick_body_min,
+        mom4_min=mom4_min,
+        context=context,
+        test_group=test_group,
+    )
+
+
+A_CONTROL_ID = "A_CONTROL_RALLY_RR475"
+B_CONTROL_ID = "B_CONTROL_HIGHSWEEP_RR300"
+
+
+def fixed_deep_configs():
+    """
+    Controlled, predeclared neighbourhoods only.
+    No automatic selection is performed inside the runner.
+    """
+    configs = []
+
+    # ---------------- Candidate A control + RR plateau ----------------
+    for rr in [4.50, 4.75, 5.00, 5.25]:
+        cid = A_CONTROL_ID if abs(rr - 4.75) < 1e-12 else f"A_RR_{rr:.2f}"
+        configs.append(a_cfg(
+            cid,
+            rr=rr,
+            test_group="A_RR_PLATEAU",
+        ))
+
+    # ---------------- Session-boundary stability ----------------
+    # These deliberately include the known 16-19 control plus neighbouring
+    # blocks on both sides. The runner reports them; it does NOT cherry-pick.
+    for context in [
+        "NY_BLOCK_15-19",
+        "NY_BLOCK_16-19",
+        "NY_BLOCK_17-19",
+        "NY_BLOCK_16-20",
+        "NY_BLOCK_17-20",
+        "NY_BLOCK_15-20",
+        "NY_BLOCK_16-18",
+    ]:
+        cid = "A_SESSION_" + context.replace("NY_BLOCK_", "").replace("-", "_")
+        if context == "NY_BLOCK_16-19":
+            cid = "A_SESSION_CONTROL_16_19"
+        configs.append(a_cfg(
+            cid,
+            context=context,
+            test_group="A_SESSION_STABILITY",
+        ))
+
+    # ---------------- Per-hour diagnostic ----------------
+    for hour in [15, 16, 17, 18, 19, 20]:
+        configs.append(a_cfg(
+            f"A_HOUR_{hour:02d}",
+            context=f"NY_BLOCK_{hour:02d}-{hour:02d}",
+            test_group="A_HOUR_DIAGNOSTIC",
+        ))
+
+    # ---------------- Weekday exclusion diagnostics ----------------
+    for weekday, name in [
+        (0, "MON"),
+        (1, "TUE"),
+        (2, "WED"),
+        (3, "THU"),
+        (4, "FRI"),
+    ]:
+        configs.append(a_cfg(
+            f"A_EXCL_{name}",
+            excluded_weekdays={weekday},
+            test_group="A_WEEKDAY_DIAGNOSTIC",
+        ))
+
+    # ---------------- Geometry x RR one-factor interactions ----------------
+    rr_grid = [4.50, 4.75, 5.00, 5.25]
+
+    for body in [0.65, 0.75, 0.85]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_BODY_{body:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                body_atr_min=body,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for mom in [1.00, 1.25, 1.50]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_MOM_{mom:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                mom4_min=mom,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for close_max in [0.25, 0.30, 0.35]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_CLOSE_{close_max:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                close_loc_max=close_max,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for lb in [20, 40, 60]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_SWEEP_{lb}_RR_{rr:.2f}",
+                rr=rr,
+                sweep_lb=lb,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    # ---------------- Candidate B sparse robustness ----------------
+    for rr in [2.50, 2.75, 3.00, 3.25, 3.50]:
+        cid = B_CONTROL_ID if abs(rr - 3.00) < 1e-12 else f"B_RR_{rr:.2f}"
+        configs.append(b_cfg(
+            cid,
+            rr=rr,
+            test_group="B_RR_PLATEAU",
+        ))
+
+    for lb in [40, 60, 80]:
+        configs.append(b_cfg(
+            f"B_SWEEP_{lb}",
+            sweep_lb=lb,
+            test_group="B_GEOMETRY",
+        ))
+
+    for body in [0.90, 1.00, 1.10]:
+        configs.append(b_cfg(
+            f"B_BODY_{body:.2f}",
+            body_atr_min=body,
+            test_group="B_GEOMETRY",
+        ))
+
+    for wick in [0.25, 0.35, 0.45]:
+        configs.append(b_cfg(
+            f"B_WICK_{wick:.2f}",
+            upper_wick_body_min=wick,
+            test_group="B_GEOMETRY",
+        ))
+
+    for mom in [0.75, 1.00, 1.25]:
+        configs.append(b_cfg(
+            f"B_MOM_{mom:.2f}",
+            mom4_min=mom,
+            test_group="B_GEOMETRY",
+        ))
+
+    for context in [
+        "NONE",
+        "H1_CLOSE_LT_EMA100",
+        "H1_CLOSE_LT_EMA200",
+        "H1_EMA50_LT_EMA200",
+    ]:
+        configs.append(b_cfg(
+            "B_CONTEXT_" + context,
+            context=context,
+            test_group="B_CONTEXT",
+        ))
+
+    # Remove exact duplicate signatures while preserving the first descriptive id.
+    out = []
+    seen = set()
+    for c in configs:
+        sig = (
+            c["family"],
+            c["rr"],
+            c.get("context"),
+            c.get("sweep_lb"),
+            c.get("body_atr_min"),
+            c.get("upper_wick_body_min"),
+            c.get("mom4_min"),
+            c.get("close_loc_max"),
+            tuple(sorted(c.get("excluded_weekdays", set()))),
+        )
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(c)
+
+    # Ensure the canonical IDs exist even if a duplicate appeared earlier.
+    ids = {x["config_id"] for x in out}
+    if A_CONTROL_ID not in ids:
+        out.append(a_cfg(A_CONTROL_ID))
+    if B_CONTROL_ID not in ids:
+        out.append(b_cfg(B_CONTROL_ID))
+
+    return out
+
+
+def deep_summary_row(config, candles, candidate_indices):
+    row = shortlist_summary(config, candles, candidate_indices)
+    row["test_group"] = config.get("test_group", "")
+    return row
+
+
+def filter_indices_by_time(candles, candidate_indices, start=None, end=None):
+    if start is None and end is None:
+        return candidate_indices
+    times = [candles[i]["time"] for i in candidate_indices]
+    a = 0 if start is None else bisect.bisect_left(times, start)
+    b = len(candidate_indices) if end is None else bisect.bisect_left(times, end)
+    return candidate_indices[a:b]
+
+
+def combined_backtest(
+    candles,
+    ix_a,
+    rr_a,
+    ix_b,
+    rr_b,
+    cost_pips,
+    start=None,
+    end=None,
+    priority="A",
+    collect_rejections=False,
+):
+    """
+    One-position p0 two-trigger portfolio for the eventual single strategy #24.
+
+    Half-open overlap convention:
+        an accepted trade occupies [signal_index, exit_index)
+        a signal exactly on the exit candle remains eligible.
+
+    If both triggers fire on the same signal candle, the selected priority wins.
+    Candidate A priority is the main diagnostic because B is the complement.
+    """
+    use_a = filter_indices_by_time(candles, ix_a, start, end)
+    use_b = filter_indices_by_time(candles, ix_b, start, end)
+
+    pri = {"A": 0, "B": 1} if priority == "A" else {"B": 0, "A": 1}
+
+    events = (
+        [(i, pri["A"], "A", rr_a) for i in use_a]
+        + [(i, pri["B"], "B", rr_b) for i in use_b]
+    )
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    trades = []
+    rejected = []
+    p = 0
+
+    while p < len(events):
+        signal_index = events[p][0]
+
+        # Gather all triggers on this exact candle in declared priority order.
+        q = p
+        same = []
+        while q < len(events) and events[q][0] == signal_index:
+            same.append(events[q])
+            q += 1
+
+        chosen = None
+        chosen_trade = None
+        for event in same:
+            _, _, trigger, rr = event
+            t = outcome(candles, signal_index, rr, cost_pips)
+            if t is not None:
+                chosen = event
+                chosen_trade = dict(t)
+                break
+
+        if chosen_trade is None:
+            p = q
+            continue
+
+        chosen_trigger = chosen[2]
+        chosen_trade["trigger"] = chosen_trigger
+        chosen_trade["combined_priority"] = priority
+        trades.append(chosen_trade)
+
+        # Same-candle second trigger is rejected by the single-strategy p0 state.
+        for event in same:
+            if event is chosen:
+                continue
+            if collect_rejections:
+                rejected.append({
+                    "signal_index": event[0],
+                    "signal_time_utc": iso(candles[event[0]]["time"]),
+                    "trigger": event[2],
+                    "reason": "SAME_CANDLE_LOWER_PRIORITY",
+                    "blocking_trigger": chosen_trigger,
+                    "blocking_entry_time_utc": chosen_trade["entry_time_utc"],
+                    "blocking_exit_time_utc": chosen_trade["exit_time_utc"],
+                })
+
+        # Reject every signal strictly inside [entry, exit). A signal on the
+        # exact exit candle is intentionally eligible.
+        exit_index = chosen_trade["exit_index"]
+        p = q
+        while p < len(events) and events[p][0] < exit_index:
+            if collect_rejections:
+                rejected.append({
+                    "signal_index": events[p][0],
+                    "signal_time_utc": iso(candles[events[p][0]]["time"]),
+                    "trigger": events[p][2],
+                    "reason": "OPEN_POSITION_P0",
+                    "blocking_trigger": chosen_trigger,
+                    "blocking_entry_time_utc": chosen_trade["entry_time_utc"],
+                    "blocking_exit_time_utc": chosen_trade["exit_time_utc"],
+                })
+            p += 1
+
+    if collect_rejections:
+        return trades, rejected
+    return trades
+
+
+def generic_period_rows(config_id, family, rr_label, trade_fn):
+    periods = [
+        ("FULL", START, NOW),
+        ("PRE_2010", START, datetime(2010, 1, 1, tzinfo=timezone.utc)),
+        ("2010_PLUS", datetime(2010, 1, 1, tzinfo=timezone.utc), NOW),
+        ("DEV_2002_17", START, datetime(2018, 1, 1, tzinfo=timezone.utc)),
+        ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+        *ERAS,
+        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+    ]
+    rows = []
+    for label, a, b in periods:
+        s = stats(trade_fn(PRIMARY_COST, a, b))
+        rows.append({
+            "config_id": config_id,
+            "family": family,
+            "rr": rr_label,
+            "period": label,
+            **{
+                key: round(value, 6) if isinstance(value, float) else value
+                for key, value in s.items()
+            },
+            "start_utc": iso(a),
+            "end_utc": iso(b),
+        })
+    return rows
+
+
+def generic_cost_rows(config_id, family, rr_label, trade_fn):
+    rows = []
+    for cost in COSTS:
+        for label, a, b in [
+            ("FULL", START, NOW),
+            ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+        ]:
+            s = stats(trade_fn(cost, a, b))
+            rows.append({
+                "config_id": config_id,
+                "family": family,
+                "rr": rr_label,
+                "period": label,
+                "cost_pips": cost,
+                **{
+                    key: round(value, 6) if isinstance(value, float) else value
+                    for key, value in s.items()
+                },
+            })
+    return rows
+
+
+def generic_rolling_rows(config_id, trade_fn):
+    rows = []
+    first = month_floor(START)
+    last = month_floor(NOW)
+
+    for months in [12, 24, 36]:
+        s = first
+        while add_months(s, months) <= last:
+            e = add_months(s, months)
+            st = stats(trade_fn(PRIMARY_COST, s, e))
+            rows.append({
+                "config_id": config_id,
+                "months": months,
+                "start_utc": iso(s),
+                "end_utc": iso(e),
+                "trades": st["trades"],
+                "profit_factor": round(st["profit_factor"], 6),
+                "total_r": round(st["total_r"], 4),
+                "positive": st["total_r"] > 0,
+                "zero_trade": st["trades"] == 0,
+            })
+            s = add_months(s, 1)
+
+    return rows
+
+
+def generic_calendar_rows(config_id, trade_fn):
+    rows = []
+    for year in range(START.year, NOW.year):
+        a = datetime(year, 1, 1, tzinfo=timezone.utc)
+        b = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        st = stats(trade_fn(PRIMARY_COST, a, b))
+        rows.append({
+            "config_id": config_id,
+            "year": year,
+            "trades": st["trades"],
+            "profit_factor": round(st["profit_factor"], 6),
+            "total_r": round(st["total_r"], 4),
+            "positive": st["total_r"] > 0,
+            "negative": st["total_r"] < 0,
+            "zero_trade": st["trades"] == 0,
+        })
+    return rows
+
+
+def primary_summary_from_periods(config_id, family, rr_label, period_rows_):
+    by = {r["period"]: r for r in period_rows_}
+    eras = [
+        by.get("ERA_2002_07", {}),
+        by.get("ERA_2008_13", {}),
+        by.get("ERA_2014_19", {}),
+        by.get("ERA_2020_NOW", {}),
+    ]
+    full = by["FULL"]
+    return {
+        "config_id": config_id,
+        "family": family,
+        "rr": rr_label,
+        "full_trades": full["trades"],
+        "full_pf": full["profit_factor"],
+        "full_r": full["total_r"],
+        "full_exp": full["expectancy_r"],
+        "full_dd": full["max_drawdown_r"],
+        "full_win_rate": full["win_rate"],
+        "validation2018_plus_trades": by["VALIDATION_2018_PLUS"]["trades"],
+        "validation2018_plus_pf": by["VALIDATION_2018_PLUS"]["profit_factor"],
+        "validation2018_plus_r": by["VALIDATION_2018_PLUS"]["total_r"],
+        "era2020_plus_trades": by["ERA_2020_NOW"]["trades"],
+        "era2020_plus_pf": by["ERA_2020_NOW"]["profit_factor"],
+        "era2020_plus_r": by["ERA_2020_NOW"]["total_r"],
+        "last5y_trades": by["LAST_5Y"]["trades"],
+        "last5y_pf": by["LAST_5Y"]["profit_factor"],
+        "last5y_r": by["LAST_5Y"]["total_r"],
+        "last2y_trades": by["LAST_2Y"]["trades"],
+        "last2y_pf": by["LAST_2Y"]["profit_factor"],
+        "last2y_r": by["LAST_2Y"]["total_r"],
+        "last1y_trades": by["LAST_1Y"]["trades"],
+        "last1y_pf": by["LAST_1Y"]["profit_factor"],
+        "last1y_r": by["LAST_1Y"]["total_r"],
+        "positive_eras": sum(
+            int(x.get("trades", 0) > 0 and x.get("total_r", 0.0) > 0)
+            for x in eras
+        ),
+        "min_active_era_pf": round(min(
+            [
+                float(x["profit_factor"])
+                for x in eras
+                if x.get("trades", 0) > 0
+            ],
+            default=0.0,
+        ), 6),
+    }
+
+
+def full_overlap_rows(a_trades, b_trades, combined_a, combined_b):
+    a_times = {t["signal_index"] for t in a_trades}
+    b_times = {t["signal_index"] for t in b_trades}
+    shared = a_times & b_times
+
+    def interval_count(left, right):
+        count = 0
+        for x in left:
+            if any(
+                y["signal_index"] < x["exit_index"]
+                and x["signal_index"] < y["exit_index"]
+                for y in right
+            ):
+                count += 1
+        return count
+
+    return [{
+        "a_standalone_trades": len(a_trades),
+        "b_standalone_trades": len(b_trades),
+        "exact_same_signal_candles": len(shared),
+        "a_trades_with_any_b_interval_overlap": interval_count(a_trades, b_trades),
+        "b_trades_with_any_a_interval_overlap": interval_count(b_trades, a_trades),
+        "combined_a_priority_trades": len(combined_a),
+        "combined_b_priority_trades": len(combined_b),
+        "combined_a_priority_a_trades": sum(t.get("trigger") == "A" for t in combined_a),
+        "combined_a_priority_b_trades": sum(t.get("trigger") == "B" for t in combined_a),
+        "combined_b_priority_a_trades": sum(t.get("trigger") == "A" for t in combined_b),
+        "combined_b_priority_b_trades": sum(t.get("trigger") == "B" for t in combined_b),
+    }]
+
+
+def deep_decision_rows(primary_summary, costs, rollsum, calsum, local_summary, parity_rows):
+    cost_map = {
+        (r["config_id"], r["period"], float(r["cost_pips"])): r
+        for r in costs
+    }
+    roll_map = {
+        (r["config_id"], int(r["months"])): r
+        for r in rollsum
+    }
+    cal_map = {r["config_id"]: r for r in calsum}
+    parity_map = {r["config_id"]: r for r in parity_rows}
+    local_map = {r["config_id"]: r for r in local_summary}
+
+    # Session breadth for A: count neighbouring blocks (not the per-hour rows)
+    # that remain positive in FULL, 2018+, and last5Y.
+    session_rows = [
+        r for r in local_summary
+        if r.get("test_group") == "A_SESSION_STABILITY"
+    ]
+    stable_session_count = sum(
+        r["full_r"] > 0
+        and r["validation2018_plus_r"] > 0
+        and r["last5y_r"] > 0
+        for r in session_rows
+    )
+
+    # Geometry robustness: evaluate the declared one-factor x RR matrix.
+    geo_rows = [
+        r for r in local_summary
+        if r.get("test_group") == "A_GEOMETRY_RR"
+    ]
+    geo_recent_positive_pct = (
+        100.0 * sum(
+            r["full_r"] > 0
+            and r["validation2018_plus_r"] > 0
+            and r["last5y_r"] > 0
+            for r in geo_rows
+        ) / len(geo_rows)
+        if geo_rows else 0.0
+    )
+
+    out = []
+    a_full_r = next(
+        (r["full_r"] for r in primary_summary if r["config_id"] == A_CONTROL_ID),
+        0.0,
+    )
+    a_full_dd = next(
+        (r["full_dd"] for r in primary_summary if r["config_id"] == A_CONTROL_ID),
+        0.0,
+    )
+
+    for row in primary_summary:
+        cid = row["config_id"]
+        c2 = cost_map.get((cid, "FULL", 2.0), {})
+        c3 = cost_map.get((cid, "FULL", 3.0), {})
+        c3_val = cost_map.get((cid, "VALIDATION_2018_PLUS", 3.0), {})
+        r36 = roll_map.get((cid, 36), {})
+        cal = cal_map.get(cid, {})
+
+        if cid == A_CONTROL_ID:
+            checks = {
+                "parity": parity_map.get(cid, {}).get("status") != "FAIL_BELOW_REFERENCE",
+                "full_pf": row["full_pf"] >= 1.25,
+                "all_eras_positive": row["positive_eras"] == 4,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "2020_positive": row["era2020_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "last2_positive": row["last2y_r"] > 0,
+                "2pip_pf": c2.get("profit_factor", 0.0) >= 1.20,
+                "3pip_positive": (
+                    c3.get("profit_factor", 0.0) >= 1.10
+                    and c3.get("total_r", 0.0) > 0
+                    and c3_val.get("total_r", 0.0) > 0
+                ),
+                "rolling36": r36.get("positive_active_windows_pct", 0.0) >= 70.0,
+                "session_breadth": stable_session_count >= 4,
+                "geometry_breadth": geo_recent_positive_pct >= 50.0,
+            }
+            verdict = (
+                "FREEZE_CANDIDATE_A"
+                if all(checks.values())
+                else "A_NEEDS_REVIEW"
+            )
+
+        elif cid == B_CONTROL_ID:
+            checks = {
+                "parity": parity_map.get(cid, {}).get("status") != "FAIL_BELOW_REFERENCE",
+                "full_pf": row["full_pf"] >= 1.50,
+                "all_eras_positive": row["positive_eras"] == 4,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "2pip_pf": c2.get("profit_factor", 0.0) >= 1.40,
+                "3pip_positive": c3.get("total_r", 0.0) > 0,
+            }
+            # Sparse by design: never auto-promote B to standalone.
+            verdict = (
+                "KEEP_AS_SPARSE_COMPLEMENT"
+                if all(checks.values())
+                else "B_REJECT_OR_REVIEW"
+            )
+
+        elif cid == "AB_A_PRIORITY":
+            marginal_r = row["full_r"] - a_full_r
+            dd_change = row["full_dd"] - a_full_dd
+            checks = {
+                "adds_r": marginal_r >= 3.0,
+                "full_pf": row["full_pf"] >= 1.30,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "2020_positive": row["era2020_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "last2_positive": row["last2y_r"] > 0,
+                "3pip_positive": c3.get("total_r", 0.0) > 0,
+                "dd_not_materially_worse": dd_change >= -2.0,
+                "rolling36": r36.get("positive_active_windows_pct", 0.0) >= 70.0,
+            }
+            verdict = (
+                "PREFERRED_TWO_TRIGGER_CANDIDATE"
+                if all(checks.values())
+                else "COMBINATION_NEEDS_REVIEW"
+            )
+
+        else:  # B-priority diagnostic
+            checks = {
+                "full_positive": row["full_r"] > 0,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+            }
+            verdict = "PRIORITY_DIAGNOSTIC_ONLY"
+
+        out.append({
+            "config_id": cid,
+            "family": row["family"],
+            "rr": row["rr"],
+            "deep_verdict": verdict,
+            "checks_passed": sum(bool(x) for x in checks.values()),
+            "checks_total": len(checks),
+            **{f"check_{k}": v for k, v in checks.items()},
+            "full_trades": row["full_trades"],
+            "full_pf": row["full_pf"],
+            "full_r": row["full_r"],
+            "full_dd": row["full_dd"],
+            "validation2018_plus_pf": row["validation2018_plus_pf"],
+            "validation2018_plus_r": row["validation2018_plus_r"],
+            "era2020_plus_pf": row["era2020_plus_pf"],
+            "era2020_plus_r": row["era2020_plus_r"],
+            "last5y_pf": row["last5y_pf"],
+            "last5y_r": row["last5y_r"],
+            "last2y_pf": row["last2y_pf"],
+            "last2y_r": row["last2y_r"],
+            "cost_2pip_pf": c2.get("profit_factor", 0.0),
+            "cost_2pip_r": c2.get("total_r", 0.0),
+            "cost_3pip_pf": c3.get("profit_factor", 0.0),
+            "cost_3pip_r": c3.get("total_r", 0.0),
+            "cost_3pip_2018_r": c3_val.get("total_r", 0.0),
+            "rolling36_positive_active_pct": r36.get("positive_active_windows_pct", 0.0),
+            "rolling36_median_r": r36.get("median_r_active", 0.0),
+            "rolling36_worst_r": r36.get("worst_r", 0.0),
+            "active_calendar_years": cal.get("active_years", 0),
+            "zero_trade_years": cal.get("zero_trade_years", 0),
+            "positive_active_years_pct": cal.get("positive_active_years_pct", 0.0),
+            "a_session_stable_neighbour_count": stable_session_count if cid == A_CONTROL_ID else "",
+            "a_geometry_recent_positive_pct": round(geo_recent_positive_pct, 4) if cid == A_CONTROL_ID else "",
+            "marginal_r_vs_a": round(row["full_r"] - a_full_r, 4) if cid.startswith("AB_") else "",
+            "dd_change_vs_a": round(row["full_dd"] - a_full_dd, 4) if cid.startswith("AB_") else "",
+        })
+
+    return out
+
+
+def run_deep_validation():
+    try:
+        STATUS.update({
+            "state": "loading",
+            "message": "Downloading EUR/JPY M15/H1/H4/D history",
+            "progress": 2,
+        })
+
+        OUTCOME_CACHE.clear()
+
+        # Same market-data conventions as the broad runner.
+        m15 = fetch_range(PAIR, "M15", WARMUP, NOW, "M")
+        h1 = fetch_range(PAIR, "H1", WARMUP, NOW, "M")
+        h4 = fetch_range(PAIR, "H4", WARMUP, NOW, "M")
+        daily = fetch_range(PAIR, "D", WARMUP, NOW, "M")
+
+        # Keep study sample at/after the declared start.
+        m15 = [x for x in m15 if x["time"] >= START]
+
+        if len(m15) < 1000:
+            raise RuntimeError("Insufficient EUR/JPY M15 history returned")
+
+        coverage_rows = [
+            {
+                "granularity": "M15",
+                "candles": len(m15),
+                "first_utc": iso(m15[0]["time"]),
+                "last_utc": iso(m15[-1]["time"]),
+            },
+            {
+                "granularity": "H1",
+                "candles": len(h1),
+                "first_utc": iso(h1[0]["time"]) if h1 else "",
+                "last_utc": iso(h1[-1]["time"]) if h1 else "",
+            },
+            {
+                "granularity": "H4",
+                "candles": len(h4),
+                "first_utc": iso(h4[0]["time"]) if h4 else "",
+                "last_utc": iso(h4[-1]["time"]) if h4 else "",
+            },
+            {
+                "granularity": "D",
+                "candles": len(daily),
+                "first_utc": iso(daily[0]["time"]) if daily else "",
+                "last_utc": iso(daily[-1]["time"]) if daily else "",
+            },
+        ]
+        write_csv(OUTS["coverage"], coverage_rows)
+
+        STATUS.update({
+            "state": "precompute",
+            "message": "Building strict completed-HTF alignment and feature cache",
+            "progress": 18,
+        })
+
+        m15_times = [x["time"] for x in m15]
+        aligned_h1 = align_htf(m15_times, htf_state(h1))
+        aligned_h4 = align_htf(m15_times, htf_state(h4))
+        aligned_daily = align_htf(m15_times, htf_state(daily))
+        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
+
+        configs = fixed_deep_configs()
+        config_by_id = {c["config_id"]: c for c in configs}
+
+        # Canonical controls must exist under stable ids.
+        if A_CONTROL_ID not in config_by_id:
+            config_by_id[A_CONTROL_ID] = a_cfg(A_CONTROL_ID)
+            configs.append(config_by_id[A_CONTROL_ID])
+        if B_CONTROL_ID not in config_by_id:
+            config_by_id[B_CONTROL_ID] = b_cfg(B_CONTROL_ID)
+            configs.append(config_by_id[B_CONTROL_ID])
+
+        STATUS.update({
+            "state": "local_robustness",
+            "message": f"Evaluating {len(configs)} frozen local robustness variants",
+            "progress": 28,
+        })
+
+        local_summary = []
+        indices_map = {}
+
+        for i, c in enumerate(configs, 1):
+            ix = indices(c, f)
+            indices_map[c["config_id"]] = ix
+            local_summary.append(deep_summary_row(c, m15, ix))
+            if i % 10 == 0 or i == len(configs):
+                STATUS.update({
+                    "state": "local_robustness",
+                    "message": f"Local robustness {i}/{len(configs)}",
+                    "progress": 28 + int(28 * i / len(configs)),
+                })
+
+        local_summary.sort(
+            key=lambda r: (
+                r.get("test_group", ""),
+                r["config_id"],
+            )
+        )
+        write_csv(OUTS["local_summary"], local_summary)
+        write_csv(
+            OUTS["rr_plateau"],
+            [r for r in local_summary if r.get("test_group") == "A_RR_PLATEAU"],
+        )
+        write_csv(
+            OUTS["session_stability"],
+            [r for r in local_summary if r.get("test_group") == "A_SESSION_STABILITY"],
+        )
+        write_csv(
+            OUTS["hour_diagnostic"],
+            [r for r in local_summary if r.get("test_group") == "A_HOUR_DIAGNOSTIC"],
+        )
+        write_csv(
+            OUTS["weekday_diagnostic"],
+            [r for r in local_summary if r.get("test_group") == "A_WEEKDAY_DIAGNOSTIC"],
+        )
+        write_csv(
+            OUTS["geometry_rr"],
+            [r for r in local_summary if r.get("test_group") == "A_GEOMETRY_RR"],
+        )
+        write_csv(
+            OUTS["candidate_b"],
+            [r for r in local_summary if str(r.get("test_group", "")).startswith("B_")],
+        )
+
+        # ---------------- Broad-search parity guards ----------------
+        local_map = {r["config_id"]: r for r in local_summary}
+        parity_rows = []
+        refs = {
+            A_CONTROL_ID: {
+                "reference_min_trades": 140,
+                "reference_pf_if_equal": 1.412597,
+                "reference_r_if_equal": 43.7353,
+            },
+            B_CONTROL_ID: {
+                "reference_min_trades": 29,
+                "reference_pf_if_equal": 2.008885,
+                "reference_r_if_equal": 17.1510,
+            },
+        }
+        for cid, ref in refs.items():
+            row = local_map[cid]
+            if row["full_trades"] < ref["reference_min_trades"]:
+                status = "FAIL_BELOW_REFERENCE"
+            elif row["full_trades"] > ref["reference_min_trades"]:
+                status = "PASS_NEWER_TRADES"
+            else:
+                pf_ok = abs(row["full_pf"] - ref["reference_pf_if_equal"]) <= 0.02
+                r_ok = abs(row["full_r"] - ref["reference_r_if_equal"]) <= 0.50
+                status = "PASS_EQUAL" if pf_ok and r_ok else "FAIL_METRIC_DRIFT"
+            parity_rows.append({
+                "config_id": cid,
+                **ref,
+                "current_trades": row["full_trades"],
+                "current_pf": row["full_pf"],
+                "current_r": row["full_r"],
+                "status": status,
+            })
+
+        write_csv(OUTS["parity"], parity_rows)
+        bad = [x for x in parity_rows if x["status"].startswith("FAIL")]
+        if bad:
+            raise RuntimeError(
+                "Broad-result control parity failure: "
+                + str(bad)
+            )
+
+        STATUS.update({
+            "state": "primary_diagnostics",
+            "message": "Running A, B and A+B deep temporal/cost/rolling diagnostics",
+            "progress": 60,
+        })
+
+        a = config_by_id[A_CONTROL_ID]
+        b = config_by_id[B_CONTROL_ID]
+        ix_a = indices_map[A_CONTROL_ID]
+        ix_b = indices_map[B_CONTROL_ID]
+
+        def a_trade_fn(cost, start, end):
+            return backtest(m15, ix_a, a["rr"], cost, start, end)
+
+        def b_trade_fn(cost, start, end):
+            return backtest(m15, ix_b, b["rr"], cost, start, end)
+
+        def ab_a_trade_fn(cost, start, end):
+            return combined_backtest(
+                m15, ix_a, a["rr"], ix_b, b["rr"], cost,
+                start=start, end=end, priority="A",
+            )
+
+        def ab_b_trade_fn(cost, start, end):
+            return combined_backtest(
+                m15, ix_a, a["rr"], ix_b, b["rr"], cost,
+                start=start, end=end, priority="B",
+            )
+
+        primary_defs = [
+            (A_CONTROL_ID, "RALLY_REJECTION", "4.75", a_trade_fn),
+            (B_CONTROL_ID, "HIGH_SWEEP_DISPLACEMENT", "3.00", b_trade_fn),
+            ("AB_A_PRIORITY", "TWO_TRIGGER_A_PLUS_B", "A4.75+B3.00", ab_a_trade_fn),
+            ("AB_B_PRIORITY", "TWO_TRIGGER_A_PLUS_B", "A4.75+B3.00", ab_b_trade_fn),
+        ]
+
+        primary_summary = []
+        periods_all = []
+        costs_all = []
+        rolling_all = []
+        calendar_all = []
+        trades_all = []
+
+        for n, (cid, family, rr_label, trade_fn) in enumerate(primary_defs, 1):
+            STATUS.update({
+                "state": "primary_diagnostics",
+                "message": f"Primary diagnostic {n}/{len(primary_defs)}: {cid}",
+                "progress": 60 + int(28 * n / len(primary_defs)),
+            })
+
+            prows = generic_period_rows(cid, family, rr_label, trade_fn)
+            periods_all.extend(prows)
+            primary_summary.append(
+                primary_summary_from_periods(cid, family, rr_label, prows)
+            )
+            costs_all.extend(
+                generic_cost_rows(cid, family, rr_label, trade_fn)
+            )
+            rolling_all.extend(
+                generic_rolling_rows(cid, trade_fn)
+            )
+            calendar_all.extend(
+                generic_calendar_rows(cid, trade_fn)
+            )
+
+            full_trades = trade_fn(PRIMARY_COST, START, NOW)
+            for t in full_trades:
+                row = dict(t)
+                row.pop("entry_time", None)
+                row.pop("exit_time", None)
+                row["config_id"] = cid
+                row["family"] = family
+                trades_all.append(row)
+
+        rollsum = rolling_summary(rolling_all)
+        calsum = calendar_summary(calendar_all)
+
+        write_csv(OUTS["primary_summary"], primary_summary)
+        write_csv(OUTS["periods"], periods_all)
+        write_csv(OUTS["cost"], costs_all)
+        write_csv(OUTS["rolling"], rolling_all)
+        write_csv(OUTS["rolling_summary"], rollsum)
+        write_csv(OUTS["calendar"], calendar_all)
+        write_csv(OUTS["calendar_summary"], calsum)
+        write_csv(OUTS["trades"], trades_all)
+
+        a_full = a_trade_fn(PRIMARY_COST, START, NOW)
+        b_full = b_trade_fn(PRIMARY_COST, START, NOW)
+        ab_a_full, rej_a = combined_backtest(
+            m15, ix_a, a["rr"], ix_b, b["rr"], PRIMARY_COST,
+            start=START, end=NOW, priority="A", collect_rejections=True,
+        )
+        ab_b_full, rej_b = combined_backtest(
+            m15, ix_a, a["rr"], ix_b, b["rr"], PRIMARY_COST,
+            start=START, end=NOW, priority="B", collect_rejections=True,
+        )
+
+        write_csv(
+            OUTS["overlap"],
+            full_overlap_rows(a_full, b_full, ab_a_full, ab_b_full),
+        )
+        write_csv(
+            OUTS["combined_rejections"],
+            [
+                {"combined_mode": "A_PRIORITY", **r}
+                for r in rej_a
+            ] + [
+                {"combined_mode": "B_PRIORITY", **r}
+                for r in rej_b
+            ],
+        )
+
+        decisions = deep_decision_rows(
+            primary_summary,
+            costs_all,
+            rollsum,
+            calsum,
+            local_summary,
+            parity_rows,
+        )
+        write_csv(OUTS["decision"], decisions)
+
+        write_csv(OUTS["notes"], [
+            {
+                "item": "Study basis",
+                "value": "Frozen deep validation derived from the completed EUR/JPY M15 SHORT #24 broad-search results. No new trigger family search is performed.",
+            },
+            {
+                "item": "Candidate A",
+                "value": "Rally rejection: sweep prior40 high; close below prior10 high; bearish body>=0.75 ATR14; prior4h M15 momentum>=+1.25 ATR14; close location<=0.30; include NY16:00-19:59; RR4.75.",
+            },
+            {
+                "item": "Candidate B",
+                "value": "Sparse complement: high-sweep displacement; sweep prior60 high; close below previous candle low; body>=1.00 ATR14; upper wick/body>=0.35; prior4h M15 momentum>=+1.00 ATR14; previous strictly completed H1 close<H1 EMA100; RR3.00.",
+            },
+            {
+                "item": "Historical execution",
+                "value": "OANDA midpoint; SHORT fill=signal close minus adverse cost; base cost=1 pip; stop=signal high+10 ticks; targets use reference-close risk; p0; exact exit-candle signal eligible.",
+            },
+            {
+                "item": "Session interpretation",
+                "value": "NY_BLOCK_a-b means INCLUDE signal candles whose America/New_York opening hour is between a and b inclusive.",
+            },
+            {
+                "item": "Session stability",
+                "value": "Neighbouring NY blocks are reported as diagnostics. The runner does not automatically drop hour16 or choose the best block after seeing the results.",
+            },
+            {
+                "item": "Weekday diagnostics",
+                "value": "Each weekday exclusion is tested separately around Candidate A, but no weekday exclusion is automatically adopted.",
+            },
+            {
+                "item": "Geometry x RR",
+                "value": "One-factor neighbourhoods for body, momentum, close location and sweep lookback are crossed with RR4.50/4.75/5.00/5.25 to test whether the edge sits on a broad plateau.",
+            },
+            {
+                "item": "Cost stress",
+                "value": "Primary A/B/A+B variants are stressed at 0.5/1/1.5/2/2.5/3 pip adverse historical entry cost.",
+            },
+            {
+                "item": "Two-trigger overlap",
+                "value": "A+B uses one-position p0 with half-open [signal_index,exit_index) overlap rejection. Exact exit-candle signals remain eligible. A-priority is the intended main combination; B-priority is diagnostic.",
+            },
+            {
+                "item": "No pristine OOS claim",
+                "value": "The same long history has been repeatedly explored. Temporal/rolling/parameter tests are robustness evidence, not untouched out-of-sample evidence.",
+            },
+            {
+                "item": "Next gate",
+                "value": "Only after a frozen A or A+B rule survives this study should we run the exact 23->24 portfolio-add analysis with the live non-hedging gate.",
+            },
+        ])
+
+        STATUS.update({
+            "state": "packaging",
+            "message": "Packaging EUR/JPY M15 SHORT #24 deep-validation results",
+            "progress": 96,
+        })
+        package_results()
+
+        STATUS.update({
+            "state": "complete",
+            "message": "EUR/JPY M15 SHORT #24 deep validation complete",
+            "progress": 100,
+            "local_variants": len(configs),
+            "primary_variants": len(primary_defs),
+            "bundle": BUNDLE,
+            "decision_verdicts": {
+                r["config_id"]: r["deep_verdict"]
+                for r in decisions
+            },
+        })
+
+    except Exception as error:
+        STATUS.update({
+            "state": "error",
+            "message": str(error),
+        })
+        print("ERROR:", repr(error), flush=True)
+
+
 # ============================================================
 # FLASK ROUTES
 # ============================================================
@@ -1911,42 +3040,45 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service": "EURJPY M15 SHORT #24 Broad Research",
+        "service": "EURJPY M15 SHORT #24 Deep Validation",
         "status": STATUS["state"],
         "instrument": PAIR,
         "timeframe": "M15",
         "side": "SELL",
         "primary_cost_pips": PRIMARY_COST,
-        "families": [
-            "BEAR_ENGULF_STRUCTURE",
-            "HIGH_SWEEP_DISPLACEMENT",
-            "FAILED_BREAKOUT_REJECTION",
-            "OUTSIDE_REVERSAL",
-            "COMPRESSION_BREAKDOWN",
-            "RALLY_REJECTION",
-        ],
+        "stress_costs_pips": COSTS,
         "orders_supported": False,
         "trading_enabled": False,
+        "candidate_a": {
+            "family": "RALLY_REJECTION",
+            "rr": 4.75,
+            "ny_hours_included": "16-19",
+        },
+        "candidate_b": {
+            "family": "HIGH_SWEEP_DISPLACEMENT",
+            "rr": 3.00,
+            "role": "sparse complement",
+        },
         "routes": [
-            "/eurjpy-m15-short-24/status",
-            "/eurjpy-m15-short-24/results",
+            "/eurjpy-m15-short-24-deep/status",
+            "/eurjpy-m15-short-24-deep/results",
         ],
     })
 
 
-@app.route("/eurjpy-m15-short-24/status")
-def research_status():
+@app.route("/eurjpy-m15-short-24-deep/status")
+def deep_status():
     return jsonify(STATUS)
 
 
-@app.route("/eurjpy-m15-short-24/results")
-def research_results():
+@app.route("/eurjpy-m15-short-24-deep/results")
+def deep_results():
     return download(BUNDLE)
 
 
 if __name__ == "__main__":
     threading.Thread(
-        target=run_research,
+        target=run_deep_validation,
         daemon=True,
     ).start()
 
