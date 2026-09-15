@@ -11103,9 +11103,1313 @@ def eurjpy_m15_short_24_portfolio_info():
     })
 
 
+
+# ============================================================
+# EUR/JPY M15 SHORT #24 — CANDIDATE-ONLY RISK SWEEP
+# ============================================================
+#
+# PURPOSE
+# -------
+# Keep the CURRENT 23 live strategies at exactly 1.00% risk each.
+# Keep #24's frozen signals, A+B/B-priority logic and non-hedging acceptance
+# EXACTLY unchanged.
+#
+# Vary ONLY the cash risk used by accepted EUR_JPY_M15_SHORT #24 trades:
+#     0.50%
+#     0.75%
+#     1.00%
+#
+# Baseline:
+#     CURRENT_23 at 1.00% per trade, with no #24.
+#
+# This isolates the sizing decision after the strategy and portfolio gate have
+# already been frozen.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+Q24R_STATUS = {
+    "state": "not_started",
+    "message": "EUR/JPY M15 SHORT #24 candidate-only risk sweep not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+Q24R_CANDIDATE_RISKS = [0.0050, 0.0075, 0.0100]
+Q24R_EXISTING_RISK = 0.0100
+Q24R_BUNDLE = "EURJPY_M15_SHORT_24_CANDIDATE_ONLY_RISK_SWEEP_RESULTS.zip"
+
+Q24R_OUT = {
+    "baseline_parity": "eurjpy_m15_short_24_risk_sweep_current23_parity.csv",
+    "candidate_parity": "eurjpy_m15_short_24_risk_sweep_candidate_parity.csv",
+    "gate_summary": "eurjpy_m15_short_24_risk_sweep_gate_summary.csv",
+    "summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_summary.csv",
+    "delta": "eurjpy_m15_short_24_candidate_only_risk_sweep_delta.csv",
+    "rolling": "eurjpy_m15_short_24_candidate_only_risk_sweep_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_candidate_only_risk_sweep_calendar.csv",
+    "calendar_summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_calendar_summary.csv",
+    "periods": "eurjpy_m15_short_24_candidate_only_risk_sweep_periods.csv",
+    "trade_equity": "eurjpy_m15_short_24_candidate_only_risk_sweep_trade_equity.csv",
+    "decision": "eurjpy_m15_short_24_candidate_only_risk_sweep_decision_matrix.csv",
+    "notes": "eurjpy_m15_short_24_candidate_only_risk_sweep_notes.csv",
+}
+
+
+# ============================================================
+# STRATEGY-SPECIFIC RISK EQUITY SIMULATOR
+# ============================================================
+
+def q24r_trade_risk_fraction(trade, candidate_risk_fraction):
+    if trade["strategy_id"] == Q24_STRATEGY_ID:
+        return float(candidate_risk_fraction)
+    return Q24R_EXISTING_RISK
+
+
+def q24r_simulate_equity(
+    trades,
+    candidate_risk_fraction,
+    starting_balance=100.0,
+):
+    """
+    Event-driven compounding where every existing strategy stays at 1.00%,
+    while only EUR_JPY_M15_SHORT uses candidate_risk_fraction.
+
+    Each trade fixes its cash risk at entry:
+        risk_cash = then-realised equity * that strategy's risk fraction.
+
+    Existing open positions retain their original cash risk until exit.
+
+    Event order:
+        EXIT before ENTRY at identical timestamps.
+
+    Conservative open-risk floor:
+        realised equity - sum(open trade cash risks).
+
+    As with the prior portfolio runner, this uses realised equity because the
+    historical ledgers do not reconstruct exact intra-trade NAV/MTM paths.
+    """
+    if not trades:
+        return {
+            "summary": {
+                "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+                "candidate_risk_pct": candidate_risk_fraction * 100.0,
+                "starting_balance": starting_balance,
+                "ending_balance": starting_balance,
+                "ending_multiple": 1.0,
+                "total_return_pct": 0.0,
+                "cagr_pct": 0.0,
+                "max_closed_equity_dd_pct": 0.0,
+                "max_open_risk_floor_dd_pct": 0.0,
+                "max_open_positions": 0,
+                "max_open_risk_pct_of_realised_equity": 0.0,
+                "trades": 0,
+                "candidate_trades": 0,
+            },
+            "curve": [],
+            "trade_rows": [],
+            "exit_times": [],
+            "exit_balances": [],
+        }
+
+    ordered = sorted(
+        trades,
+        key=lambda t: (t["entry_time"], t["strategy_id"]),
+    )
+
+    events = []
+    for n, t in enumerate(ordered):
+        key = (
+            t["strategy_id"],
+            t["entry_time"],
+            t["exit_event_time"],
+            n,
+        )
+        events.append(
+            (t["entry_time"], 1, t["strategy_id"], key, t)
+        )
+        events.append(
+            (t["exit_event_time"], 0, t["strategy_id"], key, t)
+        )
+
+    # Exit before entry at the exact same timestamp.
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+
+    balance = float(starting_balance)
+    peak = balance
+    max_closed_dd = 0.0
+    max_floor_dd = 0.0
+
+    open_trades = {}
+    open_risk_cash = 0.0
+    max_open_positions = 0
+    max_open_risk_pct = 0.0
+
+    curve = []
+    trade_rows = []
+    exit_times = []
+    exit_balances = []
+
+    for ts, kind, sid, key, t in events:
+        if kind == 0:  # EXIT
+            rec = open_trades.pop(key, None)
+            if rec is None:
+                raise RuntimeError(
+                    f"Risk sweep exit without entry: {sid} {iso(ts)}"
+                )
+
+            before = balance
+            pnl_cash = rec["risk_cash"] * float(t["r"])
+            balance += pnl_cash
+
+            open_risk_cash -= rec["risk_cash"]
+            if abs(open_risk_cash) < 1e-12:
+                open_risk_cash = 0.0
+
+            peak = max(peak, balance)
+
+            closed_dd = (
+                ((balance / peak) - 1.0) * 100.0
+                if peak > 0 else -100.0
+            )
+            max_closed_dd = min(max_closed_dd, closed_dd)
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = (
+                ((floor_equity / peak) - 1.0) * 100.0
+                if peak > 0 else -100.0
+            )
+            max_floor_dd = min(max_floor_dd, floor_dd)
+
+            open_risk_pct = (
+                (open_risk_cash / balance) * 100.0
+                if balance > 0 else 999.0
+            )
+
+            exit_times.append(ts)
+            exit_balances.append(balance)
+
+            trade_rows.append({
+                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
+                "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+                "candidate_risk_pct": candidate_risk_fraction * 100.0,
+                "pair": t["pair"],
+                "strategy_id": t["strategy_id"],
+                "timeframe": t["timeframe"],
+                "side": t["side"],
+                "entry_time": iso(t["entry_time"]),
+                "exit_time": iso(t["exit_event_time"]),
+                "r": t["r"],
+                "result": t["result"],
+                "risk_fraction": rec["risk_fraction"],
+                "risk_pct": rec["risk_fraction"] * 100.0,
+                "entry_realised_equity": rec["entry_equity"],
+                "risk_cash": rec["risk_cash"],
+                "pnl_cash": pnl_cash,
+                "balance_before_exit": before,
+                "balance_after_exit": balance,
+                "closed_equity_drawdown_pct": closed_dd,
+                "open_positions_after_exit": len(open_trades),
+                "open_risk_cash_after_exit": open_risk_cash,
+                "open_risk_pct_of_realised_equity_after_exit": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+            curve.append({
+                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
+                "time_utc": iso(ts),
+                "event": "EXIT",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": closed_dd,
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_pct_of_realised_equity": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+        else:  # ENTRY
+            if balance <= 0:
+                raise RuntimeError(
+                    f"Risk sweep equity depleted before {sid} at {iso(ts)}"
+                )
+
+            risk_fraction = q24r_trade_risk_fraction(
+                t,
+                candidate_risk_fraction,
+            )
+            risk_cash = balance * risk_fraction
+
+            open_trades[key] = {
+                "risk_cash": risk_cash,
+                "risk_fraction": risk_fraction,
+                "entry_equity": balance,
+            }
+            open_risk_cash += risk_cash
+
+            max_open_positions = max(
+                max_open_positions,
+                len(open_trades),
+            )
+
+            open_risk_pct = (
+                (open_risk_cash / balance) * 100.0
+                if balance > 0 else 999.0
+            )
+            max_open_risk_pct = max(
+                max_open_risk_pct,
+                open_risk_pct,
+            )
+
+            floor_equity = balance - open_risk_cash
+            floor_dd = (
+                ((floor_equity / peak) - 1.0) * 100.0
+                if peak > 0 else -100.0
+            )
+            max_floor_dd = min(max_floor_dd, floor_dd)
+
+            curve.append({
+                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
+                "time_utc": iso(ts),
+                "event": "ENTRY",
+                "strategy_id": sid,
+                "balance": balance,
+                "peak_balance": peak,
+                "closed_equity_drawdown_pct": (
+                    ((balance / peak) - 1.0) * 100.0
+                    if peak > 0 else -100.0
+                ),
+                "open_positions": len(open_trades),
+                "open_risk_cash": open_risk_cash,
+                "open_risk_pct_of_realised_equity": open_risk_pct,
+                "open_risk_floor_equity": floor_equity,
+                "open_risk_floor_drawdown_pct": floor_dd,
+            })
+
+    if open_trades:
+        raise RuntimeError(
+            f"Risk sweep finished with {len(open_trades)} open trades"
+        )
+
+    first_entry = min(t["entry_time"] for t in ordered)
+    last_exit = max(t["exit_event_time"] for t in ordered)
+    years = max(
+        (last_exit - first_entry).total_seconds()
+        / (365.2425 * 86400.0),
+        1e-9,
+    )
+
+    total_return_pct = (
+        ((balance / starting_balance) - 1.0) * 100.0
+    )
+    cagr_pct = (
+        (
+            (balance / starting_balance) ** (1.0 / years)
+            - 1.0
+        ) * 100.0
+        if balance > 0 and starting_balance > 0
+        else -100.0
+    )
+
+    return {
+        "summary": {
+            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+            "candidate_risk_pct": candidate_risk_fraction * 100.0,
+            "starting_balance": starting_balance,
+            "ending_balance": balance,
+            "ending_multiple": balance / starting_balance,
+            "total_return_pct": total_return_pct,
+            "cagr_pct": cagr_pct,
+            "simulation_start_utc": iso(first_entry),
+            "simulation_end_utc": iso(last_exit),
+            "simulation_years": years,
+            "trades": len(ordered),
+            "candidate_trades": sum(
+                t["strategy_id"] == Q24_STRATEGY_ID
+                for t in ordered
+            ),
+            "max_closed_equity_dd_pct": max_closed_dd,
+            "max_open_risk_floor_dd_pct": max_floor_dd,
+            "max_open_positions": max_open_positions,
+            "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
+        },
+        "curve": curve,
+        "trade_rows": trade_rows,
+        "exit_times": exit_times,
+        "exit_balances": exit_balances,
+    }
+
+
+def q24r_balance_before(sim, ts):
+    j = bisect.bisect_left(
+        sim["exit_times"],
+        ts,
+    ) - 1
+    return (
+        sim["exit_balances"][j]
+        if j >= 0
+        else STARTING_BALANCE
+    )
+
+
+def q24r_period_row(
+    variant,
+    mode,
+    candidate_risk_fraction,
+    sim,
+    trades,
+    label,
+    start,
+    end,
+):
+    sb = q24r_balance_before(sim, start)
+    eb = q24r_balance_before(sim, end)
+
+    exits = [
+        t for t in trades
+        if start <= t["exit_event_time"] < end
+    ]
+
+    ret = (
+        ((eb / sb) - 1.0) * 100.0
+        if sb > 0 else 0.0
+    )
+
+    years = max(
+        (end - start).total_seconds()
+        / (365.2425 * 86400.0),
+        1e-9,
+    )
+    annualized = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0
+        else 0.0
+    )
+
+    return {
+        "variant": variant,
+        "portfolio_mode": mode,
+        "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+        "candidate_risk_pct": candidate_risk_fraction * 100.0,
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": annualized,
+        "realized_exits": len(exits),
+    }
+
+
+def q24r_rolling_rows(
+    variant,
+    mode,
+    candidate_risk_fraction,
+    sim,
+    trades,
+):
+    first_entry = min(
+        t["entry_time"]
+        for t in trades
+    )
+    start_month = month_floor(first_entry)
+    end_complete = month_floor(NOW)
+
+    rows = []
+    for months in (12, 24, 36):
+        cur = start_month
+        while add_months(cur, months) <= end_complete:
+            end = add_months(cur, months)
+            row = q24r_period_row(
+                variant,
+                mode,
+                candidate_risk_fraction,
+                sim,
+                trades,
+                f"ROLLING_{months}M",
+                cur,
+                end,
+            )
+            row["months"] = months
+            rows.append(row)
+            cur = add_months(cur, 1)
+    return rows
+
+
+def q24r_rolling_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["variant"],
+                r["portfolio_mode"],
+                r["candidate_risk_pct"],
+                r["months"],
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, mode, risk_pct, months = key
+        active = [
+            x for x in group
+            if x["realized_exits"] > 0
+        ]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+
+        values = [
+            x["compounded_return_pct"]
+            for x in active
+        ]
+
+        out.append({
+            "variant": variant,
+            "portfolio_mode": mode,
+            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+            "candidate_risk_pct": risk_pct,
+            "months": months,
+            "total_windows": len(group),
+            "active_windows": len(active),
+            "positive_active_windows": len(positive),
+            "positive_active_windows_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_compounded_return_pct_active": safe_median(values),
+            "worst_compounded_return_pct_active": min(values) if values else 0.0,
+            "best_compounded_return_pct_active": max(values) if values else 0.0,
+        })
+
+    return out
+
+
+def q24r_calendar_rows(
+    variant,
+    mode,
+    candidate_risk_fraction,
+    sim,
+    trades,
+):
+    first_year = min(
+        t["entry_time"]
+        for t in trades
+    ).year
+
+    rows = []
+    for year in range(first_year, NOW.year + 1):
+        start = datetime(
+            year, 1, 1,
+            tzinfo=timezone.utc,
+        )
+        nominal_end = datetime(
+            year + 1, 1, 1,
+            tzinfo=timezone.utc,
+        )
+        end = min(nominal_end, NOW)
+
+        if end <= start:
+            continue
+
+        row = q24r_period_row(
+            variant,
+            mode,
+            candidate_risk_fraction,
+            sim,
+            trades,
+            str(year),
+            start,
+            end,
+        )
+        row["year"] = year
+        row["complete_year"] = nominal_end <= NOW
+        rows.append(row)
+
+    return rows
+
+
+def q24r_calendar_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["variant"],
+                r["portfolio_mode"],
+                r["candidate_risk_pct"],
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, mode, risk_pct = key
+        complete = [
+            x for x in group
+            if x["complete_year"]
+        ]
+        active = [
+            x for x in complete
+            if x["realized_exits"] > 0
+        ]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+
+        worst = (
+            min(
+                active,
+                key=lambda x: x["compounded_return_pct"],
+            )
+            if active else None
+        )
+        best = (
+            max(
+                active,
+                key=lambda x: x["compounded_return_pct"],
+            )
+            if active else None
+        )
+
+        out.append({
+            "variant": variant,
+            "portfolio_mode": mode,
+            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+            "candidate_risk_pct": risk_pct,
+            "completed_years": len(complete),
+            "active_completed_years": len(active),
+            "positive_active_completed_years": len(positive),
+            "positive_active_completed_years_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_return_pct_active": safe_median(
+                x["compounded_return_pct"]
+                for x in active
+            ),
+            "worst_year": (
+                worst["year"]
+                if worst else ""
+            ),
+            "worst_year_return_pct": (
+                worst["compounded_return_pct"]
+                if worst else 0.0
+            ),
+            "best_year": (
+                best["year"]
+                if best else ""
+            ),
+            "best_year_return_pct": (
+                best["compounded_return_pct"]
+                if best else 0.0
+            ),
+        })
+
+    return out
+
+
+def q24r_summary_row(
+    variant,
+    mode,
+    candidate_risk_fraction,
+    trades,
+    sim,
+):
+    s = calc_stats(trades)
+    es = sim["summary"]
+
+    return {
+        "variant": variant,
+        "portfolio_mode": mode,
+        "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
+        "candidate_risk_pct": candidate_risk_fraction * 100.0,
+        "trades": s["trades"],
+        "portfolio_total_r_unscaled": s["total_r"],
+        "profit_factor_unscaled": s["profit_factor"],
+        "ending_balance_from_100": es["ending_balance"],
+        "ending_multiple": es["ending_multiple"],
+        "total_return_pct": es["total_return_pct"],
+        "historical_cagr_pct": es["cagr_pct"],
+        "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
+        "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
+        "max_open_positions": es["max_open_positions"],
+        "max_open_risk_pct_of_realised_equity": es[
+            "max_open_risk_pct_of_realised_equity"
+        ],
+        "accepted_candidate_trades": es["candidate_trades"],
+    }
+
+
+def q24r_baseline_summary_row(
+    mode,
+    trades,
+):
+    # Current23: all accepted existing trades at 1%.
+    sim = q24r_simulate_equity(
+        trades,
+        candidate_risk_fraction=Q24R_EXISTING_RISK,
+        starting_balance=STARTING_BALANCE,
+    )
+    # There are no Q24 trades in this set, so the candidate override is inert.
+    row = q24r_summary_row(
+        "CURRENT_23_BASELINE",
+        mode,
+        0.0,
+        trades,
+        sim,
+    )
+    row["candidate_risk_pct"] = 0.0
+    row["accepted_candidate_trades"] = 0
+    return row, sim
+
+
+def q24r_delta_row(
+    baseline,
+    candidate,
+):
+    cagr_gain = (
+        candidate["historical_cagr_pct"]
+        - baseline["historical_cagr_pct"]
+    )
+    closed_dd_change = (
+        candidate["max_closed_equity_dd_pct"]
+        - baseline["max_closed_equity_dd_pct"]
+    )
+    floor_dd_change = (
+        candidate["max_open_risk_floor_dd_pct"]
+        - baseline["max_open_risk_floor_dd_pct"]
+    )
+
+    # Negative DD delta means drawdown became deeper. Express the extra
+    # magnitude as positive percentage points for easier comparison.
+    closed_dd_cost_pp = max(0.0, -closed_dd_change)
+    floor_dd_cost_pp = max(0.0, -floor_dd_change)
+
+    return {
+        "variant": candidate["variant"],
+        "portfolio_mode": candidate["portfolio_mode"],
+        "candidate_risk_pct": candidate["candidate_risk_pct"],
+        "baseline_cagr_pct": baseline["historical_cagr_pct"],
+        "candidate_cagr_pct": candidate["historical_cagr_pct"],
+        "cagr_gain_pp": cagr_gain,
+        "baseline_closed_dd_pct": baseline["max_closed_equity_dd_pct"],
+        "candidate_closed_dd_pct": candidate["max_closed_equity_dd_pct"],
+        "closed_dd_change_pp": closed_dd_change,
+        "extra_closed_dd_magnitude_pp": closed_dd_cost_pp,
+        "baseline_floor_dd_pct": baseline["max_open_risk_floor_dd_pct"],
+        "candidate_floor_dd_pct": candidate["max_open_risk_floor_dd_pct"],
+        "floor_dd_change_pp": floor_dd_change,
+        "extra_floor_dd_magnitude_pp": floor_dd_cost_pp,
+        "cagr_gain_per_extra_closed_dd_pp": (
+            cagr_gain / closed_dd_cost_pp
+            if closed_dd_cost_pp > 0
+            else 999.0 if cagr_gain > 0 else 0.0
+        ),
+        "cagr_gain_per_extra_floor_dd_pp": (
+            cagr_gain / floor_dd_cost_pp
+            if floor_dd_cost_pp > 0
+            else 999.0 if cagr_gain > 0 else 0.0
+        ),
+        "baseline_ending_multiple": baseline["ending_multiple"],
+        "candidate_ending_multiple": candidate["ending_multiple"],
+        "max_open_positions": candidate["max_open_positions"],
+        "max_open_risk_pct_of_realised_equity": candidate[
+            "max_open_risk_pct_of_realised_equity"
+        ],
+    }
+
+
+def q24r_decision_rows(
+    deltas,
+    rolling_summary,
+):
+    roll_lookup = {
+        (
+            r["variant"],
+            r["portfolio_mode"],
+            int(r["months"]),
+        ): r
+        for r in rolling_summary
+    }
+
+    out = []
+    for d in deltas:
+        mode = d["portfolio_mode"]
+        variant = d["variant"]
+
+        r12 = roll_lookup.get((variant, mode, 12), {})
+        r24 = roll_lookup.get((variant, mode, 24), {})
+        r36 = roll_lookup.get((variant, mode, 36), {})
+
+        # This is deliberately a comparison aid, not an auto-deployment rule.
+        checks = {
+            "adds_cagr": d["cagr_gain_pp"] > 0,
+            "closed_dd_under_20pct": (
+                d["candidate_closed_dd_pct"] > -20.0
+            ),
+            "floor_dd_under_20pct": (
+                d["candidate_floor_dd_pct"] > -20.0
+            ),
+            "all_12m_positive": (
+                r12.get("positive_active_windows_pct", 0.0)
+                == 100.0
+            ),
+            "all_24m_positive": (
+                r24.get("positive_active_windows_pct", 0.0)
+                == 100.0
+            ),
+            "all_36m_positive": (
+                r36.get("positive_active_windows_pct", 0.0)
+                == 100.0
+            ),
+        }
+
+        out.append({
+            "variant": variant,
+            "portfolio_mode": mode,
+            "candidate_risk_pct": d["candidate_risk_pct"],
+            "comparison_status": (
+                "MEETS_COMPARISON_TARGETS"
+                if all(checks.values())
+                else "REVIEW_TRADEOFF"
+            ),
+            "checks_passed": sum(
+                bool(x)
+                for x in checks.values()
+            ),
+            "checks_total": len(checks),
+            **{
+                f"check_{k}": v
+                for k, v in checks.items()
+            },
+            "cagr_gain_pp": d["cagr_gain_pp"],
+            "candidate_closed_dd_pct": d[
+                "candidate_closed_dd_pct"
+            ],
+            "candidate_floor_dd_pct": d[
+                "candidate_floor_dd_pct"
+            ],
+            "cagr_gain_per_extra_closed_dd_pp": d[
+                "cagr_gain_per_extra_closed_dd_pp"
+            ],
+            "cagr_gain_per_extra_floor_dd_pp": d[
+                "cagr_gain_per_extra_floor_dd_pp"
+            ],
+            "rolling12_positive_pct": r12.get(
+                "positive_active_windows_pct", 0.0
+            ),
+            "rolling12_median_return_pct": r12.get(
+                "median_compounded_return_pct_active", 0.0
+            ),
+            "rolling12_worst_return_pct": r12.get(
+                "worst_compounded_return_pct_active", 0.0
+            ),
+            "rolling24_positive_pct": r24.get(
+                "positive_active_windows_pct", 0.0
+            ),
+            "rolling24_median_return_pct": r24.get(
+                "median_compounded_return_pct_active", 0.0
+            ),
+            "rolling24_worst_return_pct": r24.get(
+                "worst_compounded_return_pct_active", 0.0
+            ),
+            "rolling36_positive_pct": r36.get(
+                "positive_active_windows_pct", 0.0
+            ),
+            "rolling36_median_return_pct": r36.get(
+                "median_compounded_return_pct_active", 0.0
+            ),
+            "rolling36_worst_return_pct": r36.get(
+                "worst_compounded_return_pct_active", 0.0
+            ),
+        })
+
+    return out
+
+
+# ============================================================
+# MAIN RISK-SWEEP RUNNER
+# ============================================================
+
+def run_q24_candidate_only_risk_sweep():
+    try:
+        # Reuse inherited status hooks inside exact current23 rebuild.
+        global EV_STATUS
+        EV_STATUS = Q24R_STATUS
+
+        Q24R_STATUS.update(
+            state="fetch",
+            message="Fetching EUR/JPY M15 + H1 history",
+            progress=2,
+        )
+
+        eurjpy_m15, _ = fetch_history(
+            Q24_PAIR,
+            "M15",
+            START,
+            NOW,
+        )
+        eurjpy_h1, _ = fetch_history(
+            Q24_PAIR,
+            "H1",
+            PV_H1_WARMUP,
+            NOW,
+        )
+
+        if len(eurjpy_m15) < 400000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
+            )
+        if len(eurjpy_h1) < 100000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
+            )
+
+        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
+
+        Q24R_STATUS.update(
+            state="baseline",
+            message="Rebuilding exact current 23-strategy baseline",
+            progress=8,
+        )
+
+        baseline = q24_rebuild_current23(
+            eurjpy_m15,
+            eurjpy_h1,
+            eurjpy_h1_atr,
+        )
+        write_csv(
+            Q24R_OUT["baseline_parity"],
+            baseline["parity"],
+        )
+
+        Q24R_STATUS.update(
+            state="candidate",
+            message="Reproducing frozen #24 A+B/B-priority candidate",
+            progress=62,
+        )
+
+        short_features = q24_features(
+            eurjpy_m15,
+            eurjpy_h1,
+        )
+        candidate_trades = q24_build_candidate_trades(
+            eurjpy_m15,
+            short_features,
+        )
+        candidate_summary = q24_candidate_summary(
+            candidate_trades
+        )
+
+        ref = Q24_REFERENCE
+        if candidate_summary["trades"] < ref["trades"]:
+            parity_status = "FAIL_BELOW_REFERENCE"
+        elif candidate_summary["trades"] > ref["trades"]:
+            parity_status = "PASS_NEWER_TRADES"
+        else:
+            pf_ok = (
+                abs(
+                    candidate_summary["profit_factor"]
+                    - ref["pf"]
+                ) <= 0.0001
+            )
+            r_ok = (
+                abs(
+                    candidate_summary["total_r"]
+                    - ref["r"]
+                ) <= 0.03
+            )
+            parity_status = (
+                "PASS_EQUAL"
+                if pf_ok and r_ok
+                else "FAIL_METRIC_DRIFT"
+            )
+
+        candidate_parity = [{
+            "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
+            "reference_trades": ref["trades"],
+            "current_trades": candidate_summary["trades"],
+            "reference_pf": ref["pf"],
+            "current_pf": candidate_summary["profit_factor"],
+            "reference_r": ref["r"],
+            "current_r": candidate_summary["total_r"],
+            "status": parity_status,
+        }]
+        write_csv(
+            Q24R_OUT["candidate_parity"],
+            candidate_parity,
+        )
+
+        if parity_status.startswith("FAIL"):
+            raise RuntimeError(
+                "Frozen #24 parity failure: "
+                + json.dumps(candidate_parity)
+            )
+
+        Q24R_STATUS.update(
+            state="gate",
+            message="Applying exact live non-hedging gate once",
+            progress=70,
+        )
+
+        combined_independent = sorted(
+            baseline["independent"] + candidate_trades,
+            key=lambda t: (
+                t["entry_time"],
+                t["strategy_id"],
+            ),
+        )
+
+        all_summary = []
+        all_delta = []
+        all_rolling = []
+        all_calendar = []
+        all_periods = []
+        all_trade_equity = []
+        gate_rows = []
+
+        for mode_index, (priority, mode) in enumerate([
+            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+        ]):
+            if mode == "LIVE_SAFE_H1_FIRST":
+                baseline_trades = baseline["live_h1_first"]
+            else:
+                baseline_trades = baseline["live_m15_first"]
+
+            accepted, rejected = apply_live_safe_nonhedging_gate(
+                combined_independent,
+                priority,
+            )
+
+            accepted_candidate = [
+                t for t in accepted
+                if t["strategy_id"] == Q24_STRATEGY_ID
+            ]
+            rejected_candidate = [
+                r for r in rejected
+                if r["candidate_strategy_id"] == Q24_STRATEGY_ID
+            ]
+
+            gate_rows.append({
+                "portfolio_mode": mode,
+                "candidate_raw_trades": len(candidate_trades),
+                "candidate_accepted_trades": len(accepted_candidate),
+                "candidate_rejected_trades": len(rejected_candidate),
+                "accepted_candidate_r_unscaled": sum(
+                    float(t["r"])
+                    for t in accepted_candidate
+                ),
+                "baseline_current23_trades": len(baseline_trades),
+                "with24_accepted_portfolio_trades": len(accepted),
+                "gate_is_identical_for_all_risk_levels": True,
+            })
+
+            # Untouched current23 baseline at 1% for every trade.
+            baseline_row, baseline_sim = q24r_baseline_summary_row(
+                mode,
+                baseline_trades,
+            )
+            all_summary.append(baseline_row)
+
+            baseline_rolling = q24r_rolling_rows(
+                "CURRENT_23_BASELINE",
+                mode,
+                0.0,
+                baseline_sim,
+                baseline_trades,
+            )
+            all_rolling.extend(baseline_rolling)
+
+            baseline_calendar = q24r_calendar_rows(
+                "CURRENT_23_BASELINE",
+                mode,
+                0.0,
+                baseline_sim,
+                baseline_trades,
+            )
+            all_calendar.extend(baseline_calendar)
+
+            period_defs = [
+                (
+                    "FULL",
+                    min(t["entry_time"] for t in baseline_trades),
+                    NOW,
+                ),
+                (
+                    "LAST_5Y",
+                    NOW - timedelta(days=365.2425 * 5),
+                    NOW,
+                ),
+                (
+                    "LAST_3Y",
+                    NOW - timedelta(days=365.2425 * 3),
+                    NOW,
+                ),
+                (
+                    "LAST_2Y",
+                    NOW - timedelta(days=365.2425 * 2),
+                    NOW,
+                ),
+                (
+                    "LAST_1Y",
+                    NOW - timedelta(days=365.2425),
+                    NOW,
+                ),
+            ]
+
+            for label, a, b in period_defs:
+                row = q24r_period_row(
+                    "CURRENT_23_BASELINE",
+                    mode,
+                    0.0,
+                    baseline_sim,
+                    baseline_trades,
+                    label,
+                    a,
+                    b,
+                )
+                row["candidate_risk_pct"] = 0.0
+                all_periods.append(row)
+
+            # Candidate-only risk sweep.
+            for ri, candidate_risk in enumerate(
+                Q24R_CANDIDATE_RISKS,
+                1,
+            ):
+                variant = (
+                    f"WITH_Q24_AT_{candidate_risk*100:.2f}PCT"
+                )
+
+                sim = q24r_simulate_equity(
+                    accepted,
+                    candidate_risk,
+                    STARTING_BALANCE,
+                )
+                row = q24r_summary_row(
+                    variant,
+                    mode,
+                    candidate_risk,
+                    accepted,
+                    sim,
+                )
+                all_summary.append(row)
+
+                delta = q24r_delta_row(
+                    baseline_row,
+                    row,
+                )
+                all_delta.append(delta)
+
+                all_rolling.extend(
+                    q24r_rolling_rows(
+                        variant,
+                        mode,
+                        candidate_risk,
+                        sim,
+                        accepted,
+                    )
+                )
+                all_calendar.extend(
+                    q24r_calendar_rows(
+                        variant,
+                        mode,
+                        candidate_risk,
+                        sim,
+                        accepted,
+                    )
+                )
+
+                for label, a, b in period_defs:
+                    all_periods.append(
+                        q24r_period_row(
+                            variant,
+                            mode,
+                            candidate_risk,
+                            sim,
+                            accepted,
+                            label,
+                            a,
+                            b,
+                        )
+                    )
+
+                for tr in sim["trade_rows"]:
+                    # Keep all trades so cash-risk interactions can be audited.
+                    all_trade_equity.append(tr)
+
+                Q24R_STATUS.update(
+                    state="risk_sweep",
+                    message=(
+                        f"{mode}: candidate risk "
+                        f"{candidate_risk*100:.2f}% complete"
+                    ),
+                    progress=72 + mode_index * 11 + ri * 3,
+                )
+
+        rolling_summary = q24r_rolling_summary(
+            all_rolling
+        )
+        calendar_summary = q24r_calendar_summary(
+            all_calendar
+        )
+        decisions = q24r_decision_rows(
+            all_delta,
+            rolling_summary,
+        )
+
+        write_csv(Q24R_OUT["gate_summary"], gate_rows)
+        write_csv(Q24R_OUT["summary"], all_summary)
+        write_csv(Q24R_OUT["delta"], all_delta)
+        write_csv(Q24R_OUT["rolling"], all_rolling)
+        write_csv(
+            Q24R_OUT["rolling_summary"],
+            rolling_summary,
+        )
+        write_csv(Q24R_OUT["calendar"], all_calendar)
+        write_csv(
+            Q24R_OUT["calendar_summary"],
+            calendar_summary,
+        )
+        write_csv(Q24R_OUT["periods"], all_periods)
+        write_csv(
+            Q24R_OUT["trade_equity"],
+            all_trade_equity,
+        )
+        write_csv(Q24R_OUT["decision"], decisions)
+
+        write_csv(Q24R_OUT["notes"], [
+            {
+                "item": "purpose",
+                "value": "Candidate-only sizing sweep after #24 signal rules and portfolio gate were frozen.",
+            },
+            {
+                "item": "existing23_risk",
+                "value": "Every current live strategy remains at 1.00% of then-realised equity per accepted trade in this historical simulation.",
+            },
+            {
+                "item": "candidate_risk_levels",
+                "value": "Only EUR_JPY_M15_SHORT #24 varies: 0.50%, 0.75%, 1.00%.",
+            },
+            {
+                "item": "signals_and_gate",
+                "value": "Signals, A+B B-priority logic, trade outcomes and non-hedging acceptance are identical across all three risk levels. Risk size does not change which historical trades are accepted.",
+            },
+            {
+                "item": "baseline",
+                "value": "CURRENT_23_BASELINE contains no #24 trades and uses 1.00% risk on all accepted existing strategies.",
+            },
+            {
+                "item": "equity_model",
+                "value": "Event-driven realised-equity compounding. Each position fixes risk cash at entry. Exit before entry at equal timestamps. Conservative floor assumes every open trade simultaneously loses its fixed cash risk.",
+            },
+            {
+                "item": "nav_limit",
+                "value": "The live OANDA executor sizes from current NAV including unrealised P/L; exact historical intra-trade NAV cannot be reconstructed from outcome-only ledgers, so realised equity is used consistently with the prior portfolio tests.",
+            },
+            {
+                "item": "decision",
+                "value": "The decision matrix is a comparison aid only. Choose the risk level from marginal CAGR versus additional drawdown and rolling consistency; it does not alter or deploy the live executor.",
+            },
+        ])
+
+        Q24R_STATUS.update(
+            state="packaging",
+            message="Packaging #24 candidate-only risk sweep",
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            Q24R_BUNDLE,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in Q24R_OUT.values():
+                if os.path.exists(path):
+                    z.write(
+                        path,
+                        arcname=os.path.basename(path),
+                    )
+
+        Q24R_STATUS.update(
+            state="complete",
+            message="EUR/JPY M15 SHORT #24 candidate-only risk sweep complete",
+            progress=100,
+            results=Q24R_BUNDLE,
+            candidate_risk_levels_pct=[
+                x * 100.0
+                for x in Q24R_CANDIDATE_RISKS
+            ],
+            existing_strategy_risk_pct=1.0,
+        )
+
+    except Exception as e:
+        Q24R_STATUS.update(
+            state="error",
+            message=str(e),
+        )
+        print(
+            "Q24 CANDIDATE-ONLY RISK SWEEP ERROR:",
+            repr(e),
+            flush=True,
+        )
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route("/eurjpy-m15-short-24-risk-sweep/status")
+def eurjpy_m15_short_24_risk_sweep_status():
+    return jsonify(Q24R_STATUS)
+
+
+@app.route("/eurjpy-m15-short-24-risk-sweep/results")
+def eurjpy_m15_short_24_risk_sweep_results():
+    if not os.path.exists(Q24R_BUNDLE):
+        return jsonify({
+            "status": "not_ready",
+            "state": Q24R_STATUS.get("state"),
+            "message": Q24R_STATUS.get("message"),
+        }), 404
+
+    return send_file(
+        os.path.abspath(Q24R_BUNDLE),
+        as_attachment=True,
+        download_name=Q24R_BUNDLE,
+    )
+
+
+@app.route("/eurjpy-m15-short-24-risk-sweep/info")
+def eurjpy_m15_short_24_risk_sweep_info():
+    return jsonify({
+        "service": "EUR/JPY M15 SHORT #24 candidate-only risk sweep",
+        "read_only": True,
+        "orders_supported": False,
+        "existing_23_risk_pct": 1.0,
+        "candidate_24_risk_levels_pct": [0.50, 0.75, 1.00],
+        "candidate_strategy_id": Q24_STRATEGY_ID,
+        "signals": "frozen A+B/B-priority #24",
+        "gate": "same frozen live non-hedging gate at all risk levels",
+        "routes": [
+            "/eurjpy-m15-short-24-risk-sweep/status",
+            "/eurjpy-m15-short-24-risk-sweep/results",
+            "/eurjpy-m15-short-24-risk-sweep/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_eurjpy_m15_short_24_portfolio_add,
+        target=run_q24_candidate_only_risk_sweep,
         daemon=True,
     ).start()
 
