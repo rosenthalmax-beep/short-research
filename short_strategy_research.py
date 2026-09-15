@@ -1,368 +1,205 @@
-"""
-H1 + M15 FINAL LOCKED 20-STRATEGY PORTFOLIO ANALYSIS
-================================================
-
-READ-ONLY research service. NEVER sends orders.
-
-Purpose
--------
-Rebuild and merge the FINAL full-history-validated M15 strategies for:
-    EUR/USD  LONG + SHORT
-    GBP/USD  LONG + SHORT
-    USD/JPY  LONG + SHORT
-    USD/CAD  LONG + SHORT
-    EUR/GBP  LONG + SHORT
-
-The strategy rules below are frozen. This file performs NO optimization.
-It downloads OANDA midpoint history, recreates each final locked strategy,
-then exports one ZIP containing:
-
-    - exact strategy manifest
-    - data coverage
-    - per-strategy summary and period stats
-    - per-pair summary
-    - full portfolio summary
-    - last 1/2/3/5/10Y stats
-    - calendar-year returns / trade counts
-    - rolling 12/24/36M returns and trade counts
-    - rolling-window summary / best and worst windows
-    - trade-frequency stats
-    - 0.5/1.0/1.5/2.0-pip cost stress
-    - monthly strategy returns + correlation matrix
-    - trade overlap / concurrency diagnostics
-    - all 1-pip baseline trades
-    - parity / validation-reference diagnostics
-    - event-driven compounded equity at 0.50% / 0.75% / 1.00% risk per trade
-    - compounded calendar-year and rolling 12/24/36M returns
-    - concurrent open-risk exposure and conservative open-risk floor DD
-    - compounded cost-stress matrix across 0.5/1.0/1.5/2.0-pip fills
-
-Historical conventions
-----------------------
-- OANDA midpoint candles, M15 signal timestamp = candle OPEN.
-- ATR14 = Wilder/RMA, SMA seeded.
-- Reference entry = signal close.
-- Historical adverse fill: LONG close + cost; SHORT close - cost.
-- Stop buffer = 10 ticks.
-- Target is based on REFERENCE signal-close risk.
-- Actual R is measured from the adverse fill.
-- Exit testing starts on the NEXT M15 candle.
-- Signal on the exact exit candle is eligible.
-- Same-bar LONG tie: if high is closer to candle open => TARGET first;
-  otherwise STOP first.
-- Same-bar SHORT tie: if high is closer to candle open => STOP first;
-  otherwise TARGET first.
-- HTF state becomes available only at next ACTUAL HTF candle open;
-  lookup = bisect_right(completion_times, signal_time) - 1.
-- OANDA dailyAlignment=17, alignmentTimezone=America/New_York.
-- Each strategy enforces pyramiding=0 internally.
-- DIFFERENT strategy IDs are allowed to overlap/concurrently hold positions.
-  This includes opposite directions on the same pair; the analysis reports
-  those overlaps rather than suppressing them.
-
-Final full-history locks used
------------------------------
-EUR/USD LONG:
-    exact bullish engulf; BR>=1.20; body>=1.00 ATR; S165/D0.10;
-    exclude Tuesday (America/New_York); NO hour exclusion; RR3.75.
-EUR/USD SHORT:
-    exact bearish engulf; BR>=1.10; body>=1.30 ATR; range>=1.70 ATR;
-    S60/D0.225; NY 02:00-03:59; no weekday exclusion; RR3.50.
-GBP/USD LONG:
-    failed breakdown/reclaim of prior165 low; body>=1.00 ATR;
-    close location>=0.75; NY04:00-07:59; RR4.25.
-GBP/USD SHORT:
-    exact bearish engulf; BR>=1.30; body>=1.10 ATR; range>=1.60 ATR;
-    S100/D0.075; no time/day filters; RR3.00.
-USD/JPY LONG:
-    SWEEP30_RR4.00; bullish; NO BR filter; body>=1.25 ATR;
-    low<prior30 low; close>previous M15 high; lower wick/body>=0.25;
-    prior4h momentum<=-1.75 ATR; previous completed H1 ATR14/mean50>=0.80;
-    RR4.00.
-USD/JPY SHORT:
-    core compression-breakdown + daily EMA200, RR4.75;
-    complement prior165 high sweep/rejection + H4 EMA100, RR3.00;
-    same-candle core priority; pyramiding0 on union stream.
-USD/CAD LONG:
-    core bullish engulf S165/D0.175 + daily EMA50>EMA200, RR5.00;
-    complement compression-breakout prior5 high + H4 close>EMA100, RR5.25;
-    same-candle core priority; pyramiding0 on union stream.
-USD/CAD SHORT:
-    core bearish outside S120/D0.05 + H4 close<EMA100, RR4.00;
-    complement prior20 high sweep rejection + H1 close<EMA100, RR3.50;
-    historical half-open complement/core overlap rejection.
-EUR/GBP LONG:
-    core sweep60 displacement / body1.20 / wick0.25 / prior4h<=-1.25 /
-    NY01-03 / RR2.75;
-    complement exact bullish engulf BR1.20/body1.10/S165/D0.20 /
-    Europe/London03-07 / RR2.25;
-    historical half-open complement/core overlap rejection.
-EUR/GBP SHORT:
-    core high-sweep120 / body1.25 / closeLoc<=.20 / wick>=.40 /
-    exclude Wednesday Europe/London / RR4.50;
-    complement exact bearish engulf BR1.60/body1.00/S100/D0.15 /
-    previous completed H1 close<EMA100 / RR2.50;
-    historical half-open complement/core overlap rejection.
-"""
-
 import os
 import csv
-import json
-import math
 import time
 import bisect
 import zipfile
 import threading
-import gc
-from collections import deque, defaultdict
+from copy import deepcopy
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import requests
 from flask import Flask, jsonify, send_file
 
-
 # ============================================================
-# SERVICE / GLOBAL SETTINGS
+# EUR/JPY M15 SHORT #24 — FROZEN DEEP VALIDATION
+#
+# Purpose:
+#   Search EUR/JPY M15 SHORT from first principles. This runner does NOT
+#   invert or inherit the locked EUR/JPY M15 LONG #23 entry logic.
+#
+# Research universe:
+#   2002-05-06 20:00 UTC -> present / earliest OANDA available
+#
+# Independent trigger families:
+#   1) BEAR_ENGULF_STRUCTURE
+#   2) HIGH_SWEEP_DISPLACEMENT
+#   3) FAILED_BREAKOUT_REJECTION
+#   4) OUTSIDE_REVERSAL
+#   5) COMPRESSION_BREAKDOWN
+#   6) RALLY_REJECTION
+#
+# Staged process:
+#   Stage 1: raw archetype geometry, no HTF/session context
+#   Stage 2: one broad HTF / volatility / session / weekday context at a time
+#   Stage 3: local geometry + RR robustness around diverse Stage-2 winners
+#   Final shortlist diagnostics:
+#       temporal periods, four eras, 2018+, 2020+, last 5Y/2Y/1Y,
+#       0.5/1/1.5/2 pip cost stress, rolling 12/24/36M,
+#       calendar/tradeless years, full trade ledger.
+#
+# Historical conventions (matched to prior EUR/JPY M15 research):
+#   OANDA midpoint
+#   ATR14 Wilder/RMA, SMA seeded
+#   signal timestamp = M15 candle OPEN
+#   reference entry = signal close
+#   primary adverse cost = 1 pip
+#   SHORT historical fill = signal close - adverse cost
+#   stop = signal high + 10 ticks
+#   target = reference close - RR * reference-close risk
+#   exits begin on next candle
+#   pyramiding 0
+#   exact exit-candle signal eligible (half-open holding interval)
+#   short same-bar stop+target: lower side closer to open => target first,
+#                               otherwise stop first
+#
+# HTF no-lookahead:
+#   H1/H4/D state becomes usable only at the next ACTUAL HTF candle open.
+#   lookup = bisect_right(completion_times, signal_time) - 1
+#
+# IMPORTANT:
+#   This is exploratory full-history research, not pristine OOS validation.
+#   No strategy is automatically approved for live trading by this runner.
+#   Any survivor still needs deep validation and a 23 -> 24 portfolio-add test.
+#
+# READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
 
 app = Flask(__name__)
 
 TOKEN = os.getenv("OANDA_TOKEN")
 BASE = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com")
+PAIR = "EUR_JPY"
 
 START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
-HTF_WARMUP = START - timedelta(days=1000)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+WARMUP = START - timedelta(days=900)
 
 NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
+TOKYO = ZoneInfo("Asia/Tokyo")
 
-PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CAD", "EUR_GBP"]
-COSTS = [0.5, 1.0, 1.5, 2.0]
-BASELINE_COST = 1.0
+TICK = 0.001
+PIP = 0.01
+STOP_TICKS = 10
 
-# Equity simulation. Scale-invariant: change the starting balance if desired.
-# Every new trade risks this fraction of THEN-REALISED account equity.
-# Existing open trades keep the cash risk amount fixed at their own entry.
-STARTING_BALANCE = float(os.getenv("PORTFOLIO_START_BALANCE", "100.0"))
-RISK_LEVELS = [0.0050, 0.0075, 0.0100]  # 0.50%, 0.75%, 1.00%
+PRIMARY_COST = 1.0
+COSTS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 
-PAIR_META = {
-    "EUR_USD": {"tick": 0.00001, "pip": 0.0001},
-    "GBP_USD": {"tick": 0.00001, "pip": 0.0001},
-    "USD_JPY": {"tick": 0.001, "pip": 0.01},
-    "USD_CAD": {"tick": 0.00001, "pip": 0.0001},
-    "EUR_GBP": {"tick": 0.00001, "pip": 0.0001},
+# Diversity is intentional: do not let one family monopolise the next stage.
+STAGE1_PER_FAMILY = 2
+STAGE1_BASE_KEEP = 14
+STAGE2_PER_FAMILY = 2
+STAGE2_BASE_KEEP = 12
+FINAL_PER_FAMILY = 2
+FINAL_KEEP = 14
+
+OUTS = {
+    "coverage": "eurjpy_m15_short_24_coverage.csv",
+    "stage1": "eurjpy_m15_short_24_stage1_summary.csv",
+    "stage1_family": "eurjpy_m15_short_24_stage1_family_summary.csv",
+    "stage2": "eurjpy_m15_short_24_stage2_summary.csv",
+    "stage2_family": "eurjpy_m15_short_24_stage2_family_summary.csv",
+    "stage3": "eurjpy_m15_short_24_stage3_summary.csv",
+    "stage3_family": "eurjpy_m15_short_24_stage3_family_summary.csv",
+    "shortlist": "eurjpy_m15_short_24_shortlist.csv",
+    "periods": "eurjpy_m15_short_24_shortlist_periods.csv",
+    "cost": "eurjpy_m15_short_24_shortlist_cost_stress.csv",
+    "rolling": "eurjpy_m15_short_24_shortlist_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_shortlist_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_shortlist_calendar_years.csv",
+    "calendar_summary": "eurjpy_m15_short_24_shortlist_calendar_summary.csv",
+    "trades": "eurjpy_m15_short_24_shortlist_trades.csv",
+    "decision": "eurjpy_m15_short_24_decision_matrix.csv",
+    "notes": "eurjpy_m15_short_24_notes.csv",
 }
-
-# Only required HTFs are fetched per pair.
-PAIR_HTFS = {
-    "EUR_USD": [],
-    "GBP_USD": [],
-    "USD_JPY": ["H1", "H4", "D"],
-    "USD_CAD": ["H1", "H4", "D"],
-    "EUR_GBP": ["H1"],
-}
-
-# Safe OANDA chunk sizes; deliberately kept below 5000-candle limits.
-CHUNK_DAYS = {
-    "M15": 35,
-    "H1": 180,
-    "H4": 700,
-    "D": 3000,
-}
-
-# Diagnostic reference counts from the final validation runs.
-# A current run can legitimately be ABOVE these if new signals have appeared.
-REFERENCE_COUNTS = {
-    "EUR_USD_M15_LONG": 87,
-    "EUR_USD_M15_SHORT": 73,
-    "GBP_USD_M15_LONG": 84,
-    "GBP_USD_M15_SHORT": 74,
-    "USD_JPY_M15_LONG": 78,
-    "USD_JPY_M15_SHORT": 131,
-    "USD_CAD_M15_LONG": 149,
-    "USD_CAD_M15_SHORT": 182,
-    "EUR_GBP_M15_LONG": 92,
-    "EUR_GBP_M15_SHORT": 71,
-}
-
-OUT = {
-    "manifest": "m15_final_portfolio_manifest.csv",
-    "coverage": "m15_final_portfolio_coverage.csv",
-    "parity": "m15_final_portfolio_parity.csv",
-    "strategy_summary": "m15_final_portfolio_strategy_summary.csv",
-    "strategy_periods": "m15_final_portfolio_strategy_periods.csv",
-    "strategy_cost": "m15_final_portfolio_strategy_cost_stress.csv",
-    "strategy_calendar": "m15_final_portfolio_strategy_calendar_years.csv",
-    "strategy_rolling": "m15_final_portfolio_strategy_rolling.csv",
-    "strategy_rolling_summary": "m15_final_portfolio_strategy_rolling_summary.csv",
-    "pair_summary": "m15_final_portfolio_pair_summary.csv",
-    "portfolio_summary": "m15_final_portfolio_summary.csv",
-    "portfolio_periods": "m15_final_portfolio_periods.csv",
-    "portfolio_cost": "m15_final_portfolio_cost_stress.csv",
-    "portfolio_calendar": "m15_final_portfolio_calendar_years.csv",
-    "portfolio_rolling": "m15_final_portfolio_rolling.csv",
-    "portfolio_rolling_summary": "m15_final_portfolio_rolling_summary.csv",
-    "frequency": "m15_final_portfolio_trade_frequency.csv",
-    "monthly": "m15_final_portfolio_monthly_by_strategy.csv",
-    "correlation": "m15_final_portfolio_monthly_correlation.csv",
-    "overlap": "m15_final_portfolio_overlap.csv",
-    "concurrency": "m15_final_portfolio_concurrency.csv",
-    "trades": "m15_final_portfolio_trades.csv",
-    "notes": "m15_final_portfolio_notes.csv",
-    "equity_summary": "m15_final_portfolio_equity_summary.csv",
-    "equity_periods": "m15_final_portfolio_equity_periods.csv",
-    "equity_calendar": "m15_final_portfolio_equity_calendar_years.csv",
-    "equity_calendar_summary": "m15_final_portfolio_equity_calendar_summary.csv",
-    "equity_rolling": "m15_final_portfolio_equity_rolling.csv",
-    "equity_rolling_summary": "m15_final_portfolio_equity_rolling_summary.csv",
-    "equity_curve": "m15_final_portfolio_equity_curve.csv",
-    "equity_trades": "m15_final_portfolio_equity_trades.csv",
-    "equity_cost_stress": "m15_final_portfolio_equity_cost_stress.csv",
-}
-BUNDLE = "M15_FINAL_LOCKED_PORTFOLIO_EQUITY_COMPOUNDING_RESULTS.zip"
+BUNDLE = "EURJPY_M15_SHORT_24_BROAD_RESEARCH_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
-    "message": "M15 final locked portfolio analysis not started",
+    "message": "Not started",
     "orders_supported": False,
     "trading_enabled": False,
-    "progress": 0,
 }
 
-
 # ============================================================
-# FROZEN MANIFEST — SOURCE OF TRUTH INSIDE THIS RUNNER
-# ============================================================
-
-MANIFEST = [
-    {
-        "strategy_id": "EUR_USD_M15_LONG", "pair": "EUR_USD", "side": "BUY",
-        "architecture": "single",
-        "rules": "Exact bull engulf; BR>=1.20; body>=1.00ATR; prior165-low distance<=0.10ATR; exclude Tue NY; all hours; RR3.75",
-        "source": "full-history re-examination final lock (supersedes older BR1.35/body0.75/NY07-exclusion file)",
-    },
-    {
-        "strategy_id": "EUR_USD_M15_SHORT", "pair": "EUR_USD", "side": "SELL",
-        "architecture": "single",
-        "rules": "Exact bear engulf; BR>=1.10; body>=1.30ATR; range>=1.70ATR; prior60-high distance<=0.225ATR; NY02-03; RR3.50",
-        "source": "final full-history confirmation / locked file",
-    },
-    {
-        "strategy_id": "GBP_USD_M15_LONG", "pair": "GBP_USD", "side": "BUY",
-        "architecture": "single",
-        "rules": "Failed breakdown+reclaim prior165 low; body>=1.00ATR; closeLoc>=0.75; NY04-07; RR4.25",
-        "source": "final full-history locked file",
-    },
-    {
-        "strategy_id": "GBP_USD_M15_SHORT", "pair": "GBP_USD", "side": "SELL",
-        "architecture": "single",
-        "rules": "Exact bear engulf; BR>=1.30; body>=1.10ATR; range>=1.60ATR; prior100-high distance<=0.075ATR; RR3.00",
-        "source": "GRID_0240 final full-history locked file",
-    },
-    {
-        "strategy_id": "USD_JPY_M15_LONG", "pair": "USD_JPY", "side": "BUY",
-        "architecture": "single",
-        "rules": "SWEEP30; bull; no BR; body>=1.25ATR; close>prev high; lowerWick/body>=0.25; prior4h<=-1.75ATR; completed H1 ATR/mean50>=0.80; RR4.00",
-        "source": "SWEEP30_RR4.00 final full-history locked file (supersedes older any-20/40/60/100 version)",
-    },
-    {
-        "strategy_id": "USD_JPY_M15_SHORT", "pair": "USD_JPY", "side": "SELL",
-        "architecture": "priority_union",
-        "rules": "Core compression<=0.80/body1.25/range1.60/break40/daily<EMA200/RR4.75 + complement sweep165/body1.00/closeLoc<=.20/H4<EMA100/RR3.00",
-        "source": "final full-history two-trigger locked file",
-    },
-    {
-        "strategy_id": "USD_CAD_M15_LONG", "pair": "USD_CAD", "side": "BUY",
-        "architecture": "priority_union",
-        "rules": "Core bull engulf BR1.70/body1.25/range1.50/S165D.175/daily EMA50>200/RR5 + complement compression.70/body1.0/range1.5/break5/H4>EMA100/RR5.25",
-        "source": "final full-history two-trigger locked file",
-    },
-    {
-        "strategy_id": "USD_CAD_M15_SHORT", "pair": "USD_CAD", "side": "SELL",
-        "architecture": "historical_overlay",
-        "rules": "Core bear outside/body.75/closeLoc.35/S120D.05/H4<EMA100/RR4 + complement sweep20/body1.25/closeLoc.40/wick.25/H1<EMA100/RR3.5",
-        "source": "final full-history two-trigger locked file",
-    },
-    {
-        "strategy_id": "EUR_GBP_M15_LONG", "pair": "EUR_GBP", "side": "BUY",
-        "architecture": "historical_overlay",
-        "rules": "Core sweep60/body1.20/wick.25/prior4h<=-1.25/NY01-03/RR2.75 + complement bull engulf BR1.20/body1.10/S165D.20/London03-07/RR2.25",
-        "source": "final full-history two-trigger locked file",
-    },
-    {
-        "strategy_id": "EUR_GBP_M15_SHORT", "pair": "EUR_GBP", "side": "SELL",
-        "architecture": "historical_overlay",
-        "rules": "Core sweep120/body1.25/closeLoc.20/wick.40/excl Wed London/RR4.5 + complement bear engulf BR1.60/body1.00/S100D.15/H1<EMA100/RR2.5",
-        "source": "final full-history BR-confirmed two-trigger locked file",
-    },
-]
-
-
-# ============================================================
-# BASIC HELPERS
+# GENERAL HELPERS
 # ============================================================
 
 def iso(dt):
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def parse_time(value):
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    if "." in value:
-        left, right = value.split(".", 1)
+def parse_time(s):
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    if "." in s:
+        left, right = s.split(".", 1)
         sign = None
-        offset = None
+        off = None
         if "+" in right:
-            frac, offset = right.split("+", 1); sign = "+"
+            frac, off = right.split("+", 1)
+            sign = "+"
         elif "-" in right:
-            frac, offset = right.split("-", 1); sign = "-"
+            frac, off = right.split("-", 1)
+            sign = "-"
         else:
             frac = right
-        frac = frac[:6].ljust(6, "0")
-        value = left + "." + frac
+        s = left + "." + frac[:6].ljust(6, "0")
         if sign:
-            value += sign + offset
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
+            s += sign + off
+    return datetime.fromisoformat(s).astimezone(timezone.utc)
 
 
 def write_csv(path, rows):
-    rows = list(rows)
     if not rows:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("")
+        Path(path).write_text("", encoding="utf-8")
         return
-    fields, seen = [], set()
+    fields = []
+    seen = set()
     for row in rows:
-        for k in row:
-            if k not in seen:
-                seen.add(k); fields.append(k)
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fields.append(key)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader(); w.writerows(rows)
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
-def safe_median(vals):
-    vals = [x for x in vals if x is not None and math.isfinite(x)]
-    return median(vals) if vals else 0.0
+def download(path):
+    if not os.path.exists(path):
+        return jsonify({"error": "not ready"}), 404
+    return send_file(
+        os.path.abspath(path),
+        as_attachment=True,
+        download_name=os.path.basename(path),
+    )
+
+
+def package_results():
+    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in OUTS.values():
+            if os.path.exists(path):
+                z.write(path, arcname=os.path.basename(path))
+
+
+def add_months(dt, n):
+    m = dt.year * 12 + dt.month - 1 + n
+    return datetime(m // 12, m % 12 + 1, 1, tzinfo=timezone.utc)
 
 
 def month_floor(dt):
     return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
 
 
-def add_months(dt, months):
-    z = dt.year * 12 + dt.month - 1 + months
-    return datetime(z // 12, z % 12 + 1, 1, tzinfo=timezone.utc)
-
-
-def pct(num, den):
-    return 100.0 * num / den if den else 0.0
+def med(values):
+    return median(values) if values else 0.0
 
 
 # ============================================================
@@ -375,9663 +212,713 @@ def headers():
     return {"Authorization": "Bearer " + TOKEN.strip()}
 
 
-def fetch_chunk(pair, gran, start, end):
+def fetch_chunk(granularity, start, end):
     params = {
-        "price": "M", "granularity": gran,
-        "from": iso(start), "to": iso(end),
-        "smooth": "false", "includeFirst": "true",
+        "price": "M",
+        "granularity": granularity,
+        "smooth": "false",
+        "from": iso(start),
+        "to": iso(end),
+        "includeFirst": "true",
     }
-    if gran == "D":
+    if granularity == "D":
         params["dailyAlignment"] = 17
         params["alignmentTimezone"] = "America/New_York"
-    r = requests.get(
-        f"{BASE}/v3/instruments/{pair}/candles",
-        headers=headers(), params=params, timeout=45,
-    )
-    if r.status_code in (400, 404):
-        # Older unavailable-history chunks can legitimately be rejected.
-        # Coverage guards below prevent this from silently truncating M15.
-        return []
-    r.raise_for_status()
-    out = []
-    for c in r.json().get("candles", []):
-        if not c.get("complete", False):
+
+    url = f"{BASE}/v3/instruments/{PAIR}/candles"
+    response = requests.get(url, headers=headers(), params=params, timeout=60)
+    response.raise_for_status()
+
+    rows = []
+    for candle in response.json().get("candles", []):
+        if not candle.get("complete", False):
             continue
-        m = c.get("mid") or {}
-        if not all(k in m for k in ("o", "h", "l", "c")):
-            continue
-        out.append({
-            "time": parse_time(c["time"]),
-            "open": float(m["o"]), "high": float(m["h"]),
-            "low": float(m["l"]), "close": float(m["c"]),
+        mid = candle["mid"]
+        rows.append({
+            "time": parse_time(candle["time"]),
+            "open": float(mid["o"]),
+            "high": float(mid["h"]),
+            "low": float(mid["l"]),
+            "close": float(mid["c"]),
         })
-    return out
+    return rows
 
 
-def fetch_history(pair, gran, start, end):
-    step = timedelta(days=CHUNK_DAYS[gran])
-    by_t = {}
-    cursor = start
-    empty = 0
-    while cursor < end:
-        nxt = min(cursor + step, end)
-        chunk = fetch_chunk(pair, gran, cursor, nxt)
-        if not chunk:
-            empty += 1
-        for c in chunk:
-            by_t[c["time"]] = c
-        cursor = nxt
-        time.sleep(0.015)
-    out = [by_t[k] for k in sorted(by_t)]
-    return out, empty
+def fetch(granularity, start, end, chunk_days):
+    current = start
+    by_time = {}
+    chunk = 0
+
+    while current < end:
+        chunk += 1
+        nxt = min(current + timedelta(days=chunk_days), end)
+        STATUS.update({
+            "state": "fetch",
+            "message": f"Fetching {granularity} chunk {chunk}: {iso(current)} -> {iso(nxt)}",
+        })
+
+        rows = fetch_chunk(granularity, current, nxt)
+        for row in rows:
+            by_time[row["time"]] = row
+
+        current = nxt
+        time.sleep(0.04)
+
+    return [by_time[t] for t in sorted(by_time)]
 
 
 # ============================================================
-# INDICATORS / FEATURE CACHE
+# INDICATORS / HTF CAUSAL ALIGNMENT
 # ============================================================
 
-def rma(values, n):
-    x = np.asarray(values, dtype=float)
-    out = np.full(len(x), np.nan)
-    if len(x) < n:
+def sma(values, length):
+    values = np.asarray(values, dtype=float)
+    out = np.full(len(values), np.nan)
+    if len(values) < length:
         return out
-    out[n - 1] = np.mean(x[:n])
-    for i in range(n, len(x)):
-        out[i] = (out[i - 1] * (n - 1) + x[i]) / n
+    valid = np.isfinite(values).astype(int)
+    sums = np.cumsum(np.where(np.isfinite(values), values, 0.0))
+    cnts = np.cumsum(valid)
+    sums = np.r_[0.0, sums]
+    cnts = np.r_[0, cnts]
+    for i in range(length - 1, len(values)):
+        total = sums[i + 1] - sums[i + 1 - length]
+        count = cnts[i + 1] - cnts[i + 1 - length]
+        if count == length:
+            out[i] = total / length
     return out
 
 
-def sma(values, n):
-    x = np.asarray(values, dtype=float)
-    out = np.full(len(x), np.nan)
-    q = deque(); s = 0.0; invalid = 0
-    for i, v in enumerate(x):
-        q.append(v)
-        if math.isfinite(v): s += v
-        else: invalid += 1
-        if len(q) > n:
-            old = q.popleft()
-            if math.isfinite(old): s -= old
-            else: invalid -= 1
-        if len(q) == n and invalid == 0:
-            out[i] = s / n
+def ema(values, length):
+    values = np.asarray(values, dtype=float)
+    out = np.full(len(values), np.nan)
+    if len(values) < length:
+        return out
+
+    seed_i = None
+    for i in range(length - 1, len(values)):
+        window = values[i - length + 1:i + 1]
+        if np.all(np.isfinite(window)):
+            seed_i = i
+            out[i] = float(np.mean(window))
+            break
+
+    if seed_i is None:
+        return out
+
+    alpha = 2.0 / (length + 1.0)
+    for i in range(seed_i + 1, len(values)):
+        if np.isfinite(values[i]) and np.isfinite(out[i - 1]):
+            out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
     return out
 
 
-def ema(values, n):
-    x = np.asarray(values, dtype=float)
-    out = np.full(len(x), np.nan)
-    if len(x) < n:
+def atr(candles, length=14):
+    n = len(candles)
+    out = np.full(n, np.nan)
+    if n == 0:
         return out
-    seed = x[:n]
-    if not np.all(np.isfinite(seed)):
-        return out
-    out[n - 1] = np.mean(seed)
-    a = 2.0 / (n + 1.0)
-    for i in range(n, len(x)):
-        if math.isfinite(x[i]):
-            out[i] = a * x[i] + (1.0 - a) * out[i - 1]
-    return out
 
-
-def atr14(candles):
-    h = np.array([c["high"] for c in candles], dtype=float)
-    l = np.array([c["low"] for c in candles], dtype=float)
-    c = np.array([c["close"] for c in candles], dtype=float)
-    tr = np.full(len(c), np.nan)
-    if len(c): tr[0] = h[0] - l[0]
-    if len(c) > 1:
-        tr[1:] = np.maximum.reduce([
-            h[1:] - l[1:], np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])
-        ])
-    return rma(tr, 14)
-
-
-def prev_extreme(values, lookback, want_max):
-    x = np.asarray(values, dtype=float)
-    out = np.full(len(x), np.nan)
-    dq = deque()
-    for i in range(len(x)):
-        # At i, deque represents indices in [i-lookback, i-1].
-        min_idx = i - lookback
-        while dq and dq[0] < min_idx:
-            dq.popleft()
-        if i >= lookback and dq:
-            out[i] = x[dq[0]]
-        # add current only AFTER emitting so current candle is excluded
-        if want_max:
-            while dq and x[dq[-1]] <= x[i]: dq.pop()
+    tr = np.full(n, np.nan)
+    for i, candle in enumerate(candles):
+        h = candle["high"]
+        l = candle["low"]
+        if i == 0:
+            tr[i] = h - l
         else:
-            while dq and x[dq[-1]] >= x[i]: dq.pop()
-        dq.append(i)
+            pc = candles[i - 1]["close"]
+            tr[i] = max(h - l, abs(h - pc), abs(l - pc))
+
+    if n < length:
+        return out
+
+    out[length - 1] = float(np.mean(tr[:length]))
+    for i in range(length, n):
+        out[i] = ((out[i - 1] * (length - 1)) + tr[i]) / length
     return out
+
+
+def prev_extreme(values, lookback, mode):
+    values = np.asarray(values, dtype=float)
+    out = np.full(len(values), np.nan)
+    from collections import deque
+    dq = deque()
+
+    for i in range(len(values)):
+        while dq and dq[0] < i - lookback:
+            dq.popleft()
+        if i > 0:
+            j = i - 1
+            if mode == "max":
+                while dq and values[dq[-1]] <= values[j]:
+                    dq.pop()
+            else:
+                while dq and values[dq[-1]] >= values[j]:
+                    dq.pop()
+            dq.append(j)
+        if i >= lookback and dq:
+            out[i] = values[dq[0]]
+    return out
+
+
+def infer_completion_times(candles):
+    """Next ACTUAL candle open = first time the prior HTF bar is safely usable."""
+    complete_at = [None] * len(candles)
+    for i in range(len(candles) - 1):
+        complete_at[i] = candles[i + 1]["time"]
+    return complete_at
 
 
 def htf_state(candles):
-    close = np.array([c["close"] for c in candles], dtype=float)
-    a14 = atr14(candles)
-    am50 = sma(a14, 50)
-    e50 = ema(close, 50)
-    e100 = ema(close, 100)
-    e200 = ema(close, 200)
-    states = []
-    for i, c in enumerate(candles):
-        complete_at = candles[i + 1]["time"] if i + 1 < len(candles) else None
-        if complete_at is None:
-            continue
-        states.append({
-            "complete_at": complete_at,
-            "close": close[i],
-            "ema50": e50[i],
-            "ema100": e100[i],
-            "ema200": e200[i],
-            "atr14": a14[i],
-            "atr_ratio50": (a14[i] / am50[i]) if math.isfinite(a14[i]) and math.isfinite(am50[i]) and am50[i] != 0 else np.nan,
-        })
-    return states
-
-
-def align_htf(m15_times, states):
-    ct = [s["complete_at"] for s in states]
-    fields = ["close", "ema50", "ema100", "ema200", "atr14", "atr_ratio50"]
-    out = {k: np.full(len(m15_times), np.nan) for k in fields}
-    for i, t in enumerate(m15_times):
-        j = bisect.bisect_right(ct, t) - 1
-        if j >= 0:
-            s = states[j]
-            for k in fields:
-                out[k][i] = s[k]
-    return out
-
-
-def build_features(pair, m15, aligned):
-    n = len(m15)
-    o = np.array([x["open"] for x in m15], dtype=float)
-    h = np.array([x["high"] for x in m15], dtype=float)
-    l = np.array([x["low"] for x in m15], dtype=float)
-    c = np.array([x["close"] for x in m15], dtype=float)
-    a = atr14(m15)
-    body = c - o
-    absbody = np.abs(body)
-    rng = h - l
-    bull_body = np.maximum(body, 0.0)
-    bear_body = np.maximum(-body, 0.0)
-    bull_atr = np.divide(bull_body, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
-    bear_atr = np.divide(bear_body, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
-    range_atr = np.divide(rng, a, out=np.full(n, np.nan), where=np.isfinite(a) & (a > 0))
-    close_loc = np.divide(c - l, rng, out=np.full(n, np.nan), where=rng > 0)
-    lower_wick = np.minimum(o, c) - l
-    upper_wick = h - np.maximum(o, c)
-    lwb = np.divide(lower_wick, bull_body, out=np.full(n, np.nan), where=bull_body > 0)
-    uwb = np.divide(upper_wick, bear_body, out=np.full(n, np.nan), where=bear_body > 0)
-
-    exact_bull = np.zeros(n, dtype=bool)
-    exact_bear = np.zeros(n, dtype=bool)
-    bull_br = np.full(n, np.nan); bear_br = np.full(n, np.nan)
-    if n > 1:
-        prev_abs = absbody[:-1]
-        exact_bull[1:] = (c[:-1] < o[:-1]) & (c[1:] > o[1:]) & (o[1:] <= c[:-1]) & (c[1:] >= o[:-1])
-        exact_bear[1:] = (c[:-1] > o[:-1]) & (c[1:] < o[1:]) & (o[1:] >= c[:-1]) & (c[1:] <= o[:-1])
-        bull_br[1:] = np.divide(bull_body[1:], prev_abs, out=np.full(n-1, np.nan), where=prev_abs > 0)
-        bear_br[1:] = np.divide(bear_body[1:], prev_abs, out=np.full(n-1, np.nan), where=prev_abs > 0)
-
-    lookbacks = {
-        "EUR_USD": {"low": [165], "high": [60]},
-        "GBP_USD": {"low": [165], "high": [100]},
-        "USD_JPY": {"low": [30, 40], "high": [165]},
-        "USD_CAD": {"low": [165], "high": [5, 20, 120]},
-        "EUR_GBP": {"low": [60, 165], "high": [100, 120]},
-    }[pair]
-    lows = {lb: prev_extreme(l, lb, False) for lb in lookbacks["low"]}
-    highs = {lb: prev_extreme(h, lb, True) for lb in lookbacks["high"]}
-
-    prev_a = np.r_[np.nan, a[:-1]]
-    a_mean20 = sma(a, 20)
-    prev_a_mean20 = np.r_[np.nan, a_mean20[:-1]]
-    compression = np.divide(prev_a, prev_a_mean20, out=np.full(n, np.nan), where=np.isfinite(prev_a) & np.isfinite(prev_a_mean20) & (prev_a_mean20 != 0))
-
-    mom4 = np.full(n, np.nan)
-    if n > 17:
-        mom4[17:] = np.divide(c[16:-1] - c[:-17], a[17:], out=np.full(n-17, np.nan), where=np.isfinite(a[17:]) & (a[17:] > 0))
-
-    prev_high = np.r_[np.nan, h[:-1]]
-    prev_low = np.r_[np.nan, l[:-1]]
-
-    # Time arrays only where rules need them; inexpensive relative to backtest.
-    times = [x["time"] for x in m15]
-    ny_hour = np.array([t.astimezone(NY).hour for t in times], dtype=np.int16)
-    ny_weekday = np.array([t.astimezone(NY).weekday() for t in times], dtype=np.int8)
-    london_hour = np.array([t.astimezone(LONDON).hour for t in times], dtype=np.int16)
-    london_weekday = np.array([t.astimezone(LONDON).weekday() for t in times], dtype=np.int8)
-
-    return {
-        "o": o, "h": h, "l": l, "c": c, "atr": a,
-        "bull": body > 0, "bear": body < 0,
-        "bull_atr": bull_atr, "bear_atr": bear_atr, "range_atr": range_atr,
-        "close_loc": close_loc, "lwb": lwb, "uwb": uwb,
-        "exact_bull": exact_bull, "exact_bear": exact_bear,
-        "bull_br": bull_br, "bear_br": bear_br,
-        "low": lows, "high": highs,
-        "compression": compression, "mom4": mom4,
-        "prev_high": prev_high, "prev_low": prev_low,
-        "ny_hour": ny_hour, "ny_weekday": ny_weekday,
-        "london_hour": london_hour, "london_weekday": london_weekday,
-        "htf": aligned,
-    }
-
-
-# ============================================================
-# FROZEN SIGNAL RULES
-# ============================================================
-
-def idx_from_mask(mask):
-    return np.flatnonzero(np.asarray(mask, dtype=bool)).tolist()
-
-
-def signal_sets(pair, f):
-    A = f["atr"]; C=f["c"]; H=f["h"]; L=f["l"]
-    valid = np.isfinite(A) & (A > 0)
-    htf = f["htf"]
-
-    if pair == "EUR_USD":
-        d165 = np.abs(L - f["low"][165]) / A
-        long_m = valid & f["exact_bull"] & (f["bull_br"] >= 1.20) & (f["bull_atr"] >= 1.00) & (d165 <= 0.10) & (f["ny_weekday"] != 1)
-        d60 = np.abs(H - f["high"][60]) / A
-        short_m = valid & f["exact_bear"] & (f["bear_br"] >= 1.10) & (f["bear_atr"] >= 1.30) & (f["range_atr"] >= 1.70) & (d60 <= 0.225) & np.isin(f["ny_hour"], [2,3])
-        return {
-            "EUR_USD_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"CORE",3.75) for i in idx_from_mask(long_m)]},
-            "EUR_USD_M15_SHORT": {"side":"SELL","mode":"single","signals":[(i,"CORE",3.50) for i in idx_from_mask(short_m)]},
-        }
-
-    if pair == "GBP_USD":
-        p165=f["low"][165]
-        long_m = valid & f["bull"] & (f["bull_atr"] >= 1.00) & (f["close_loc"] >= 0.75) & (L < p165) & (C > p165) & np.isin(f["ny_hour"], [4,5,6,7])
-        d100=np.abs(H-f["high"][100])/A
-        short_m = valid & f["exact_bear"] & (f["bear_br"] >= 1.30) & (f["bear_atr"] >= 1.10) & (f["range_atr"] >= 1.60) & (d100 <= 0.075)
-        return {
-            "GBP_USD_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"CORE",4.25) for i in idx_from_mask(long_m)]},
-            "GBP_USD_M15_SHORT": {"side":"SELL","mode":"single","signals":[(i,"CORE",3.00) for i in idx_from_mask(short_m)]},
-        }
-
-    if pair == "USD_JPY":
-        h1=htf["H1"]; h4=htf["H4"]; d=htf["D"]
-        p30=f["low"][30]
-        long_m = valid & f["bull"] & (f["bull_atr"] >= 1.25) & (L < p30) & (C > f["prev_high"]) & (f["lwb"] >= 0.25) & (f["mom4"] <= -1.75) & (h1["atr_ratio50"] >= 0.80)
-        core = valid & f["bear"] & (f["compression"] <= 0.80) & (f["bear_atr"] >= 1.25) & (f["range_atr"] >= 1.60) & (C < f["low"][40]) & (d["close"] < d["ema200"])
-        p165=f["high"][165]
-        comp = valid & f["bear"] & (H > p165) & (C < p165) & (f["bear_atr"] >= 1.00) & (f["close_loc"] <= 0.20) & (h4["close"] < h4["ema100"])
-        union=[]
-        for i in sorted(set(idx_from_mask(core)) | set(idx_from_mask(comp))):
-            if core[i]: union.append((i,"CORE_GRID_0731",4.75))
-            elif comp[i]: union.append((i,"COMPLEMENT_CAND_0322",3.00))
-        return {
-            "USD_JPY_M15_LONG": {"side":"BUY","mode":"single","signals":[(i,"SWEEP30_RR4.00",4.00) for i in idx_from_mask(long_m)]},
-            "USD_JPY_M15_SHORT": {"side":"SELL","mode":"priority_union","signals":union},
-        }
-
-    if pair == "USD_CAD":
-        h1=htf["H1"]; h4=htf["H4"]; d=htf["D"]
-        d165=np.abs(L-f["low"][165])/A
-        core_l = valid & f["exact_bull"] & (f["bull_br"] >= 1.70) & (f["bull_atr"] >= 1.25) & (f["range_atr"] >= 1.50) & (d165 <= 0.175) & (d["ema50"] > d["ema200"])
-        comp_l = valid & f["bull"] & (f["compression"] <= 0.70) & (f["bull_atr"] >= 1.00) & (f["range_atr"] >= 1.50) & (C > f["high"][5]) & (h4["close"] > h4["ema100"])
-        union=[]
-        for i in sorted(set(idx_from_mask(core_l)) | set(idx_from_mask(comp_l))):
-            if core_l[i]: union.append((i,"CORE_EMA50_REGIME_BR170",5.00))
-            elif comp_l[i]: union.append((i,"COMPLEMENT_H4_COMPRESSION_BREAKOUT",5.25))
-
-        d120=np.abs(H-f["high"][120])/A
-        core_s = valid & f["bear"] & (H > f["prev_high"]) & (L < f["prev_low"]) & (f["bear_atr"] >= 0.75) & (f["close_loc"] <= 0.35) & (d120 <= 0.05) & (h4["close"] < h4["ema100"])
-        p20=f["high"][20]
-        comp_s = valid & f["bear"] & (H > p20) & (C < p20) & (f["bear_atr"] >= 1.25) & (f["close_loc"] <= 0.40) & (f["uwb"] >= 0.25) & (h1["close"] < h1["ema100"])
-        return {
-            "USD_CAD_M15_LONG": {"side":"BUY","mode":"priority_union","signals":union},
-            "USD_CAD_M15_SHORT": {"side":"SELL","mode":"overlay","core_signals":[(i,"CORE_OUTSIDE_H4EMA100",4.00) for i in idx_from_mask(core_s)],"comp_signals":[(i,"COMPLEMENT_HIGH_SWEEP_H1EMA100",3.50) for i in idx_from_mask(comp_s)]},
-        }
-
-    if pair == "EUR_GBP":
-        h1=htf["H1"]
-        p60=f["low"][60]
-        core_l = valid & f["bull"] & (f["bull_atr"] >= 1.20) & (L < p60) & (C > f["prev_high"]) & (f["lwb"] >= 0.25) & (f["mom4"] <= -1.25) & np.isin(f["ny_hour"],[1,2,3])
-        d165=np.abs(L-f["low"][165])/A
-        comp_l = valid & f["exact_bull"] & (f["bull_br"] >= 1.20) & (f["bull_atr"] >= 1.10) & (d165 <= 0.20) & np.isin(f["london_hour"],[3,4,5,6,7])
-
-        p120=f["high"][120]
-        core_s = valid & f["bear"] & (H > p120) & (C < p120) & (f["bear_atr"] >= 1.25) & (f["close_loc"] <= 0.20) & (f["uwb"] >= 0.40) & (f["london_weekday"] != 2)
-        d100=np.abs(H-f["high"][100])/A
-        comp_s = valid & f["exact_bear"] & (f["bear_br"] >= 1.60) & (f["bear_atr"] >= 1.00) & (d100 <= 0.15) & (h1["close"] < h1["ema100"])
-        return {
-            "EUR_GBP_M15_LONG": {"side":"BUY","mode":"overlay","core_signals":[(i,"CORE_SWEEP_DISPLACEMENT",2.75) for i in idx_from_mask(core_l)],"comp_signals":[(i,"COMPLEMENT_LONDON_ENGULF_STRUCTURE",2.25) for i in idx_from_mask(comp_l)]},
-            "EUR_GBP_M15_SHORT": {"side":"SELL","mode":"overlay","core_signals":[(i,"CORE_HIGH_SWEEP_REJECTION",4.50) for i in idx_from_mask(core_s)],"comp_signals":[(i,"COMPLEMENT_BEAR_ENGULF_H1EMA100",2.50) for i in idx_from_mask(comp_s)]},
-        }
-
-    raise KeyError(pair)
-
-
-# ============================================================
-# BACKTEST ENGINE
-# ============================================================
-
-def one_outcome(pair, strategy_id, trigger, side, m15, i, rr, cost_pips):
-    meta=PAIR_META[pair]; tick=meta["tick"]; pip=meta["pip"]
-    sig=m15[i]; ref=sig["close"]
-    if side == "BUY":
-        stop=sig["low"] - 10*tick
-        ref_risk=ref-stop
-        if ref_risk <= 0: return None
-        target=ref + rr*ref_risk
-        fill=ref + cost_pips*pip
-        actual_risk=fill-stop
-    else:
-        stop=sig["high"] + 10*tick
-        ref_risk=stop-ref
-        if ref_risk <= 0: return None
-        target=ref - rr*ref_risk
-        fill=ref - cost_pips*pip
-        actual_risk=stop-fill
-    if actual_risk <= 0: return None
-
-    for j in range(i+1, len(m15)):
-        x=m15[j]
-        hit_stop = x["low"] <= stop if side=="BUY" else x["high"] >= stop
-        hit_target = x["high"] >= target if side=="BUY" else x["low"] <= target
-        if not hit_stop and not hit_target:
-            continue
-        if hit_stop and hit_target:
-            high_closer = abs(x["high"] - x["open"]) < abs(x["open"] - x["low"])
-            if side=="BUY":
-                result="TARGET" if high_closer else "STOP"
-            else:
-                result="STOP" if high_closer else "TARGET"
-        else:
-            result="STOP" if hit_stop else "TARGET"
-        r = -1.0 if result=="STOP" else ((target-fill)/actual_risk if side=="BUY" else (fill-target)/actual_risk)
-        return {
-            "pair":pair, "strategy_id":strategy_id, "trigger":trigger, "side":side,
-            "signal_index":i, "exit_index":j,
-            "signal_time":sig["time"], "exit_time":x["time"],
-            "rr":rr, "reference_entry":ref, "historical_fill":fill,
-            "stop":stop, "target":target, "result":result, "r":float(r),
-            "cost_pips":cost_pips,
-        }
-    return None
-
-
-def run_stream(pair, strategy_id, side, m15, signals, cost_pips):
-    signals=sorted(signals, key=lambda z:z[0])
-    idxs=[z[0] for z in signals]
-    out=[]; p=0
-    while p < len(signals):
-        i, trig, rr = signals[p]
-        tr=one_outcome(pair,strategy_id,trig,side,m15,i,rr,cost_pips)
-        if tr is None:
-            p += 1; continue
-        out.append(tr)
-        # exact exit-candle signal eligible
-        p=bisect.bisect_left(idxs, tr["exit_index"], lo=p+1)
-    return out
-
-
-def overlay(core, comp):
-    core=sorted(core,key=lambda x:x["signal_index"])
-    comp=sorted(comp,key=lambda x:x["signal_index"])
-    accepted=[]; rejected=[]; p=0
-    for tr in comp:
-        s,e=tr["signal_index"],tr["exit_index"]
-        while p<len(core) and core[p]["exit_index"] <= s:
-            p += 1
-        overlaps = p<len(core) and core[p]["signal_index"] < e and core[p]["exit_index"] > s
-        (rejected if overlaps else accepted).append(tr)
-    return sorted(core+accepted,key=lambda x:x["signal_index"]), accepted, rejected
-
-
-def evaluate_strategy(pair, strategy_id, spec, m15, cost_pips):
-    if spec["mode"] in ("single","priority_union"):
-        trades=run_stream(pair,strategy_id,spec["side"],m15,spec["signals"],cost_pips)
-        return trades,{"accepted_complement":0,"rejected_overlap":0}
-    core=run_stream(pair,strategy_id,spec["side"],m15,spec["core_signals"],cost_pips)
-    comp=run_stream(pair,strategy_id,spec["side"],m15,spec["comp_signals"],cost_pips)
-    combined,accepted,rejected=overlay(core,comp)
-    return combined,{"accepted_complement":len(accepted),"rejected_overlap":len(rejected),"core_trades":len(core),"candidate_complement":len(comp)}
-
-
-# ============================================================
-# METRICS
-# ============================================================
-
-def calc_stats(trades, order="signal"):
-    if not trades:
-        return {"trades":0,"winners":0,"losers":0,"win_rate_pct":0.0,"profit_factor":0.0,"total_r":0.0,"expectancy_r":0.0,"max_drawdown_r":0.0,"longest_loss_streak":0}
-    key="signal_time" if order=="signal" else "exit_time"
-    ts=sorted(trades,key=lambda x:(x[key],x["strategy_id"]))
-    rs=[x["r"] for x in ts]
-    pos=sum(x for x in rs if x>0); neg=-sum(x for x in rs if x<0)
-    pf=pos/neg if neg>0 else (999.0 if pos>0 else 0.0)
-    eq=0.0; peak=0.0; dd=0.0; streak=0; maxst=0
-    for r in rs:
-        eq += r; peak=max(peak,eq); dd=min(dd,eq-peak)
-        if r<0: streak+=1; maxst=max(maxst,streak)
-        else: streak=0
-    w=sum(r>0 for r in rs); l=sum(r<0 for r in rs)
-    return {
-        "trades":len(rs),"winners":w,"losers":l,"win_rate_pct":pct(w,len(rs)),
-        "profit_factor":pf,"total_r":sum(rs),"expectancy_r":sum(rs)/len(rs),
-        "max_drawdown_r":dd,"longest_loss_streak":maxst,
-    }
-
-
-def subset(trades,start=None,end=None):
-    return [t for t in trades if (start is None or t["signal_time"]>=start) and (end is None or t["signal_time"]<end)]
-
-
-def stats_row(scope,label,trades,start=None,end=None):
-    s=calc_stats(subset(trades,start,end))
-    return {"scope":scope,"period":label,"start_utc":iso(start) if start else "","end_utc":iso(end) if end else "",**s,
-            "simple_return_pct_at_0_25pct_risk":s["total_r"]*0.25,
-            "simple_return_pct_at_0_50pct_risk":s["total_r"]*0.50,
-            "simple_return_pct_at_0_75pct_risk":s["total_r"]*0.75,
-            "simple_return_pct_at_1pct_risk":s["total_r"]*1.00}
-
-
-def rolling_rows(scope,trades,months,data_start,end_complete_month):
-    rows=[]
-    start_month=month_floor(data_start)
-    cur=start_month
-    while add_months(cur,months) <= end_complete_month:
-        end=add_months(cur,months)
-        s=calc_stats(subset(trades,cur,end))
-        rows.append({"scope":scope,"months":months,"start_utc":iso(cur),"end_utc":iso(end),**s,"simple_return_pct_at_1pct_risk":s["total_r"]})
-        cur=add_months(cur,1)
-    return rows
-
-
-def rolling_summary(rows):
-    grouped=defaultdict(list)
-    for r in rows: grouped[(r["scope"],r["months"])].append(r)
-    out=[]
-    for (scope,m),g in grouped.items():
-        active=[x for x in g if x["trades"]>0]
-        positive=[x for x in active if x["total_r"]>0]
-        pfs=[x["profit_factor"] for x in active if x["profit_factor"]<900]
-        best=max(g,key=lambda x:x["total_r"]) if g else None
-        worst=min(g,key=lambda x:x["total_r"]) if g else None
-        out.append({
-            "scope":scope,"months":m,"windows":len(g),"active_windows":len(active),"zero_trade_windows":len(g)-len(active),
-            "positive_windows":sum(x["total_r"]>0 for x in g),"positive_active_windows":len(positive),
-            "positive_all_windows_pct":pct(sum(x["total_r"]>0 for x in g),len(g)),
-            "positive_active_windows_pct":pct(len(positive),len(active)),
-            "median_r_active":safe_median(x["total_r"] for x in active),"median_pf_active":safe_median(pfs),
-            "median_trades_active":safe_median(x["trades"] for x in active),
-            "worst_r":worst["total_r"] if worst else 0,"worst_start_utc":worst["start_utc"] if worst else "",
-            "best_r":best["total_r"] if best else 0,"best_start_utc":best["start_utc"] if best else "",
-        })
-    return out
-
-
-def calendar_rows(scope,trades,start_year,end_year):
-    out=[]
-    for y in range(start_year,end_year+1):
-        a=datetime(y,1,1,tzinfo=timezone.utc); b=datetime(y+1,1,1,tzinfo=timezone.utc)
-        s=calc_stats(subset(trades,a,b))
-        out.append({"scope":scope,"year":y,"complete_year":y<NOW.year,**s,"simple_return_pct_at_1pct_risk":s["total_r"]})
-    return out
-
-
-def frequency_row(scope,trades,start,end,label):
-    t=subset(trades,start,end)
-    days=max((end-start).total_seconds()/86400.0,1e-9)
-    times=sorted(x["signal_time"] for x in t)
-    gaps=[(b-a).total_seconds()/86400.0 for a,b in zip(times,times[1:])]
-    return {
-        "scope":scope,"period":label,"trades":len(t),"days":days,
-        "trades_per_week":len(t)/(days/7.0),"trades_per_30d":len(t)/(days/30.0),
-        "median_days_between_signals":safe_median(gaps),
-        "max_days_between_signals":max(gaps) if gaps else 0.0,
-    }
-
-
-
-# ============================================================
-# EVENT-DRIVEN EQUITY / COMPOUNDING
-# ============================================================
-
-def _trade_key(t):
-    return (
-        t["strategy_id"],
-        t["pair"],
-        int(t.get("signal_index", -1)),
-        t["signal_time"],
-        t["exit_time"],
-    )
-
-
-def _equity_balance_before(curve_exit_times, curve_balances, ts, starting_balance):
-    """
-    Balance immediately BEFORE events stamped exactly at ts.
-    This makes a [start, end) period include exits at start and exclude exits at end.
-    """
-    j = bisect.bisect_left(curve_exit_times, ts) - 1
-    return curve_balances[j] if j >= 0 else starting_balance
-
-
-def simulate_equity(trades, risk_fraction, starting_balance=100.0):
-    """
-    Event-driven compounding with real concurrency.
-
-    Sizing:
-        risk_cash = realised_equity_at_signal * risk_fraction
-
-    Concurrent positions:
-        each position keeps its own original cash-risk amount until exit.
-        No portfolio risk cap is imposed; this intentionally represents the
-        requested fixed per-trade risk system.
-
-    Event ordering:
-        EXIT before ENTRY at the exact same timestamp.
-        This matches the historical rule that a signal on an exact exit candle
-        is eligible and lets newly freed equity be used for that new signal.
-
-    Equity:
-        balance is realised/closed equity. We do NOT invent intra-trade MTM,
-        because the backtest trade record contains only entry/stop/target/exit.
-        We therefore also report a conservative open-risk floor:
-            realised_equity - sum(open trade cash risks)
-        i.e. the balance if every currently open position instantly lost 1R.
-    """
-    if not trades:
-        return {
-            "summary": {
-                "risk_fraction": risk_fraction,
-                "risk_pct_per_trade": risk_fraction * 100.0,
-                "starting_balance": starting_balance,
-                "ending_balance": starting_balance,
-                "total_return_pct": 0.0,
-                "cagr_pct": 0.0,
-                "max_closed_equity_dd_pct": 0.0,
-                "max_open_risk_floor_dd_pct": 0.0,
-                "max_open_positions": 0,
-                "max_open_risk_cash": 0.0,
-                "max_open_risk_pct_of_realised_equity": 0.0,
-                "trades": 0,
-            },
-            "curve": [],
-            "trade_rows": [],
-            "exit_times": [],
-            "exit_balances": [],
-        }
-
-    trades_sorted = sorted(trades, key=lambda x: (x["signal_time"], x["strategy_id"]))
-    events = []
-    for n, t in enumerate(trades_sorted):
-        key = _trade_key(t) + (n,)
-        events.append((t["signal_time"], 1, t["strategy_id"], key, t))  # entry
-        events.append((t["exit_time"], 0, t["strategy_id"], key, t))    # exit
-    # 0=exit before 1=entry at same timestamp.
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
-
-    balance = float(starting_balance)
-    peak = balance
-    max_closed_dd_pct = 0.0
-    max_open_floor_dd_pct = 0.0
-
-    open_trades = {}
-    open_risk_cash = 0.0
-    max_open_positions = 0
-    max_open_risk_cash = 0.0
-    max_open_risk_pct = 0.0
-
-    curve = []
-    trade_rows = []
-    exit_times = []
-    exit_balances = []
-
-    first_signal = trades_sorted[0]["signal_time"]
-    last_exit = max(t["exit_time"] for t in trades_sorted)
-
-    for ts, event_kind, sid, key, t in events:
-        if event_kind == 0:  # EXIT
-            rec = open_trades.pop(key, None)
-            if rec is None:
-                raise RuntimeError(
-                    f"Equity simulator exit without open trade: {sid} {iso(ts)}"
-                )
-
-            balance_before_exit = balance
-            pnl_cash = rec["risk_cash"] * float(t["r"])
-            balance += pnl_cash
-            open_risk_cash -= rec["risk_cash"]
-            if abs(open_risk_cash) < 1e-12:
-                open_risk_cash = 0.0
-
-            peak = max(peak, balance)
-            closed_dd_pct = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            max_closed_dd_pct = min(max_closed_dd_pct, closed_dd_pct)
-
-            open_risk_pct = (
-                (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
-            )
-            floor_equity = balance - open_risk_cash
-            floor_dd_pct = (
-                ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            )
-            max_open_floor_dd_pct = min(max_open_floor_dd_pct, floor_dd_pct)
-
-            exit_times.append(ts)
-            exit_balances.append(balance)
-
-            trade_rows.append({
-                "risk_pct_per_trade": risk_fraction * 100.0,
-                "pair": t["pair"],
-                "strategy_id": t["strategy_id"],
-                "trigger": t["trigger"],
-                "side": t["side"],
-                "signal_time": iso(t["signal_time"]),
-                "exit_time": iso(t["exit_time"]),
-                "r": t["r"],
-                "result": t["result"],
-                "entry_realised_equity": rec["entry_equity"],
-                "risk_cash": rec["risk_cash"],
-                "pnl_cash": pnl_cash,
-                "balance_before_exit": balance_before_exit,
-                "balance_after_exit": balance,
-                "open_positions_after_exit": len(open_trades),
-                "open_risk_cash_after_exit": open_risk_cash,
-                "open_risk_pct_of_realised_equity_after_exit": open_risk_pct,
-                "closed_equity_drawdown_pct": closed_dd_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd_pct,
-            })
-
-            curve.append({
-                "risk_pct_per_trade": risk_fraction * 100.0,
-                "time_utc": iso(ts),
-                "event": "EXIT",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": closed_dd_pct,
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_pct_of_realised_equity": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd_pct,
-            })
-
-        else:  # ENTRY
-            if balance <= 0:
-                raise RuntimeError(
-                    f"Equity depleted before entry: balance={balance} at {iso(ts)}"
-                )
-            risk_cash = balance * risk_fraction
-            open_trades[key] = {
-                "risk_cash": risk_cash,
-                "entry_equity": balance,
-            }
-            open_risk_cash += risk_cash
-            max_open_positions = max(max_open_positions, len(open_trades))
-            max_open_risk_cash = max(max_open_risk_cash, open_risk_cash)
-
-            open_risk_pct = (
-                (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
-            )
-            max_open_risk_pct = max(max_open_risk_pct, open_risk_pct)
-
-            floor_equity = balance - open_risk_cash
-            floor_dd_pct = (
-                ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            )
-            max_open_floor_dd_pct = min(max_open_floor_dd_pct, floor_dd_pct)
-
-            curve.append({
-                "risk_pct_per_trade": risk_fraction * 100.0,
-                "time_utc": iso(ts),
-                "event": "ENTRY",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": ((balance / peak) - 1.0) * 100.0,
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_pct_of_realised_equity": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd_pct,
-            })
-
-    if open_trades:
-        raise RuntimeError(
-            f"Equity simulator finished with {len(open_trades)} open trades"
-        )
-
-    years = max((last_exit - first_signal).total_seconds() / (365.2425 * 86400.0), 1e-9)
-    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
-    cagr_pct = (
-        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
-        if balance > 0 and starting_balance > 0 else -100.0
-    )
-
-    summary = {
-        "risk_fraction": risk_fraction,
-        "risk_pct_per_trade": risk_fraction * 100.0,
-        "starting_balance": starting_balance,
-        "ending_balance": balance,
-        "ending_multiple": balance / starting_balance if starting_balance else 0.0,
-        "total_return_pct": total_return_pct,
-        "cagr_pct": cagr_pct,
-        "simulation_start_utc": iso(first_signal),
-        "simulation_end_utc": iso(last_exit),
-        "simulation_years": years,
-        "trades": len(trades_sorted),
-        "max_closed_equity_dd_pct": max_closed_dd_pct,
-        "max_open_risk_floor_dd_pct": max_open_floor_dd_pct,
-        "max_open_positions": max_open_positions,
-        "max_open_risk_cash": max_open_risk_cash,
-        "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
-    }
-
-    return {
-        "summary": summary,
-        "curve": curve,
-        "trade_rows": trade_rows,
-        "exit_times": exit_times,
-        "exit_balances": exit_balances,
-    }
-
-
-def equity_period_row(sim, risk_fraction, label, start, end, trades):
-    sb = _equity_balance_before(
-        sim["exit_times"], sim["exit_balances"], start, STARTING_BALANCE
-    )
-    eb = _equity_balance_before(
-        sim["exit_times"], sim["exit_balances"], end, STARTING_BALANCE
-    )
-    tr = [t for t in trades if start <= t["exit_time"] < end]
-    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
-    days = max((end - start).total_seconds() / 86400.0, 1e-9)
-    years = days / 365.2425
-    ann = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0 and years > 0 else 0.0
-    )
-    return {
-        "risk_pct_per_trade": risk_fraction * 100.0,
-        "period": label,
-        "start_utc": iso(start),
-        "end_utc": iso(end),
-        "start_balance": sb,
-        "end_balance": eb,
-        "compounded_return_pct": ret,
-        "annualized_return_pct": ann,
-        "realized_exits": len(tr),
-    }
-
-
-def equity_calendar_rows(sim, risk_fraction, trades, first_active_year, last_year):
-    rows = []
-    for y in range(first_active_year, last_year + 1):
-        a = datetime(y, 1, 1, tzinfo=timezone.utc)
-        nominal_b = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
-        b = min(nominal_b, NOW)
-        if b <= a:
-            continue
-        row = equity_period_row(sim, risk_fraction, str(y), a, b, trades)
-        row["year"] = y
-        row["complete_year"] = nominal_b <= NOW
-        rows.append(row)
-    return rows
-
-
-def equity_calendar_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[r["risk_pct_per_trade"]].append(r)
-
-    out = []
-    for risk_pct, g in grouped.items():
-        complete = [x for x in g if x["complete_year"]]
-        active = [x for x in complete if x["realized_exits"] > 0]
-        positive = [x for x in active if x["compounded_return_pct"] > 0]
-        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        out.append({
-            "risk_pct_per_trade": risk_pct,
-            "completed_years": len(complete),
-            "active_completed_years": len(active),
-            "positive_active_completed_years": len(positive),
-            "positive_active_completed_years_pct": pct(len(positive), len(active)),
-            "average_compounded_return_pct_active_year": (
-                sum(x["compounded_return_pct"] for x in active) / len(active)
-                if active else 0.0
-            ),
-            "median_compounded_return_pct_active_year": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
-            "best_year": best["year"] if best else "",
-            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
-        })
-    return out
-
-
-def equity_rolling_rows(sim, risk_fraction, trades, months, start_month, end_complete_month):
-    rows = []
-    cur = start_month
-    while add_months(cur, months) <= end_complete_month:
-        end = add_months(cur, months)
-        row = equity_period_row(
-            sim, risk_fraction, f"ROLLING_{months}M", cur, end, trades
-        )
-        row["months"] = months
-        rows.append(row)
-        cur = add_months(cur, 1)
-    return rows
-
-
-def equity_rolling_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[(r["risk_pct_per_trade"], r["months"])].append(r)
-
-    out = []
-    for (risk_pct, months), g in grouped.items():
-        active = [x for x in g if x["realized_exits"] > 0]
-        positive = [x for x in active if x["compounded_return_pct"] > 0]
-        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        out.append({
-            "risk_pct_per_trade": risk_pct,
-            "months": months,
-            "windows": len(g),
-            "active_windows": len(active),
-            "zero_exit_windows": len(g) - len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(len(positive), len(active)),
-            "median_compounded_return_pct_active": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "median_realized_exits_active": safe_median(
-                x["realized_exits"] for x in active
-            ),
-            "worst_compounded_return_pct": (
-                worst["compounded_return_pct"] if worst else 0.0
-            ),
-            "worst_start_utc": worst["start_utc"] if worst else "",
-            "best_compounded_return_pct": (
-                best["compounded_return_pct"] if best else 0.0
-            ),
-            "best_start_utc": best["start_utc"] if best else "",
-        })
-    return out
-
-
-# ============================================================
-# PORTFOLIO OVERLAP / MONTHLY
-# ============================================================
-
-def intervals_overlap(a,b):
-    return a["signal_time"] < b["exit_time"] and b["signal_time"] < a["exit_time"]
-
-
-def overlap_rows(strategy_trades):
-    ids=sorted(strategy_trades)
-    out=[]
-    for i,a in enumerate(ids):
-        for b in ids[i+1:]:
-            ta=strategy_trades[a]; tb=strategy_trades[b]
-            count_a=sum(any(intervals_overlap(x,y) for y in tb) for x in ta)
-            count_b=sum(any(intervals_overlap(y,x) for x in ta) for y in tb)
-            same_pair = (ta[0]["pair"] if ta else a.split("_M15")[0]) == (tb[0]["pair"] if tb else b.split("_M15")[0])
-            out.append({"strategy_a":a,"strategy_b":b,"a_trades_overlapping_b":count_a,"b_trades_overlapping_a":count_b,"same_pair":same_pair})
-    return out
-
-
-def concurrency_rows(all_trades):
-    events=[]
-    for t in all_trades:
-        events.append((t["signal_time"],1,t["strategy_id"]))
-        events.append((t["exit_time"],-1,t["strategy_id"]))
-    # End events before starts at same timestamp: exact exit-candle new signal eligible.
-    events.sort(key=lambda z:(z[0],z[1]))
-    active=0; max_active=0; hist=defaultdict(int); last=None
-    for ts,delta,sid in events:
-        if last is not None and ts>last:
-            hist[active] += (ts-last).total_seconds()
-        active += delta; max_active=max(max_active,active); last=ts
-    total=sum(hist.values())
-    rows=[{"metric":"max_concurrent_positions","value":max_active}]
-    for k in sorted(hist):
-        rows.append({"metric":f"pct_time_{k}_positions","value":pct(hist[k],total)})
-    # same-timestamp signals
-    clusters=defaultdict(int)
-    for t in all_trades: clusters[t["signal_time"]]+=1
-    rows.append({"metric":"signal_timestamps_with_2plus_trades","value":sum(v>=2 for v in clusters.values())})
-    rows.append({"metric":"max_same_timestamp_signals","value":max(clusters.values()) if clusters else 0})
-    return rows
-
-
-def monthly_matrix(strategy_trades, start_month, end_month):
-    ids=sorted(strategy_trades)
-    rows=[]; cur=start_month
-    while cur < end_month:
-        nxt=add_months(cur,1); row={"month":cur.strftime("%Y-%m")}
-        for sid in ids:
-            row[sid]=sum(t["r"] for t in strategy_trades[sid] if cur<=t["signal_time"]<nxt)
-        row["PORTFOLIO"]=sum(row[sid] for sid in ids)
-        rows.append(row); cur=nxt
-    return rows
-
-
-def correlation_rows(monthly, ids):
-    cols=ids+["PORTFOLIO"]
-    arr={k:np.array([r[k] for r in monthly],dtype=float) for k in cols}
-    out=[]
-    for a in cols:
-        row={"strategy":a}
-        for b in cols:
-            x,y=arr[a],arr[b]
-            if len(x)<2 or np.std(x)==0 or np.std(y)==0: val=0.0
-            else: val=float(np.corrcoef(x,y)[0,1])
-            row[b]=val
-        out.append(row)
-    return out
-
-
-# ============================================================
-# MAIN RESEARCH
-# ============================================================
-
-def run_research():
-    try:
-        STATUS.update(state="starting",message="Starting exact final-locked M15 portfolio rebuild",progress=1)
-        write_csv(OUT["manifest"],[{**r,"reference_validation_trades":REFERENCE_COUNTS.get(r["strategy_id"],"")} for r in MANIFEST])
-
-        strategy_trades_by_cost={cost:{} for cost in COSTS}
-        strategy_overlay_meta={}
-        coverage=[]
-
-        for pi,pair in enumerate(PAIRS):
-            STATUS.update(state="downloading",message=f"Downloading {pair} M15 + required HTF history",progress=5+pi*11)
-            m15,empty=fetch_history(pair,"M15",START,NOW)
-            if len(m15)<350000:
-                raise RuntimeError(f"Incomplete {pair} M15 history: only {len(m15)} candles; first={iso(m15[0]['time']) if m15 else 'NONE'}; empty_chunks={empty}")
-            if m15[0]["time"] > datetime(2003,1,1,tzinfo=timezone.utc):
-                raise RuntimeError(f"Incomplete {pair} early M15 coverage: first candle {iso(m15[0]['time'])}")
-
-            aligned={}
-            htf_counts={}
-            for gran in PAIR_HTFS[pair]:
-                hs,_=fetch_history(pair,gran,HTF_WARMUP,NOW)
-                htf_counts[gran]=len(hs)
-                if not hs: raise RuntimeError(f"Missing required {pair} {gran} history")
-                aligned[gran]=align_htf([x["time"] for x in m15],htf_state(hs))
-                del hs
-
-            coverage.append({"pair":pair,"requested_start_utc":iso(START),"actual_first_m15_utc":iso(m15[0]["time"]),"actual_last_m15_utc":iso(m15[-1]["time"]),"m15_candles":len(m15),"h1_candles":htf_counts.get("H1",0),"h4_candles":htf_counts.get("H4",0),"daily_candles":htf_counts.get("D",0),"empty_m15_chunks":empty})
-
-            STATUS.update(state="precomputing",message=f"Building {pair} frozen feature cache",progress=9+pi*11)
-            f=build_features(pair,m15,aligned)
-            specs=signal_sets(pair,f)
-
-            for cost in COSTS:
-                for sid,spec in specs.items():
-                    trades,meta=evaluate_strategy(pair,sid,spec,m15,cost)
-                    strategy_trades_by_cost[cost][sid]=trades
-                    if cost==BASELINE_COST:
-                        strategy_overlay_meta[sid]=meta
-
-            del f, aligned, m15, specs
-            gc.collect()
-
-        write_csv(OUT["coverage"],coverage)
-        baseline=strategy_trades_by_cost[BASELINE_COST]
-        ids=[r["strategy_id"] for r in MANIFEST]
-
-        # Parity/reference diagnostics: lower-than-reference is a red flag;
-        # equal or greater can reflect newer signals after validation cutoff.
-        parity=[]
-        for sid in ids:
-            actual=len(baseline[sid]); expected=REFERENCE_COUNTS[sid]
-            parity.append({"strategy_id":sid,"reference_validation_trades":expected,"current_full_history_trades":actual,"status":"PASS_EQUAL" if actual==expected else ("PASS_NEWER_TRADES" if actual>expected else "CHECK_BELOW_REFERENCE"),**strategy_overlay_meta.get(sid,{})})
-        write_csv(OUT["parity"],parity)
-        if any(r["status"]=="CHECK_BELOW_REFERENCE" for r in parity):
-            bad=[r for r in parity if r["status"]=="CHECK_BELOW_REFERENCE"]
-            raise RuntimeError("Strategy reproduction below final reference count: "+json.dumps(bad))
-
-        STATUS.update(state="analyzing",message="Merging 10 final locked strategies",progress=68)
-        portfolio=sorted([t for sid in ids for t in baseline[sid]],key=lambda x:(x["signal_time"],x["strategy_id"]))
-
-        # ------------------------------------------------------------
-        # Event-driven compounded equity analysis at baseline 1-pip cost.
-        # ------------------------------------------------------------
-        STATUS.update(
-            state="analyzing",
-            message="Simulating compounded equity at 0.50%, 0.75% and 1.00% risk",
-            progress=72,
-        )
-        equity_sims = {
-            rf: simulate_equity(portfolio, rf, STARTING_BALANCE)
-            for rf in RISK_LEVELS
-        }
-
-        equity_summary = [equity_sims[rf]["summary"] for rf in RISK_LEVELS]
-        equity_curve = []
-        equity_trades = []
-        equity_periods = []
-        equity_calendar = []
-        equity_rolling = []
-
-        active_start = month_floor(portfolio[0]["signal_time"])
-        first_active_year = portfolio[0]["signal_time"].year
-        equity_period_defs = [
-            ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
-            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-            ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
-            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-            ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-        ]
-        equity_end_complete = month_floor(NOW)
-
-        for rf in RISK_LEVELS:
-            sim = equity_sims[rf]
-            equity_curve.extend(sim["curve"])
-            equity_trades.extend(sim["trade_rows"])
-
-            for label, a, b in equity_period_defs:
-                equity_periods.append(
-                    equity_period_row(sim, rf, label, a, b, portfolio)
-                )
-
-            equity_calendar.extend(
-                equity_calendar_rows(
-                    sim, rf, portfolio, first_active_year, NOW.year
-                )
-            )
-
-            for months in (12, 24, 36):
-                equity_rolling.extend(
-                    equity_rolling_rows(
-                        sim, rf, portfolio, months, active_start, equity_end_complete
-                    )
-                )
-
-        write_csv(OUT["equity_summary"], equity_summary)
-        write_csv(OUT["equity_periods"], equity_periods)
-        write_csv(OUT["equity_calendar"], equity_calendar)
-        write_csv(
-            OUT["equity_calendar_summary"],
-            equity_calendar_summary(equity_calendar),
-        )
-        write_csv(OUT["equity_rolling"], equity_rolling)
-        write_csv(
-            OUT["equity_rolling_summary"],
-            equity_rolling_summary(equity_rolling),
-        )
-        write_csv(OUT["equity_curve"], equity_curve)
-        write_csv(OUT["equity_trades"], equity_trades)
-
-        # Compounded cost stress: same frozen signals/rebuild logic, all
-        # requested cost assumptions x all three risk levels.
-        equity_cost_rows = []
-        for cost in COSTS:
-            pts = sorted(
-                [
-                    t
-                    for sid in ids
-                    for t in strategy_trades_by_cost[cost][sid]
-                ],
-                key=lambda x: (x["signal_time"], x["strategy_id"]),
-            )
-            for rf in RISK_LEVELS:
-                ss = simulate_equity(pts, rf, STARTING_BALANCE)["summary"]
-                equity_cost_rows.append({
-                    "cost_pips": cost,
-                    **ss,
-                })
-        write_csv(OUT["equity_cost_stress"], equity_cost_rows)
-
-        # Strategy summaries / periods / calendars / rolling.
-        strategy_summary=[]; strategy_periods=[]; strategy_calendar=[]; strategy_roll=[]; strategy_cost=[]
-        period_defs=[
-            ("FULL",None,None),
-            ("PRE_2010",None,datetime(2010,1,1,tzinfo=timezone.utc)),
-            ("2010_PLUS",datetime(2010,1,1,tzinfo=timezone.utc),None),
-            ("2018_PLUS",datetime(2018,1,1,tzinfo=timezone.utc),None),
-            ("LAST_10Y",NOW-timedelta(days=365.2425*10),NOW),
-            ("LAST_5Y",NOW-timedelta(days=365.2425*5),NOW),
-            ("LAST_3Y",NOW-timedelta(days=365.2425*3),NOW),
-            ("LAST_2Y",NOW-timedelta(days=365.2425*2),NOW),
-            ("LAST_1Y",NOW-timedelta(days=365.2425),NOW),
-        ]
-        common_start=max(datetime.fromisoformat(r["actual_first_m15_utc"].replace("Z","+00:00")) for r in coverage)
-        end_complete=month_floor(NOW)
-
-        for sid in ids:
-            tr=baseline[sid]; s=calc_stats(tr); se=calc_stats(tr,"exit")
-            strategy_summary.append({"strategy_id":sid,**s,"exit_order_max_drawdown_r":se["max_drawdown_r"],"contribution_pct_of_portfolio_r":0.0})
-            for label,a,b in period_defs: strategy_periods.append(stats_row(sid,label,tr,a,b))
-            strategy_calendar.extend(calendar_rows(sid,tr,START.year,NOW.year))
-            for m in (12,24,36): strategy_roll.extend(rolling_rows(sid,tr,m,common_start,end_complete))
-            for cost in COSTS:
-                ss=calc_stats(strategy_trades_by_cost[cost][sid])
-                strategy_cost.append({"strategy_id":sid,"cost_pips":cost,**ss})
-
-        port_stats=calc_stats(portfolio); port_exit=calc_stats(portfolio,"exit")
-        for r in strategy_summary:
-            r["contribution_pct_of_portfolio_r"]=pct(r["total_r"],port_stats["total_r"])
-        write_csv(OUT["strategy_summary"],strategy_summary)
-        write_csv(OUT["strategy_periods"],strategy_periods)
-        write_csv(OUT["strategy_calendar"],strategy_calendar)
-        write_csv(OUT["strategy_rolling"],strategy_roll)
-        write_csv(OUT["strategy_rolling_summary"],rolling_summary(strategy_roll))
-        write_csv(OUT["strategy_cost"],strategy_cost)
-
-        # Pair summaries.
-        pair_rows=[]
-        for pair in PAIRS:
-            ts=[t for t in portfolio if t["pair"]==pair]
-            s=calc_stats(ts)
-            pair_rows.append({"pair":pair,**s,"contribution_pct_of_portfolio_r":pct(s["total_r"],port_stats["total_r"])})
-        write_csv(OUT["pair_summary"],pair_rows)
-
-        # Portfolio headline + periods.
-        write_csv(OUT["portfolio_summary"],[{"scope":"PORTFOLIO","strategies":len(ids),"pairs":len(PAIRS),**port_stats,"signal_order_max_drawdown_r":port_stats["max_drawdown_r"],"exit_order_max_drawdown_r":port_exit["max_drawdown_r"],"simple_full_return_pct_at_1pct_risk":port_stats["total_r"]}])
-        write_csv(OUT["portfolio_periods"],[stats_row("PORTFOLIO",label,portfolio,a,b) for label,a,b in period_defs])
-
-        # Portfolio cost stress.
-        pc=[]
-        for cost in COSTS:
-            pts=sorted([t for sid in ids for t in strategy_trades_by_cost[cost][sid]],key=lambda x:(x["signal_time"],x["strategy_id"]))
-            ss=calc_stats(pts); ee=calc_stats(pts,"exit")
-            pc.append({"cost_pips":cost,**ss,"exit_order_max_drawdown_r":ee["max_drawdown_r"]})
-        write_csv(OUT["portfolio_cost"],pc)
-
-        # Portfolio calendar / rolling.
-        write_csv(OUT["portfolio_calendar"],calendar_rows("PORTFOLIO",portfolio,START.year,NOW.year))
-        pr=[]
-        for m in (12,24,36): pr.extend(rolling_rows("PORTFOLIO",portfolio,m,common_start,end_complete))
-        write_csv(OUT["portfolio_rolling"],pr)
-        write_csv(OUT["portfolio_rolling_summary"],rolling_summary(pr))
-
-        STATUS.update(state="analyzing",message="Calculating trade frequency, monthly correlation and concurrency",progress=82)
-        # Frequency by portfolio, pair and strategy across useful trailing windows.
-        freq=[]
-        freq_periods=[
-            ("FULL",common_start,NOW),
-            ("LAST_10Y",NOW-timedelta(days=365.2425*10),NOW),
-            ("LAST_5Y",NOW-timedelta(days=365.2425*5),NOW),
-            ("LAST_3Y",NOW-timedelta(days=365.2425*3),NOW),
-            ("LAST_2Y",NOW-timedelta(days=365.2425*2),NOW),
-            ("LAST_1Y",NOW-timedelta(days=365.2425),NOW),
-        ]
-        scopes={"PORTFOLIO":portfolio}
-        scopes.update({sid:baseline[sid] for sid in ids})
-        scopes.update({pair:[t for t in portfolio if t["pair"]==pair] for pair in PAIRS})
-        for scope,tr in scopes.items():
-            for label,a,b in freq_periods: freq.append(frequency_row(scope,tr,a,b,label))
-        write_csv(OUT["frequency"],freq)
-
-        monthly=monthly_matrix(baseline,month_floor(common_start),month_floor(NOW))
-        write_csv(OUT["monthly"],monthly)
-        write_csv(OUT["correlation"],correlation_rows(monthly,ids))
-        write_csv(OUT["overlap"],overlap_rows(baseline))
-        write_csv(OUT["concurrency"],concurrency_rows(portfolio))
-
-        # All baseline trades, serializable timestamps.
-        trade_rows=[]
-        for t in portfolio:
-            r=dict(t); r["signal_time"]=iso(r["signal_time"]); r["exit_time"]=iso(r["exit_time"])
-            trade_rows.append(r)
-        write_csv(OUT["trades"],trade_rows)
-
-        write_csv(OUT["notes"],[
-            {"item":"Frozen rules","value":"NO optimization is performed. All 10 strategy definitions are the final full-history locks listed in manifest."},
-            {"item":"Portfolio concurrency","value":"Pyramiding0 is enforced per strategy; different strategy IDs may overlap, including opposite directions on one pair. Concurrency is reported, not suppressed."},
-            {"item":"R aggregation","value":"Combined R is arithmetic across trades, treating each trade as one independent risk unit. simple_return_pct_at_1pct_risk = total_R × 1%; it is not an equity-compounded return when trades overlap."},
-            {"item":"Drawdown","value":"Signal-order DD matches the historical strategy-sequence convention; exit-order DD is also exported and is often more intuitive for concurrently open portfolio trades."},
-            {"item":"Rolling windows","value":"12/24/36M windows are month-aligned and complete only; current partial month is excluded from rolling-window endpoints."},
-            {"item":"Cost stress","value":"Every strategy is rebuilt at 0.5/1.0/1.5/2.0 pips adverse fill; signal rules are unchanged."},
-            {"item":"EURUSD legacy warning","value":"Old EURUSD files in Library are superseded. This runner uses the later full-history locks: LONG BR1.20/body1.00/no hour exclusion; SHORT BR1.10/body1.30/range1.70/S60D.225/NY02-03/no weekday."},
-            {"item":"USDJPY legacy warning","value":"This runner uses final SWEEP30_RR4.00 + completed H1 ATR ratio>=0.80 for USDJPY LONG, not the older any-20/40/60/100 sweep lock."},
-            {"item":"Equity sizing","value":"For compounded simulations, each new trade risks 0.50%, 0.75% or 1.00% of THEN-REALISED equity at signal time. Existing open positions keep their original cash-risk amount."},
-            {"item":"Equity event order","value":"At the same timestamp, exits are processed before new entries, matching exact exit-candle signal eligibility."},
-            {"item":"Equity drawdown","value":"max_closed_equity_dd_pct is based on realised exits only. Because intra-trade mark-to-market is not reconstructed, max_open_risk_floor_dd_pct is also exported as a conservative floor assuming every currently open trade instantly loses its full 1R cash risk."},
-            {"item":"No portfolio risk cap","value":"Different locked strategies may overlap exactly as in the portfolio test. The compounding simulation does not suppress trades or cap aggregate open risk; it reports the resulting concurrent cash risk."},
-            {"item":"Equity rolling windows","value":"Compounded rolling 12/24/36M returns start from the month of the first actual portfolio trade, avoiding the pre-signal 2002-2004 zero-history distortion."},
-        ])
-
-        STATUS.update(state="packaging",message="Building one ZIP results bundle",progress=95)
-        with zipfile.ZipFile(BUNDLE,"w",compression=zipfile.ZIP_DEFLATED) as z:
-            for p in OUT.values():
-                if os.path.exists(p): z.write(p,arcname=os.path.basename(p))
-        STATUS.update(state="complete",message="M15 final locked 10-strategy portfolio + equity analysis complete",progress=100,results=BUNDLE,portfolio_trades=len(portfolio),portfolio_total_r=port_stats["total_r"],portfolio_pf=port_stats["profit_factor"])
-    except Exception as e:
-        import traceback
-        STATUS.update(state="error",message=str(e),error_type=type(e).__name__,traceback=traceback.format_exc(),progress=STATUS.get("progress",0))
-
-
-
-# ============================================================
-# H1 + M15 20-STRATEGY COMBINED PORTFOLIO LAYER
-# ============================================================
-#
-# READ ONLY. NEVER SENDS ORDERS.
-#
-# H1 authority:
-#   strategy_probe(6).py SHA256:
-#   4ec3b8870fb085eb842fdf85e60681b81968b300efa1a9e1ab677a1d242d5a65
-#
-# Executor reference:
-#   app(7).py SHA256:
-#   14d9aa2c555f7809efd8b8f03a53923c773d47494aaa0c60883d5b54cbfa89d4
-#
-# M15 authority:
-#   exact previously verified M15 portfolio runner SHA256:
-#   703baac7e933c6b5b33c2f5870bbacf6a0d7954b5a5067a313c524c7b8f15df8
-#
-# The H1 strategy dictionaries below were extracted literally from the
-# attached live strategy engine. The H1 historical signal/trade functions
-# below are copied from that same live engine. The short historical trade
-# wrapper comes from the prior final-live H1 portfolio audit whose strategy
-# dictionaries were programmatically verified identical to the attached
-# live engine before this combined file was generated.
-#
-# Baseline costs:
-#   H1  = 5 adverse ticks (the live H1 historical convention)
-#   M15 = 1 adverse pip (the final full-history M15 convention)
-#
-# Portfolio modes:
-#   INDEPENDENT
-#       Every strategy keeps only its own internal pyramiding=0 rule.
-#       Different H1/M15 strategies can overlap, including same instrument.
-#
-#   PAIR_GATE_H1_FIRST
-#       Mimics the current live strategy-engine rule that an already-open
-#       OANDA trade on an instrument blocks any new trade on that instrument.
-#       If H1 and M15 signals occur at the exact same entry timestamp, H1
-#       gets priority. BUY precedes SELL within the same timeframe.
-#
-#   PAIR_GATE_M15_FIRST
-#       Same one-open-trade-per-instrument gate, but M15 gets priority on an
-#       exact H1/M15 tie. This exists because the future combined watcher
-#       scheduling order has not yet been defined.
-#
-# Equity scenarios:
-#   full 3x3 H1-risk x M15-risk matrix:
-#       0.50%, 0.75%, 1.00% per new trade.
-#
-# Sizing:
-#   risk is based on then-REALISED equity because candle-only backtests do
-#   not reconstruct mark-to-market NAV between exits. The actual executor
-#   uses current OANDA NAV. Open positions retain their entry cash-risk.
-# ============================================================
-
-# H1 globals expected by the exact copied live functions.
-NY_TZ = NY
-DAILY_ALIGNMENT_HOUR = 17
-DAILY_ALIGNMENT_TIMEZONE = "America/New_York"
-BACKTEST_SLIPPAGE_TICKS = 5
-
-STRATEGIES = {'EUR_USD': {'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'EURUSD',
-             'minimum_body_ratio': 1.0,
-             'strong_close_enabled': True,
-             'minimum_close_location': 0.6,
-             'lower_wick_filter_enabled': False,
-             'minimum_lower_wick_body_ratio': None,
-             'atr_length': 14,
-             'structure_lookback': 15,
-             'maximum_distance_atr': 0.1,
-             'minimum_range_enabled': False,
-             'minimum_range_atr': None,
-             'fast_daily_ema': 1,
-             'slow_daily_ema': 1,
-             'daily_close_ema': None,
-             'require_daily_close_above_slow': False,
-             'require_daily_fast_above_slow': False,
-             'minimum_daily_atr_ratio_50': None,
-             'session_timezone': 'America/New_York',
-             'session_mode': 'include',
-             'session_start_hour': 8,
-             'session_end_hour': 16,
-             'excluded_weekdays': {1, 4},
-             'reward_risk': 3.5,
-             'stop_buffer_ticks': 10},
- 'GBP_USD': {'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'GBPUSD',
-             'minimum_body_ratio': 1.4,
-             'strong_close_enabled': True,
-             'minimum_close_location': 0.65,
-             'lower_wick_filter_enabled': False,
-             'minimum_lower_wick_body_ratio': None,
-             'atr_length': 14,
-             'structure_lookback': 20,
-             'maximum_distance_atr': 0.25,
-             'minimum_range_enabled': True,
-             'minimum_range_atr': 0.9,
-             'fast_daily_ema': 50,
-             'slow_daily_ema': 70,
-             'require_daily_close_above_slow': True,
-             'require_daily_fast_above_slow': True,
-             'session_timezone': 'America/New_York',
-             'session_mode': 'exclude',
-             'session_start_hour': 14,
-             'session_end_hour': 19,
-             'excluded_weekdays': set(),
-             'reward_risk': 4.25,
-             'stop_buffer_ticks': 10},
- 'USD_JPY': {'tick_size': 0.001,
-             'price_precision': 3,
-             'signal_id_prefix': 'USDJPY',
-             'minimum_body_ratio': 1.0,
-             'strong_close_enabled': True,
-             'minimum_close_location': 0.6,
-             'lower_wick_filter_enabled': False,
-             'minimum_lower_wick_body_ratio': None,
-             'atr_length': 14,
-             'minimum_body_atr': 0.8,
-             'structure_lookback': 100,
-             'maximum_distance_atr': 0.55,
-             'minimum_range_enabled': False,
-             'minimum_range_atr': None,
-             'fast_daily_ema': 1,
-             'slow_daily_ema': 1,
-             'daily_close_ema': None,
-             'require_daily_close_above_slow': False,
-             'require_daily_fast_above_slow': False,
-             'minimum_daily_atr_ratio_50': None,
-             'session_timezone': 'America/New_York',
-             'session_mode': 'all',
-             'session_start_hour': None,
-             'session_end_hour': None,
-             'excluded_weekdays': set(),
-             'reward_risk': 3.75,
-             'stop_buffer_ticks': 10},
- 'USD_CAD': {'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'USDCAD',
-             'minimum_body_ratio': 1.1,
-             'strong_close_enabled': False,
-             'minimum_close_location': 0.75,
-             'lower_wick_filter_enabled': True,
-             'minimum_lower_wick_body_ratio': 0.2,
-             'atr_length': 14,
-             'minimum_body_atr': 0.6,
-             'structure_lookback': 40,
-             'maximum_distance_atr': 0.05,
-             'minimum_range_enabled': True,
-             'minimum_range_atr': 1.2,
-             'fast_daily_ema': 1,
-             'slow_daily_ema': 1,
-             'require_daily_close_above_slow': False,
-             'require_daily_fast_above_slow': False,
-             'minimum_daily_atr_ratio_50': 0.95,
-             'session_timezone': 'America/New_York',
-             'session_mode': 'all',
-             'session_start_hour': None,
-             'session_end_hour': None,
-             'excluded_weekdays': set(),
-             'reward_risk': 3.5,
-             'stop_buffer_ticks': 10},
- 'EUR_GBP': {'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'EURGBP',
-             'minimum_body_ratio': 1.0,
-             'strong_close_enabled': False,
-             'minimum_close_location': 0.75,
-             'lower_wick_filter_enabled': False,
-             'minimum_lower_wick_body_ratio': None,
-             'atr_length': 14,
-             'minimum_body_atr': 1.1,
-             'structure_lookback': 30,
-             'maximum_distance_atr': 0.075,
-             'minimum_range_enabled': True,
-             'minimum_range_atr': 1.4,
-             'daily_close_ema': 200,
-             'fast_daily_ema': 20,
-             'slow_daily_ema': 150,
-             'require_daily_close_above_slow': False,
-             'require_daily_fast_above_slow': True,
-             'minimum_daily_atr_ratio_50': None,
-             'session_timezone': 'Europe/London',
-             'session_mode': 'all',
-             'session_start_hour': None,
-             'session_end_hour': None,
-             'excluded_weekdays': set(),
-             'reward_risk': 3.0,
-             'stop_buffer_ticks': 10}}
-SHORT_STRATEGIES = {'EUR_USD': {'strategy_name': 'BALANCED_815',
-             'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'EURUSDSHORT',
-             'minimum_body_ratio': 1.1,
-             'maximum_close_location': 0.275,
-             'atr_length': 14,
-             'structure_lookback': 55,
-             'maximum_distance_atr': 0.35,
-             'fast_daily_ema': 85,
-             'slow_daily_ema': 100,
-             'require_daily_fast_below_slow': True,
-             'minimum_daily_ema_separation_atr': 0.05,
-             'maximum_slow_ema_slope_5d_atr': None,
-             'minimum_daily_atr_ratio_50': None,
-             'session_timezone': 'America/New_York',
-             'excluded_hours': {2, 10, 12, 14},
-             'excluded_weekdays': set(),
-             'reward_risk': 4.0,
-             'stop_buffer_ticks': 10},
- 'GBP_USD': {'strategy_name': 'GBPUSD_FINAL_SHORT',
-             'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'GBPUSDSHORT',
-             'minimum_body_ratio': 1.0,
-             'maximum_close_location': None,
-             'atr_length': 14,
-             'structure_lookback': 70,
-             'maximum_distance_atr': 0.175,
-             'fast_daily_ema': 40,
-             'slow_daily_ema': 100,
-             'require_daily_fast_below_slow': True,
-             'minimum_daily_ema_separation_atr': None,
-             'maximum_slow_ema_slope_5d_atr': -0.05,
-             'minimum_daily_atr_ratio_50': 0.8,
-             'session_timezone': 'America/New_York',
-             'excluded_hours': {3, 15},
-             'excluded_weekdays': set(),
-             'reward_risk': 2.5,
-             'stop_buffer_ticks': 10},
- 'USD_JPY': {'strategy_name': 'USDJPY_FINAL_SHORT',
-             'tick_size': 0.001,
-             'price_precision': 3,
-             'signal_id_prefix': 'USDJPYSHORT',
-             'minimum_body_ratio': 1.45,
-             'maximum_close_location': None,
-             'atr_length': 14,
-             'structure_lookback': 90,
-             'maximum_distance_atr': 0.5,
-             'fast_daily_ema': 90,
-             'slow_daily_ema': 90,
-             'require_daily_fast_below_slow': False,
-             'minimum_daily_ema_separation_atr': None,
-             'maximum_slow_ema_slope_5d_atr': None,
-             'minimum_daily_atr_ratio_50': None,
-             'session_timezone': 'America/New_York',
-             'excluded_hours': {1, 5, 6, 10, 11},
-             'excluded_weekdays': set(),
-             'reward_risk': 2.5,
-             'stop_buffer_ticks': 10},
- 'USD_CAD': {'strategy_name': 'USDCAD_FINAL_SHORT',
-             'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'USDCADSHORT',
-             'minimum_body_ratio': 1.4,
-             'maximum_close_location': None,
-             'atr_length': 14,
-             'structure_lookback': 60,
-             'maximum_distance_atr': 0.25,
-             'fast_daily_ema': 300,
-             'slow_daily_ema': 300,
-             'require_daily_fast_below_slow': False,
-             'minimum_daily_ema_separation_atr': None,
-             'maximum_slow_ema_slope_5d_atr': None,
-             'minimum_daily_atr_ratio_50': None,
-             'momentum_lookback_bars': 24,
-             'minimum_upward_momentum_atr': 0.5,
-             'minimum_signal_range_atr': 0.9,
-             'maximum_stop_size_atr': 1.6,
-             'session_timezone': 'America/New_York',
-             'excluded_hours': {18},
-             'excluded_weekdays': set(),
-             'reward_risk': 3.25,
-             'stop_buffer_ticks': 10},
- 'EUR_GBP': {'strategy_name': 'EURGBP_CONFIRMED_SHORT',
-             'tick_size': 1e-05,
-             'price_precision': 5,
-             'signal_id_prefix': 'EURGBPSHORT',
-             'minimum_body_ratio': 1.0,
-             'maximum_close_location': 0.2,
-             'atr_length': 14,
-             'structure_lookback': 90,
-             'maximum_distance_atr': 0.075,
-             'fast_daily_ema': 1,
-             'slow_daily_ema': 1,
-             'require_daily_close_below_slow': False,
-             'require_daily_fast_below_slow': False,
-             'minimum_daily_ema_separation_atr': None,
-             'maximum_slow_ema_slope_5d_atr': None,
-             'minimum_daily_atr_ratio_50': None,
-             'momentum_requirements': {12: 0.25, 48: 1.0},
-             'minimum_signal_range_atr': 1.1,
-             'maximum_stop_size_atr': 2.5,
-             'minimum_upper_wick_body_ratio': 0.1,
-             'minimum_h1_atr_ratio_50': 0.8,
-             'session_timezone': 'America/New_York',
-             'excluded_hours': {9},
-             'excluded_weekdays': set(),
-             'reward_risk': 3.0,
-             'stop_buffer_ticks': 10}}
-
-H1_REFERENCE_FULL_TRADES = 1314
-M15_REFERENCE_PORTFOLIO_TRADES = 1021
-
-H1_DATA_WARMUP = START - timedelta(days=120)
-H1_DAILY_WARMUP = START - timedelta(days=1500)
-
-COMBINED_RISK_LEVELS = [0.0050, 0.0075, 0.0100]
-COST_MULTIPLIERS = [0.50, 1.00, 1.50, 2.00]
-
-COMBINED_OUT = {
-    "source_audit": "h1_m15_20_source_audit.csv",
-    "manifest": "h1_m15_20_manifest.csv",
-    "coverage": "h1_m15_20_coverage.csv",
-    "parity": "h1_m15_20_parity.csv",
-    "strategy_summary": "h1_m15_20_strategy_summary.csv",
-    "timeframe_summary": "h1_m15_20_timeframe_summary.csv",
-    "pair_summary": "h1_m15_20_pair_summary.csv",
-    "mode_summary": "h1_m15_20_portfolio_mode_summary.csv",
-    "periods": "h1_m15_20_periods.csv",
-    "calendar": "h1_m15_20_calendar_years.csv",
-    "rolling": "h1_m15_20_rolling.csv",
-    "rolling_summary": "h1_m15_20_rolling_summary.csv",
-    "frequency": "h1_m15_20_trade_frequency.csv",
-    "monthly": "h1_m15_20_monthly_by_strategy.csv",
-    "correlation": "h1_m15_20_monthly_correlation.csv",
-    "overlap": "h1_m15_20_overlap.csv",
-    "concurrency": "h1_m15_20_concurrency.csv",
-    "pair_gate_rejections": "h1_m15_20_pair_gate_rejections.csv",
-    "cost_stress": "h1_m15_20_cost_stress.csv",
-    "equity_matrix": "h1_m15_20_equity_risk_matrix.csv",
-    "equity_periods": "h1_m15_20_equity_periods.csv",
-    "equity_calendar": "h1_m15_20_equity_calendar_years.csv",
-    "equity_calendar_summary": "h1_m15_20_equity_calendar_summary.csv",
-    "equity_rolling": "h1_m15_20_equity_rolling.csv",
-    "equity_rolling_summary": "h1_m15_20_equity_rolling_summary.csv",
-    "equity_key_curve": "h1_m15_20_equity_key_curves.csv",
-    "equity_key_trades": "h1_m15_20_equity_key_trades.csv",
-    "trades_independent": "h1_m15_20_trades_independent.csv",
-    "trades_pair_gate_h1_first": "h1_m15_20_trades_pair_gate_h1_first.csv",
-    "trades_pair_gate_m15_first": "h1_m15_20_trades_pair_gate_m15_first.csv",
-    "notes": "h1_m15_20_notes.csv",
-}
-COMBINED_BUNDLE = "H1_M15_FINAL_20_STRATEGY_PORTFOLIO_ANALYSIS_RESULTS.zip"
-
-COMBINED_STATUS = {
-    "state": "not_started",
-    "message": "H1 + M15 20-strategy analysis not started",
-    "orders_supported": False,
-    "trading_enabled": False,
-    "progress": 0,
-}
-
-# ----------------------------------------------------------------
-# Exact functions copied from attached live H1 strategy engine.
-# ----------------------------------------------------------------
-
-def strategy_timezone(
-    config
-):
-
-    return ZoneInfo(
-        config[
-            "session_timezone"
-        ]
-    )
-
-
-def round_price(
-    value,
-    config
-):
-
-    return round(
-        value,
-        config[
-            "price_precision"
-        ]
-    )
-
-
-def ema_series(
-    values,
-    length
-):
-
-    if len(values) < length:
-
-        raise ValueError(
-            f"Not enough values "
-            f"for EMA{length}"
-        )
-
-    result = [
-        None
-    ] * len(
-        values
-    )
-
-    multiplier = (
-        2.0
-        / (
-            length + 1.0
-        )
-    )
-
-    initial = (
-        sum(
-            values[
-                :length
-            ]
-        )
-        / length
-    )
-
-    result[
-        length - 1
-    ] = initial
-
-    previous = initial
-
-    for index in range(
-        length,
-        len(values)
-    ):
-
-        current = (
-            (
-                values[index]
-                - previous
-            )
-            * multiplier
-            + previous
-        )
-
-        result[
-            index
-        ] = current
-
-        previous = current
-
-    return result
-
-
-def true_ranges(
-    candles
-):
-
-    values = []
-
-    for index, candle in enumerate(
-        candles
-    ):
-
-        if index == 0:
-
-            tr = (
-                candle["high"]
-                - candle["low"]
-            )
-
-        else:
-
-            previous_close = (
-                candles[
-                    index - 1
-                ]["close"]
-            )
-
-            tr = max(
-
-                candle["high"]
-                - candle["low"],
-
-                abs(
-                    candle["high"]
-                    - previous_close
-                ),
-
-                abs(
-                    candle["low"]
-                    - previous_close
-                )
-            )
-
-        values.append(
-            tr
-        )
-
-    return values
-
-
-def rma_series(
-    values,
-    length
-):
-
-    if len(values) < length:
-
-        raise ValueError(
-            f"Not enough values "
-            f"for RMA{length}"
-        )
-
-    result = [
-        None
-    ] * len(
-        values
-    )
-
-    initial = (
-        sum(
-            values[
-                :length
-            ]
-        )
-        / length
-    )
-
-    result[
-        length - 1
-    ] = initial
-
-    previous = initial
-
-    for index in range(
-        length,
-        len(values)
-    ):
-
-        current = (
-            (
-                previous
-                * (
-                    length - 1
-                )
-            )
-            + values[index]
-        ) / length
-
-        result[
-            index
-        ] = current
-
-        previous = current
-
-    return result
-
-
-def atr_series(
-    candles,
-    length
-):
-
-    return rma_series(
-        true_ranges(
-            candles
-        ),
-        length
-    )
-
-
-def current_daily_start(
-    timestamp_utc
-):
-
-    ny_time = (
-        timestamp_utc
-        .astimezone(
-            NY_TZ
-        )
-    )
-
-    candidate = (
-        ny_time.replace(
-
-            hour=
-                DAILY_ALIGNMENT_HOUR,
-
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-    )
-
-    if ny_time < candidate:
-
-        candidate = (
-            candidate
-            - timedelta(
-                days=1
-            )
-        )
-
-    return candidate.astimezone(
-        timezone.utc
-    )
-
-
-def build_daily_state(
-    daily,
-    config
-):
-
-    closes = [
-        candle["close"]
-        for candle in daily
-    ]
-
-    fast_length = (
-        config[
-            "fast_daily_ema"
-        ]
-    )
-
-    slow_length = (
-        config[
-            "slow_daily_ema"
-        ]
-    )
-
-    if fast_length is not None:
-
-        fast_ema = ema_series(
-            closes,
-            fast_length
-        )
-
-    else:
-
-        fast_ema = [
-            None
-        ] * len(
-            closes
-        )
-
-    slow_ema = ema_series(
-        closes,
-        slow_length
-    )
-
-    # Optional independent daily-close EMA regime for long
-    # strategies. Existing longs leave this unset.
-    daily_close_ema_length = config.get(
-        "daily_close_ema"
-    )
-
-    if daily_close_ema_length is not None:
-
-        daily_close_ema = ema_series(
-            closes,
-            daily_close_ema_length
-        )
-
-    else:
-
-        daily_close_ema = [
-            None
-        ] * len(
-            closes
-        )
-
-    # Daily volatility regime support for long strategies.
-    # Existing longs ignore this unless
-    # minimum_daily_atr_ratio_50 is configured.
-    daily_atr = atr_series(
-        daily,
-        14
-    )
-
-    daily_atr_sma50 = [
-        None
-    ] * len(
-        daily_atr
-    )
-
-    rolling_sum = 0.0
-    rolling_values = []
-
-    for index, value in enumerate(
-        daily_atr
-    ):
-
-        if value is None:
-            rolling_values.append(
-                None
-            )
-            continue
-
-        rolling_values.append(
-            value
-        )
-        rolling_sum += value
-
-        if len(
-            rolling_values
-        ) > 50:
-
-            removed = (
-                rolling_values[
-                    -51
-                ]
-            )
-
-            if removed is not None:
-                rolling_sum -= removed
-
-        window = (
-            rolling_values[
-                -50:
-            ]
-        )
-
-        if (
-            len(
-                window
-            ) == 50
-            and
-            all(
-                item is not None
-                for item in window
-            )
-        ):
-
-            daily_atr_sma50[
-                index
-            ] = (
-                rolling_sum
-                / 50.0
-            )
-
-    result = []
-
-    for index, candle in enumerate(
-        daily
-    ):
-
-        daily_atr_ratio_50 = None
-
-        # Match the short/research warm-up convention:
-        # ATR14 seed + 50 valid ATR observations.
-        if (
-            index >= 63
-            and
-            daily_atr[
-                index
-            ] is not None
-            and
-            daily_atr_sma50[
-                index
-            ] is not None
-            and
-            daily_atr_sma50[
-                index
-            ] > 0
-        ):
-
-            daily_atr_ratio_50 = (
-                daily_atr[
-                    index
-                ]
-                / daily_atr_sma50[
-                    index
-                ]
-            )
-
-        result.append({
-
-            "time":
-                candle["time"],
-
-            "close":
-                candle["close"],
-
-            "fast_ema":
-                fast_ema[
-                    index
-                ],
-
-            "slow_ema":
-                slow_ema[
-                    index
-                ],
-
-            "daily_close_ema":
-                daily_close_ema[
-                    index
-                ],
-
-            "daily_atr":
-                daily_atr[
-                    index
-                ],
-
-            "daily_atr_ratio_50":
-                daily_atr_ratio_50
-        })
-
-    return result
-
-
-def previous_daily_values(
-    signal_time,
-    daily_state,
-    config
-):
-
-    session_start = (
-        current_daily_start(
-            signal_time
-        )
-    )
-
-    selected = None
-
-    require_fast = (
-        config[
-            "require_daily_fast_above_slow"
-        ]
-    )
-
-    require_daily_close_ema = (
-        config.get(
-            "daily_close_ema"
-        )
-        is not None
-    )
-
-    for row in daily_state:
-
-        slow_ready = (
-            row[
-                "slow_ema"
-            ]
-            is not None
-        )
-
-        fast_ready = (
-            not require_fast
-            or
-            row[
-                "fast_ema"
-            ]
-            is not None
-        )
-
-        daily_close_ema_ready = (
-            not require_daily_close_ema
-            or
-            row[
-                "daily_close_ema"
-            ]
-            is not None
-        )
-
-        if (
-            row["time"]
-            < session_start
-            and
-            slow_ready
-            and
-            fast_ready
-            and
-            daily_close_ema_ready
-        ):
-
-            selected = row
-
-        elif (
-            row["time"]
-            >= session_start
-        ):
-
-            break
-
-    return selected
-
-
-def build_short_daily_state(
-    daily,
-    config
-):
-
-    closes = [
-        candle["close"]
-        for candle in daily
-    ]
-
-    fast_ema = ema_series(
-        closes,
-        config[
-            "fast_daily_ema"
-        ]
-    )
-
-    slow_ema = ema_series(
-        closes,
-        config[
-            "slow_daily_ema"
-        ]
-    )
-
-    daily_atr = atr_series(
-        daily,
-        14
-    )
-
-    # 50-day simple average of Daily ATR14.
-    daily_atr_sma50 = [None] * len(daily_atr)
-    rolling_sum = 0.0
-    rolling_values = []
-
-    for index, value in enumerate(daily_atr):
-
-        if value is None:
-            rolling_values.append(None)
-            continue
-
-        rolling_values.append(value)
-        rolling_sum += value
-
-        if len(rolling_values) > 50:
-            removed = rolling_values[-51]
-            if removed is not None:
-                rolling_sum -= removed
-
-        window = rolling_values[-50:]
-
-        if (
-            len(window) == 50
-            and all(
-                item is not None
-                for item in window
-            )
-        ):
-            daily_atr_sma50[index] = (
-                rolling_sum / 50.0
-            )
-
-    result = []
-
-    for index, candle in enumerate(
-        daily
-    ):
-
-        slow_slope_5d_atr = None
-
-        if (
-            index >= 5
-            and slow_ema[index] is not None
-            and slow_ema[index - 5] is not None
-            and daily_atr[index] is not None
-            and daily_atr[index] > 0
-        ):
-            slow_slope_5d_atr = (
-                slow_ema[index]
-                - slow_ema[index - 5]
-            ) / daily_atr[index]
-
-        daily_atr_ratio_50 = None
-
-        # Match the research warmup convention exactly:
-        # ATR14 first becomes valid after its 14-bar seed, then
-        # the 50-day ATR mean is not exposed until index 63.
-        if (
-            index >= 63
-            and daily_atr[index] is not None
-            and daily_atr_sma50[index] is not None
-            and daily_atr_sma50[index] > 0
-        ):
-            daily_atr_ratio_50 = (
-                daily_atr[index]
-                / daily_atr_sma50[index]
-            )
-
-        result.append({
-
-            "time":
-                candle["time"],
-
-            "close":
-                candle["close"],
-
-            "fast_ema":
-                fast_ema[index],
-
-            "slow_ema":
-                slow_ema[index],
-
-            "daily_atr":
-                daily_atr[index],
-
-            "slow_ema_slope_5d_atr":
-                slow_slope_5d_atr,
-
-            "daily_atr_ratio_50":
-                daily_atr_ratio_50
-        })
-
-    return result
-
-
-def previous_short_daily_values(
-    signal_time,
-    daily_state
-):
-
-    session_start = (
-        current_daily_start(
-            signal_time
-        )
-    )
-
-    selected = None
-
-    for row in daily_state:
-
-        ready = (
-            row["fast_ema"] is not None
-            and row["slow_ema"] is not None
-            and row["daily_atr"] is not None
-        )
-
-        if (
-            row["time"] < session_start
-            and ready
-        ):
-            selected = row
-
-        elif row["time"] >= session_start:
-            break
-
-    return selected
-
-
-def local_signal_time(
-    signal_time,
-    config
-):
-
-    return signal_time.astimezone(
-        strategy_timezone(
-            config
-        )
-    )
-
-
-def session_allowed_for(
-    signal_time,
-    config
-):
-
-    mode = (
-        config[
-            "session_mode"
-        ]
-    )
-
-    if mode == "all":
-
-        return True
-
-    local_time = (
-        local_signal_time(
-            signal_time,
-            config
-        )
-    )
-
-    hour = (
-        local_time.hour
-    )
-
-    inside_window = (
-        hour
-        >= config[
-            "session_start_hour"
-        ]
-        and
-        hour
-        < config[
-            "session_end_hour"
-        ]
-    )
-
-    if mode == "include":
-
-        return inside_window
-
-    if mode == "exclude":
-
-        return not inside_window
-
-    raise ValueError(
-        f"Unknown session mode: "
-        f"{mode}"
-    )
-
-
-def weekday_allowed_for(
-    signal_time,
-    config
-):
-
-    local_time = (
-        local_signal_time(
-            signal_time,
-            config
-        )
-    )
-
-    return (
-        local_time.weekday()
-        not in config[
-            "excluded_weekdays"
-        ]
-    )
-
-
-def evaluate_signal_at_index(
-    instrument,
-    h1,
-    atr,
-    index,
-    daily_state
-):
-
-    config = (
-        STRATEGIES[
-            instrument
-        ]
-    )
-
-    minimum_index = max(
-
-        config[
-            "atr_length"
-        ],
-
-        config[
-            "structure_lookback"
-        ]
-    )
-
-    if index < minimum_index:
-
-        return None
-
-    signal = (
-        h1[index]
-    )
-
-    previous = (
-        h1[
-            index - 1
-        ]
-    )
-
-    current_atr = (
-        atr[index]
-    )
-
-    if current_atr is None:
-
-        return None
-
-    # ==============================================
-    # CANDLE VALUES
-    # ==============================================
-
-    previous_body = abs(
-        previous["close"]
-        - previous["open"]
-    )
-
-    current_body = abs(
-        signal["close"]
-        - signal["open"]
-    )
-
-    signal_range = (
-        signal["high"]
-        - signal["low"]
-    )
-
-    lower_wick = (
-        min(
-            signal["open"],
-            signal["close"]
-        )
-        - signal["low"]
-    )
-
-    close_location = (
-
-        (
-            signal["close"]
-            - signal["low"]
-        )
-        / signal_range
-
-        if signal_range > 0
-
-        else 0.0
-    )
-
-    body_ratio = (
-
-        current_body
-        / previous_body
-
-        if previous_body > 0
-
-        else None
-    )
-
-    body_atr = (
-
-        current_body
-        / current_atr
-
-        if current_atr > 0
-
-        else None
-    )
-
-    # ==============================================
-    # BODY RATIO
-    # ==============================================
-
-    body_ratio_allowed = (
-        previous_body > 0
-        and
-        current_body
-        >= (
-            previous_body
-            * config[
-                "minimum_body_ratio"
-            ]
-        )
-    )
-
-    # ==============================================
-    # BULLISH ENGULFING
-    # ==============================================
-
-    bullish_engulfing = (
-
-        previous[
-            "close"
-        ]
-        < previous[
-            "open"
-        ]
-
-        and
-
-        signal[
-            "close"
-        ]
-        > signal[
-            "open"
-        ]
-
-        and
-
-        signal[
-            "open"
-        ]
-        <= previous[
-            "close"
-        ]
-
-        and
-
-        signal[
-            "close"
-        ]
-        >= previous[
-            "open"
-        ]
-
-        and
-
-        body_ratio_allowed
-    )
-
-    # ==============================================
-    # STRONG CLOSE
-    # ==============================================
-
-    if config[
-        "strong_close_enabled"
-    ]:
-
-        strong_close_allowed = (
-            close_location
-            >= config[
-                "minimum_close_location"
-            ]
-        )
-
-    else:
-
-        strong_close_allowed = True
-
-    # ==============================================
-    # LOWER WICK
-    # ==============================================
-
-    if config[
-        "lower_wick_filter_enabled"
-    ]:
-
-        lower_wick_allowed = (
-            lower_wick
-            >= (
-                current_body
-                * config[
-                    "minimum_lower_wick_body_ratio"
-                ]
-            )
-        )
-
-    else:
-
-        lower_wick_allowed = True
-
-    # ==============================================
-    # MINIMUM RANGE
-    # ==============================================
-
-    if config[
-        "minimum_range_enabled"
-    ]:
-
-        minimum_range_allowed = (
-            signal_range
-            >= (
-                current_atr
-                * config[
-                    "minimum_range_atr"
-                ]
-            )
-        )
-
-    else:
-
-        minimum_range_allowed = True
-
-    # ==============================================
-    # MINIMUM BODY / ATR
-    # ==============================================
-
-    minimum_body_atr = config.get(
-        "minimum_body_atr"
-    )
-
-    minimum_body_atr_allowed = (
-
-        True
-
-        if minimum_body_atr is None
-
-        else (
-            body_atr is not None
-            and
-            body_atr >= minimum_body_atr
-        )
-    )
-
-    # ==============================================
-    # STRUCTURE
-    # ==============================================
-
-    lookback = (
-        config[
-            "structure_lookback"
-        ]
-    )
-
-    previous_bars = (
-        h1[
-            index - lookback:
-            index
-        ]
-    )
-
-    previous_lowest_low = min(
-        candle["low"]
-        for candle
-        in previous_bars
-    )
-
-    distance_from_recent_low = (
-        signal["low"]
-        - previous_lowest_low
-    )
-
-    maximum_distance = (
-        current_atr
-        * config[
-            "maximum_distance_atr"
-        ]
-    )
-
-    structure_allowed = (
-        distance_from_recent_low
-        <= maximum_distance
-    )
-
-    # ==============================================
-    # DAILY
-    # ==============================================
-
-    daily = (
-        previous_daily_values(
-            signal["time"],
-            daily_state,
-            config
-        )
-    )
-
-    if daily is None:
-
-        return None
-
-    if config[
-        "require_daily_close_above_slow"
-    ]:
-
-        daily_regime_allowed = (
-            daily["close"]
-            > daily["slow_ema"]
-        )
-
-    else:
-
-        daily_regime_allowed = True
-
-    if config[
-        "require_daily_fast_above_slow"
-    ]:
-
-        daily_alignment_allowed = (
-            daily["fast_ema"]
-            > daily["slow_ema"]
-        )
-
-    else:
-
-        daily_alignment_allowed = True
-
-    daily_close_ema_length = config.get(
-        "daily_close_ema"
-    )
-
-    daily_close_ema_value = daily.get(
-        "daily_close_ema"
-    )
-
-    daily_close_ema_allowed = (
-
-        True
-
-        if daily_close_ema_length is None
-
-        else (
-            daily_close_ema_value is not None
-            and
-            daily["close"] > daily_close_ema_value
-        )
-    )
-
-    minimum_daily_atr_ratio_50 = (
-        config.get(
-            "minimum_daily_atr_ratio_50"
-        )
-    )
-
-    daily_atr_ratio_50 = (
-        daily.get(
-            "daily_atr_ratio_50"
-        )
-    )
-
-    daily_atr_ratio_allowed = (
-
-        True
-
-        if minimum_daily_atr_ratio_50 is None
-
-        else (
-            daily_atr_ratio_50 is not None
-            and
-            daily_atr_ratio_50
-            >= minimum_daily_atr_ratio_50
-        )
-    )
-
-    # ==============================================
-    # SESSION / WEEKDAY
-    # ==============================================
-
-    session_allowed = (
-        session_allowed_for(
-            signal["time"],
-            config
-        )
-    )
-
-    weekday_allowed = (
-        weekday_allowed_for(
-            signal["time"],
-            config
-        )
-    )
-
-    local_time = (
-        local_signal_time(
-            signal["time"],
-            config
-        )
-    )
-
-    # ==============================================
-    # FINAL
-    # ==============================================
-
-    qualified = all([
-
-        bullish_engulfing,
-        strong_close_allowed,
-        lower_wick_allowed,
-        minimum_range_allowed,
-        minimum_body_atr_allowed,
-        structure_allowed,
-        daily_regime_allowed,
-        daily_alignment_allowed,
-        daily_close_ema_allowed,
-        daily_atr_ratio_allowed,
-        session_allowed,
-        weekday_allowed
-    ])
-
-    return {
-
-        "qualified":
-            qualified,
-
-        "signal_start_utc":
-            signal["time"],
-
-        "signal_close_utc":
-            signal["time"]
-            + timedelta(
-                hours=1
-            ),
-
-        "open":
-            signal["open"],
-
-        "high":
-            signal["high"],
-
-        "low":
-            signal["low"],
-
-        "close":
-            signal["close"],
-
-        "atr":
-            current_atr,
-
-        "body_ratio":
-            body_ratio,
-
-        "body_atr":
-            body_atr,
-
-        "daily_atr_ratio_50":
-            daily_atr_ratio_50,
-
-        "close_location":
-            close_location,
-
-        "lower_wick":
-            lower_wick,
-
-        "lower_wick_body_ratio":
-            (
-                lower_wick
-                / current_body
-
-                if current_body > 0
-
-                else None
-            ),
-
-        "local_timezone":
-            config[
-                "session_timezone"
-            ],
-
-        "local_hour":
-            local_time.hour,
-
-        "weekday":
-            local_time.strftime(
-                "%A"
-            ),
-
-        "previous_daily_close":
-            daily[
-                "close"
-            ],
-
-        "previous_daily_fast_ema":
-            daily[
-                "fast_ema"
-            ],
-
-        "previous_daily_slow_ema":
-            daily[
-                "slow_ema"
-            ],
-
-        "previous_daily_close_ema":
-            daily.get(
-                "daily_close_ema"
-            )
-    }
-
-
-def evaluate_short_signal_at_index(
-    instrument,
-    h1,
-    atr,
-    index,
-    daily_state
-):
-
-    if instrument not in SHORT_STRATEGIES:
-        raise ValueError(
-            f"{instrument} has no short strategy"
-        )
-
-    config = SHORT_STRATEGIES[instrument]
-
-    momentum_requirements = config.get(
-        "momentum_requirements",
-        {}
-    )
-
-    maximum_momentum_lookback = max(
-        momentum_requirements.keys(),
-        default=0
-    )
-
-    h1_atr_ratio_warmup = (
-        config["atr_length"] + 49
-        if config.get("minimum_h1_atr_ratio_50") is not None
-        else 0
-    )
-
-    minimum_index = max(
-        config["atr_length"],
-        config["structure_lookback"],
-        config.get("momentum_lookback_bars", 0),
-        maximum_momentum_lookback,
-        h1_atr_ratio_warmup
-    )
-
-    if index < minimum_index:
-        return None
-
-    signal = h1[index]
-    previous = h1[index - 1]
-    current_atr = atr[index]
-
-    if current_atr is None:
-        return None
-
-    previous_body = abs(
-        previous["close"] - previous["open"]
-    )
-    current_body = abs(
-        signal["close"] - signal["open"]
-    )
-    signal_range = (
-        signal["high"] - signal["low"]
-    )
-
-    close_location = (
-        (signal["close"] - signal["low"])
-        / signal_range
-        if signal_range > 0
-        else 1.0
-    )
-
-    body_ratio = (
-        current_body / previous_body
-        if previous_body > 0
-        else None
-    )
-
-    body_ratio_allowed = (
-        previous_body > 0
-        and current_body >= (
-            previous_body
-            * config["minimum_body_ratio"]
-        )
-    )
-
-    bearish_engulfing = (
-        previous["close"] > previous["open"]
-        and signal["close"] < signal["open"]
-        and signal["open"] >= previous["close"]
-        and signal["close"] <= previous["open"]
-        and body_ratio_allowed
-    )
-
-    maximum_close_location = config.get(
-        "maximum_close_location"
-    )
-    strong_close_allowed = (
-        True
-        if maximum_close_location is None
-        else close_location <= maximum_close_location
-    )
-
-    lookback = config["structure_lookback"]
-    previous_bars = h1[index - lookback:index]
-    previous_highest_high = max(
-        candle["high"]
-        for candle in previous_bars
-    )
-    distance_from_recent_high = (
-        previous_highest_high
-        - signal["high"]
-    )
-    maximum_distance = (
-        current_atr
-        * config["maximum_distance_atr"]
-    )
-    structure_allowed = (
-        distance_from_recent_high
-        <= maximum_distance
-    )
-
-    daily = previous_short_daily_values(
-        signal["time"],
-        daily_state
-    )
-    if daily is None:
-        return None
-
-    require_daily_close_below_slow = config.get(
-        "require_daily_close_below_slow",
-        True
-    )
-    daily_regime_allowed = (
-        True
-        if not require_daily_close_below_slow
-        else daily["close"] < daily["slow_ema"]
-    )
-    require_fast_below_slow = config.get(
-        "require_daily_fast_below_slow",
-        True
-    )
-    daily_alignment_allowed = (
-        True
-        if not require_fast_below_slow
-        else daily["fast_ema"] < daily["slow_ema"]
-    )
-
-    daily_separation = (
-        (
-            daily["slow_ema"]
-            - daily["fast_ema"]
-        ) / daily["daily_atr"]
-        if daily["daily_atr"] > 0
-        else None
-    )
-
-    minimum_separation = config.get(
-        "minimum_daily_ema_separation_atr"
-    )
-    daily_separation_allowed = (
-        True
-        if minimum_separation is None
-        else (
-            daily_separation is not None
-            and daily_separation >= minimum_separation
-        )
-    )
-
-    maximum_slope = config.get(
-        "maximum_slow_ema_slope_5d_atr"
-    )
-    daily_slope = daily.get(
-        "slow_ema_slope_5d_atr"
-    )
-    daily_slope_allowed = (
-        True
-        if maximum_slope is None
-        else (
-            daily_slope is not None
-            and daily_slope <= maximum_slope
-        )
-    )
-
-    minimum_atr_ratio = config.get(
-        "minimum_daily_atr_ratio_50"
-    )
-    daily_atr_ratio = daily.get(
-        "daily_atr_ratio_50"
-    )
-    daily_atr_ratio_allowed = (
-        True
-        if minimum_atr_ratio is None
-        else (
-            daily_atr_ratio is not None
-            and daily_atr_ratio >= minimum_atr_ratio
-        )
-    )
-
-    # Optional H1 filters. Existing strategies leave these absent unless used.
-    momentum_lookback = config.get("momentum_lookback_bars")
-    minimum_upward_momentum_atr = config.get(
-        "minimum_upward_momentum_atr"
-    )
-    upward_momentum = None
-    upward_momentum_atr = None
-
-    if momentum_lookback is not None:
-        momentum_reference_close = h1[index - momentum_lookback]["close"]
-        upward_momentum = signal["close"] - momentum_reference_close
-        upward_momentum_atr = (
-            upward_momentum / current_atr
-            if current_atr > 0
-            else None
-        )
-
-    upward_momentum_allowed = (
-        True
-        if minimum_upward_momentum_atr is None
-        else (
-            upward_momentum_atr is not None
-            and upward_momentum_atr >= minimum_upward_momentum_atr
-        )
-    )
-
-    momentum_requirement_values = {}
-    momentum_requirements_allowed = True
-
-    for lookback_bars, minimum_atr in momentum_requirements.items():
-        momentum_atr_value = (
-            signal["close"] - h1[index - lookback_bars]["close"]
-        ) / current_atr
-        momentum_requirement_values[lookback_bars] = momentum_atr_value
-        if momentum_atr_value < minimum_atr:
-            momentum_requirements_allowed = False
-
-    minimum_signal_range_atr = config.get("minimum_signal_range_atr")
-    signal_range_atr = (
-        signal_range / current_atr
-        if current_atr > 0
-        else None
-    )
-    signal_range_allowed = (
-        True
-        if minimum_signal_range_atr is None
-        else (
-            signal_range_atr is not None
-            and signal_range_atr >= minimum_signal_range_atr
-        )
-    )
-
-    maximum_stop_size_atr = config.get("maximum_stop_size_atr")
-    stop_price_for_filter = (
-        signal["high"]
-        + config["stop_buffer_ticks"] * config["tick_size"]
-    )
-    stop_size = stop_price_for_filter - signal["close"]
-    stop_size_atr = (
-        stop_size / current_atr
-        if current_atr > 0
-        else None
-    )
-    stop_size_allowed = (
-        True
-        if maximum_stop_size_atr is None
-        else (
-            stop_size_atr is not None
-            and stop_size_atr <= maximum_stop_size_atr
-        )
-    )
-
-    upper_wick = max(
-        0.0,
-        signal["high"] - max(signal["open"], signal["close"])
-    )
-    upper_wick_body_ratio = (
-        upper_wick / current_body
-        if current_body > 0
-        else None
-    )
-    minimum_upper_wick_body_ratio = config.get(
-        "minimum_upper_wick_body_ratio"
-    )
-    upper_wick_allowed = (
-        True
-        if minimum_upper_wick_body_ratio is None
-        else (
-            upper_wick_body_ratio is not None
-            and upper_wick_body_ratio >= minimum_upper_wick_body_ratio
-        )
-    )
-
-    minimum_h1_atr_ratio_50 = config.get(
-        "minimum_h1_atr_ratio_50"
-    )
-    h1_atr_ratio_50 = None
-
-    if minimum_h1_atr_ratio_50 is not None:
-        atr_window = atr[index - 49:index + 1]
-        if (
-            len(atr_window) == 50
-            and all(value is not None for value in atr_window)
-        ):
-            atr_mean_50 = sum(atr_window) / 50.0
-            if atr_mean_50 > 0:
-                h1_atr_ratio_50 = current_atr / atr_mean_50
-
-    h1_atr_ratio_allowed = (
-        True
-        if minimum_h1_atr_ratio_50 is None
-        else (
-            h1_atr_ratio_50 is not None
-            and h1_atr_ratio_50 >= minimum_h1_atr_ratio_50
-        )
-    )
-
-    local_time = signal["time"].astimezone(
-        ZoneInfo(config["session_timezone"])
-    )
-    session_allowed = (
-        local_time.hour
-        not in config["excluded_hours"]
-    )
-    weekday_allowed = (
-        local_time.weekday()
-        not in config["excluded_weekdays"]
-    )
-
-    qualified = all([
-        bearish_engulfing,
-        strong_close_allowed,
-        structure_allowed,
-        daily_regime_allowed,
-        daily_alignment_allowed,
-        daily_separation_allowed,
-        daily_slope_allowed,
-        daily_atr_ratio_allowed,
-        upward_momentum_allowed,
-        momentum_requirements_allowed,
-        signal_range_allowed,
-        stop_size_allowed,
-        upper_wick_allowed,
-        h1_atr_ratio_allowed,
-        session_allowed,
-        weekday_allowed
-    ])
-
-    return {
-        "qualified": qualified,
-        "side": "SELL",
-        "strategy_name": config["strategy_name"],
-        "signal_start_utc": signal["time"],
-        "signal_close_utc": signal["time"] + timedelta(hours=1),
-        "open": signal["open"],
-        "high": signal["high"],
-        "low": signal["low"],
-        "close": signal["close"],
-        "atr": current_atr,
-        "body_ratio": body_ratio,
-        "close_location": close_location,
-        "previous_highest_high": previous_highest_high,
-        "distance_from_recent_high": distance_from_recent_high,
-        "distance_from_recent_high_atr": (
-            distance_from_recent_high / current_atr
-            if current_atr > 0
-            else None
-        ),
-        "local_timezone": config["session_timezone"],
-        "local_hour": local_time.hour,
-        "weekday": local_time.strftime("%A"),
-        "previous_daily_close": daily["close"],
-        "previous_daily_fast_ema": daily["fast_ema"],
-        "previous_daily_slow_ema": daily["slow_ema"],
-        "previous_daily_atr14": daily["daily_atr"],
-        "daily_ema_separation_atr": daily_separation,
-        "slow_ema_slope_5d_atr": daily_slope,
-        "daily_atr_ratio_50": daily_atr_ratio,
-        "upward_momentum": upward_momentum,
-        "upward_momentum_atr": upward_momentum_atr,
-        "momentum_requirements_atr": momentum_requirement_values,
-        "signal_range_atr": signal_range_atr,
-        "stop_size": stop_size,
-        "stop_size_atr": stop_size_atr,
-        "upper_wick_body_ratio": upper_wick_body_ratio,
-        "h1_atr_ratio_50": h1_atr_ratio_50
-    }
-
-
-def create_trade(
-    instrument,
-    signal_result
-):
-
-    config = (
-        STRATEGIES[
-            instrument
-        ]
-    )
-
-    tick = (
-        config[
-            "tick_size"
-        ]
-    )
-
-    reference_entry = (
-        signal_result[
-            "close"
-        ]
-    )
-
-    backtest_entry = (
-        reference_entry
-        + (
-            BACKTEST_SLIPPAGE_TICKS
-            * tick
-        )
-    )
-
-    stop = (
-        signal_result[
-            "low"
-        ]
-        - (
-            config[
-                "stop_buffer_ticks"
-            ]
-            * tick
-        )
-    )
-
-    trade_risk = (
-        reference_entry
-        - stop
-    )
-
-    target = (
-        reference_entry
-        + (
-            trade_risk
-            * config[
-                "reward_risk"
-            ]
-        )
-    )
-
-    return {
-
-        "instrument":
-            instrument,
-
-        "signal_start_utc":
-            signal_result[
-                "signal_start_utc"
-            ],
-
-        "entry_time_utc":
-            signal_result[
-                "signal_close_utc"
-            ],
-
-        "reference_entry":
-            round_price(
-                reference_entry,
-                config
-            ),
-
-        "backtest_entry":
-            round_price(
-                backtest_entry,
-                config
-            ),
-
-        "stop":
-            round_price(
-                stop,
-                config
-            ),
-
-        "target":
-            round_price(
-                target,
-                config
-            ),
-
-        "exit_bar_start_utc":
-            None,
-
-        "exit_time_utc":
-            None,
-
-        "exit_reason":
-            None
-    }
-
-
-def determine_exit_on_bar(
-    trade,
-    candle
-):
-
-    stop = (
-        trade[
-            "stop"
-        ]
-    )
-
-    target = (
-        trade[
-            "target"
-        ]
-    )
-
-    stop_touched = (
-        candle["low"]
-        <= stop
-    )
-
-    target_touched = (
-        candle["high"]
-        >= target
-    )
-
-    if (
-        not stop_touched
-        and
-        not target_touched
-    ):
-
-        return None
-
-    if (
-        stop_touched
-        and
-        not target_touched
-    ):
-
-        return "STOP"
-
-    if (
-        target_touched
-        and
-        not stop_touched
-    ):
-
-        return "TARGET"
-
-    # TradingView historical broker-emulator
-    # same-bar path approximation.
-    distance_to_high = abs(
-        candle["high"]
-        - candle["open"]
-    )
-
-    distance_to_low = abs(
-        candle["open"]
-        - candle["low"]
-    )
-
-    if (
-        distance_to_high
-        < distance_to_low
-    ):
-
-        return "TARGET"
-
-    return "STOP"
-
-
-def simulate_trades(
-    instrument,
-    h1,
-    atr,
-    daily_state,
-    start,
-    end
-):
-
-    config = (
-        STRATEGIES[
-            instrument
-        ]
-    )
-
-    raw_signals = []
-    trades = []
-    ignored_signals = []
-
-    open_trade = None
-
-    start_index = max(
-
-        config[
-            "atr_length"
-        ],
-
-        config[
-            "structure_lookback"
-        ]
-    )
-
-    evaluated_bars = 0
-
-    for index in range(
-        start_index,
-        len(h1)
-    ):
-
-        candle = (
-            h1[index]
-        )
-
-        candle_time = (
-            candle["time"]
-        )
-
-        if candle_time < start:
-
-            continue
-
-        if candle_time >= end:
-
-            break
-
-        evaluated_bars += 1
-
-        # ==========================================
-        # EXISTING POSITION
-        # ==========================================
-
-        if open_trade is not None:
-
-            exit_reason = (
-                determine_exit_on_bar(
-                    open_trade,
-                    candle
-                )
-            )
-
-            if exit_reason is not None:
-
-                open_trade[
-                    "exit_reason"
-                ] = exit_reason
-
-                open_trade[
-                    "exit_bar_start_utc"
-                ] = candle_time
-
-                open_trade[
-                    "exit_time_utc"
-                ] = (
-                    candle_time
-                    + timedelta(
-                        hours=1
-                    )
-                )
-
-                open_trade = None
-
-        # ==========================================
-        # SIGNAL
-        # ==========================================
-
-        result = (
-            evaluate_signal_at_index(
-                instrument,
-                h1,
-                atr,
-                index,
-                daily_state
-            )
-        )
-
-        if (
-            result is None
-            or
-            not result[
-                "qualified"
-            ]
-        ):
-
-            continue
-
-        raw_signals.append(
-            result
-        )
-
-        # ==========================================
-        # PYRAMIDING=0
-        # ==========================================
-
-        if open_trade is not None:
-
-            ignored_signals.append({
-
-                "signal_start_utc":
-                    result[
-                        "signal_start_utc"
-                    ],
-
-                "signal_close_utc":
-                    result[
-                        "signal_close_utc"
-                    ],
-
-                "reason":
-                    "POSITION_ALREADY_OPEN",
-
-                "existing_trade_entry_time":
-                    open_trade[
-                        "entry_time_utc"
-                    ]
-            })
-
-            continue
-
-        new_trade = (
-            create_trade(
-                instrument,
-                result
-            )
-        )
-
-        trades.append(
-            new_trade
-        )
-
-        open_trade = (
-            new_trade
-        )
-
-    return {
-
-        "evaluated_bars":
-            evaluated_bars,
-
-        "raw_signals":
-            raw_signals,
-
-        "trades":
-            trades,
-
-        "ignored_signals":
-            ignored_signals,
-
-        "position_still_open_at_end":
-            open_trade is not None
-    }
-
-# ----------------------------------------------------------------
-# Faster exact-equivalent daily lookup.
-#
-# The live historical helper linearly scans the daily list. That is fine for
-# short live windows but prohibitively slow over ~24 years. These overrides
-# preserve the same strict `row["time"] < current_daily_start(signal_time)`
-# semantics and readiness rules using bisect.
-# ----------------------------------------------------------------
-
-_H1_DAILY_TIMES = {}
-
-def register_h1_daily_state(daily_state):
-    _H1_DAILY_TIMES[id(daily_state)] = [row["time"] for row in daily_state]
-
-
-def previous_daily_values(signal_time, daily_state, config):
-    times = _H1_DAILY_TIMES.get(id(daily_state))
-    if times is None:
-        times = [row["time"] for row in daily_state]
-        _H1_DAILY_TIMES[id(daily_state)] = times
-
-    session_start = current_daily_start(signal_time)
-    j = bisect.bisect_left(times, session_start) - 1
-
-    require_fast = config["require_daily_fast_above_slow"]
-    require_daily_close_ema = config.get("daily_close_ema") is not None
-
-    while j >= 0:
-        row = daily_state[j]
-        slow_ready = row["slow_ema"] is not None
-        fast_ready = (not require_fast) or row["fast_ema"] is not None
-        close_ema_ready = (
-            (not require_daily_close_ema)
-            or row["daily_close_ema"] is not None
-        )
-        if slow_ready and fast_ready and close_ema_ready:
-            return row
-        j -= 1
-
-    return None
-
-
-def previous_short_daily_values(signal_time, daily_state):
-    times = _H1_DAILY_TIMES.get(id(daily_state))
-    if times is None:
-        times = [row["time"] for row in daily_state]
-        _H1_DAILY_TIMES[id(daily_state)] = times
-
-    session_start = current_daily_start(signal_time)
-    j = bisect.bisect_left(times, session_start) - 1
-
-    while j >= 0:
-        row = daily_state[j]
-        ready = (
-            row["fast_ema"] is not None
-            and row["slow_ema"] is not None
-            and row["daily_atr"] is not None
-        )
-        if ready:
-            return row
-        j -= 1
-
-    return None
-
-
-# ----------------------------------------------------------------
-# Proven short historical mechanics + H1 R conversion.
-# ----------------------------------------------------------------
-
-def portfolio_short_trade_from_signal(
-    instrument,
-    signal_result
-):
-    config = SHORT_STRATEGIES[instrument]
-    tick = config["tick_size"]
-
-    reference_entry = signal_result["close"]
-
-    # Locked research convention:
-    # adverse short fill = signal close - 5 ticks.
-    backtest_entry = (
-        reference_entry
-        - BACKTEST_SLIPPAGE_TICKS * tick
-    )
-
-    stop = (
-        signal_result["high"]
-        + config["stop_buffer_ticks"] * tick
-    )
-
-    reference_risk = stop - reference_entry
-
-    if reference_risk <= 0:
-        raise RuntimeError(
-            f"Invalid short reference risk for {instrument}"
-        )
-
-    target = (
-        reference_entry
-        - reference_risk * config["reward_risk"]
-    )
-
-    return {
-        "instrument": instrument,
-        "side": "SELL",
-        "strategy": "SHORT",
-        "signal_start_utc": signal_result["signal_start_utc"],
-        "entry_time_utc": signal_result["signal_close_utc"],
-        "reference_entry": round_price(reference_entry, config),
-        "backtest_entry": round_price(backtest_entry, config),
-        "stop": round_price(stop, config),
-        "target": round_price(target, config),
-        "exit_bar_start_utc": None,
-        "exit_time_utc": None,
-        "exit_reason": None,
-    }
-
-
-def portfolio_short_exit_on_bar(
-    trade,
-    candle
-):
-    stop_touched = (
-        candle["high"] >= trade["stop"]
-    )
-
-    target_touched = (
-        candle["low"] <= trade["target"]
-    )
-
-    if not stop_touched and not target_touched:
-        return None
-
-    if stop_touched and not target_touched:
-        return "STOP"
-
-    if target_touched and not stop_touched:
-        return "TARGET"
-
-    # Locked short same-bar rule:
-    # if high is closer to candle open, stop is assumed first;
-    # otherwise target is assumed first.
-    distance_to_high = abs(
-        candle["high"] - candle["open"]
-    )
-
-    distance_to_low = abs(
-        candle["open"] - candle["low"]
-    )
-
-    if distance_to_high < distance_to_low:
-        return "STOP"
-
-    return "TARGET"
-
-
-def portfolio_simulate_shorts(
-    instrument,
-    h1,
-    atr,
-    daily_state,
-    start,
-    end
-):
-    config = SHORT_STRATEGIES[instrument]
-
-    required_lookbacks = [
-        config["atr_length"],
-        config["structure_lookback"],
-    ]
-
-    momentum_lookback = config.get(
-        "momentum_lookback_bars"
-    )
-
-    if momentum_lookback is not None:
-        required_lookbacks.append(
-            momentum_lookback
-        )
-
-    momentum_requirements = config.get(
-        "momentum_requirements",
-        {}
-    )
-
-    for lookback_bars in momentum_requirements.keys():
-        required_lookbacks.append(
-            int(lookback_bars)
-        )
-
-    if config.get(
-        "minimum_h1_atr_ratio_50"
-    ) is not None:
-        required_lookbacks.append(50)
-
-    start_index = max(
-        required_lookbacks
-    )
-
-    trades = []
-    open_trade = None
-    raw_signal_count = 0
-    ignored_signal_count = 0
-
-    for index in range(
-        start_index,
-        len(h1)
-    ):
-        candle = h1[index]
-        candle_time = candle["time"]
-
-        if candle_time < start:
-            continue
-
-        if candle_time >= end:
-            break
-
-        # Existing short position is evaluated first.
-        # This preserves the locked convention that a new
-        # signal on the exact H1 candle where the old trade
-        # exits is allowed.
-        if open_trade is not None:
-            exit_reason = (
-                portfolio_short_exit_on_bar(
-                    open_trade,
-                    candle
-                )
-            )
-
-            if exit_reason is not None:
-                open_trade["exit_reason"] = (
-                    exit_reason
-                )
-                open_trade[
-                    "exit_bar_start_utc"
-                ] = candle_time
-                open_trade[
-                    "exit_time_utc"
-                ] = (
-                    candle_time
-                    + timedelta(hours=1)
-                )
-                open_trade = None
-
-        result = evaluate_short_signal_at_index(
-            instrument,
-            h1,
-            atr,
-            index,
-            daily_state
-        )
-
-        if (
-            result is None
-            or not result["qualified"]
-        ):
-            continue
-
-        raw_signal_count += 1
-
-        if open_trade is not None:
-            ignored_signal_count += 1
-            continue
-
-        new_trade = (
-            portfolio_short_trade_from_signal(
-                instrument,
-                result
-            )
-        )
-
-        trades.append(
-            new_trade
-        )
-
-        open_trade = (
-            new_trade
-        )
-
-    return {
-        "trades": trades,
-        "raw_signal_count": raw_signal_count,
-        "ignored_signal_count": ignored_signal_count,
-        "position_still_open_at_end": (
-            open_trade is not None
-        ),
-    }
-
-
-def portfolio_long_trade_r(
-    trade
-):
-    if trade["exit_reason"] not in {
-        "TARGET",
-        "STOP",
-    }:
-        return None
-
-    entry = float(
-        trade["backtest_entry"]
-    )
-    stop = float(
-        trade["stop"]
-    )
-    target = float(
-        trade["target"]
-    )
-
-    actual_risk = entry - stop
-
-    if actual_risk <= 0:
-        return None
-
-    if trade["exit_reason"] == "STOP":
-        exit_price = stop
-    else:
-        exit_price = target
-
-    return (
-        exit_price - entry
-    ) / actual_risk
-
-
-def portfolio_short_trade_r(
-    trade
-):
-    if trade["exit_reason"] not in {
-        "TARGET",
-        "STOP",
-    }:
-        return None
-
-    entry = float(
-        trade["backtest_entry"]
-    )
-    stop = float(
-        trade["stop"]
-    )
-    target = float(
-        trade["target"]
-    )
-
-    actual_risk = stop - entry
-
-    if actual_risk <= 0:
-        return None
-
-    if trade["exit_reason"] == "STOP":
-        exit_price = stop
-    else:
-        exit_price = target
-
-    return (
-        entry - exit_price
-    ) / actual_risk
-
-
-def h1_standardise_trade(pair, side, trade, result_r, reward_risk):
-    signal_time = trade["signal_start_utc"]
-    entry_time = trade["entry_time_utc"]
-    exit_bar_start = trade["exit_bar_start_utc"]
-    exit_event = trade["exit_time_utc"]
-
-    sid = f"{pair}_H1_{'LONG' if side == 'BUY' else 'SHORT'}"
-
-    return {
-        "pair": pair,
-        "strategy_id": sid,
-        "trigger": "LIVE_H1_LONG" if side == "BUY" else "LIVE_H1_SHORT",
-        "timeframe": "H1",
-        "side": side,
-        "signal_time": signal_time,
-        "entry_time": entry_time,
-        "exit_time": exit_bar_start,
-        "exit_event_time": exit_event,
-        "rr": float(reward_risk),
-        "reference_entry": float(trade["reference_entry"]),
-        "historical_fill": float(trade["backtest_entry"]),
-        "stop": float(trade["stop"]),
-        "target": float(trade["target"]),
-        "result": trade["exit_reason"],
-        "r": float(result_r),
-        "cost_model": "H1_5_ADVERSE_TICKS",
-        "baseline_cost_value": float(BACKTEST_SLIPPAGE_TICKS),
-    }
-
-
-def collect_h1_pair(pair):
-    h1, h1_empty = fetch_history(pair, "H1", H1_DATA_WARMUP, NOW)
-    daily, d_empty = fetch_history(pair, "D", H1_DAILY_WARMUP, NOW)
-
-    if len(h1) < 90000:
-        raise RuntimeError(
-            f"Incomplete H1 history for {pair}: {len(h1)} candles; "
-            f"first={iso(h1[0]['time']) if h1 else 'NONE'}"
-        )
-    if len(daily) < 5000:
-        raise RuntimeError(
-            f"Incomplete daily history for {pair}: {len(daily)} candles; "
-            f"first={iso(daily[0]['time']) if daily else 'NONE'}"
-        )
-
-    out = {}
-    meta = []
-
-    long_cfg = STRATEGIES[pair]
-    long_atr = atr_series(h1, long_cfg["atr_length"])
-    long_daily_state = build_daily_state(daily, long_cfg)
-    register_h1_daily_state(long_daily_state)
-
-    long_sim = simulate_trades(
-        pair, h1, long_atr, long_daily_state, START, NOW
-    )
-
-    long_trades = []
-    for tr in long_sim["trades"]:
-        result_r = portfolio_long_trade_r(tr)
-        if result_r is None:
-            continue
-        long_trades.append(
-            h1_standardise_trade(
-                pair, "BUY", tr, result_r, long_cfg["reward_risk"]
-            )
-        )
-
-    long_sid = f"{pair}_H1_LONG"
-    out[long_sid] = long_trades
-    meta.append({
-        "strategy_id": long_sid,
-        "raw_signals": len(long_sim["raw_signals"]),
-        "ignored_while_own_position_open": len(long_sim["ignored_signals"]),
-        "position_still_open_at_end": long_sim["position_still_open_at_end"],
-    })
-
-    short_cfg = SHORT_STRATEGIES[pair]
-    short_atr = atr_series(h1, short_cfg["atr_length"])
-    short_daily_state = build_short_daily_state(daily, short_cfg)
-    register_h1_daily_state(short_daily_state)
-
-    short_sim = portfolio_simulate_shorts(
-        pair, h1, short_atr, short_daily_state, START, NOW
-    )
-
-    short_trades = []
-    for tr in short_sim["trades"]:
-        result_r = portfolio_short_trade_r(tr)
-        if result_r is None:
-            continue
-        short_trades.append(
-            h1_standardise_trade(
-                pair, "SELL", tr, result_r, short_cfg["reward_risk"]
-            )
-        )
-
-    short_sid = f"{pair}_H1_SHORT"
-    out[short_sid] = short_trades
-    meta.append({
-        "strategy_id": short_sid,
-        "raw_signals": short_sim["raw_signal_count"],
-        "ignored_while_own_position_open": short_sim["ignored_signal_count"],
-        "position_still_open_at_end": short_sim["position_still_open_at_end"],
-    })
-
-    coverage = {
-        "pair": pair,
-        "h1_requested_start_utc": iso(H1_DATA_WARMUP),
-        "h1_actual_first_utc": iso(h1[0]["time"]),
-        "h1_actual_last_utc": iso(h1[-1]["time"]),
-        "h1_candles": len(h1),
-        "daily_requested_start_utc": iso(H1_DAILY_WARMUP),
-        "daily_actual_first_utc": iso(daily[0]["time"]),
-        "daily_actual_last_utc": iso(daily[-1]["time"]),
-        "daily_candles": len(daily),
-        "empty_h1_chunks": h1_empty,
-        "empty_daily_chunks": d_empty,
-    }
-
-    # Prevent id-cache growth after the pair is finished.
-    _H1_DAILY_TIMES.pop(id(long_daily_state), None)
-    _H1_DAILY_TIMES.pop(id(short_daily_state), None)
-
-    return out, meta, coverage
-
-
-def load_m15_baseline_trades():
-    path = OUT["trades"]
-    if not os.path.exists(path):
-        raise RuntimeError(
-            "M15 baseline trade CSV is missing after the embedded M15 run"
-        )
+    closes = np.array([x["close"] for x in candles], dtype=float)
+    atr14 = atr(candles, 14)
+    atr_mean50 = sma(atr14, 50)
+
+    e50 = ema(closes, 50)
+    e100 = ema(closes, 100)
+    e200 = ema(closes, 200)
+    complete_at = infer_completion_times(candles)
 
     rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for raw in csv.DictReader(f):
-            signal_time = parse_time(raw["signal_time"])
-            exit_bar_start = parse_time(raw["exit_time"])
-            rows.append({
-                "pair": raw["pair"],
-                "strategy_id": raw["strategy_id"],
-                "trigger": raw["trigger"],
-                "timeframe": "M15",
-                "side": raw["side"],
-                "signal_time": signal_time,
-                # Signal is only knowable at the end of its M15 candle.
-                "entry_time": signal_time + timedelta(minutes=15),
-                "exit_time": exit_bar_start,
-                # Exit bar is only resolved at bar granularity; use its close
-                # as the event timestamp so exact-exit-candle replacement is
-                # handled consistently with the H1 engine.
-                "exit_event_time": exit_bar_start + timedelta(minutes=15),
-                "rr": float(raw["rr"]),
-                "reference_entry": float(raw["reference_entry"]),
-                "historical_fill": float(raw["historical_fill"]),
-                "stop": float(raw["stop"]),
-                "target": float(raw["target"]),
-                "result": raw["result"],
-                "r": float(raw["r"]),
-                "cost_model": "M15_1_ADVERSE_PIP",
-                "baseline_cost_value": float(raw.get("cost_pips") or 1.0),
-            })
-    return rows
-
-
-def actual_intervals_overlap(a, b):
-    return (
-        a["entry_time"] < b["exit_event_time"]
-        and b["entry_time"] < a["exit_event_time"]
-    )
-
-
-def actual_overlap_rows(strategy_trades):
-    ids = sorted(strategy_trades)
-    out = []
-    for ia, a in enumerate(ids):
-        for b in ids[ia + 1:]:
-            ta = strategy_trades[a]
-            tb = strategy_trades[b]
-            ca = sum(any(actual_intervals_overlap(x, y) for y in tb) for x in ta)
-            cb = sum(any(actual_intervals_overlap(y, x) for x in ta) for y in tb)
-            pa = ta[0]["pair"] if ta else a.split("_H1")[0].split("_M15")[0]
-            pb = tb[0]["pair"] if tb else b.split("_H1")[0].split("_M15")[0]
-            out.append({
-                "strategy_a": a,
-                "strategy_b": b,
-                "a_trades_overlapping_b": ca,
-                "b_trades_overlapping_a": cb,
-                "same_pair": pa == pb,
-                "timeframe_a": ta[0]["timeframe"] if ta else "",
-                "timeframe_b": tb[0]["timeframe"] if tb else "",
-            })
-    return out
-
-
-def actual_concurrency_rows(scope, all_trades):
-    events = []
-    for t in all_trades:
-        events.append((t["entry_time"], 1, t["strategy_id"], t["pair"], t["timeframe"]))
-        events.append((t["exit_event_time"], -1, t["strategy_id"], t["pair"], t["timeframe"]))
-
-    # Exit before entry at the same timestamp.
-    events.sort(key=lambda z: (z[0], z[1], z[2]))
-
-    active = 0
-    max_active = 0
-    hist = defaultdict(float)
-    last = None
-
-    for ts, delta, sid, pair, tf in events:
-        if last is not None and ts > last:
-            hist[active] += (ts - last).total_seconds()
-        active += delta
-        max_active = max(max_active, active)
-        last = ts
-
-    total = sum(hist.values())
-    rows = [
-        {"scope": scope, "metric": "max_concurrent_positions", "value": max_active}
-    ]
-    for k in sorted(hist):
-        rows.append({
-            "scope": scope,
-            "metric": f"pct_time_{k}_positions",
-            "value": pct(hist[k], total),
-        })
-
-    clusters = defaultdict(int)
-    for t in all_trades:
-        clusters[t["entry_time"]] += 1
-
-    rows.append({
-        "scope": scope,
-        "metric": "entry_timestamps_with_2plus_trades",
-        "value": sum(v >= 2 for v in clusters.values()),
-    })
-    rows.append({
-        "scope": scope,
-        "metric": "max_same_timestamp_entries",
-        "value": max(clusters.values()) if clusters else 0,
-    })
-    return rows
-
-
-def apply_pair_gate(trades, priority):
-    """
-    Apply the current live-engine style instrument gate:
-    no new trade on a pair while any accepted trade on that pair is open.
-
-    priority:
-        H1_FIRST or M15_FIRST for exact same-timestamp conflicts.
-        BUY precedes SELL within a timeframe, matching the current H1
-        watcher ordering where longs are processed before shorts.
-    """
-    if priority not in {"H1_FIRST", "M15_FIRST"}:
-        raise ValueError(priority)
-
-    tf_order = (
-        {"H1": 0, "M15": 1}
-        if priority == "H1_FIRST"
-        else {"M15": 0, "H1": 1}
-    )
-    side_order = {"BUY": 0, "SELL": 1}
-
-    candidates = sorted(
-        trades,
-        key=lambda t: (
-            t["entry_time"],
-            tf_order[t["timeframe"]],
-            side_order.get(t["side"], 9),
-            t["strategy_id"],
-        ),
-    )
-
-    active = {}
-    accepted = []
-    rejected = []
-
-    for t in candidates:
-        pair = t["pair"]
-        cur = active.get(pair)
-
-        if cur is not None and cur["exit_event_time"] <= t["entry_time"]:
-            active.pop(pair, None)
-            cur = None
-
-        if cur is not None:
-            rejected.append({
-                "priority_mode": priority,
-                "pair": pair,
-                "rejected_strategy_id": t["strategy_id"],
-                "rejected_timeframe": t["timeframe"],
-                "rejected_side": t["side"],
-                "rejected_entry_time": iso(t["entry_time"]),
-                "blocking_strategy_id": cur["strategy_id"],
-                "blocking_timeframe": cur["timeframe"],
-                "blocking_side": cur["side"],
-                "blocking_entry_time": iso(cur["entry_time"]),
-                "blocking_exit_time": iso(cur["exit_event_time"]),
-            })
-            continue
-
-        accepted.append(t)
-        active[pair] = t
-
-    accepted.sort(key=lambda t: (t["signal_time"], t["strategy_id"]))
-    return accepted, rejected
-
-
-def serialise_trade(t):
-    row = dict(t)
-    for k in ("signal_time", "entry_time", "exit_time", "exit_event_time"):
-        if isinstance(row.get(k), datetime):
-            row[k] = iso(row[k])
-    return row
-
-
-def recalc_trade_cost_multiplier(t, multiplier):
-    """
-    Stress each timeframe relative to its native historical baseline:
-      H1 1.0x = 5 adverse ticks
-      M15 1.0x = 1 adverse pip
-
-    Signal, stop, target, result and exit timing stay unchanged; only actual
-    R from the adverse fill changes.
-    """
-    x = dict(t)
-    pair = x["pair"]
-    tick = PAIR_META[pair]["tick"]
-    pip = PAIR_META[pair]["pip"]
-
-    if x["timeframe"] == "H1":
-        precision = 3 if pair == "USD_JPY" else 5
-        slip = BACKTEST_SLIPPAGE_TICKS * multiplier * tick
-        fill = (
-            x["reference_entry"] + slip
-            if x["side"] == "BUY"
-            else x["reference_entry"] - slip
-        )
-        fill = round(fill, precision)
-        x["cost_stress_value"] = BACKTEST_SLIPPAGE_TICKS * multiplier
-        x["cost_stress_unit"] = "ticks"
-    else:
-        slip = multiplier * pip
-        fill = (
-            x["reference_entry"] + slip
-            if x["side"] == "BUY"
-            else x["reference_entry"] - slip
-        )
-        x["cost_stress_value"] = multiplier
-        x["cost_stress_unit"] = "pips"
-
-    stop = x["stop"]
-    target = x["target"]
-
-    if x["side"] == "BUY":
-        actual_risk = fill - stop
-        r = -1.0 if x["result"] == "STOP" else (target - fill) / actual_risk
-    else:
-        actual_risk = stop - fill
-        r = -1.0 if x["result"] == "STOP" else (fill - target) / actual_risk
-
-    if actual_risk <= 0:
-        raise RuntimeError(
-            f"Invalid stressed risk {x['strategy_id']} multiplier={multiplier}"
-        )
-
-    x["historical_fill"] = float(fill)
-    x["r"] = float(r)
-    x["cost_multiplier"] = float(multiplier)
-    return x
-
-
-def simulate_mixed_equity(
-    trades,
-    h1_risk_fraction,
-    m15_risk_fraction,
-    starting_balance=100.0,
-):
-    """
-    Event-driven mixed-timeframe compounding.
-
-    Each new trade risks its timeframe-specific percentage of then-REALISED
-    equity. Existing positions retain their entry cash risk. The real OANDA
-    executor sizes from current NAV, including unrealised P/L; that cannot be
-    reconstructed exactly from OHLC outcome-only trade records.
-
-    Exits are processed before entries at the exact same timestamp.
-    """
-    if not trades:
-        return {
-            "summary": {
-                "h1_risk_pct": h1_risk_fraction * 100,
-                "m15_risk_pct": m15_risk_fraction * 100,
-                "starting_balance": starting_balance,
-                "ending_balance": starting_balance,
-                "ending_multiple": 1.0,
-                "total_return_pct": 0.0,
-                "cagr_pct": 0.0,
-                "max_closed_equity_dd_pct": 0.0,
-                "max_open_risk_floor_dd_pct": 0.0,
-                "max_open_positions": 0,
-                "max_open_risk_pct_of_realised_equity": 0.0,
-                "trades": 0,
-            },
-            "curve": [],
-            "trade_rows": [],
-            "exit_times": [],
-            "exit_balances": [],
-        }
-
-    ordered = sorted(trades, key=lambda t: (t["entry_time"], t["strategy_id"]))
-
-    events = []
-    for n, t in enumerate(ordered):
-        key = (t["strategy_id"], t["entry_time"], t["exit_event_time"], n)
-        events.append((t["entry_time"], 1, t["strategy_id"], key, t))
-        events.append((t["exit_event_time"], 0, t["strategy_id"], key, t))
-
-    # 0 exit, 1 entry
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
-
-    balance = float(starting_balance)
-    peak = balance
-    max_closed_dd = 0.0
-    max_floor_dd = 0.0
-    open_trades = {}
-    open_risk_cash = 0.0
-    max_open_positions = 0
-    max_open_risk_pct = 0.0
-    curve = []
-    trade_rows = []
-    exit_times = []
-    exit_balances = []
-
-    for ts, kind, sid, key, t in events:
-        if kind == 0:
-            rec = open_trades.pop(key, None)
-            if rec is None:
-                raise RuntimeError(
-                    f"Mixed equity exit without entry: {sid} {iso(ts)}"
-                )
-
-            pnl_cash = rec["risk_cash"] * float(t["r"])
-            before = balance
-            balance += pnl_cash
-            open_risk_cash -= rec["risk_cash"]
-            if abs(open_risk_cash) < 1e-12:
-                open_risk_cash = 0.0
-
-            peak = max(peak, balance)
-            closed_dd = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            max_closed_dd = min(max_closed_dd, closed_dd)
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            max_floor_dd = min(max_floor_dd, floor_dd)
-
-            exit_times.append(ts)
-            exit_balances.append(balance)
-
-            trade_rows.append({
-                "h1_risk_pct": h1_risk_fraction * 100.0,
-                "m15_risk_pct": m15_risk_fraction * 100.0,
-                "pair": t["pair"],
-                "strategy_id": t["strategy_id"],
-                "timeframe": t["timeframe"],
-                "side": t["side"],
-                "entry_time": iso(t["entry_time"]),
-                "exit_time": iso(t["exit_event_time"]),
-                "r": t["r"],
-                "result": t["result"],
-                "entry_realised_equity": rec["entry_equity"],
-                "risk_fraction": rec["risk_fraction"],
-                "risk_cash": rec["risk_cash"],
-                "pnl_cash": pnl_cash,
-                "balance_before_exit": before,
-                "balance_after_exit": balance,
-                "closed_equity_drawdown_pct": closed_dd,
-                "open_positions_after_exit": len(open_trades),
-                "open_risk_cash_after_exit": open_risk_cash,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-            curve.append({
-                "time_utc": iso(ts),
-                "event": "EXIT",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": closed_dd,
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-        else:
-            risk_fraction = (
-                h1_risk_fraction
-                if t["timeframe"] == "H1"
-                else m15_risk_fraction
-            )
-
-            if balance <= 0:
-                raise RuntimeError(
-                    f"Equity depleted before {sid} at {iso(ts)}"
-                )
-
-            risk_cash = balance * risk_fraction
-            open_trades[key] = {
-                "risk_cash": risk_cash,
-                "risk_fraction": risk_fraction,
-                "entry_equity": balance,
-            }
-            open_risk_cash += risk_cash
-            max_open_positions = max(max_open_positions, len(open_trades))
-
-            open_risk_pct = (
-                (open_risk_cash / balance) * 100.0
-                if balance > 0
-                else 999.0
-            )
-            max_open_risk_pct = max(max_open_risk_pct, open_risk_pct)
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            max_floor_dd = min(max_floor_dd, floor_dd)
-
-            curve.append({
-                "time_utc": iso(ts),
-                "event": "ENTRY",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": ((balance / peak) - 1.0) * 100.0,
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_pct_of_realised_equity": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-    if open_trades:
-        raise RuntimeError(
-            f"Mixed equity finished with {len(open_trades)} open trades"
-        )
-
-    first_entry = min(t["entry_time"] for t in ordered)
-    last_exit = max(t["exit_event_time"] for t in ordered)
-    years = max(
-        (last_exit - first_entry).total_seconds() / (365.2425 * 86400.0),
-        1e-9,
-    )
-    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
-    cagr_pct = (
-        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
-        if balance > 0 and starting_balance > 0
-        else -100.0
-    )
-
-    return {
-        "summary": {
-            "h1_risk_pct": h1_risk_fraction * 100.0,
-            "m15_risk_pct": m15_risk_fraction * 100.0,
-            "starting_balance": starting_balance,
-            "ending_balance": balance,
-            "ending_multiple": balance / starting_balance,
-            "total_return_pct": total_return_pct,
-            "cagr_pct": cagr_pct,
-            "simulation_start_utc": iso(first_entry),
-            "simulation_end_utc": iso(last_exit),
-            "simulation_years": years,
-            "trades": len(ordered),
-            "max_closed_equity_dd_pct": max_closed_dd,
-            "max_open_risk_floor_dd_pct": max_floor_dd,
-            "max_open_positions": max_open_positions,
-            "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
-        },
-        "curve": curve,
-        "trade_rows": trade_rows,
-        "exit_times": exit_times,
-        "exit_balances": exit_balances,
-    }
-
-
-def mixed_balance_before(sim, ts):
-    j = bisect.bisect_left(sim["exit_times"], ts) - 1
-    return sim["exit_balances"][j] if j >= 0 else STARTING_BALANCE
-
-
-def mixed_equity_period_row(
-    mode,
-    sim,
-    h1_risk,
-    m15_risk,
-    label,
-    start,
-    end,
-    trades,
-):
-    sb = mixed_balance_before(sim, start)
-    eb = mixed_balance_before(sim, end)
-    exits = [t for t in trades if start <= t["exit_event_time"] < end]
-    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
-    years = max((end - start).total_seconds() / (365.2425 * 86400.0), 1e-9)
-    ann = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0
-        else 0.0
-    )
-    return {
-        "portfolio_mode": mode,
-        "h1_risk_pct": h1_risk * 100.0,
-        "m15_risk_pct": m15_risk * 100.0,
-        "period": label,
-        "start_utc": iso(start),
-        "end_utc": iso(end),
-        "start_balance": sb,
-        "end_balance": eb,
-        "compounded_return_pct": ret,
-        "annualized_return_pct": ann,
-        "realized_exits": len(exits),
-    }
-
-
-def mixed_equity_calendar_rows(
-    mode, sim, h1_risk, m15_risk, trades, first_year, last_year
-):
-    rows = []
-    for y in range(first_year, last_year + 1):
-        a = datetime(y, 1, 1, tzinfo=timezone.utc)
-        nominal_b = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
-        b = min(nominal_b, NOW)
-        if b <= a:
-            continue
-        row = mixed_equity_period_row(
-            mode, sim, h1_risk, m15_risk, str(y), a, b, trades
-        )
-        row["year"] = y
-        row["complete_year"] = nominal_b <= NOW
-        rows.append(row)
-    return rows
-
-
-def mixed_equity_calendar_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        key = (
-            r["portfolio_mode"],
-            r["h1_risk_pct"],
-            r["m15_risk_pct"],
-        )
-        grouped[key].append(r)
-
-    out = []
-    for key, g in grouped.items():
-        mode, h1p, m15p = key
-        complete = [x for x in g if x["complete_year"]]
-        active = [x for x in complete if x["realized_exits"] > 0]
-        positive = [x for x in active if x["compounded_return_pct"] > 0]
-        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        out.append({
-            "portfolio_mode": mode,
-            "h1_risk_pct": h1p,
-            "m15_risk_pct": m15p,
-            "completed_years": len(complete),
-            "active_completed_years": len(active),
-            "positive_active_completed_years": len(positive),
-            "positive_active_completed_years_pct": pct(len(positive), len(active)),
-            "average_return_pct_active": (
-                sum(x["compounded_return_pct"] for x in active) / len(active)
-                if active else 0.0
-            ),
-            "median_return_pct_active": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
-            "best_year": best["year"] if best else "",
-            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
-        })
-    return out
-
-
-def mixed_equity_rolling_rows(
-    mode,
-    sim,
-    h1_risk,
-    m15_risk,
-    trades,
-    months,
-    start_month,
-    end_complete_month,
-):
-    rows = []
-    cur = start_month
-    while add_months(cur, months) <= end_complete_month:
-        end = add_months(cur, months)
-        row = mixed_equity_period_row(
-            mode, sim, h1_risk, m15_risk,
-            f"ROLLING_{months}M", cur, end, trades
-        )
-        row["months"] = months
-        rows.append(row)
-        cur = add_months(cur, 1)
-    return rows
-
-
-def mixed_equity_rolling_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        key = (
-            r["portfolio_mode"],
-            r["h1_risk_pct"],
-            r["m15_risk_pct"],
-            r["months"],
-        )
-        grouped[key].append(r)
-
-    out = []
-    for key, g in grouped.items():
-        mode, h1p, m15p, months = key
-        active = [x for x in g if x["realized_exits"] > 0]
-        positive = [x for x in active if x["compounded_return_pct"] > 0]
-        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        out.append({
-            "portfolio_mode": mode,
-            "h1_risk_pct": h1p,
-            "m15_risk_pct": m15p,
-            "months": months,
-            "windows": len(g),
-            "active_windows": len(active),
-            "zero_exit_windows": len(g) - len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(len(positive), len(active)),
-            "median_compounded_return_pct_active": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_compounded_return_pct": (
-                worst["compounded_return_pct"] if worst else 0.0
-            ),
-            "worst_start_utc": worst["start_utc"] if worst else "",
-            "best_compounded_return_pct": (
-                best["compounded_return_pct"] if best else 0.0
-            ),
-            "best_start_utc": best["start_utc"] if best else "",
-        })
-    return out
-
-
-def combined_monthly_matrix(strategy_trades, start_month, end_month):
-    ids = sorted(strategy_trades)
-    rows = []
-    cur = start_month
-    while cur < end_month:
-        nxt = add_months(cur, 1)
-        row = {"month": cur.strftime("%Y-%m")}
-        for sid in ids:
-            row[sid] = sum(
-                t["r"]
-                for t in strategy_trades[sid]
-                if cur <= t["signal_time"] < nxt
-            )
-        row["PORTFOLIO"] = sum(row[sid] for sid in ids)
-        rows.append(row)
-        cur = nxt
-    return rows
-
-
-def combined_json_safe(value):
-    if isinstance(value, set):
-        return sorted(value)
-    if isinstance(value, dict):
-        return {k: combined_json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [combined_json_safe(v) for v in value]
-    return value
-
-
-def run_combined_research():
-    try:
-        COMBINED_STATUS.update(
-            state="starting",
-            message="Running exact 10-strategy M15 rebuild first",
-            progress=1,
-        )
-
-        # ------------------------------------------------------------
-        # 1) Re-run the exact already-verified M15 engine.
-        # ------------------------------------------------------------
-        run_research()
-        if STATUS.get("state") != "complete":
-            raise RuntimeError(
-                "Embedded M15 rebuild failed: " + json.dumps(STATUS, default=str)
-            )
-
-        m15_trades = load_m15_baseline_trades()
-        if len(m15_trades) < M15_REFERENCE_PORTFOLIO_TRADES:
-            raise RuntimeError(
-                f"M15 portfolio below known reference: "
-                f"{len(m15_trades)} < {M15_REFERENCE_PORTFOLIO_TRADES}"
-            )
-
-        COMBINED_STATUS.update(
-            state="h1_download",
-            message="Rebuilding the exact current-live 10-strategy H1 portfolio",
-            progress=55,
-        )
-
-        # ------------------------------------------------------------
-        # 2) Rebuild exact current-live H1 portfolio from attached rules.
-        # ------------------------------------------------------------
-        h1_by_strategy = {}
-        h1_meta = []
-        h1_coverage = []
-
-        for pi, pair in enumerate(PAIRS):
-            COMBINED_STATUS.update(
-                state="h1_rebuild",
-                message=f"Rebuilding current-live H1 {pair} long + short",
-                progress=57 + pi * 5,
-            )
-            pair_trades, pair_meta, cov = collect_h1_pair(pair)
-            h1_by_strategy.update(pair_trades)
-            h1_meta.extend(pair_meta)
-            h1_coverage.append(cov)
-            gc.collect()
-
-        h1_trades = sorted(
-            [t for sid in sorted(h1_by_strategy) for t in h1_by_strategy[sid]],
-            key=lambda t: (t["signal_time"], t["strategy_id"]),
-        )
-
-        if len(h1_trades) < H1_REFERENCE_FULL_TRADES:
-            raise RuntimeError(
-                f"H1 portfolio reproduction below prior final-live reference: "
-                f"{len(h1_trades)} < {H1_REFERENCE_FULL_TRADES}. "
-                f"Do not trust combined results until this is reconciled."
-            )
-
-        COMBINED_STATUS.update(
-            state="merging",
-            message="Merging H1 + M15 and applying live instrument-gate variants",
-            progress=83,
-        )
-
-        # ------------------------------------------------------------
-        # 3) Unified strategy dictionaries + portfolio modes.
-        # ------------------------------------------------------------
-        m15_by_strategy = defaultdict(list)
-        for t in m15_trades:
-            m15_by_strategy[t["strategy_id"]].append(t)
-
-        all_by_strategy = {}
-        all_by_strategy.update({k: list(v) for k, v in h1_by_strategy.items()})
-        all_by_strategy.update({k: list(v) for k, v in m15_by_strategy.items()})
-
-        independent = sorted(
-            h1_trades + m15_trades,
-            key=lambda t: (t["signal_time"], t["strategy_id"]),
-        )
-
-        gated_h1, rejected_h1 = apply_pair_gate(independent, "H1_FIRST")
-        gated_m15, rejected_m15 = apply_pair_gate(independent, "M15_FIRST")
-
-        modes = {
-            "INDEPENDENT": independent,
-            "PAIR_GATE_H1_FIRST": gated_h1,
-            "PAIR_GATE_M15_FIRST": gated_m15,
-        }
-
-        # ------------------------------------------------------------
-        # 4) Audit / manifest / parity.
-        # ------------------------------------------------------------
-        source_audit = [
-            {
-                "source": "strategy_probe(6).py",
-                "role": "CURRENT LIVE H1 STRATEGY AUTHORITY",
-                "sha256": "4ec3b8870fb085eb842fdf85e60681b81968b300efa1a9e1ab677a1d242d5a65",
-            },
-            {
-                "source": "app(7).py",
-                "role": "CURRENT LIVE EXECUTOR / 1%-NAV REFERENCE",
-                "sha256": "14d9aa2c555f7809efd8b8f03a53923c773d47494aaa0c60883d5b54cbfa89d4",
-            },
-            {
-                "source": "m15_final_locked_portfolio_EQUITY_COMPOUNDING_analysis.py",
-                "role": "FINAL LOCKED 10-STRATEGY M15 REBUILD AUTHORITY",
-                "sha256": "703baac7e933c6b5b33c2f5870bbacf6a0d7954b5a5067a313c524c7b8f15df8",
-            },
-        ]
-        write_csv(COMBINED_OUT["source_audit"], source_audit)
-
-        manifest = []
-        for pair in PAIRS:
-            manifest.append({
-                "strategy_id": f"{pair}_H1_LONG",
-                "pair": pair,
-                "timeframe": "H1",
-                "side": "BUY",
-                "source": "attached current live strategy_probe(6).py",
-                "config_json": json.dumps(
-                    combined_json_safe(STRATEGIES[pair]), sort_keys=True
-                ),
-            })
-            manifest.append({
-                "strategy_id": f"{pair}_H1_SHORT",
-                "pair": pair,
-                "timeframe": "H1",
-                "side": "SELL",
-                "source": "attached current live strategy_probe(6).py",
-                "config_json": json.dumps(
-                    combined_json_safe(SHORT_STRATEGIES[pair]), sort_keys=True
-                ),
-            })
-        for row in MANIFEST:
-            manifest.append({
-                "strategy_id": row["strategy_id"],
-                "pair": row["pair"],
-                "timeframe": "M15",
-                "side": row["side"],
-                "source": row["source"],
-                "config_json": row["rules"],
-            })
-        write_csv(COMBINED_OUT["manifest"], manifest)
-
-        coverage_rows = []
-        for r in h1_coverage:
-            coverage_rows.append({"timeframe": "H1", **r})
-        # Carry forward the exact M15 coverage produced by embedded runner.
-        if os.path.exists(OUT["coverage"]):
-            with open(OUT["coverage"], newline="", encoding="utf-8") as f:
-                for r in csv.DictReader(f):
-                    coverage_rows.append({"timeframe": "M15", **r})
-        write_csv(COMBINED_OUT["coverage"], coverage_rows)
-
-        parity_rows = []
-        for sid in sorted(h1_by_strategy):
-            parity_rows.append({
-                "scope": "H1_STRATEGY",
-                "strategy_id": sid,
-                "trades": len(h1_by_strategy[sid]),
-                "status": "INFO",
-            })
-        parity_rows.extend({
-            "scope": "H1_PORTFOLIO",
-            "strategy_id": "ALL_H1",
-            "trades": len(h1_trades),
-            "reference_min": H1_REFERENCE_FULL_TRADES,
-            "status": (
-                "PASS_EQUAL"
-                if len(h1_trades) == H1_REFERENCE_FULL_TRADES
-                else "PASS_NEWER_TRADES"
-            ),
-        } for _ in [0])
-        parity_rows.extend({
-            "scope": "M15_PORTFOLIO",
-            "strategy_id": "ALL_M15",
-            "trades": len(m15_trades),
-            "reference_min": M15_REFERENCE_PORTFOLIO_TRADES,
-            "status": (
-                "PASS_EQUAL"
-                if len(m15_trades) == M15_REFERENCE_PORTFOLIO_TRADES
-                else "PASS_NEWER_TRADES"
-            ),
-        } for _ in [0])
-        write_csv(COMBINED_OUT["parity"], parity_rows)
-
-        # ------------------------------------------------------------
-        # 5) Non-compounded strategy / timeframe / pair / mode stats.
-        # ------------------------------------------------------------
-        all_strategy_ids = sorted(all_by_strategy)
-        independent_stats = calc_stats(independent)
-
-        strategy_summary = []
-        for sid in all_strategy_ids:
-            tr = all_by_strategy[sid]
-            s = calc_stats(tr)
-            strategy_summary.append({
-                "strategy_id": sid,
-                "pair": tr[0]["pair"] if tr else "",
-                "timeframe": tr[0]["timeframe"] if tr else "",
-                "side": tr[0]["side"] if tr else "",
-                **s,
-                "contribution_pct_of_independent_total_r": pct(
-                    s["total_r"], independent_stats["total_r"]
-                ),
-            })
-        write_csv(COMBINED_OUT["strategy_summary"], strategy_summary)
-
-        tf_rows = []
-        for tf in ("H1", "M15"):
-            tr = [t for t in independent if t["timeframe"] == tf]
-            s = calc_stats(tr)
-            tf_rows.append({
-                "timeframe": tf,
-                **s,
-                "contribution_pct_of_independent_total_r": pct(
-                    s["total_r"], independent_stats["total_r"]
-                ),
-            })
-        write_csv(COMBINED_OUT["timeframe_summary"], tf_rows)
-
-        pair_rows = []
-        for pair in PAIRS:
-            tr = [t for t in independent if t["pair"] == pair]
-            s = calc_stats(tr)
-            pair_rows.append({
-                "pair": pair,
-                **s,
-                "contribution_pct_of_independent_total_r": pct(
-                    s["total_r"], independent_stats["total_r"]
-                ),
-            })
-        write_csv(COMBINED_OUT["pair_summary"], pair_rows)
-
-        mode_rows = []
-        for mode, tr in modes.items():
-            s = calc_stats(tr)
-            se = calc_stats(tr, "exit")
-            mode_rows.append({
-                "portfolio_mode": mode,
-                "strategies_available": len(all_strategy_ids),
-                "trades": s["trades"],
-                "winners": s["winners"],
-                "losers": s["losers"],
-                "win_rate_pct": s["win_rate_pct"],
-                "profit_factor": s["profit_factor"],
-                "total_r": s["total_r"],
-                "expectancy_r": s["expectancy_r"],
-                "signal_order_max_drawdown_r": s["max_drawdown_r"],
-                "exit_order_max_drawdown_r": se["max_drawdown_r"],
-                "longest_loss_streak": s["longest_loss_streak"],
-                "trades_removed_vs_independent": len(independent) - len(tr),
-            })
-        write_csv(COMBINED_OUT["mode_summary"], mode_rows)
-
-        # ------------------------------------------------------------
-        # 6) Periods / calendar / rolling / frequency for each mode.
-        # ------------------------------------------------------------
-        period_defs = [
-            ("FULL", None, None),
-            ("PRE_2010", None, datetime(2010, 1, 1, tzinfo=timezone.utc)),
-            ("2010_PLUS", datetime(2010, 1, 1, tzinfo=timezone.utc), None),
-            ("2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), None),
-            ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
-            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-            ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
-            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-            ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-        ]
-
-        active_start = month_floor(min(t["signal_time"] for t in independent))
-        end_complete = month_floor(NOW)
-
-        period_rows = []
-        calendar_out = []
-        rolling_out = []
-        frequency_out = []
-
-        for mode, tr in modes.items():
-            for label, a, b in period_defs:
-                row = stats_row(mode, label, tr, a, b)
-                row["portfolio_mode"] = mode
-                period_rows.append(row)
-
-            calendar_out.extend(
-                dict(r, portfolio_mode=mode)
-                for r in calendar_rows(mode, tr, START.year, NOW.year)
-            )
-
-            for months in (12, 24, 36):
-                rolling_out.extend(
-                    dict(r, portfolio_mode=mode)
-                    for r in rolling_rows(
-                        mode, tr, months, active_start, end_complete
-                    )
-                )
-
-            freq_periods = [
-                ("FULL", active_start, NOW),
-                ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
-                ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-                ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
-                ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-                ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-            ]
-            for label, a, b in freq_periods:
-                row = frequency_row(mode, tr, a, b, label)
-                row["portfolio_mode"] = mode
-                frequency_out.append(row)
-
-        # Also include H1-only and M15-only frequency.
-        for tf in ("H1", "M15"):
-            tf_tr = [t for t in independent if t["timeframe"] == tf]
-            for label, a, b in [
-                ("FULL", active_start, NOW),
-                ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-                ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-                ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-            ]:
-                row = frequency_row(f"{tf}_ONLY", tf_tr, a, b, label)
-                row["portfolio_mode"] = f"{tf}_ONLY"
-                frequency_out.append(row)
-
-        write_csv(COMBINED_OUT["periods"], period_rows)
-        write_csv(COMBINED_OUT["calendar"], calendar_out)
-        write_csv(COMBINED_OUT["rolling"], rolling_out)
-        write_csv(COMBINED_OUT["rolling_summary"], rolling_summary(rolling_out))
-        write_csv(COMBINED_OUT["frequency"], frequency_out)
-
-        # ------------------------------------------------------------
-        # 7) Correlation / overlap / concurrency / gate rejections.
-        # ------------------------------------------------------------
-        monthly = combined_monthly_matrix(
-            all_by_strategy, active_start, month_floor(NOW)
-        )
-        write_csv(COMBINED_OUT["monthly"], monthly)
-        write_csv(
-            COMBINED_OUT["correlation"],
-            correlation_rows(monthly, all_strategy_ids),
-        )
-        write_csv(COMBINED_OUT["overlap"], actual_overlap_rows(all_by_strategy))
-
-        concurrency_out = []
-        for mode, tr in modes.items():
-            concurrency_out.extend(actual_concurrency_rows(mode, tr))
-        write_csv(COMBINED_OUT["concurrency"], concurrency_out)
-
-        gate_rejections = rejected_h1 + rejected_m15
-        write_csv(COMBINED_OUT["pair_gate_rejections"], gate_rejections)
-
-        # ------------------------------------------------------------
-        # 8) Native-cost multiplier stress.
-        # ------------------------------------------------------------
-        cost_rows = []
-        for mult in COST_MULTIPLIERS:
-            stressed_independent = [
-                recalc_trade_cost_multiplier(t, mult) for t in independent
-            ]
-            stressed_by_key = {
-                (
-                    t["strategy_id"],
-                    t["entry_time"],
-                    t["exit_event_time"],
-                ): t
-                for t in stressed_independent
-            }
-
-            for mode, base_trades in modes.items():
-                stressed = [
-                    stressed_by_key[(
-                        t["strategy_id"],
-                        t["entry_time"],
-                        t["exit_event_time"],
-                    )]
-                    for t in base_trades
-                ]
-                s = calc_stats(stressed)
-                cost_rows.append({
-                    "portfolio_mode": mode,
-                    "cost_multiplier": mult,
-                    "h1_adverse_ticks": BACKTEST_SLIPPAGE_TICKS * mult,
-                    "m15_adverse_pips": 1.0 * mult,
-                    **s,
-                })
-
-                # Two most decision-relevant risk allocations under cost stress.
-                for h1r, m15r, label in [
-                    (0.0100, 0.0100, "H1_1_M15_1"),
-                    (0.0075, 0.0100, "H1_0.75_M15_1"),
-                ]:
-                    es = simulate_mixed_equity(
-                        stressed, h1r, m15r, STARTING_BALANCE
-                    )["summary"]
-                    cost_rows.append({
-                        "portfolio_mode": mode,
-                        "cost_multiplier": mult,
-                        "h1_adverse_ticks": BACKTEST_SLIPPAGE_TICKS * mult,
-                        "m15_adverse_pips": 1.0 * mult,
-                        "equity_scenario": label,
-                        **es,
-                    })
-        write_csv(COMBINED_OUT["cost_stress"], cost_rows)
-
-        # ------------------------------------------------------------
-        # 9) Full H1-risk x M15-risk equity matrix for all 3 modes.
-        # ------------------------------------------------------------
-        COMBINED_STATUS.update(
-            state="equity",
-            message="Running 3x3 H1/M15 risk matrix across all portfolio modes",
-            progress=91,
-        )
-
-        equity_matrix = []
-        equity_periods = []
-        equity_calendar = []
-        equity_rolling = []
-        key_curves = []
-        key_trade_rows = []
-
-        key_scenarios = {
-            ("INDEPENDENT", 1.00, 1.00),
-            ("INDEPENDENT", 0.75, 1.00),
-            ("PAIR_GATE_H1_FIRST", 1.00, 1.00),
-            ("PAIR_GATE_H1_FIRST", 0.75, 1.00),
-        }
-
-        for mode, tr in modes.items():
-            first_year = min(t["entry_time"].year for t in tr)
-            roll_start = month_floor(min(t["entry_time"] for t in tr))
-
-            for h1r in COMBINED_RISK_LEVELS:
-                for m15r in COMBINED_RISK_LEVELS:
-                    sim = simulate_mixed_equity(
-                        tr, h1r, m15r, STARTING_BALANCE
-                    )
-                    equity_matrix.append({
-                        "portfolio_mode": mode,
-                        **sim["summary"],
-                    })
-
-                    for label, a, b in [
-                        ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
-                        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-                        ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
-                        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-                        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-                    ]:
-                        equity_periods.append(
-                            mixed_equity_period_row(
-                                mode, sim, h1r, m15r, label, a, b, tr
-                            )
-                        )
-
-                    equity_calendar.extend(
-                        mixed_equity_calendar_rows(
-                            mode, sim, h1r, m15r, tr, first_year, NOW.year
-                        )
-                    )
-
-                    for months in (12, 24, 36):
-                        equity_rolling.extend(
-                            mixed_equity_rolling_rows(
-                                mode, sim, h1r, m15r, tr,
-                                months, roll_start, end_complete
-                            )
-                        )
-
-                    scenario_key = (
-                        mode,
-                        round(h1r * 100.0, 2),
-                        round(m15r * 100.0, 2),
-                    )
-                    if scenario_key in key_scenarios:
-                        for r in sim["curve"]:
-                            key_curves.append({
-                                "portfolio_mode": mode,
-                                "h1_risk_pct": h1r * 100.0,
-                                "m15_risk_pct": m15r * 100.0,
-                                **r,
-                            })
-                        for r in sim["trade_rows"]:
-                            key_trade_rows.append({
-                                "portfolio_mode": mode,
-                                **r,
-                            })
-
-        write_csv(COMBINED_OUT["equity_matrix"], equity_matrix)
-        write_csv(COMBINED_OUT["equity_periods"], equity_periods)
-        write_csv(COMBINED_OUT["equity_calendar"], equity_calendar)
-        write_csv(
-            COMBINED_OUT["equity_calendar_summary"],
-            mixed_equity_calendar_summary(equity_calendar),
-        )
-        write_csv(COMBINED_OUT["equity_rolling"], equity_rolling)
-        write_csv(
-            COMBINED_OUT["equity_rolling_summary"],
-            mixed_equity_rolling_summary(equity_rolling),
-        )
-        write_csv(COMBINED_OUT["equity_key_curve"], key_curves)
-        write_csv(COMBINED_OUT["equity_key_trades"], key_trade_rows)
-
-        # ------------------------------------------------------------
-        # 10) Trade logs + notes + one ZIP.
-        # ------------------------------------------------------------
-        write_csv(
-            COMBINED_OUT["trades_independent"],
-            [serialise_trade(t) for t in independent],
-        )
-        write_csv(
-            COMBINED_OUT["trades_pair_gate_h1_first"],
-            [serialise_trade(t) for t in gated_h1],
-        )
-        write_csv(
-            COMBINED_OUT["trades_pair_gate_m15_first"],
-            [serialise_trade(t) for t in gated_m15],
-        )
-
-        notes = [
-            {
-                "item": "Read only",
-                "value": "This research service never sends orders.",
-            },
-            {
-                "item": "H1 authority",
-                "value": "All 10 H1 configs are literal extracts from the attached current live strategy_probe(6).py.",
-            },
-            {
-                "item": "H1 backtest cost",
-                "value": "Baseline adverse entry is exactly 5 ticks, matching current H1 historical code.",
-            },
-            {
-                "item": "M15 authority",
-                "value": "The embedded exact final 10-strategy M15 runner is executed first and must pass its own final-lock parity guards.",
-            },
-            {
-                "item": "M15 backtest cost",
-                "value": "Baseline adverse entry is 1 pip, matching the final full-history M15 research.",
-            },
-            {
-                "item": "Current live instrument gate",
-                "value": "The attached H1 live engine refuses a new signal when OANDA already has any open trade on that instrument. PAIR_GATE modes model that restriction across H1+M15; INDEPENDENT shows pure research diversification.",
-            },
-            {
-                "item": "Exact-tie gate priority",
-                "value": "Both H1-first and M15-first variants are exported because the future combined H1/M15 watcher tie order is not yet defined. BUY precedes SELL within a timeframe.",
-            },
-            {
-                "item": "Risk matrix",
-                "value": "Every portfolio mode is compounded at all nine H1-risk x M15-risk combinations from 0.50%, 0.75% and 1.00% per trade.",
-            },
-            {
-                "item": "NAV caveat",
-                "value": "Actual app(7).py sizes from current OANDA NAV. The backtest sizes from realised equity because candle-level outcome records do not reconstruct intra-trade mark-to-market NAV. Conservative open-risk-floor DD is exported.",
-            },
-            {
-                "item": "Actual event timing",
-                "value": "H1 entries use signal candle close (+1h); M15 entries use signal candle close (+15m). Exit event timestamps use the close of the historical exit bar. This is used for cross-timeframe pair gating and concurrency.",
-            },
-            {
-                "item": "Cost multiplier stress",
-                "value": "0.5x/1x/1.5x/2x means H1 2.5/5/7.5/10 adverse ticks while M15 uses 0.5/1/1.5/2 adverse pips.",
-            },
-        ]
-        write_csv(COMBINED_OUT["notes"], notes)
-
-        COMBINED_STATUS.update(
-            state="packaging",
-            message="Packaging one H1+M15 20-strategy ZIP",
-            progress=97,
-        )
-
-        with zipfile.ZipFile(
-            COMBINED_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED
-        ) as z:
-            for p in COMBINED_OUT.values():
-                if os.path.exists(p):
-                    z.write(p, arcname=os.path.basename(p))
-            # Include the embedded M15 parity/result bundle as provenance.
-            if os.path.exists(BUNDLE):
-                z.write(BUNDLE, arcname=os.path.basename(BUNDLE))
-
-        ind = calc_stats(independent)
-        COMBINED_STATUS.update(
-            state="complete",
-            message="H1 + M15 final 20-strategy portfolio analysis complete",
-            progress=100,
-            results=COMBINED_BUNDLE,
-            h1_trades=len(h1_trades),
-            m15_trades=len(m15_trades),
-            independent_trades=len(independent),
-            independent_total_r=ind["total_r"],
-            independent_pf=ind["profit_factor"],
-            pair_gate_h1_first_trades=len(gated_h1),
-            pair_gate_m15_first_trades=len(gated_m15),
-        )
-
-    except Exception as e:
-        import traceback
-        COMBINED_STATUS.update(
-            state="error",
-            message=str(e),
-            error_type=type(e).__name__,
-            traceback=traceback.format_exc(),
-            progress=COMBINED_STATUS.get("progress", 0),
-        )
-
-
-
-
-# ============================================================
-# H1 + M15 EXIT RESEARCH LAYER
-# ============================================================
-#
-# READ ONLY. NEVER SENDS ORDERS.
-#
-# Purpose:
-#   Test whether universal early-exit rules improve the exact locked
-#   20-strategy H1+M15 portfolio without changing any ENTRY rule.
-#
-# Control:
-#   Existing STOP / TARGET only.
-#
-# Candidate families:
-#   1) MAX HOLD ONLY
-#      H1: 12 / 24 / 48 / 72 completed post-entry H1 bars
-#      M15: 24 / 48 / 72 / 96 completed post-entry M15 bars
-#
-#   2) TIME + MFE PROGRESS
-#      At the same bar limits, exit at that bar close ONLY IF the trade
-#      has never achieved +0.25R, +0.50R or +0.75R MFE since entry.
-#      If the threshold has already been reached, the trade is left alone
-#      to continue to its original stop or target.
-#
-#   3) UNIVERSAL REVERSAL
-#      Exit at bar close after a strong exact opposite engulfing candle.
-#      Opposite body thresholds: 0.75 / 1.00 / 1.25 ATR14.
-#      This is deliberately generic: no pair-specific reversal optimization.
-#
-# Important causality conventions:
-#   - Original stop/target is always checked FIRST inside each bar.
-#   - If neither is hit, MFE/reversal/time logic is evaluated at bar close.
-#   - MFE starts only AFTER entry; the signal candle's pre-entry excursion
-#     is never counted.
-#   - Exact exit-candle re-entry remains eligible, preserving locked p0 logic.
-#   - Original entry adverse-cost convention is unchanged.
-#   - Primary early-exit result uses the bar close with no invented extra
-#     market-exit slippage. A separate sensitivity table adds 0.5x and 1.0x
-#     the native adverse entry-cost amount ONLY to early-market exits.
-#
-# Live portfolio modes:
-#   INDEPENDENT
-#       Research ceiling: different strategies can overlap in either direction.
-#
-#   LIVE_SAFE_H1_FIRST
-#       Matches the current non-hedging OANDA constraint: same-direction
-#       same-pair overlaps are allowed, but a new trade is rejected while an
-#       opposite-direction trade on that pair is open. H1 wins exact entry ties.
-#
-#   LIVE_SAFE_M15_FIRST
-#       Same rule, but M15 wins exact H1/M15 entry ties. Exported as a tie-order
-#       sensitivity because the two live watcher loops are independent.
-# ============================================================
-
-EXIT_STATUS = {
-    "state": "not_started",
-    "message": "Exit research not started",
-    "progress": 0,
-}
-
-EXIT_BUNDLE = "H1_M15_20_EXIT_RESEARCH_RESULTS.zip"
-EXIT_OUT = {
-    "scenario_definitions": "h1_m15_exit_scenario_definitions.csv",
-    "control_parity": "h1_m15_exit_control_parity.csv",
-    "scenario_summary": "h1_m15_exit_scenario_summary.csv",
-    "delta_vs_control": "h1_m15_exit_delta_vs_control.csv",
-    "by_strategy": "h1_m15_exit_by_strategy.csv",
-    "by_timeframe": "h1_m15_exit_by_timeframe.csv",
-    "periods": "h1_m15_exit_periods.csv",
-    "rolling": "h1_m15_exit_rolling.csv",
-    "rolling_summary": "h1_m15_exit_rolling_summary.csv",
-    "calendar": "h1_m15_exit_calendar.csv",
-    "calendar_summary": "h1_m15_exit_calendar_summary.csv",
-    "exit_reasons": "h1_m15_exit_reason_summary.csv",
-    "hold_summary": "h1_m15_exit_hold_summary.csv",
-    "gate_rejections": "h1_m15_exit_live_safe_gate_rejections.csv",
-    "market_exit_cost_stress": "h1_m15_exit_market_exit_cost_stress.csv",
-    "trades": "h1_m15_exit_all_trades.csv",
-    "notes": "h1_m15_exit_notes.csv",
-}
-
-# Current known control counts from the exact combined run on 2026-09-10.
-# A later run may have MORE trades because the history endpoint advances, but
-# it must never fall below these counts under CONTROL.
-H1_CONTROL_MIN_BY_STRATEGY = {
-    "EUR_GBP_H1_LONG": 52,
-    "EUR_GBP_H1_SHORT": 73,
-    "EUR_USD_H1_LONG": 163,
-    "EUR_USD_H1_SHORT": 122,
-    "GBP_USD_H1_LONG": 205,
-    "GBP_USD_H1_SHORT": 123,
-    "USD_CAD_H1_LONG": 82,
-    "USD_CAD_H1_SHORT": 98,
-    "USD_JPY_H1_LONG": 228,
-    "USD_JPY_H1_SHORT": 169,
-}
-M15_CONTROL_MIN_BY_STRATEGY = dict(REFERENCE_COUNTS)
-
-
-def build_exit_scenarios():
-    out = [{
-        "scenario_id": "CONTROL",
-        "family": "CONTROL",
-        "h1_max_bars": None,
-        "m15_max_bars": None,
-        "mfe_threshold_r": None,
-        "reversal_body_atr_min": None,
-        "description": "Original locked stop/target exits only",
-    }]
-
-    bar_pairs = [
-        (12, 24, "A"),
-        (24, 48, "B"),
-        (48, 72, "C"),
-        (72, 96, "D"),
-    ]
-
-    for h1_bars, m15_bars, label in bar_pairs:
-        out.append({
-            "scenario_id": f"TIME_ONLY_{label}_H1_{h1_bars}_M15_{m15_bars}",
-            "family": "TIME_ONLY",
-            "h1_max_bars": h1_bars,
-            "m15_max_bars": m15_bars,
-            "mfe_threshold_r": None,
-            "reversal_body_atr_min": None,
-            "description": (
-                f"Exit at bar close after H1={h1_bars} or M15={m15_bars} "
-                "post-entry bars if stop/target has not already hit"
-            ),
-        })
-
-        for mfe in (0.25, 0.50, 0.75):
-            mfe_label = str(mfe).replace(".", "P")
-            out.append({
-                "scenario_id": (
-                    f"TIME_MFE_{label}_H1_{h1_bars}_M15_{m15_bars}_MFE_{mfe_label}R"
-                ),
-                "family": "TIME_MFE",
-                "h1_max_bars": h1_bars,
-                "m15_max_bars": m15_bars,
-                "mfe_threshold_r": mfe,
-                "reversal_body_atr_min": None,
-                "description": (
-                    f"At H1={h1_bars}/M15={m15_bars} bars, exit only if "
-                    f"post-entry MFE has never reached +{mfe:.2f}R"
-                ),
-            })
-
-    for body_atr in (0.75, 1.00, 1.25):
-        label = str(body_atr).replace(".", "P")
-        out.append({
-            "scenario_id": f"REVERSAL_OPP_ENGULF_BODY_{label}ATR",
-            "family": "REVERSAL",
-            "h1_max_bars": None,
-            "m15_max_bars": None,
-            "mfe_threshold_r": None,
-            "reversal_body_atr_min": body_atr,
-            "description": (
-                "Exit at bar close on an exact opposite engulfing candle "
-                f"whose body is >= {body_atr:.2f} ATR14"
-            ),
-        })
-
-    return out
-
-
-EXIT_SCENARIOS = build_exit_scenarios()
-EXIT_SCENARIO_MAP = {x["scenario_id"]: x for x in EXIT_SCENARIOS}
-
-
-def exit_rule_for_timeframe(scenario, timeframe):
-    if timeframe == "H1":
-        max_bars = scenario["h1_max_bars"]
-    elif timeframe == "M15":
-        max_bars = scenario["m15_max_bars"]
-    else:
-        raise ValueError(f"Unknown timeframe: {timeframe}")
-
-    return {
-        "family": scenario["family"],
-        "max_bars": max_bars,
-        "mfe_threshold_r": scenario["mfe_threshold_r"],
-        "reversal_body_atr_min": scenario["reversal_body_atr_min"],
-    }
-
-
-def exact_opposite_reversal(candles, atr_values, index, open_side, body_atr_min):
-    if body_atr_min is None or index <= 0:
-        return False
-    if index >= len(candles) or index >= len(atr_values):
-        return False
-
-    atr = atr_values[index]
-    if atr is None or not math.isfinite(float(atr)) or atr <= 0:
-        return False
-
-    previous = candles[index - 1]
-    current = candles[index]
-
-    if open_side == "BUY":
-        if not (
-            previous["close"] > previous["open"]
-            and current["close"] < current["open"]
-            and current["open"] >= previous["close"]
-            and current["close"] <= previous["open"]
-        ):
-            return False
-        body = current["open"] - current["close"]
-    else:
-        if not (
-            previous["close"] < previous["open"]
-            and current["close"] > current["open"]
-            and current["open"] <= previous["close"]
-            and current["close"] >= previous["open"]
-        ):
-            return False
-        body = current["close"] - current["open"]
-
-    return body > 0 and (body / atr) >= body_atr_min
-
-
-def exit_result_r(side, fill, stop, exit_price):
-    if side == "BUY":
-        actual_risk = fill - stop
-        if actual_risk <= 0:
-            return None
-        return (exit_price - fill) / actual_risk
-
-    actual_risk = stop - fill
-    if actual_risk <= 0:
-        return None
-    return (fill - exit_price) / actual_risk
-
-
-def evaluate_trade_exit_on_bar(
-    *,
-    side,
-    trade,
-    candles,
-    atr_values,
-    index,
-    bars_open,
-    mfe_r_before,
-    rule,
-):
-    """
-    Returns (exit_reason, exit_price, mfe_r_after).
-
-    Intrabar stop/target is always resolved before any close-based early exit.
-    """
-    candle = candles[index]
-    stop = trade["stop"]
-    target = trade["target"]
-    fill = trade["historical_fill"]
-    actual_risk = (
-        fill - stop if side == "BUY" else stop - fill
-    )
-    if actual_risk <= 0:
-        raise RuntimeError("Invalid actual risk")
-
-    hit_stop = (
-        candle["low"] <= stop if side == "BUY" else candle["high"] >= stop
-    )
-    hit_target = (
-        candle["high"] >= target if side == "BUY" else candle["low"] <= target
-    )
-
-    if hit_stop or hit_target:
-        if hit_stop and hit_target:
-            high_closer = (
-                abs(candle["high"] - candle["open"])
-                < abs(candle["open"] - candle["low"])
-            )
-            if side == "BUY":
-                reason = "TARGET" if high_closer else "STOP"
-            else:
-                reason = "STOP" if high_closer else "TARGET"
-        else:
-            reason = "STOP" if hit_stop else "TARGET"
-
-        price = stop if reason == "STOP" else target
-        # We do not try to infer MFE beyond the event that happened first.
-        return reason, price, mfe_r_before
-
-    if side == "BUY":
-        bar_favourable = (candle["high"] - fill) / actual_risk
-    else:
-        bar_favourable = (fill - candle["low"]) / actual_risk
-
-    mfe_after = max(mfe_r_before, float(bar_favourable))
-
-    reversal_min = rule.get("reversal_body_atr_min")
-    if reversal_min is not None and exact_opposite_reversal(
-        candles, atr_values, index, side, reversal_min
-    ):
-        return "REVERSAL_EXIT", candle["close"], mfe_after
-
-    max_bars = rule.get("max_bars")
-    if max_bars is not None and bars_open >= max_bars:
-        threshold = rule.get("mfe_threshold_r")
-        if threshold is None:
-            return "TIME_EXIT", candle["close"], mfe_after
-        if mfe_after < threshold:
-            return "TIME_PROGRESS_EXIT", candle["close"], mfe_after
-
-    return None, None, mfe_after
-
-
-# ============================================================
-# M15 EXIT-RESEARCH BACKTEST
-# ============================================================
-
-def m15_one_outcome_exit(
-    pair,
-    strategy_id,
-    trigger,
-    side,
-    m15,
-    atr_values,
-    i,
-    rr,
-    cost_pips,
-    scenario,
-):
-    meta = PAIR_META[pair]
-    tick = meta["tick"]
-    pip = meta["pip"]
-    sig = m15[i]
-    ref = sig["close"]
-
-    if side == "BUY":
-        stop = sig["low"] - 10 * tick
-        ref_risk = ref - stop
-        if ref_risk <= 0:
-            return None
-        target = ref + rr * ref_risk
-        fill = ref + cost_pips * pip
-    else:
-        stop = sig["high"] + 10 * tick
-        ref_risk = stop - ref
-        if ref_risk <= 0:
-            return None
-        target = ref - rr * ref_risk
-        fill = ref - cost_pips * pip
-
-    actual_risk = fill - stop if side == "BUY" else stop - fill
-    if actual_risk <= 0:
-        return None
-
-    trade = {
-        "stop": stop,
-        "target": target,
-        "historical_fill": fill,
-    }
-    rule = exit_rule_for_timeframe(scenario, "M15")
-    mfe_r = 0.0
-
-    for j in range(i + 1, len(m15)):
-        reason, exit_price, mfe_r = evaluate_trade_exit_on_bar(
-            side=side,
-            trade=trade,
-            candles=m15,
-            atr_values=atr_values,
-            index=j,
-            bars_open=j - i,
-            mfe_r_before=mfe_r,
-            rule=rule,
-        )
-
-        if reason is None:
-            continue
-
-        r = exit_result_r(side, fill, stop, exit_price)
-        if r is None:
-            return None
-
-        return {
-            "pair": pair,
-            "strategy_id": strategy_id,
-            "trigger": trigger,
-            "timeframe": "M15",
-            "side": side,
-            "signal_index": i,
-            "exit_index": j,
-            "signal_time": sig["time"],
-            "entry_time": sig["time"] + timedelta(minutes=15),
-            "exit_time": m15[j]["time"],
-            "exit_event_time": m15[j]["time"] + timedelta(minutes=15),
-            "rr": rr,
-            "reference_entry": ref,
-            "historical_fill": fill,
-            "stop": stop,
-            "target": target,
-            "result": reason,
-            "exit_price": float(exit_price),
-            "r": float(r),
-            "cost_model": "M15_1_ADVERSE_PIP",
-            "baseline_cost_value": float(cost_pips),
-            "bars_held": j - i,
-            "hold_hours": (j - i) * 0.25,
-            "mfe_r_at_exit": float(mfe_r),
-            "early_exit": reason in {
-                "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
-            },
-        }
-
-    return None
-
-
-def m15_run_stream_exit(
-    pair,
-    strategy_id,
-    side,
-    m15,
-    atr_values,
-    signals,
-    cost_pips,
-    scenario,
-):
-    signals = sorted(signals, key=lambda z: z[0])
-    idxs = [z[0] for z in signals]
-    out = []
-    p = 0
-
-    while p < len(signals):
-        i, trig, rr = signals[p]
-        tr = m15_one_outcome_exit(
-            pair,
-            strategy_id,
-            trig,
-            side,
-            m15,
-            atr_values,
-            i,
-            rr,
-            cost_pips,
-            scenario,
-        )
-        if tr is None:
-            p += 1
-            continue
-
-        out.append(tr)
-        # Exact exit-candle signal is eligible.
-        p = bisect.bisect_left(idxs, tr["exit_index"], lo=p + 1)
-
-    return out
-
-
-def m15_evaluate_strategy_exit(
-    pair,
-    strategy_id,
-    spec,
-    m15,
-    atr_values,
-    cost_pips,
-    scenario,
-):
-    if spec["mode"] in ("single", "priority_union"):
-        trades = m15_run_stream_exit(
-            pair,
-            strategy_id,
-            spec["side"],
-            m15,
-            atr_values,
-            spec["signals"],
-            cost_pips,
-            scenario,
-        )
-        return trades
-
-    core = m15_run_stream_exit(
-        pair,
-        strategy_id,
-        spec["side"],
-        m15,
-        atr_values,
-        spec["core_signals"],
-        cost_pips,
-        scenario,
-    )
-    comp = m15_run_stream_exit(
-        pair,
-        strategy_id,
-        spec["side"],
-        m15,
-        atr_values,
-        spec["comp_signals"],
-        cost_pips,
-        scenario,
-    )
-
-    combined, _, _ = overlay(core, comp)
-    return combined
-
-
-# ============================================================
-# H1 EXIT-RESEARCH BACKTEST
-# ============================================================
-
-def h1_open_trade_from_result(pair, side, result):
-    config = STRATEGIES[pair] if side == "BUY" else SHORT_STRATEGIES[pair]
-    tick = config["tick_size"]
-    ref = float(result["close"])
-
-    if side == "BUY":
-        fill = ref + BACKTEST_SLIPPAGE_TICKS * tick
-        stop = float(result["low"]) - config["stop_buffer_ticks"] * tick
-        ref_risk = ref - stop
-        target = ref + ref_risk * config["reward_risk"]
-    else:
-        fill = ref - BACKTEST_SLIPPAGE_TICKS * tick
-        stop = float(result["high"]) + config["stop_buffer_ticks"] * tick
-        ref_risk = stop - ref
-        target = ref - ref_risk * config["reward_risk"]
-
-    actual_risk = fill - stop if side == "BUY" else stop - fill
-    if ref_risk <= 0 or actual_risk <= 0:
-        return None
-
-    return {
-        "pair": pair,
-        "strategy_id": f"{pair}_H1_{'LONG' if side == 'BUY' else 'SHORT'}",
-        "trigger": "LIVE_H1_LONG" if side == "BUY" else "LIVE_H1_SHORT",
-        "timeframe": "H1",
-        "side": side,
-        "signal_time": result["signal_start_utc"],
-        "entry_time": result["signal_close_utc"],
-        "rr": float(config["reward_risk"]),
-        "reference_entry": ref,
-        "historical_fill": float(fill),
-        "stop": float(stop),
-        "target": float(target),
-        "entry_index": int(result.get("index", -1)),
-        "cost_model": "H1_5_ADVERSE_TICKS",
-        "baseline_cost_value": float(BACKTEST_SLIPPAGE_TICKS),
-        "mfe_r": 0.0,
-    }
-
-
-def h1_simulate_side_exit(
-    pair,
-    side,
-    h1,
-    atr_values,
-    daily_state,
-    start,
-    end,
-    scenario,
-):
-    config = STRATEGIES[pair] if side == "BUY" else SHORT_STRATEGIES[pair]
-
-    required = [config["atr_length"], config["structure_lookback"]]
-    if side == "SELL":
-        ml = config.get("momentum_lookback_bars")
-        if ml is not None:
-            required.append(int(ml))
-        for lookback in config.get("momentum_requirements", {}).keys():
-            required.append(int(lookback))
-        if config.get("minimum_h1_atr_ratio_50") is not None:
-            required.append(50)
-
-    start_index = max(required)
-    open_trade = None
-    trades = []
-    raw_signals = 0
-    ignored = 0
-    rule = exit_rule_for_timeframe(scenario, "H1")
-
-    for index in range(start_index, len(h1)):
-        candle = h1[index]
-        candle_time = candle["time"]
-        if candle_time < start:
-            continue
-        if candle_time >= end:
-            break
-
-        if open_trade is not None:
-            bars_open = index - open_trade["signal_index"]
-            reason, exit_price, mfe_after = evaluate_trade_exit_on_bar(
-                side=side,
-                trade=open_trade,
-                candles=h1,
-                atr_values=atr_values,
-                index=index,
-                bars_open=bars_open,
-                mfe_r_before=open_trade["mfe_r"],
-                rule=rule,
-            )
-            open_trade["mfe_r"] = mfe_after
-
-            if reason is not None:
-                r = exit_result_r(
-                    side,
-                    open_trade["historical_fill"],
-                    open_trade["stop"],
-                    exit_price,
-                )
-                if r is not None:
-                    finished = dict(open_trade)
-                    finished.update({
-                        "exit_index": index,
-                        "exit_time": candle_time,
-                        "exit_event_time": candle_time + timedelta(hours=1),
-                        "result": reason,
-                        "exit_price": float(exit_price),
-                        "r": float(r),
-                        "bars_held": bars_open,
-                        "hold_hours": float(bars_open),
-                        "mfe_r_at_exit": float(mfe_after),
-                        "early_exit": reason in {
-                            "TIME_EXIT", "TIME_PROGRESS_EXIT", "REVERSAL_EXIT"
-                        },
-                    })
-                    finished.pop("mfe_r", None)
-                    finished.pop("entry_index", None)
-                    trades.append(finished)
-                open_trade = None
-
-        if side == "BUY":
-            result = evaluate_signal_at_index(
-                pair, h1, atr_values, index, daily_state
-            )
-        else:
-            result = evaluate_short_signal_at_index(
-                pair, h1, atr_values, index, daily_state
-            )
-
-        if result is None or not result.get("qualified"):
-            continue
-
-        raw_signals += 1
-        if open_trade is not None:
-            ignored += 1
-            continue
-
-        new_trade = h1_open_trade_from_result(pair, side, result)
-        if new_trade is None:
-            continue
-        # Signal candle index is the current index; MFE starts next bar.
-        new_trade["signal_index"] = index
-        open_trade = new_trade
-
-    return {
-        "trades": trades,
-        "raw_signal_count": raw_signals,
-        "ignored_signal_count": ignored,
-        "position_still_open_at_end": open_trade is not None,
-    }
-
-
-# ============================================================
-# LIVE-SAFE NON-HEDGING GATE
-# ============================================================
-
-def live_safe_sort_key(trade, priority):
-    if priority == "H1_FIRST":
-        tf_rank = 0 if trade["timeframe"] == "H1" else 1
-    elif priority == "M15_FIRST":
-        tf_rank = 0 if trade["timeframe"] == "M15" else 1
-    else:
-        raise ValueError(priority)
-
-    side_rank = 0 if trade["side"] == "BUY" else 1
-    return (
-        trade["entry_time"],
-        tf_rank,
-        side_rank,
-        trade["strategy_id"],
-    )
-
-
-def apply_live_safe_nonhedging_gate(trades, priority="H1_FIRST"):
-    """
-    Allows same-pair SAME-DIRECTION overlaps across different strategies.
-    Blocks only an entry that opposes any still-open trade on that pair.
-    """
-    ordered = sorted(trades, key=lambda t: live_safe_sort_key(t, priority))
-    active = []
-    accepted = []
-    rejected = []
-
-    for t in ordered:
-        ts = t["entry_time"]
-        active = [x for x in active if x["exit_event_time"] > ts]
-
-        blockers = [
-            x for x in active
-            if x["pair"] == t["pair"] and x["side"] != t["side"]
-        ]
-
-        if blockers:
-            blocker = sorted(
-                blockers,
-                key=lambda x: (x["exit_event_time"], x["strategy_id"]),
-            )[0]
-            rejected.append({
-                "priority": priority,
-                "candidate_strategy_id": t["strategy_id"],
-                "candidate_pair": t["pair"],
-                "candidate_side": t["side"],
-                "candidate_timeframe": t["timeframe"],
-                "candidate_entry_time": iso(t["entry_time"]),
-                "candidate_r": t["r"],
-                "blocker_strategy_id": blocker["strategy_id"],
-                "blocker_side": blocker["side"],
-                "blocker_timeframe": blocker["timeframe"],
-                "blocker_exit_event_time": iso(blocker["exit_event_time"]),
-            })
-            continue
-
-        accepted.append(t)
-        active.append(t)
-
-    return accepted, rejected
-
-
-# ============================================================
-# EXIT-RESEARCH METRICS
-# ============================================================
-
-def serialise_exit_trade(scenario_id, mode, t):
-    row = {"scenario_id": scenario_id, "portfolio_mode": mode}
-    for k, v in t.items():
-        if isinstance(v, datetime):
-            row[k] = iso(v)
-        else:
-            row[k] = v
-    return row
-
-
-def exit_reason_rows(scenario_id, mode, trades):
-    grouped = defaultdict(list)
-    for t in trades:
-        grouped[t["result"]].append(t)
-
-    rows = []
-    for reason in sorted(grouped):
-        g = grouped[reason]
-        s = calc_stats(g)
-        rows.append({
-            "scenario_id": scenario_id,
-            "portfolio_mode": mode,
-            "exit_reason": reason,
-            **s,
-            "pct_of_trades": pct(len(g), len(trades)),
-            "median_hold_hours": safe_median(t.get("hold_hours", 0.0) for t in g),
-            "median_mfe_r_at_exit": safe_median(t.get("mfe_r_at_exit", 0.0) for t in g),
-        })
-    return rows
-
-
-def hold_summary_row(scenario_id, mode, trades):
-    holds = [float(t.get("hold_hours", 0.0)) for t in trades]
-    early = [t for t in trades if t.get("early_exit")]
-    return {
-        "scenario_id": scenario_id,
-        "portfolio_mode": mode,
-        "trades": len(trades),
-        "early_exits": len(early),
-        "early_exit_pct": pct(len(early), len(trades)),
-        "median_hold_hours": safe_median(holds),
-        "mean_hold_hours": (sum(holds) / len(holds)) if holds else 0.0,
-        "max_hold_hours": max(holds) if holds else 0.0,
-        "median_early_exit_mfe_r": safe_median(
-            t.get("mfe_r_at_exit", 0.0) for t in early
-        ),
-        "mean_early_exit_r": (
-            sum(t["r"] for t in early) / len(early)
-            if early else 0.0
-        ),
-    }
-
-
-def calendar_summary_exit(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[(r["scenario_id"], r["portfolio_mode"])].append(r)
-
-    out = []
-    for (scenario_id, mode), g in grouped.items():
-        complete = [x for x in g if str(x.get("complete_year")).lower() in {"true", "1"}]
-        active = [x for x in complete if x["realized_exits"] > 0]
-        positive = [x for x in active if x["compounded_return_pct"] > 0]
-        worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-        out.append({
-            "scenario_id": scenario_id,
-            "portfolio_mode": mode,
-            "completed_active_years": len(active),
-            "positive_completed_active_years": len(positive),
-            "positive_completed_active_years_pct": pct(len(positive), len(active)),
-            "median_calendar_return_pct": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_return_pct": worst["compounded_return_pct"] if worst else 0.0,
-            "best_year": best["year"] if best else "",
-            "best_year_return_pct": best["compounded_return_pct"] if best else 0.0,
-        })
-    return out
-
-
-def reprice_early_exit_cost(t, extra_cost_mult):
-    if not t.get("early_exit") or extra_cost_mult == 0:
-        return dict(t)
-
-    out = dict(t)
-    pair = t["pair"]
-
-    if t["timeframe"] == "H1":
-        native_price_cost = (
-            BACKTEST_SLIPPAGE_TICKS * PAIR_META[pair]["tick"]
-        )
-    else:
-        native_price_cost = PAIR_META[pair]["pip"]
-
-    extra = extra_cost_mult * native_price_cost
-    raw_exit = float(t["exit_price"])
-    stressed_exit = (
-        raw_exit - extra if t["side"] == "BUY" else raw_exit + extra
-    )
-
-    out["exit_price"] = stressed_exit
-    out["r"] = float(exit_result_r(
-        t["side"],
-        float(t["historical_fill"]),
-        float(t["stop"]),
-        stressed_exit,
-    ))
-    out["early_exit_extra_cost_mult"] = extra_cost_mult
-    return out
-
-
-# ============================================================
-# MAIN EXIT RESEARCH
-# ============================================================
-
-def run_exit_research():
-    try:
-        EXIT_STATUS.update(
-            state="starting",
-            message="Starting exact 20-strategy exit research",
-            progress=1,
-        )
-        write_csv(EXIT_OUT["scenario_definitions"], EXIT_SCENARIOS)
-
-        scenario_by_strategy = {
-            s["scenario_id"]: defaultdict(list)
-            for s in EXIT_SCENARIOS
-        }
-
-        # ------------------------------------------------------------
-        # 1) Rebuild M15 signals once per pair, then evaluate every exit rule.
-        # ------------------------------------------------------------
-        for pi, pair in enumerate(PAIRS):
-            EXIT_STATUS.update(
-                state="m15_rebuild",
-                message=f"M15 {pair}: downloading history + testing exit rules",
-                progress=4 + pi * 8,
-            )
-
-            m15, empty = fetch_history(pair, "M15", START, NOW)
-            if len(m15) < 350000:
-                raise RuntimeError(
-                    f"Incomplete {pair} M15 history: {len(m15)} candles"
-                )
-
-            aligned = {}
-            for gran in PAIR_HTFS[pair]:
-                hs, _ = fetch_history(pair, gran, HTF_WARMUP, NOW)
-                if not hs:
-                    raise RuntimeError(f"Missing {pair} {gran} history")
-                aligned[gran] = align_htf(
-                    [x["time"] for x in m15],
-                    htf_state(hs),
-                )
-                del hs
-
-            features = build_features(pair, m15, aligned)
-            specs = signal_sets(pair, features)
-            atr_values = [
-                None if not np.isfinite(x) else float(x)
-                for x in features["atr"]
-            ]
-
-            for scenario in EXIT_SCENARIOS:
-                sid = scenario["scenario_id"]
-                for strategy_id, spec in specs.items():
-                    trades = m15_evaluate_strategy_exit(
-                        pair,
-                        strategy_id,
-                        spec,
-                        m15,
-                        atr_values,
-                        BASELINE_COST,
-                        scenario,
-                    )
-                    scenario_by_strategy[sid][strategy_id].extend(trades)
-
-            del features, specs, aligned, atr_values, m15
-            gc.collect()
-
-        # ------------------------------------------------------------
-        # 2) Rebuild H1 once per pair, test every exit rule.
-        # ------------------------------------------------------------
-        for pi, pair in enumerate(PAIRS):
-            EXIT_STATUS.update(
-                state="h1_rebuild",
-                message=f"H1 {pair}: downloading history + testing exit rules",
-                progress=45 + pi * 7,
-            )
-
-            h1, _ = fetch_history(pair, "H1", H1_DATA_WARMUP, NOW)
-            daily, _ = fetch_history(pair, "D", H1_DAILY_WARMUP, NOW)
-
-            if len(h1) < 90000:
-                raise RuntimeError(
-                    f"Incomplete {pair} H1 history: {len(h1)} candles"
-                )
-            if len(daily) < 5000:
-                raise RuntimeError(
-                    f"Incomplete {pair} daily history: {len(daily)} candles"
-                )
-
-            long_cfg = STRATEGIES[pair]
-            long_atr = atr_series(h1, long_cfg["atr_length"])
-            long_daily = build_daily_state(daily, long_cfg)
-            register_h1_daily_state(long_daily)
-
-            short_cfg = SHORT_STRATEGIES[pair]
-            short_atr = atr_series(h1, short_cfg["atr_length"])
-            short_daily = build_short_daily_state(daily, short_cfg)
-            register_h1_daily_state(short_daily)
-
-            for scenario in EXIT_SCENARIOS:
-                sid = scenario["scenario_id"]
-
-                long_sim = h1_simulate_side_exit(
-                    pair,
-                    "BUY",
-                    h1,
-                    long_atr,
-                    long_daily,
-                    START,
-                    NOW,
-                    scenario,
-                )
-                short_sim = h1_simulate_side_exit(
-                    pair,
-                    "SELL",
-                    h1,
-                    short_atr,
-                    short_daily,
-                    START,
-                    NOW,
-                    scenario,
-                )
-
-                scenario_by_strategy[sid][f"{pair}_H1_LONG"].extend(
-                    long_sim["trades"]
-                )
-                scenario_by_strategy[sid][f"{pair}_H1_SHORT"].extend(
-                    short_sim["trades"]
-                )
-
-            _H1_DAILY_TIMES.pop(id(long_daily), None)
-            _H1_DAILY_TIMES.pop(id(short_daily), None)
-            del h1, daily, long_atr, short_atr, long_daily, short_daily
-            gc.collect()
-
-        # ------------------------------------------------------------
-        # 3) Hard control-parity guard.
-        # ------------------------------------------------------------
-        EXIT_STATUS.update(
-            state="parity",
-            message="Checking CONTROL against locked portfolio references",
-            progress=82,
-        )
-
-        parity = []
-        control_by_strategy = scenario_by_strategy["CONTROL"]
-        for strategy_id, minimum in {
-            **H1_CONTROL_MIN_BY_STRATEGY,
-            **M15_CONTROL_MIN_BY_STRATEGY,
-        }.items():
-            actual = len(control_by_strategy.get(strategy_id, []))
-            status = (
-                "PASS_EQUAL"
-                if actual == minimum
-                else ("PASS_NEWER_TRADES" if actual > minimum else "FAIL_BELOW_REFERENCE")
-            )
-            parity.append({
-                "strategy_id": strategy_id,
-                "reference_min_trades": minimum,
-                "control_current_trades": actual,
-                "status": status,
-            })
-
-        write_csv(EXIT_OUT["control_parity"], parity)
-        bad = [x for x in parity if x["status"] == "FAIL_BELOW_REFERENCE"]
-        if bad:
-            raise RuntimeError(
-                "CONTROL reproduction fell below reference: "
-                + json.dumps(bad, default=str)
-            )
-
-        # ------------------------------------------------------------
-        # 4) Apply portfolio modes and calculate 1%+1% equity statistics.
-        # ------------------------------------------------------------
-        summary_rows = []
-        strategy_rows = []
-        timeframe_rows = []
-        period_rows = []
-        rolling_rows_out = []
-        calendar_rows_out = []
-        exit_reason_out = []
-        hold_rows = []
-        gate_rejections = []
-        trade_rows = []
-        mode_trade_cache = {}
-
-        end_complete = month_floor(NOW)
-
-        for si, scenario in enumerate(EXIT_SCENARIOS):
-            scenario_id = scenario["scenario_id"]
-            EXIT_STATUS.update(
-                state="analyzing",
-                message=f"Analysing {scenario_id}",
-                progress=84 + int(9 * (si + 1) / len(EXIT_SCENARIOS)),
-            )
-
-            by_strategy = scenario_by_strategy[scenario_id]
-            independent = sorted(
-                [t for sid in sorted(by_strategy) for t in by_strategy[sid]],
-                key=lambda t: (t["entry_time"], t["strategy_id"]),
-            )
-
-            live_h1, rej_h1 = apply_live_safe_nonhedging_gate(
-                independent, "H1_FIRST"
-            )
-            live_m15, rej_m15 = apply_live_safe_nonhedging_gate(
-                independent, "M15_FIRST"
-            )
-
-            modes = {
-                "INDEPENDENT": independent,
-                "LIVE_SAFE_H1_FIRST": live_h1,
-                "LIVE_SAFE_M15_FIRST": live_m15,
-            }
-
-            for r in rej_h1:
-                gate_rejections.append({"scenario_id": scenario_id, **r})
-            for r in rej_m15:
-                gate_rejections.append({"scenario_id": scenario_id, **r})
-
-            for mode, trades in modes.items():
-                mode_trade_cache[(scenario_id, mode)] = trades
-                stats = calc_stats(trades)
-                exit_stats = calc_stats(trades, "exit")
-                sim = simulate_mixed_equity(
-                    trades,
-                    0.01,
-                    0.01,
-                    STARTING_BALANCE,
-                )
-                es = sim["summary"]
-                early = [t for t in trades if t.get("early_exit")]
-
-                summary_rows.append({
-                    "scenario_id": scenario_id,
-                    "family": scenario["family"],
-                    "portfolio_mode": mode,
-                    "trades": stats["trades"],
-                    "winners": stats["winners"],
-                    "losers": stats["losers"],
-                    "win_rate_pct": stats["win_rate_pct"],
-                    "profit_factor": stats["profit_factor"],
-                    "total_r": stats["total_r"],
-                    "expectancy_r": stats["expectancy_r"],
-                    "signal_order_max_drawdown_r": stats["max_drawdown_r"],
-                    "exit_order_max_drawdown_r": exit_stats["max_drawdown_r"],
-                    "longest_loss_streak": stats["longest_loss_streak"],
-                    "early_exits": len(early),
-                    "early_exit_pct": pct(len(early), len(trades)),
-                    "cagr_pct_1pct_h1_1pct_m15": es["cagr_pct"],
-                    "total_return_pct_1pct_h1_1pct_m15": es["total_return_pct"],
-                    "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
-                    "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
-                    "max_open_positions": es["max_open_positions"],
-                    "max_open_risk_pct_of_realised_equity": es[
-                        "max_open_risk_pct_of_realised_equity"
-                    ],
-                })
-
-                hold_rows.append(hold_summary_row(scenario_id, mode, trades))
-                exit_reason_out.extend(exit_reason_rows(scenario_id, mode, trades))
-
-                for tf in ("H1", "M15"):
-                    g = [t for t in trades if t["timeframe"] == tf]
-                    st = calc_stats(g)
-                    timeframe_rows.append({
-                        "scenario_id": scenario_id,
-                        "portfolio_mode": mode,
-                        "timeframe": tf,
-                        **st,
-                        "early_exits": sum(bool(t.get("early_exit")) for t in g),
-                        "median_hold_hours": safe_median(
-                            t.get("hold_hours", 0.0) for t in g
-                        ),
-                    })
-
-                for strategy_id in sorted(by_strategy):
-                    g = [t for t in trades if t["strategy_id"] == strategy_id]
-                    st = calc_stats(g)
-                    strategy_rows.append({
-                        "scenario_id": scenario_id,
-                        "portfolio_mode": mode,
-                        "strategy_id": strategy_id,
-                        "timeframe": (
-                            g[0]["timeframe"]
-                            if g else ("H1" if "_H1_" in strategy_id else "M15")
-                        ),
-                        **st,
-                        "early_exits": sum(bool(t.get("early_exit")) for t in g),
-                        "median_hold_hours": safe_median(
-                            t.get("hold_hours", 0.0) for t in g
-                        ),
-                    })
-
-                for label, a, b in [
-                    ("LAST_10Y", NOW - timedelta(days=365.2425 * 10), NOW),
-                    ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-                    ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
-                    ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-                    ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-                ]:
-                    row = mixed_equity_period_row(
-                        mode,
-                        sim,
-                        0.01,
-                        0.01,
-                        label,
-                        a,
-                        b,
-                        trades,
-                    )
-                    row["scenario_id"] = scenario_id
-                    period_rows.append(row)
-
-                first_year = min(t["entry_time"].year for t in trades)
-                cal = mixed_equity_calendar_rows(
-                    mode,
-                    sim,
-                    0.01,
-                    0.01,
-                    trades,
-                    first_year,
-                    NOW.year,
-                )
-                for row in cal:
-                    row["scenario_id"] = scenario_id
-                    calendar_rows_out.append(row)
-
-                roll_start = month_floor(min(t["entry_time"] for t in trades))
-                for months in (12, 24, 36):
-                    rr = mixed_equity_rolling_rows(
-                        mode,
-                        sim,
-                        0.01,
-                        0.01,
-                        trades,
-                        months,
-                        roll_start,
-                        end_complete,
-                    )
-                    for row in rr:
-                        row["scenario_id"] = scenario_id
-                        rolling_rows_out.append(row)
-
-                # Keep one complete trade log. ~20 scenarios x ~2300 trades is
-                # compact enough for a CSV and invaluable for auditing winners.
-                for t in trades:
-                    trade_rows.append(serialise_exit_trade(scenario_id, mode, t))
-
-        # ------------------------------------------------------------
-        # 5) Deltas vs CONTROL within each portfolio mode.
-        # ------------------------------------------------------------
-        summary_lookup = {
-            (r["scenario_id"], r["portfolio_mode"]): r
-            for r in summary_rows
-        }
-        delta_rows = []
-        for row in summary_rows:
-            control = summary_lookup[("CONTROL", row["portfolio_mode"])]
-            delta_rows.append({
-                "scenario_id": row["scenario_id"],
-                "family": row["family"],
-                "portfolio_mode": row["portfolio_mode"],
-                "delta_trades": row["trades"] - control["trades"],
-                "delta_total_r": row["total_r"] - control["total_r"],
-                "delta_pf": row["profit_factor"] - control["profit_factor"],
-                "delta_expectancy_r": row["expectancy_r"] - control["expectancy_r"],
-                "delta_cagr_pct_points": (
-                    row["cagr_pct_1pct_h1_1pct_m15"]
-                    - control["cagr_pct_1pct_h1_1pct_m15"]
-                ),
-                "delta_closed_dd_pct_points": (
-                    row["max_closed_equity_dd_pct"]
-                    - control["max_closed_equity_dd_pct"]
-                ),
-                "delta_floor_dd_pct_points": (
-                    row["max_open_risk_floor_dd_pct"]
-                    - control["max_open_risk_floor_dd_pct"]
-                ),
-                "early_exits": row["early_exits"],
-            })
-
-        # ------------------------------------------------------------
-        # 6) Rolling summaries, adapted to scenario dimension.
-        # ------------------------------------------------------------
-        roll_grouped = defaultdict(list)
-        for row in rolling_rows_out:
-            roll_grouped[(
-                row["scenario_id"],
-                row["portfolio_mode"],
-                row["months"],
-            )].append(row)
-
-        roll_summary_out = []
-        for (scenario_id, mode, months), g in roll_grouped.items():
-            active = [x for x in g if x["realized_exits"] > 0]
-            positive = [x for x in active if x["compounded_return_pct"] > 0]
-            worst = min(active, key=lambda x: x["compounded_return_pct"]) if active else None
-            best = max(active, key=lambda x: x["compounded_return_pct"]) if active else None
-            roll_summary_out.append({
-                "scenario_id": scenario_id,
-                "portfolio_mode": mode,
-                "months": months,
-                "windows": len(g),
-                "active_windows": len(active),
-                "positive_active_windows": len(positive),
-                "positive_active_windows_pct": pct(len(positive), len(active)),
-                "median_return_pct_active": safe_median(
-                    x["compounded_return_pct"] for x in active
-                ),
-                "worst_return_pct": worst["compounded_return_pct"] if worst else 0.0,
-                "worst_start_utc": worst["start_utc"] if worst else "",
-                "best_return_pct": best["compounded_return_pct"] if best else 0.0,
-                "best_start_utc": best["start_utc"] if best else "",
-            })
-
-        # ------------------------------------------------------------
-        # 7) Extra market-exit-cost sensitivity for live-safe H1-first.
-        # ------------------------------------------------------------
-        market_cost_rows = []
-        for scenario in EXIT_SCENARIOS:
-            scenario_id = scenario["scenario_id"]
-            base_trades = mode_trade_cache[(scenario_id, "LIVE_SAFE_H1_FIRST")]
-            for extra_mult in (0.0, 0.5, 1.0):
-                stressed = [
-                    reprice_early_exit_cost(t, extra_mult)
-                    for t in base_trades
-                ]
-                st = calc_stats(stressed)
-                es = simulate_mixed_equity(
-                    stressed, 0.01, 0.01, STARTING_BALANCE
-                )["summary"]
-                market_cost_rows.append({
-                    "scenario_id": scenario_id,
-                    "portfolio_mode": "LIVE_SAFE_H1_FIRST",
-                    "extra_early_exit_cost_mult": extra_mult,
-                    "interpretation": (
-                        "0=no extra close slippage; 0.5/1.0 = adverse extra "
-                        "close cost equal to 0.5x/1.0x each timeframe's native "
-                        "entry adverse-cost amount, applied only to early exits"
-                    ),
-                    **st,
-                    "cagr_pct": es["cagr_pct"],
-                    "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
-                    "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
-                })
-
-        # ------------------------------------------------------------
-        # 8) Write everything.
-        # ------------------------------------------------------------
-        write_csv(EXIT_OUT["scenario_summary"], summary_rows)
-        write_csv(EXIT_OUT["delta_vs_control"], delta_rows)
-        write_csv(EXIT_OUT["by_strategy"], strategy_rows)
-        write_csv(EXIT_OUT["by_timeframe"], timeframe_rows)
-        write_csv(EXIT_OUT["periods"], period_rows)
-        write_csv(EXIT_OUT["rolling"], rolling_rows_out)
-        write_csv(EXIT_OUT["rolling_summary"], roll_summary_out)
-        write_csv(EXIT_OUT["calendar"], calendar_rows_out)
-        write_csv(EXIT_OUT["calendar_summary"], calendar_summary_exit(calendar_rows_out))
-        write_csv(EXIT_OUT["exit_reasons"], exit_reason_out)
-        write_csv(EXIT_OUT["hold_summary"], hold_rows)
-        write_csv(EXIT_OUT["gate_rejections"], gate_rejections)
-        write_csv(EXIT_OUT["market_exit_cost_stress"], market_cost_rows)
-        write_csv(EXIT_OUT["trades"], trade_rows)
-
-        write_csv(EXIT_OUT["notes"], [
-            {
-                "item": "Entry rules frozen",
-                "value": "No entry parameter is optimized or changed. This file inherits the exact final locked 10 H1 + 10 M15 definitions from the validated combined runner.",
-            },
-            {
-                "item": "Primary live mode",
-                "value": "LIVE_SAFE_H1_FIRST allows same-direction same-pair overlaps and blocks only opposite-direction same-pair entries, matching the current non-hedging account constraint. M15-first is exported as exact-tie sensitivity.",
-            },
-            {
-                "item": "1% + 1%",
-                "value": "All equity comparisons use 1% per accepted H1 trade and 1% per accepted M15 trade, matching the current live deployment decision.",
-            },
-            {
-                "item": "Time exit timing",
-                "value": "Stop/target is checked intrabar first. If neither is hit and the time rule fires, the market exit is assumed at that bar close.",
-            },
-            {
-                "item": "MFE definition",
-                "value": "MFE is calculated from the adverse historical fill in units of actual stop risk, using only post-entry bars. Signal-candle excursion before entry is excluded.",
-            },
-            {
-                "item": "Progress exit",
-                "value": "The TIME_MFE rule is a one-time deadline test: at the specified bar count, exit only if MFE has never reached the threshold. If threshold was reached, the trade remains on original stop/target indefinitely.",
-            },
-            {
-                "item": "Reversal exit",
-                "value": "Universal exact opposite engulfing only; body must exceed the specified ATR14 threshold. No pair-specific reversal tuning is used.",
-            },
-            {
-                "item": "Early exit costs",
-                "value": "Primary scenario results preserve the original adverse-entry cost convention. A separate sensitivity file adds 0.5x and 1.0x native adverse price cost to early-market exits only.",
-            },
-            {
-                "item": "Selection discipline",
-                "value": "Do not pick the single highest CAGR blindly. Prefer broad plateaus that improve PF/expectancy/DD/rolling windows across H1, M15 and many strategies, including under extra early-exit cost stress.",
-            },
-        ])
-
-        EXIT_STATUS.update(
-            state="packaging",
-            message="Packaging exit-research ZIP",
-            progress=98,
-        )
-        with zipfile.ZipFile(
-            EXIT_BUNDLE, "w", compression=zipfile.ZIP_DEFLATED
-        ) as z:
-            for path in EXIT_OUT.values():
-                if os.path.exists(path):
-                    z.write(path, arcname=os.path.basename(path))
-
-        control_live = summary_lookup[("CONTROL", "LIVE_SAFE_H1_FIRST")]
-        EXIT_STATUS.update(
-            state="complete",
-            message="20-strategy exit research complete",
-            progress=100,
-            results=EXIT_BUNDLE,
-            scenarios=len(EXIT_SCENARIOS),
-            control_live_safe_trades=control_live["trades"],
-            control_live_safe_pf=control_live["profit_factor"],
-            control_live_safe_cagr_pct=control_live[
-                "cagr_pct_1pct_h1_1pct_m15"
-            ],
-            control_live_safe_floor_dd_pct=control_live[
-                "max_open_risk_floor_dd_pct"
-            ],
-        )
-
-    except Exception as e:
-        import traceback
-        EXIT_STATUS.update(
-            state="error",
-            message=str(e),
-            error_type=type(e).__name__,
-            traceback=traceback.format_exc(),
-            progress=EXIT_STATUS.get("progress", 0),
-        )
-
-
-# ============================================================
-# EXIT RESEARCH FLASK ROUTES
-# ============================================================
-@app.get("/")
-def exit_root():
-    return jsonify({
-        "service": "H1 + M15 20-Strategy Exit Research",
-        "state": EXIT_STATUS.get("state"),
-        "message": EXIT_STATUS.get("message"),
-        "orders_supported": False,
-        "trading_enabled": False,
-        "risk_model": "1% H1 + 1% M15",
-        "primary_live_mode": "LIVE_SAFE_H1_FIRST",
-        "scenarios": len(EXIT_SCENARIOS),
-        "routes": [
-            "/h1-m15-exit-research/status",
-            "/h1-m15-exit-research/results",
-        ],
-    })
-
-
-@app.get("/h1-m15-exit-research/status")
-def exit_research_status():
-    return jsonify(EXIT_STATUS)
-
-
-@app.get("/h1-m15-exit-research/results")
-def exit_research_results():
-    if not os.path.exists(EXIT_BUNDLE):
-        return jsonify({
-            "error": "Exit research results not ready",
-            "status": EXIT_STATUS,
-        }), 404
-    return send_file(
-        os.path.abspath(EXIT_BUNDLE),
-        as_attachment=True,
-        download_name=EXIT_BUNDLE,
-    )
-
-
-def start_background():
-    threading.Thread(target=run_exit_research, daemon=True).start()
-
-
-
-# ============================================================
-# EUR/JPY STRATEGY #21 — FINAL TARGETED VALIDATION + PORTFOLIO ADD
-# ============================================================
-#
-# This section is intentionally narrow.
-#
-# Frozen raw family:
-#   EUR_JPY H1 LONG
-#   exact bullish engulfing
-#   BR >= 1.30
-#   body >= 1.25 ATR14
-#   signal low within 0.15 ATR14 of prior low
-#   RR = 5.50
-#   stop = signal low - 10 ticks
-#   adverse historical entry = +5 ticks = +0.5 pip
-#
-# Geometry sensitivity retained:
-#   lookback = 12 / 15 / 20
-#
-# Context variants ONLY:
-#   CONTROL
-#   EXCLUDE_FRIDAY
-#   EXCLUDE_NY08
-#   EXCLUDE_FRIDAY_NY08
-#
-# Every one of the 12 candidates is:
-#   - rebuilt from OANDA midpoint H1 candles
-#   - checked at 1x and cost-stressed 0.5x / 1.5x / 2x
-#   - split 2002-2017 vs 2018+
-#   - checked over four broad eras
-#   - checked last 5Y / 2Y / 1Y
-#   - calendar-year tested
-#   - rolling 12 / 24 / 36M tested
-#   - added ONE AT A TIME to the exact current locked 20-strategy portfolio
-#   - passed through the current non-hedging-safe live gate
-#   - compounded at 1% per accepted H1/M15 trade
-#
-# The existing 20-strategy portfolio is rebuilt with the exact frozen
-# H1/M15 machinery already present above. No baseline summary is hard-coded.
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-EV_STATUS = {
-    "state": "not_started",
-    "message": "EUR/JPY final validation not started",
-    "progress": 0,
-}
-
-EV_BUNDLE = "EURJPY_H1_LONG_FINAL_VALIDATION_AND_PORTFOLIO_ADD_RESULTS.zip"
-
-EV_OUT = {
-    "baseline_parity": "eurjpy_final_current20_control_parity.csv",
-    "baseline_summary": "eurjpy_final_current20_baseline_summary.csv",
-    "candidate_summary": "eurjpy_final_candidate_summary.csv",
-    "candidate_periods": "eurjpy_final_candidate_periods.csv",
-    "candidate_cost_stress": "eurjpy_final_candidate_cost_stress.csv",
-    "candidate_calendar": "eurjpy_final_candidate_calendar.csv",
-    "candidate_calendar_summary": "eurjpy_final_candidate_calendar_summary.csv",
-    "candidate_rolling": "eurjpy_final_candidate_rolling.csv",
-    "candidate_rolling_summary": "eurjpy_final_candidate_rolling_summary.csv",
-    "candidate_trades": "eurjpy_final_candidate_trades.csv",
-    "portfolio_summary": "eurjpy_final_portfolio_addition_summary.csv",
-    "portfolio_delta": "eurjpy_final_portfolio_delta_vs_current20.csv",
-    "portfolio_frequency": "eurjpy_final_portfolio_frequency.csv",
-    "portfolio_rolling": "eurjpy_final_portfolio_rolling.csv",
-    "portfolio_rolling_summary": "eurjpy_final_portfolio_rolling_summary.csv",
-    "portfolio_calendar": "eurjpy_final_portfolio_calendar.csv",
-    "portfolio_calendar_summary": "eurjpy_final_portfolio_calendar_summary.csv",
-    "portfolio_gate_rejections": "eurjpy_final_portfolio_gate_rejections.csv",
-    "notes": "eurjpy_final_notes.csv",
-}
-
-EV_PAIR = "EUR_JPY"
-EV_TICK = 0.001
-EV_PIP = 0.01
-EV_STOP_BUFFER_TICKS = 10
-EV_BASE_COST_TICKS = 5.0
-EV_RR = 5.50
-EV_BR_MIN = 1.30
-EV_BODY_ATR_MIN = 1.25
-EV_DISTANCE_ATR_MAX = 0.15
-EV_LOOKBACKS = [12, 15, 20]
-EV_NY = ZoneInfo("America/New_York")
-
-EV_VARIANTS = [
-    {
-        "variant_id": "CONTROL",
-        "exclude_friday": False,
-        "exclude_ny08": False,
-    },
-    {
-        "variant_id": "EXCLUDE_FRIDAY",
-        "exclude_friday": True,
-        "exclude_ny08": False,
-    },
-    {
-        "variant_id": "EXCLUDE_NY08",
-        "exclude_friday": False,
-        "exclude_ny08": True,
-    },
-    {
-        "variant_id": "EXCLUDE_FRIDAY_NY08",
-        "exclude_friday": True,
-        "exclude_ny08": True,
-    },
-]
-
-# Reference counts from the immediately preceding context-filter run.
-# Later history may add trades, but a re-run must never fall BELOW these.
-EV_REFERENCE_COUNTS = {
-    (12, "CONTROL"): 102,
-    (15, "CONTROL"): 91,
-    (20, "CONTROL"): 72,
-    (12, "EXCLUDE_FRIDAY"): 90,
-    (15, "EXCLUDE_FRIDAY"): 78,
-    (20, "EXCLUDE_FRIDAY"): 63,
-    (12, "EXCLUDE_NY08"): 95,
-    (15, "EXCLUDE_NY08"): 86,
-    (20, "EXCLUDE_NY08"): 68,
-    (12, "EXCLUDE_FRIDAY_NY08"): 84,
-    (15, "EXCLUDE_FRIDAY_NY08"): 74,
-    (20, "EXCLUDE_FRIDAY_NY08"): 59,
-}
-
-
-# ============================================================
-# EUR/JPY CANDIDATE HELPERS
-# ============================================================
-
-def ev_atr14(candles):
-    return atr_series(candles, 14)
-
-
-def ev_prior_low(candles, index, lookback):
-    if index < lookback:
-        return None
-    return min(float(candles[j]["low"]) for j in range(index - lookback, index))
-
-
-def ev_raw_signal(candles, atr_values, index, lookback):
-    if index <= 0 or index < lookback:
-        return False
-
-    prev = candles[index - 1]
-    cur = candles[index]
-    atr = atr_values[index]
-
-    if atr is None or not math.isfinite(float(atr)) or float(atr) <= 0:
-        return False
-
-    # Exact bullish engulfing.
-    if not (float(prev["close"]) < float(prev["open"])):
-        return False
-    if not (float(cur["close"]) > float(cur["open"])):
-        return False
-    if not (float(cur["open"]) <= float(prev["close"])):
-        return False
-    if not (float(cur["close"]) >= float(prev["open"])):
-        return False
-
-    current_body = float(cur["close"]) - float(cur["open"])
-    previous_body = abs(float(prev["close"]) - float(prev["open"]))
-
-    if previous_body <= 0:
-        return False
-
-    if current_body / previous_body < EV_BR_MIN:
-        return False
-
-    if current_body / float(atr) < EV_BODY_ATR_MIN:
-        return False
-
-    prior_low = ev_prior_low(candles, index, lookback)
-    if prior_low is None:
-        return False
-
-    distance_atr = abs(float(cur["low"]) - prior_low) / float(atr)
-    if distance_atr > EV_DISTANCE_ATR_MAX:
-        return False
-
-    return True
-
-
-def ev_context_allowed(signal_open_utc, variant):
-    ny = signal_open_utc.astimezone(EV_NY)
-
-    if variant["exclude_friday"] and ny.weekday() == 4:
-        return False
-
-    if variant["exclude_ny08"] and ny.hour == 8:
-        return False
-
-    return True
-
-
-def ev_find_exit(candles, signal_index, stop, target):
-    for index in range(signal_index + 1, len(candles)):
-        candle = candles[index]
-        o = float(candle["open"])
-        h = float(candle["high"])
-        l = float(candle["low"])
-
-        stop_hit = l <= stop
-        target_hit = h >= target
-
-        if not stop_hit and not target_hit:
-            continue
-
-        if stop_hit and target_hit:
-            # Locked H1 long same-bar tie convention.
-            reason = "TARGET" if abs(h - o) < abs(o - l) else "STOP"
-        elif target_hit:
-            reason = "TARGET"
-        else:
-            reason = "STOP"
-
-        return index, reason
-
-    return None, None
-
-
-def ev_build_candidate_trades(
-    candles,
-    atr_values,
-    lookback,
-    variant,
-    cost_multiplier=1.0,
-):
-    """
-    Exact p0 candidate stream.
-
-    Signal on exact exit candle is eligible.
-    """
-    strategy_id = (
-        f"EUR_JPY_H1_LONG_LB{lookback}_{variant['variant_id']}"
-    )
-
-    raw_signal_indices = []
-    for index in range(max(14, lookback), len(candles)):
-        t = candles[index]["time"]
-
-        if t < START:
-            continue
-        if t >= NOW:
-            break
-
-        if not ev_raw_signal(candles, atr_values, index, lookback):
-            continue
-
-        if not ev_context_allowed(t, variant):
-            continue
-
-        raw_signal_indices.append(index)
-
-    trades = []
-    pointer = 0
-    cost_ticks = EV_BASE_COST_TICKS * float(cost_multiplier)
-
-    while pointer < len(raw_signal_indices):
-        signal_index = raw_signal_indices[pointer]
-        signal = candles[signal_index]
-
-        reference_entry = float(signal["close"])
-        historical_fill = reference_entry + cost_ticks * EV_TICK
-        stop = float(signal["low"]) - EV_STOP_BUFFER_TICKS * EV_TICK
-        reference_risk = reference_entry - stop
-        actual_risk = historical_fill - stop
-
-        if reference_risk <= 0 or actual_risk <= 0:
-            pointer += 1
-            continue
-
-        target = reference_entry + EV_RR * reference_risk
-
-        exit_index, reason = ev_find_exit(
-            candles,
-            signal_index,
-            stop,
-            target,
-        )
-
-        if exit_index is None:
-            break
-
-        exit_price = target if reason == "TARGET" else stop
-        result_r = (exit_price - historical_fill) / actual_risk
-
-        exit_candle = candles[exit_index]
-
-        trades.append({
-            "pair": EV_PAIR,
-            "strategy_id": strategy_id,
-            "trigger": variant["variant_id"],
-            "timeframe": "H1",
-            "side": "BUY",
-            "signal_time": signal["time"],
-            "entry_time": signal["time"] + timedelta(hours=1),
-            "exit_time": exit_candle["time"],
-            "exit_event_time": exit_candle["time"] + timedelta(hours=1),
-            "rr": EV_RR,
-            "reference_entry": reference_entry,
-            "historical_fill": historical_fill,
-            "stop": stop,
-            "target": target,
-            "exit_price": exit_price,
-            "result": reason,
-            "r": float(result_r),
-            "bars_held": exit_index - signal_index,
-            "hold_hours": float(exit_index - signal_index),
-            "early_exit": False,
-            "lookback": lookback,
-            "variant_id": variant["variant_id"],
-            "cost_multiplier": float(cost_multiplier),
-            "cost_model": f"EURJPY_H1_{cost_ticks:g}_ADVERSE_TICKS",
-        })
-
-        # Exact exit-candle signal remains eligible.
-        pointer = bisect.bisect_left(
-            raw_signal_indices,
-            exit_index,
-            lo=pointer + 1,
-        )
-
-    return trades
-
-
-def ev_candidate_period_rows(lookback, variant_id, trades):
-    periods = [
-        ("FULL", None, None),
-        ("DEV_2002_2017", None, datetime(2018, 1, 1, tzinfo=timezone.utc)),
-        ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), None),
-        (
-            "2002_2007",
-            datetime(2002, 1, 1, tzinfo=timezone.utc),
-            datetime(2008, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            "2008_2013",
-            datetime(2008, 1, 1, tzinfo=timezone.utc),
-            datetime(2014, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            "2014_2019",
-            datetime(2014, 1, 1, tzinfo=timezone.utc),
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            "2020_NOW",
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
-            None,
-        ),
-        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), None),
-        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), None),
-        ("LAST_1Y", NOW - timedelta(days=365.2425), None),
-    ]
-
-    rows = []
-
-    for label, start, end in periods:
-        s = calc_stats(subset(trades, start, end))
-        rows.append({
-            "lookback": lookback,
-            "variant_id": variant_id,
-            "period": label,
-            **s,
-        })
-
-    return rows
-
-
-def ev_candidate_summary_row(lookback, variant_id, trades):
-    full = calc_stats(trades)
-    dev = calc_stats(subset(
-        trades,
-        None,
-        datetime(2018, 1, 1, tzinfo=timezone.utc),
-    ))
-    val = calc_stats(subset(
-        trades,
-        datetime(2018, 1, 1, tzinfo=timezone.utc),
-        None,
-    ))
-
-    era_ranges = [
-        (
-            datetime(2002, 1, 1, tzinfo=timezone.utc),
-            datetime(2008, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2008, 1, 1, tzinfo=timezone.utc),
-            datetime(2014, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2014, 1, 1, tzinfo=timezone.utc),
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
-            None,
-        ),
-    ]
-
-    era_stats = [
-        calc_stats(subset(trades, a, b))
-        for a, b in era_ranges
-    ]
-
-    last5 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 5),
-        None,
-    ))
-    last2 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 2),
-        None,
-    ))
-    last1 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425),
-        None,
-    ))
-
-    positive_eras = sum(
-        s["trades"] > 0 and s["total_r"] > 0
-        for s in era_stats
-    )
-
-    return {
-        "lookback": lookback,
-        "variant_id": variant_id,
-        **{f"full_{k}": v for k, v in full.items()},
-        "dev_2002_2017_trades": dev["trades"],
-        "dev_2002_2017_pf": dev["profit_factor"],
-        "dev_2002_2017_r": dev["total_r"],
-        "validation_2018_plus_trades": val["trades"],
-        "validation_2018_plus_pf": val["profit_factor"],
-        "validation_2018_plus_r": val["total_r"],
-        "min_temporal_split_pf": min(
-            dev["profit_factor"] if dev["trades"] else 0.0,
-            val["profit_factor"] if val["trades"] else 0.0,
-        ),
-        "both_temporal_splits_positive": (
-            dev["trades"] > 0
-            and val["trades"] > 0
-            and dev["total_r"] > 0
-            and val["total_r"] > 0
-        ),
-        "positive_eras": positive_eras,
-        "era_2002_2007_r": era_stats[0]["total_r"],
-        "era_2008_2013_r": era_stats[1]["total_r"],
-        "era_2014_2019_r": era_stats[2]["total_r"],
-        "era_2020_now_r": era_stats[3]["total_r"],
-        "last5y_trades": last5["trades"],
-        "last5y_pf": last5["profit_factor"],
-        "last5y_r": last5["total_r"],
-        "last2y_trades": last2["trades"],
-        "last2y_pf": last2["profit_factor"],
-        "last2y_r": last2["total_r"],
-        "last1y_trades": last1["trades"],
-        "last1y_pf": last1["profit_factor"],
-        "last1y_r": last1["total_r"],
-    }
-
-
-def ev_serialise_trade(t):
-    out = dict(t)
-    for key, value in list(out.items()):
-        if isinstance(value, datetime):
-            out[key] = iso(value)
-    return out
-
-
-# ============================================================
-# EXACT CURRENT 20-STRATEGY CONTROL REBUILD
-# ============================================================
-
-def ev_rebuild_current20():
-    control_scenario = next(
-        x for x in EXIT_SCENARIOS
-        if x["scenario_id"] == "CONTROL"
-    )
-
-    by_strategy = defaultdict(list)
-
-    # M15 exact final locks.
-    for pi, pair in enumerate(PAIRS):
-        EV_STATUS.update(
-            state="baseline_m15",
-            message=f"Rebuilding current 20: M15 {pair}",
-            progress=3 + pi * 5,
-        )
-
-        m15, _ = fetch_history(pair, "M15", START, NOW)
-
-        if len(m15) < 350000:
-            raise RuntimeError(
-                f"Incomplete {pair} M15 history: {len(m15)} candles"
-            )
-
-        aligned = {}
-        for gran in PAIR_HTFS[pair]:
-            hs, _ = fetch_history(pair, gran, HTF_WARMUP, NOW)
-            if not hs:
-                raise RuntimeError(f"Missing {pair} {gran} history")
-
-            aligned[gran] = align_htf(
-                [x["time"] for x in m15],
-                htf_state(hs),
-            )
-
-        features = build_features(pair, m15, aligned)
-        specs = signal_sets(pair, features)
-
-        atr_values = [
-            None if not np.isfinite(x) else float(x)
-            for x in features["atr"]
-        ]
-
-        for strategy_id, spec in specs.items():
-            by_strategy[strategy_id].extend(
-                m15_evaluate_strategy_exit(
-                    pair,
-                    strategy_id,
-                    spec,
-                    m15,
-                    atr_values,
-                    BASELINE_COST,
-                    control_scenario,
-                )
-            )
-
-        del m15, aligned, features, specs, atr_values
-        gc.collect()
-
-    # H1 exact current locks.
-    for pi, pair in enumerate(PAIRS):
-        EV_STATUS.update(
-            state="baseline_h1",
-            message=f"Rebuilding current 20: H1 {pair}",
-            progress=30 + pi * 6,
-        )
-
-        h1, _ = fetch_history(pair, "H1", H1_DATA_WARMUP, NOW)
-        daily, _ = fetch_history(pair, "D", H1_DAILY_WARMUP, NOW)
-
-        if len(h1) < 90000:
-            raise RuntimeError(
-                f"Incomplete {pair} H1 history: {len(h1)} candles"
-            )
-
-        if len(daily) < 5000:
-            raise RuntimeError(
-                f"Incomplete {pair} daily history: {len(daily)} candles"
-            )
-
-        long_cfg = STRATEGIES[pair]
-        short_cfg = SHORT_STRATEGIES[pair]
-
-        long_atr = atr_series(h1, long_cfg["atr_length"])
-        short_atr = atr_series(h1, short_cfg["atr_length"])
-
-        long_daily = build_daily_state(daily, long_cfg)
-        short_daily = build_short_daily_state(daily, short_cfg)
-
-        register_h1_daily_state(long_daily)
-        register_h1_daily_state(short_daily)
-
-        long_sim = h1_simulate_side_exit(
-            pair,
-            "BUY",
-            h1,
-            long_atr,
-            long_daily,
-            START,
-            NOW,
-            control_scenario,
-        )
-
-        short_sim = h1_simulate_side_exit(
-            pair,
-            "SELL",
-            h1,
-            short_atr,
-            short_daily,
-            START,
-            NOW,
-            control_scenario,
-        )
-
-        by_strategy[f"{pair}_H1_LONG"].extend(long_sim["trades"])
-        by_strategy[f"{pair}_H1_SHORT"].extend(short_sim["trades"])
-
-        _H1_DAILY_TIMES.pop(id(long_daily), None)
-        _H1_DAILY_TIMES.pop(id(short_daily), None)
-
-        del h1, daily, long_atr, short_atr, long_daily, short_daily
-        gc.collect()
-
-    parity = []
-
-    for strategy_id, minimum in {
-        **H1_CONTROL_MIN_BY_STRATEGY,
-        **M15_CONTROL_MIN_BY_STRATEGY,
-    }.items():
-        actual = len(by_strategy.get(strategy_id, []))
-        status = (
-            "PASS_EQUAL"
-            if actual == minimum
-            else (
-                "PASS_NEWER_TRADES"
-                if actual > minimum
-                else "FAIL_BELOW_REFERENCE"
-            )
-        )
-
-        parity.append({
-            "strategy_id": strategy_id,
-            "reference_min_trades": minimum,
-            "current_trades": actual,
-            "status": status,
-        })
-
-    bad = [
-        row for row in parity
-        if row["status"] == "FAIL_BELOW_REFERENCE"
-    ]
-
-    if bad:
-        raise RuntimeError(
-            "Current 20-strategy control parity failure: "
-            + json.dumps(bad, default=str)
-        )
-
-    independent = sorted(
-        [
-            t
-            for strategy_id in sorted(by_strategy)
-            for t in by_strategy[strategy_id]
-        ],
-        key=lambda t: (t["entry_time"], t["strategy_id"]),
-    )
-
-    live_h1, rejected_h1 = apply_live_safe_nonhedging_gate(
-        independent,
-        "H1_FIRST",
-    )
-
-    live_m15, rejected_m15 = apply_live_safe_nonhedging_gate(
-        independent,
-        "M15_FIRST",
-    )
-
-    return {
-        "by_strategy": by_strategy,
-        "independent": independent,
-        "live_h1_first": live_h1,
-        "live_m15_first": live_m15,
-        "rejected_h1_first": rejected_h1,
-        "rejected_m15_first": rejected_m15,
-        "parity": parity,
-    }
-
-
-# ============================================================
-# PORTFOLIO ANALYSIS HELPERS
-# ============================================================
-
-def ev_portfolio_summary_row(
-    candidate_id,
-    portfolio_mode,
-    trades,
-):
-    stats = calc_stats(trades)
-    exit_stats = calc_stats(trades, "exit")
-
-    sim = simulate_mixed_equity(
-        trades,
-        0.01,
-        0.01,
-        STARTING_BALANCE,
-    )
-
-    es = sim["summary"]
-
-    return {
-        "candidate_id": candidate_id,
-        "portfolio_mode": portfolio_mode,
-        "trades": stats["trades"],
-        "winners": stats["winners"],
-        "losers": stats["losers"],
-        "win_rate_pct": stats["win_rate_pct"],
-        "profit_factor": stats["profit_factor"],
-        "total_r": stats["total_r"],
-        "expectancy_r": stats["expectancy_r"],
-        "signal_order_max_drawdown_r": stats["max_drawdown_r"],
-        "exit_order_max_drawdown_r": exit_stats["max_drawdown_r"],
-        "longest_loss_streak": stats["longest_loss_streak"],
-        "cagr_pct_1pct_h1_1pct_m15": es["cagr_pct"],
-        "total_return_pct_1pct_h1_1pct_m15": es["total_return_pct"],
-        "ending_balance_from_100": es["ending_balance"],
-        "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
-        "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
-        "max_open_positions": es["max_open_positions"],
-        "max_open_risk_pct_of_realised_equity": es[
-            "max_open_risk_pct_of_realised_equity"
-        ],
-        "_sim": sim,
-    }
-
-
-def ev_frequency_detail(candidate_id, mode, trades):
-    rows = []
-
-    windows = [
-        ("FULL", min(t["signal_time"] for t in trades), NOW),
-        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
-        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
-        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
-    ]
-
-    for label, start, end in windows:
-        row = frequency_row(
-            candidate_id,
-            trades,
-            start,
-            end,
-            label,
-        )
-        row["candidate_id"] = candidate_id
-        row["portfolio_mode"] = mode
-        rows.append(row)
-
-    return rows
-
-
-def ev_candidate_calendar_rows(lookback, variant_id, trades):
-    if not trades:
-        return []
-
-    first_year = trades[0]["signal_time"].year
-    last_year = trades[-1]["signal_time"].year
-
-    rows = []
-
-    for year in range(first_year, last_year + 1):
-        start = datetime(year, 1, 1, tzinfo=timezone.utc)
-        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-        s = calc_stats(subset(trades, start, end))
-        rows.append({
-            "lookback": lookback,
-            "variant_id": variant_id,
-            "year": year,
-            "complete_year": year < NOW.year,
-            **s,
-        })
-
-    return rows
-
-
-def ev_candidate_rolling_rows(lookback, variant_id, trades):
-    if not trades:
-        return []
-
-    start_month = month_floor(trades[0]["signal_time"])
-    end_complete = month_floor(NOW)
-
-    rows = []
-
-    for months in (12, 24, 36):
-        for row in rolling_rows(
-            f"LB{lookback}_{variant_id}",
-            trades,
-            months,
-            start_month,
-            end_complete,
-        ):
-            row["lookback"] = lookback
-            row["variant_id"] = variant_id
-            rows.append(row)
-
-    return rows
-
-
-def ev_candidate_rolling_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[
-            (
-                row["lookback"],
-                row["variant_id"],
-                row["months"],
-            )
-        ].append(row)
-
-    out = []
-
-    for (lookback, variant_id, months), group in grouped.items():
-        active = [x for x in group if x["trades"] > 0]
-        positive = [x for x in active if x["total_r"] > 0]
-
-        values = [x["total_r"] for x in active]
-
-        out.append({
-            "lookback": lookback,
-            "variant_id": variant_id,
-            "months": months,
-            "active_windows": len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_r_active": safe_median(values),
-            "worst_r_active": min(values) if values else 0.0,
-            "best_r_active": max(values) if values else 0.0,
-        })
-
-    return out
-
-
-def ev_portfolio_rolling_rows(candidate_id, mode, trades, sim):
-    first_entry = min(t["entry_time"] for t in trades)
-    start_month = month_floor(first_entry)
-    end_complete = month_floor(NOW)
-
-    rows = []
-
-    for months in (12, 24, 36):
-        rr = mixed_equity_rolling_rows(
-            mode,
-            sim,
-            0.01,
-            0.01,
-            trades,
-            months,
-            start_month,
-            end_complete,
-        )
-
-        for row in rr:
-            row["candidate_id"] = candidate_id
-            rows.append(row)
-
-    return rows
-
-
-def ev_portfolio_calendar_rows(candidate_id, mode, trades, sim):
-    first_year = min(t["entry_time"] for t in trades).year
-
-    rows = mixed_equity_calendar_rows(
-        mode,
-        sim,
-        0.01,
-        0.01,
-        trades,
-        first_year,
-        NOW.year,
-    )
-
-    for row in rows:
-        row["candidate_id"] = candidate_id
-
-    return rows
-
-
-
-def ev_portfolio_rolling_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[
-            (
-                row["candidate_id"],
-                row["portfolio_mode"],
-                row["h1_risk_pct"],
-                row["m15_risk_pct"],
-                row["months"],
-            )
-        ].append(row)
-
-    out = []
-
-    for key, group in grouped.items():
-        candidate_id, mode, h1p, m15p, months = key
-        active = [x for x in group if x["realized_exits"] > 0]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        worst = (
-            min(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-        best = (
-            max(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-
-        out.append({
-            "candidate_id": candidate_id,
-            "portfolio_mode": mode,
-            "h1_risk_pct": h1p,
-            "m15_risk_pct": m15p,
-            "months": months,
-            "active_windows": len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_return_pct_active": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_start_utc": (
-                worst["start_utc"] if worst else ""
-            ),
-            "worst_return_pct": (
-                worst["compounded_return_pct"] if worst else 0.0
-            ),
-            "best_start_utc": (
-                best["start_utc"] if best else ""
-            ),
-            "best_return_pct": (
-                best["compounded_return_pct"] if best else 0.0
-            ),
-        })
-
-    return out
-
-
-def ev_portfolio_calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[
-            (
-                row["candidate_id"],
-                row["portfolio_mode"],
-                row["h1_risk_pct"],
-                row["m15_risk_pct"],
-            )
-        ].append(row)
-
-    out = []
-
-    for key, group in grouped.items():
-        candidate_id, mode, h1p, m15p = key
-
-        complete = [x for x in group if x["complete_year"]]
-        active = [x for x in complete if x["realized_exits"] > 0]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        worst = (
-            min(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-        best = (
-            max(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-
-        out.append({
-            "candidate_id": candidate_id,
-            "portfolio_mode": mode,
-            "h1_risk_pct": h1p,
-            "m15_risk_pct": m15p,
-            "completed_active_years": len(active),
-            "positive_completed_active_years": len(positive),
-            "positive_completed_active_years_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_calendar_return_pct": safe_median(
-                x["compounded_return_pct"] for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_return_pct": (
-                worst["compounded_return_pct"] if worst else 0.0
-            ),
-            "best_year": best["year"] if best else "",
-            "best_year_return_pct": (
-                best["compounded_return_pct"] if best else 0.0
-            ),
-        })
-
-    return out
-
-
-def ev_candidate_calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for row in rows:
-        grouped[(row["lookback"], row["variant_id"])].append(row)
-
-    out = []
-
-    for (lookback, variant_id), group in grouped.items():
-        active = [
-            x for x in group
-            if x["complete_year"] and x["trades"] > 0
-        ]
-        positive = [x for x in active if x["total_r"] > 0]
-
-        worst = (
-            min(active, key=lambda x: x["total_r"])
-            if active else None
-        )
-        best = (
-            max(active, key=lambda x: x["total_r"])
-            if active else None
-        )
-
-        out.append({
-            "lookback": lookback,
-            "variant_id": variant_id,
-            "completed_active_years": len(active),
-            "positive_completed_active_years": len(positive),
-            "positive_completed_active_years_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_calendar_r": safe_median(
-                x["total_r"] for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_r": worst["total_r"] if worst else 0.0,
-            "best_year": best["year"] if best else "",
-            "best_year_r": best["total_r"] if best else 0.0,
-        })
-
-    return out
-
-
-
-# ============================================================
-# EUR/JPY H1 SHORT — FINAL VALIDATION + CURRENT21 -> 22 TEST
-# ============================================================
-#
-# The large block above is retained deliberately because it is the exact
-# frozen machinery used to reconstruct the existing 20-strategy H1+M15
-# portfolio and the now-live EUR/JPY H1 LONG.
-#
-# CURRENT 21 BASELINE
-# -------------------
-# Existing 20 locked strategies:
-#   5 H1 LONG + 5 H1 SHORT
-#   5 M15 LONG + 5 M15 SHORT
-#
-# Plus live EUR/JPY H1 LONG:
-#   exact bullish engulf
-#   BR >= 1.30
-#   body >= 1.25 ATR14
-#   abs(signal low - prior 15-bar low) <= 0.15 ATR14
-#   exclude Friday, America/New_York
-#   exclude signal-open NY 08:00-08:59
-#   RR 5.50
-#   stop = signal low - 10 ticks
-#   historical adverse fill = +5 ticks = +0.5 pip
-#
-# SHORT FAMILY
-# ------------
-# Common raw EUR/JPY H1 SHORT geometry:
-#   previous completed H1 ATR14 / previous-20 ATR14 mean <= 0.80
-#   bearish body >= 1.10 ATR14
-#   signal range >= 1.65 ATR14
-#   close < previous 2-bar low
-#   RR 7.25
-#   stop = signal high + 10 ticks
-#   historical adverse fill = -5 ticks = -0.5 pip
-#
-# FINAL CANDIDATES
-# ----------------
-# A_RAW
-#   no extra context
-#
-# B_EX_NY19
-#   exclude signal candles opening 19:00-19:59 America/New_York
-#
-# C_EX_TUE_NY19
-#   exclude Tuesday + NY 19:00-19:59
-#
-# D_H4_EMA50_LT_EMA200
-#   previous strictly completed H4 EMA50 < EMA200
-#
-# Candidate C is the current practical favourite from context research.
-# Candidate D is retained as the high-selectivity control.
-#
-# Every candidate gets:
-#   - exact standalone rebuild
-#   - 2002-2017 / 2018+ split
-#   - four broad eras
-#   - last 5Y / 2Y / 1Y
-#   - calendar-year analysis
-#   - rolling 12 / 24 / 36M
-#   - 0.5x / 1.0x / 1.5x / 2.0x cost stress
-#   - exact addition ONE AT A TIME to CURRENT 21
-#   - current non-hedging-safe gate
-#   - event-driven 1% H1 + 1% M15 compounding
-#   - portfolio calendar + rolling comparison
-#   - trade-frequency comparison
-#
-# IMPORTANT NON-HEDGING BEHAVIOUR
-# -------------------------------
-# EUR/JPY LONG and candidate SHORT may conflict.
-#
-# Same-direction overlaps are allowed.
-# Opposite-direction same-pair entries are blocked while the opposite
-# position remains open. This uses the same current portfolio gate as the
-# rest of the live-safe analysis.
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-SV_STATUS = {
-    "state": "not_started",
-    "message": "EUR/JPY H1 SHORT final validation not started",
-    "progress": 0,
-}
-
-# The exact current20 rebuild helper above writes status to EV_STATUS.
-# Point it at this runner's status dictionary so Railway reports one coherent
-# progress stream.
-EV_STATUS = SV_STATUS
-
-SV_BUNDLE = "EURJPY_H1_SHORT_FINAL_VALIDATION_AND_21_TO_22_PORTFOLIO_ADD_RESULTS.zip"
-
-SV_OUT = {
-    "baseline_parity": "eurjpy_short_final_current21_control_parity.csv",
-    "baseline_summary": "eurjpy_short_final_current21_baseline_summary.csv",
-    "candidate_summary": "eurjpy_short_final_candidate_summary.csv",
-    "candidate_periods": "eurjpy_short_final_candidate_periods.csv",
-    "candidate_cost_stress": "eurjpy_short_final_candidate_cost_stress.csv",
-    "candidate_calendar": "eurjpy_short_final_candidate_calendar.csv",
-    "candidate_calendar_summary": "eurjpy_short_final_candidate_calendar_summary.csv",
-    "candidate_rolling": "eurjpy_short_final_candidate_rolling.csv",
-    "candidate_rolling_summary": "eurjpy_short_final_candidate_rolling_summary.csv",
-    "candidate_trades": "eurjpy_short_final_candidate_trades.csv",
-    "portfolio_summary": "eurjpy_short_final_21_to_22_portfolio_summary.csv",
-    "portfolio_delta": "eurjpy_short_final_21_to_22_portfolio_delta.csv",
-    "portfolio_frequency": "eurjpy_short_final_21_to_22_portfolio_frequency.csv",
-    "portfolio_rolling": "eurjpy_short_final_21_to_22_portfolio_rolling.csv",
-    "portfolio_rolling_summary": "eurjpy_short_final_21_to_22_portfolio_rolling_summary.csv",
-    "portfolio_calendar": "eurjpy_short_final_21_to_22_portfolio_calendar.csv",
-    "portfolio_calendar_summary": "eurjpy_short_final_21_to_22_portfolio_calendar_summary.csv",
-    "portfolio_gate_rejections": "eurjpy_short_final_21_to_22_gate_rejections.csv",
-    "decision_matrix": "eurjpy_short_final_decision_matrix.csv",
-    "notes": "eurjpy_short_final_notes.csv",
-}
-
-SV_PAIR = "EUR_JPY"
-SV_TICK = 0.001
-SV_PIP = 0.01
-SV_STOP_BUFFER_TICKS = 10
-SV_BASE_COST_TICKS = 5.0
-
-SV_COMPRESSION_MAX = 0.80
-SV_BODY_ATR_MIN = 1.10
-SV_RANGE_ATR_MIN = 1.65
-SV_LOOKBACK = 2
-SV_RR = 7.25
-SV_NY = ZoneInfo("America/New_York")
-
-SV_CANDIDATES = [
-    {
-        "candidate_id": "A_RAW_LB2_RR7_25",
-        "exclude_tuesday": False,
-        "exclude_ny19": False,
-        "require_h4_ema50_lt_ema200": False,
-        "reference_min_trades": 116,
-    },
-    {
-        "candidate_id": "B_EX_NY19_LB2_RR7_25",
-        "exclude_tuesday": False,
-        "exclude_ny19": True,
-        "require_h4_ema50_lt_ema200": False,
-        "reference_min_trades": 108,
-    },
-    {
-        "candidate_id": "C_EX_TUE_NY19_LB2_RR7_25",
-        "exclude_tuesday": True,
-        "exclude_ny19": True,
-        "require_h4_ema50_lt_ema200": False,
-        "reference_min_trades": 88,
-    },
-    {
-        "candidate_id": "D_H4_EMA50_LT_EMA200_LB2_RR7_25",
-        "exclude_tuesday": False,
-        "exclude_ny19": False,
-        "require_h4_ema50_lt_ema200": True,
-        "reference_min_trades": 62,
-    },
-]
-
-SV_CURRENT21_EURJPY_LONG_REFERENCE_MIN = 74
-
-
-# ============================================================
-# SHORT CANDIDATE FEATURES / STRICT H4 STATE
-# ============================================================
-
-def sv_previous_mean(values, lookback):
-    """
-    Mean of the previous `lookback` values, excluding current index.
-
-    At H1 index i this reproduces the context-research convention:
-        mean(values[i-lookback:i])
-    """
-    out = [None] * len(values)
-    q = []
-    total = 0.0
-    bad = 0
-
-    for i in range(len(values)):
-        add = i - 1
-        if add >= 0:
-            v = values[add]
-            q.append(v)
-            if v is None or not math.isfinite(float(v)):
-                bad += 1
-            else:
-                total += float(v)
-
-        if len(q) > lookback:
-            old = q.pop(0)
-            if old is None or not math.isfinite(float(old)):
-                bad -= 1
-            else:
-                total -= float(old)
-
-        if len(q) == lookback and bad == 0:
-            out[i] = total / lookback
-
-    return out
-
-
-def sv_prior_low(candles, index, lookback):
-    if index < lookback:
-        return None
-    return min(
-        float(candles[j]["low"])
-        for j in range(index - lookback, index)
-    )
-
-
-def sv_build_h1_raw_features(candles):
-    atr = atr_series(candles, 14)
-    atr_mean20_prev = sv_previous_mean(atr, 20)
-
-    compression = [None] * len(candles)
-    body_atr = [None] * len(candles)
-    range_atr = [None] * len(candles)
-
     for i, candle in enumerate(candles):
-        a = atr[i]
+        ratio = None
+        if (
+            np.isfinite(atr14[i])
+            and np.isfinite(atr_mean50[i])
+            and atr_mean50[i] > 0
+        ):
+            ratio = float(atr14[i] / atr_mean50[i])
 
-        if a is not None and math.isfinite(float(a)) and float(a) > 0:
-            o = float(candle["open"])
-            h = float(candle["high"])
-            l = float(candle["low"])
-            c = float(candle["close"])
-
-            body_atr[i] = (o - c) / float(a)
-            range_atr[i] = (h - l) / float(a)
-
-        if i > 0:
-            prev_atr = atr[i - 1]
-            mean20 = atr_mean20_prev[i]
-
-            if (
-                prev_atr is not None
-                and mean20 is not None
-                and math.isfinite(float(prev_atr))
-                and math.isfinite(float(mean20))
-                and float(mean20) > 0
-            ):
-                compression[i] = float(prev_atr) / float(mean20)
-
-    return {
-        "atr": atr,
-        "compression": compression,
-        "body_atr": body_atr,
-        "range_atr": range_atr,
-    }
+        rows.append({
+            "time": candle["time"],
+            "complete_at": complete_at[i],
+            "close": float(candle["close"]),
+            "ema50": float(e50[i]) if np.isfinite(e50[i]) else None,
+            "ema100": float(e100[i]) if np.isfinite(e100[i]) else None,
+            "ema200": float(e200[i]) if np.isfinite(e200[i]) else None,
+            "atr_ratio50": ratio,
+        })
+    return rows
 
 
-def sv_ema(values, length):
-    """
-    Standard EMA seeded by SMA(length), matching the context runner.
-    """
-    out = [None] * len(values)
+def align_htf(m15_times, state):
+    rows = [row for row in state if row["complete_at"] is not None]
+    completion_times = [row["complete_at"] for row in rows]
+    keys = ["close", "ema50", "ema100", "ema200", "atr_ratio50"]
+    out = {key: np.full(len(m15_times), np.nan) for key in keys}
 
-    if len(values) < length:
-        return out
-
-    seed = sum(float(x) for x in values[:length]) / length
-    out[length - 1] = seed
-
-    alpha = 2.0 / (length + 1.0)
-    prev = seed
-
-    for i in range(length, len(values)):
-        prev = alpha * float(values[i]) + (1.0 - alpha) * prev
-        out[i] = prev
-
+    for i, signal_time in enumerate(m15_times):
+        p = bisect.bisect_right(completion_times, signal_time) - 1
+        if p < 0:
+            continue
+        row = rows[p]
+        for key in keys:
+            if row[key] is not None:
+                out[key][i] = row[key]
     return out
 
 
-def sv_h4_completion_times(candles):
-    """
-    H4 state becomes available at the ACTUAL next H4 candle open.
-    Weekend/gap aware; final-candle fallback is +4h.
-    """
+# ============================================================
+# M15 FEATURE CACHE — SHORT ORIENTED
+# ============================================================
+
+def features(candles, h1, h4, daily):
+    n = len(candles)
     times = [x["time"] for x in candles]
-    out = []
+    o = np.array([x["open"] for x in candles], dtype=float)
+    h = np.array([x["high"] for x in candles], dtype=float)
+    l = np.array([x["low"] for x in candles], dtype=float)
+    cl = np.array([x["close"] for x in candles], dtype=float)
+
+    a = atr(candles, 14)
+    am20 = sma(a, 20)
+    bearish = cl < o
+
+    exact_bear = np.zeros(n, dtype=bool)
+    exact_bear[1:] = (
+        (cl[:-1] > o[:-1])
+        & (cl[1:] < o[1:])
+        & (o[1:] >= cl[:-1])
+        & (cl[1:] <= o[:-1])
+    )
+
+    bear_body = o - cl
+    previous_body = np.full(n, np.nan)
+    previous_body[1:] = np.abs(cl[:-1] - o[:-1])
+
+    bear_br = np.full(n, np.nan)
+    valid_previous_body = previous_body > 0
+    bear_br[valid_previous_body] = (
+        bear_body[valid_previous_body] / previous_body[valid_previous_body]
+    )
+
+    valid_atr = np.isfinite(a) & (a > 0)
+
+    body_atr = np.full(n, np.nan)
+    body_atr[valid_atr] = bear_body[valid_atr] / a[valid_atr]
+
+    candle_range = h - l
+    range_atr = np.full(n, np.nan)
+    range_atr[valid_atr] = candle_range[valid_atr] / a[valid_atr]
+
+    # Short-friendly: 0 = close at low, 1 = close at high.
+    close_loc = np.full(n, np.nan)
+    valid_range = candle_range > 0
+    close_loc[valid_range] = (
+        (cl[valid_range] - l[valid_range]) / candle_range[valid_range]
+    )
+
+    upper_wick = h - np.maximum(o, cl)
+    upper_wick_body = np.full(n, np.nan)
+    positive_bear_body = bear_body > 0
+    upper_wick_body[positive_bear_body] = (
+        upper_wick[positive_bear_body] / bear_body[positive_bear_body]
+    )
+
+    compression = np.full(n, np.nan)
+    previous_atr = np.r_[np.nan, a[:-1]]
+    previous_atr_mean20 = np.r_[np.nan, am20[:-1]]
+    comp_ok = (
+        np.isfinite(previous_atr)
+        & np.isfinite(previous_atr_mean20)
+        & (previous_atr_mean20 > 0)
+    )
+    compression[comp_ok] = (
+        previous_atr[comp_ok] / previous_atr_mean20[comp_ok]
+    )
+
+    lookbacks = [10, 20, 40, 60, 80, 100, 120, 165, 200]
+    prev_low = {lb: prev_extreme(l, lb, "min") for lb in lookbacks}
+    prev_high = {lb: prev_extreme(h, lb, "max") for lb in lookbacks}
+
+    structure_dist_high = {}
+    for lb in [40, 60, 80, 100, 120, 165, 200]:
+        arr = np.full(n, np.nan)
+        ok = valid_atr & np.isfinite(prev_high[lb])
+        arr[ok] = np.abs(h[ok] - prev_high[lb][ok]) / a[ok]
+        structure_dist_high[lb] = arr
+
+    # Prior ~4 hours, excluding the signal candle.
+    mom4 = np.full(n, np.nan)
+    for i in range(17, n):
+        if valid_atr[i]:
+            mom4[i] = (cl[i - 1] - cl[i - 17]) / a[i]
+
+    ny_hour = np.zeros(n, dtype=np.int16)
+    ny_weekday = np.zeros(n, dtype=np.int16)
+    london_hour = np.zeros(n, dtype=np.int16)
+    london_weekday = np.zeros(n, dtype=np.int16)
+    tokyo_hour = np.zeros(n, dtype=np.int16)
+    tokyo_weekday = np.zeros(n, dtype=np.int16)
 
     for i, t in enumerate(times):
-        if i + 1 < len(times):
-            out.append(times[i + 1])
-        else:
-            out.append(t + timedelta(hours=4))
-
-    return out
-
-
-def sv_map_strict_h4_ema_alignment(h1_times, h4_candles):
-    closes = [float(x["close"]) for x in h4_candles]
-    ema50 = sv_ema(closes, 50)
-    ema200 = sv_ema(closes, 200)
-    complete = sv_h4_completion_times(h4_candles)
-
-    allowed = [False] * len(h1_times)
-    state_index = [-1] * len(h1_times)
-
-    j = -1
-
-    for i, signal_open in enumerate(h1_times):
-        while j + 1 < len(complete) and complete[j + 1] <= signal_open:
-            j += 1
-
-        state_index[i] = j
-
-        if j < 0:
-            continue
-
-        fast = ema50[j]
-        slow = ema200[j]
-
-        if (
-            fast is not None
-            and slow is not None
-            and math.isfinite(float(fast))
-            and math.isfinite(float(slow))
-            and float(fast) < float(slow)
-        ):
-            allowed[i] = True
+        z = t.astimezone(NY)
+        ny_hour[i], ny_weekday[i] = z.hour, z.weekday()
+        z = t.astimezone(LONDON)
+        london_hour[i], london_weekday[i] = z.hour, z.weekday()
+        z = t.astimezone(TOKYO)
+        tokyo_hour[i], tokyo_weekday[i] = z.hour, z.weekday()
 
     return {
-        "ema50_lt_ema200": allowed,
-        "state_index": state_index,
-    }
-
-
-def sv_raw_signal(candles, features, index):
-    if index < max(21, SV_LOOKBACK):
-        return False
-
-    candle = candles[index]
-    o = float(candle["open"])
-    c = float(candle["close"])
-
-    if c >= o:
-        return False
-
-    body_atr = features["body_atr"][index]
-    range_atr = features["range_atr"][index]
-    compression = features["compression"][index]
-
-    if (
-        body_atr is None
-        or range_atr is None
-        or compression is None
-        or not math.isfinite(float(body_atr))
-        or not math.isfinite(float(range_atr))
-        or not math.isfinite(float(compression))
-    ):
-        return False
-
-    if float(body_atr) < SV_BODY_ATR_MIN:
-        return False
-
-    if float(range_atr) < SV_RANGE_ATR_MIN:
-        return False
-
-    if float(compression) > SV_COMPRESSION_MAX:
-        return False
-
-    prior_low = sv_prior_low(candles, index, SV_LOOKBACK)
-
-    if prior_low is None:
-        return False
-
-    if c >= prior_low:
-        return False
-
-    return True
-
-
-def sv_context_allowed(candles, index, candidate, h4_state):
-    t = candles[index]["time"]
-    ny = t.astimezone(SV_NY)
-
-    if candidate["exclude_tuesday"] and ny.weekday() == 1:
-        return False
-
-    if candidate["exclude_ny19"] and ny.hour == 19:
-        return False
-
-    if candidate["require_h4_ema50_lt_ema200"]:
-        if not h4_state["ema50_lt_ema200"][index]:
-            return False
-
-    return True
-
-
-# ============================================================
-# SHORT EXECUTION
-# ============================================================
-
-def sv_find_exit(candles, signal_index, stop, target):
-    for index in range(signal_index + 1, len(candles)):
-        candle = candles[index]
-        o = float(candle["open"])
-        h = float(candle["high"])
-        l = float(candle["low"])
-
-        stop_hit = h >= stop
-        target_hit = l <= target
-
-        if not stop_hit and not target_hit:
-            continue
-
-        if stop_hit and target_hit:
-            # Locked H1 SHORT same-bar convention:
-            # high closer to candle open => STOP first; otherwise TARGET.
-            reason = "STOP" if abs(h - o) < abs(o - l) else "TARGET"
-        elif stop_hit:
-            reason = "STOP"
-        else:
-            reason = "TARGET"
-
-        return index, reason
-
-    return None, None
-
-
-def sv_build_candidate_trades(
-    candles,
-    features,
-    h4_state,
-    candidate,
-    cost_multiplier=1.0,
-):
-    """
-    Exact p0 EUR/JPY H1 SHORT candidate stream.
-
-    Signal on exact exit candle remains eligible.
-    """
-    candidate_id = candidate["candidate_id"]
-    strategy_id = f"EUR_JPY_H1_SHORT_{candidate_id}"
-
-    raw = []
-
-    for index in range(max(21, SV_LOOKBACK), len(candles)):
-        t = candles[index]["time"]
-
-        if t < START:
-            continue
-
-        if t >= NOW:
-            break
-
-        if not sv_raw_signal(candles, features, index):
-            continue
-
-        if not sv_context_allowed(
-            candles,
-            index,
-            candidate,
-            h4_state,
-        ):
-            continue
-
-        raw.append(index)
-
-    trades = []
-    pointer = 0
-    cost_ticks = SV_BASE_COST_TICKS * float(cost_multiplier)
-
-    while pointer < len(raw):
-        signal_index = raw[pointer]
-        signal = candles[signal_index]
-
-        reference_entry = float(signal["close"])
-        historical_fill = reference_entry - cost_ticks * SV_TICK
-        stop = float(signal["high"]) + SV_STOP_BUFFER_TICKS * SV_TICK
-
-        reference_risk = stop - reference_entry
-        actual_risk = stop - historical_fill
-
-        if reference_risk <= 0 or actual_risk <= 0:
-            pointer += 1
-            continue
-
-        target = reference_entry - SV_RR * reference_risk
-
-        exit_index, reason = sv_find_exit(
-            candles,
-            signal_index,
-            stop,
-            target,
-        )
-
-        if exit_index is None:
-            break
-
-        exit_price = target if reason == "TARGET" else stop
-        result_r = (historical_fill - exit_price) / actual_risk
-        exit_candle = candles[exit_index]
-
-        trades.append({
-            "pair": SV_PAIR,
-            "strategy_id": strategy_id,
-            "trigger": candidate_id,
-            "timeframe": "H1",
-            "side": "SELL",
-            "signal_time": signal["time"],
-            "entry_time": signal["time"] + timedelta(hours=1),
-            "exit_time": exit_candle["time"],
-            "exit_event_time": exit_candle["time"] + timedelta(hours=1),
-            "rr": SV_RR,
-            "reference_entry": reference_entry,
-            "historical_fill": historical_fill,
-            "stop": stop,
-            "target": target,
-            "exit_price": exit_price,
-            "result": reason,
-            "r": float(result_r),
-            "bars_held": exit_index - signal_index,
-            "hold_hours": float(exit_index - signal_index),
-            "early_exit": False,
-            "lookback": SV_LOOKBACK,
-            "candidate_id": candidate_id,
-            "exclude_tuesday": candidate["exclude_tuesday"],
-            "exclude_ny19": candidate["exclude_ny19"],
-            "require_h4_ema50_lt_ema200": (
-                candidate["require_h4_ema50_lt_ema200"]
-            ),
-            "cost_multiplier": float(cost_multiplier),
-            "cost_model": f"EURJPY_H1_SHORT_{cost_ticks:g}_ADVERSE_TICKS",
-        })
-
-        # p0, with exact exit-candle signal eligible.
-        pointer = bisect.bisect_left(
-            raw,
-            exit_index,
-            lo=pointer + 1,
-        )
-
-    return trades
-
-
-# ============================================================
-# CURRENT 21 BASELINE
-# ============================================================
-
-def sv_rebuild_current21(eurjpy_h1, eurjpy_atr):
-    """
-    Rebuild exact current20, then append the now-live EUR/JPY H1 LONG and
-    re-run the live-safe non-hedging gate.
-
-    The long is generated by the exact final-validation helper retained
-    above, so the 21st strategy is not approximated or hard-coded.
-    """
-    current20 = ev_rebuild_current20()
-
-    long_variant = next(
-        x for x in EV_VARIANTS
-        if x["variant_id"] == "EXCLUDE_FRIDAY_NY08"
-    )
-
-    long_trades_raw = ev_build_candidate_trades(
-        eurjpy_h1,
-        eurjpy_atr,
-        15,
-        long_variant,
-        cost_multiplier=1.0,
-    )
-
-    if len(long_trades_raw) < SV_CURRENT21_EURJPY_LONG_REFERENCE_MIN:
-        raise RuntimeError(
-            "EUR/JPY live LONG reproduction fell below reference: "
-            f"{len(long_trades_raw)} < "
-            f"{SV_CURRENT21_EURJPY_LONG_REFERENCE_MIN}"
-        )
-
-    # Rename to the live strategy identity used by the 21-strategy system.
-    long_trades = []
-
-    for trade in long_trades_raw:
-        t = dict(trade)
-        t["strategy_id"] = "EUR_JPY_H1_LONG"
-        t["trigger"] = "LIVE_LOCKED_LB15_EX_FRIDAY_NY08"
-        long_trades.append(t)
-
-    by_strategy = defaultdict(list)
-
-    for sid, trades in current20["by_strategy"].items():
-        by_strategy[sid].extend(trades)
-
-    by_strategy["EUR_JPY_H1_LONG"].extend(long_trades)
-
-    independent = sorted(
-        current20["independent"] + long_trades,
-        key=lambda t: (t["entry_time"], t["strategy_id"]),
-    )
-
-    live_h1, rejected_h1 = apply_live_safe_nonhedging_gate(
-        independent,
-        "H1_FIRST",
-    )
-
-    live_m15, rejected_m15 = apply_live_safe_nonhedging_gate(
-        independent,
-        "M15_FIRST",
-    )
-
-    parity = list(current20["parity"])
-    parity.append({
-        "strategy_id": "EUR_JPY_H1_LONG",
-        "reference_min_trades": SV_CURRENT21_EURJPY_LONG_REFERENCE_MIN,
-        "current_trades": len(long_trades),
-        "status": (
-            "PASS_EQUAL"
-            if len(long_trades) == SV_CURRENT21_EURJPY_LONG_REFERENCE_MIN
-            else "PASS_NEWER_TRADES"
-        ),
-    })
-
-    return {
-        "by_strategy": by_strategy,
-        "independent": independent,
-        "live_h1_first": live_h1,
-        "live_m15_first": live_m15,
-        "rejected_h1_first": rejected_h1,
-        "rejected_m15_first": rejected_m15,
-        "parity": parity,
-        "eurjpy_long_trades": long_trades,
-    }
-
-
-
-# ============================================================
-# EUR/JPY M15 LONG — FINAL 22 -> 23 PORTFOLIO ADD TEST
-# ============================================================
-#
-# CURRENT BASELINE
-# ----------------
-# Exact current 22-strategy portfolio:
-#   - frozen 20-strategy H1+M15 portfolio
-#   - EUR/JPY H1 LONG (RR5.50)
-#   - EUR/JPY H1 SHORT Candidate B (compression breakdown,
-#     exclude NY19, RR7.25)
-#
-# M15 LONG SIGNAL IS FROZEN
-# -------------------------
-#   exact bullish engulf
-#   BR >= 1.50
-#   body >= 0.75 ATR14
-#   abs(signal low - previous 100-bar low) <= 0.10 ATR14
-#   previous STRICTLY COMPLETED H1 EMA50 > EMA200
-#   no session filter
-#   no weekday filter
-#   stop = signal low - 10 ticks
-#   historical adverse fill = signal close + 1 pip
-#   pyramiding = 0
-#
-# ONLY RR IS COMPARED:
-#   RR3.00
-#   RR4.25
-#   RR4.50
-#
-# This runner does NOT optimize anything.
-#
-# Every RR candidate is added independently as strategy #23 to the exact
-# CURRENT 22 independent trade stream and passed through the same live-safe
-# non-hedging gate used by the current system.
-#
-# Because EUR/JPY already has H1 LONG + H1 SHORT, this explicitly measures:
-#   - candidate M15 LONG trades blocked by an open EUR/JPY H1 SHORT
-#   - EUR/JPY H1 SHORT trades blocked by an open M15 LONG
-#   - H1 LONG trades (same direction) remain allowed
-#   - simultaneous H1/M15 opposite-direction entries under both H1_FIRST
-#     and M15_FIRST ordering, so tie sensitivity is visible
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-PV_STATUS = {
-    "state": "not_started",
-    "message": "EUR/JPY M15 LONG 22->23 portfolio test not started",
-    "progress": 0,
-}
-
-# Current20 rebuild writes to EV_STATUS. Point it at this task's status.
-EV_STATUS = PV_STATUS
-
-PV_BUNDLE = "EURJPY_M15_LONG_22_TO_23_PORTFOLIO_ADD_RESULTS.zip"
-PV_OUT = {
-    "baseline_parity": "eurjpy_m15_long_22_to_23_baseline_parity.csv",
-    "baseline_summary": "eurjpy_m15_long_22_to_23_current22_summary.csv",
-    "candidate_parity": "eurjpy_m15_long_22_to_23_candidate_parity.csv",
-    "candidate_summary": "eurjpy_m15_long_22_to_23_candidate_standalone_summary.csv",
-    "candidate_trades": "eurjpy_m15_long_22_to_23_candidate_trades.csv",
-    "portfolio_summary": "eurjpy_m15_long_22_to_23_portfolio_summary.csv",
-    "portfolio_delta": "eurjpy_m15_long_22_to_23_portfolio_delta.csv",
-    "portfolio_frequency": "eurjpy_m15_long_22_to_23_portfolio_frequency.csv",
-    "portfolio_rolling": "eurjpy_m15_long_22_to_23_portfolio_rolling.csv",
-    "portfolio_rolling_summary": "eurjpy_m15_long_22_to_23_portfolio_rolling_summary.csv",
-    "portfolio_calendar": "eurjpy_m15_long_22_to_23_portfolio_calendar.csv",
-    "portfolio_calendar_summary": "eurjpy_m15_long_22_to_23_portfolio_calendar_summary.csv",
-    "gate_conflicts": "eurjpy_m15_long_22_to_23_gate_conflicts.csv",
-    "monthly_correlation": "eurjpy_m15_long_22_to_23_monthly_correlation.csv",
-    "decision_matrix": "eurjpy_m15_long_22_to_23_decision_matrix.csv",
-    "notes": "eurjpy_m15_long_22_to_23_notes.csv",
-}
-
-PV_PAIR = "EUR_JPY"
-PV_TICK = 0.001
-PV_PIP = 0.01
-PV_COST_PIPS = 1.0
-PV_STOP_TICKS = 10
-PV_BR_MIN = 1.50
-PV_BODY_ATR_MIN = 0.75
-PV_STRUCTURE_LB = 100
-PV_STRUCTURE_DIST_ATR_MAX = 0.10
-PV_H1_WARMUP = START - timedelta(days=900)
-
-PV_RR_CANDIDATES = [
-    {"candidate_id": "EURJPY_M15_LONG_RR3_00", "rr": 3.00},
-    {"candidate_id": "EURJPY_M15_LONG_RR4_25", "rr": 4.25},
-    {"candidate_id": "EURJPY_M15_LONG_RR4_50", "rr": 4.50},
-]
-
-# Exact controls from the just-completed fixed deep-validation run.
-PV_REFERENCE = {
-    "EURJPY_M15_LONG_RR3_00": {
-        "trades": 74,
-        "pf": 1.775494,
-        "r": 34.8972,
-    },
-    "EURJPY_M15_LONG_RR4_25": {
-        "trades": 74,
-        "pf": 1.889369,
-        "r": 44.4685,
-    },
-    "EURJPY_M15_LONG_RR4_50": {
-        "trades": 74,
-        "pf": 1.878250,
-        "r": 44.7907,
-    },
-}
-
-PV_CURRENT22_MIN_TRADES = 2446
-PV_CURRENT22_REFERENCE = {
-    "trades": 2446,
-    "pf": 1.979622,
-    "r": 1527.231,
-    "cagr": 94.9734,
-}
-
-PV_SHORT_B = {
-    "candidate_id": "B_EX_NY19_LB2_RR7_25",
-    "exclude_tuesday": False,
-    "exclude_ny19": True,
-    "require_h4_ema50_lt_ema200": False,
-    "reference_min_trades": 108,
-}
-
-
-# ============================================================
-# FROZEN EUR/JPY M15 LONG SIGNAL
-# ============================================================
-
-def pv_m15_features(m15, h1_candles):
-    n = len(m15)
-    o = np.array([x["open"] for x in m15], dtype=float)
-    h = np.array([x["high"] for x in m15], dtype=float)
-    l = np.array([x["low"] for x in m15], dtype=float)
-    c = np.array([x["close"] for x in m15], dtype=float)
-    a = atr14(m15)
-
-    body = c - o
-    abs_body = np.abs(body)
-    bull_body = np.maximum(body, 0.0)
-
-    exact_bull = np.zeros(n, dtype=bool)
-    br = np.full(n, np.nan)
-
-    if n > 1:
-        exact_bull[1:] = (
-            (c[:-1] < o[:-1])
-            & (c[1:] > o[1:])
-            & (o[1:] <= c[:-1])
-            & (c[1:] >= o[:-1])
-        )
-        prev_abs = abs_body[:-1]
-        br[1:] = np.divide(
-            bull_body[1:],
-            prev_abs,
-            out=np.full(n - 1, np.nan),
-            where=prev_abs > 0,
-        )
-
-    body_atr = np.divide(
-        bull_body,
-        a,
-        out=np.full(n, np.nan),
-        where=np.isfinite(a) & (a > 0),
-    )
-
-    prior_low100 = prev_extreme(l, PV_STRUCTURE_LB, False)
-    structure_dist = np.divide(
-        np.abs(l - prior_low100),
-        a,
-        out=np.full(n, np.nan),
-        where=(
-            np.isfinite(a)
-            & (a > 0)
-            & np.isfinite(prior_low100)
-        ),
-    )
-
-    h1_state = htf_state(h1_candles)
-    aligned_h1 = align_htf([x["time"] for x in m15], h1_state)
-
-    mask = (
-        np.isfinite(a)
-        & (a > 0)
-        & exact_bull
-        & (br >= PV_BR_MIN)
-        & (body_atr >= PV_BODY_ATR_MIN)
-        & (structure_dist <= PV_STRUCTURE_DIST_ATR_MAX)
-        & np.isfinite(aligned_h1["ema50"])
-        & np.isfinite(aligned_h1["ema200"])
-        & (aligned_h1["ema50"] > aligned_h1["ema200"])
-    )
-
-    # Preserve the deep-validation convention: first 200 M15 bars cannot signal.
-    mask[:200] = False
-
-    return {
+        "n": n,
+        "times": times,
+        "open": o,
+        "high": h,
+        "low": l,
+        "close": cl,
         "atr": a,
-        "mask": mask,
-        "signal_indices": np.flatnonzero(mask).tolist(),
-        "aligned_h1": aligned_h1,
+        "valid_atr": valid_atr,
+        "bearish": bearish,
+        "exact_bear": exact_bear,
+        "bear_br": bear_br,
+        "body_atr": body_atr,
+        "range_atr": range_atr,
+        "close_loc": close_loc,
+        "upper_wick_body": upper_wick_body,
+        "compression": compression,
+        "prev_low": prev_low,
+        "prev_high": prev_high,
+        "structure_dist_high": structure_dist_high,
+        "mom4": mom4,
+        "ny_hour": ny_hour,
+        "ny_weekday": ny_weekday,
+        "london_hour": london_hour,
+        "london_weekday": london_weekday,
+        "tokyo_hour": tokyo_hour,
+        "tokyo_weekday": tokyo_weekday,
+        "h1_close": h1["close"],
+        "h1_ema50": h1["ema50"],
+        "h1_ema100": h1["ema100"],
+        "h1_ema200": h1["ema200"],
+        "h1_atr": h1["atr_ratio50"],
+        "h4_close": h4["close"],
+        "h4_ema100": h4["ema100"],
+        "h4_ema200": h4["ema200"],
+        "h4_atr": h4["atr_ratio50"],
+        "d_close": daily["close"],
+        "d_ema50": daily["ema50"],
+        "d_ema200": daily["ema200"],
+        "d_atr": daily["atr_ratio50"],
     }
 
 
-def pv_find_m15_exit(m15, signal_index, stop, target):
-    for j in range(signal_index + 1, len(m15)):
-        bar = m15[j]
-        stop_hit = float(bar["low"]) <= stop
-        target_hit = float(bar["high"]) >= target
+# ============================================================
+# CANDIDATE CONFIGURATION
+# ============================================================
 
-        if not stop_hit and not target_hit:
-            continue
-
-        if stop_hit and target_hit:
-            # Locked M15 LONG convention:
-            # high closer to candle open => TARGET first, else STOP first.
-            reason = (
-                "TARGET"
-                if abs(float(bar["high"]) - float(bar["open"]))
-                < abs(float(bar["open"]) - float(bar["low"]))
-                else "STOP"
-            )
-        elif target_hit:
-            reason = "TARGET"
-        else:
-            reason = "STOP"
-
-        return j, reason
-
-    return None, None
-
-
-def pv_build_m15_candidate_trades(m15, features, candidate):
-    candidate_id = candidate["candidate_id"]
-    rr = float(candidate["rr"])
-    strategy_id = f"EUR_JPY_M15_LONG_{candidate_id}"
-    raw = features["signal_indices"]
-
-    trades = []
-    p = 0
-
-    while p < len(raw):
-        i = raw[p]
-        signal = m15[i]
-        signal_time = signal["time"]
-
-        if signal_time < START:
-            p += 1
-            continue
-
-        if signal_time >= NOW:
-            break
-
-        reference_entry = float(signal["close"])
-        historical_fill = reference_entry + PV_COST_PIPS * PV_PIP
-        stop = float(signal["low"]) - PV_STOP_TICKS * PV_TICK
-        reference_risk = reference_entry - stop
-        actual_risk = historical_fill - stop
-
-        if reference_risk <= 0 or actual_risk <= 0:
-            p += 1
-            continue
-
-        target = reference_entry + rr * reference_risk
-        j, reason = pv_find_m15_exit(m15, i, stop, target)
-
-        if j is None:
-            break
-
-        exit_price = target if reason == "TARGET" else stop
-        result_r = (exit_price - historical_fill) / actual_risk
-        exit_bar = m15[j]
-
-        trades.append({
-            "pair": PV_PAIR,
-            "strategy_id": strategy_id,
-            "trigger": "ENGULF_BR150_BODY075_S100_D010_H1EMA50GT200",
-            "timeframe": "M15",
-            "side": "BUY",
-            "signal_index": i,
-            "exit_index": j,
-            "signal_time": signal_time,
-            "entry_time": signal_time + timedelta(minutes=15),
-            "exit_time": exit_bar["time"],
-            "exit_event_time": exit_bar["time"] + timedelta(minutes=15),
-            "rr": rr,
-            "reference_entry": reference_entry,
-            "historical_fill": historical_fill,
-            "stop": stop,
-            "target": target,
-            "exit_price": exit_price,
-            "result": reason,
-            "r": float(result_r),
-            "bars_held": j - i,
-            "hold_hours": (j - i) * 0.25,
-            "early_exit": False,
-            "cost_model": "M15_1_ADVERSE_PIP",
-            "baseline_cost_value": PV_COST_PIPS,
-            "candidate_id": candidate_id,
-        })
-
-        # p0: exact exit-candle signal remains eligible.
-        p = bisect.bisect_left(raw, j, lo=p + 1)
-
-    return trades
-
-
-def pv_serialise_trade(t):
-    row = dict(t)
-    for k, v in list(row.items()):
-        if isinstance(v, datetime):
-            row[k] = iso(v)
+def cfg(config_id, family, rr=3.5, **kwargs):
+    row = {
+        "config_id": config_id,
+        "family": family,
+        "rr": rr,
+        "context": "NONE",
+        "br_min": None,
+        "body_atr_min": None,
+        "range_atr_min": None,
+        "close_loc_max": None,
+        "upper_wick_body_min": None,
+        "structure_lb": None,
+        "structure_dist_atr_max": None,
+        "sweep_lb": None,
+        "breakdown_lb": None,
+        "compression_max": None,
+        "mom4_min": None,
+        "excluded_weekdays": set(),
+        "excluded_ny_hours": set(),
+    }
+    row.update(kwargs)
     return row
 
 
-# ============================================================
-# EXACT CURRENT 22 BASELINE
-# ============================================================
-
-def pv_rebuild_current22(eurjpy_h1, eurjpy_atr):
-    current21 = sv_rebuild_current21(eurjpy_h1, eurjpy_atr)
-
-    dummy_h4_state = {
-        "ema50_lt_ema200": [False] * len(eurjpy_h1),
-        "state_index": [-1] * len(eurjpy_h1),
-    }
-    short_features = sv_build_h1_raw_features(eurjpy_h1)
-    short_trades = sv_build_candidate_trades(
-        eurjpy_h1,
-        short_features,
-        dummy_h4_state,
-        PV_SHORT_B,
-        cost_multiplier=1.0,
-    )
-
-    if len(short_trades) < PV_SHORT_B["reference_min_trades"]:
-        raise RuntimeError(
-            "EUR/JPY H1 SHORT B fell below locked reference: "
-            f"{len(short_trades)} < {PV_SHORT_B['reference_min_trades']}"
-        )
-
-    independent = sorted(
-        current21["independent"] + short_trades,
-        key=lambda t: (t["entry_time"], t["strategy_id"]),
-    )
-
-    h1_first, rej_h1 = apply_live_safe_nonhedging_gate(
-        independent,
-        "H1_FIRST",
-    )
-    m15_first, rej_m15 = apply_live_safe_nonhedging_gate(
-        independent,
-        "M15_FIRST",
-    )
-
-    parity = list(current21["parity"])
-    parity.append({
-        "strategy_id": "EUR_JPY_H1_SHORT_B_EX_NY19_LB2_RR7_25",
-        "reference_min_trades": PV_SHORT_B["reference_min_trades"],
-        "current_trades": len(short_trades),
-        "status": (
-            "PASS_EQUAL"
-            if len(short_trades) == PV_SHORT_B["reference_min_trades"]
-            else "PASS_NEWER_TRADES"
-        ),
-    })
-
-    return {
-        "independent": independent,
-        "live_h1_first": h1_first,
-        "live_m15_first": m15_first,
-        "rejected_h1_first": rej_h1,
-        "rejected_m15_first": rej_m15,
-        "parity": parity,
-        "eurjpy_h1_long_trades": current21["eurjpy_long_trades"],
-        "eurjpy_h1_short_trades": short_trades,
-    }
-
-
-# ============================================================
-# STANDALONE / CORRELATION HELPERS
-# ============================================================
-
-def pv_candidate_summary(candidate, trades):
-    s = calc_stats(trades)
-    val = calc_stats(subset(
-        trades,
-        datetime(2018, 1, 1, tzinfo=timezone.utc),
-        None,
-    ))
-    y20 = calc_stats(subset(
-        trades,
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-        None,
-    ))
-    l5 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 5),
-        None,
-    ))
-    l2 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 2),
-        None,
-    ))
-
-    return {
-        "candidate_id": candidate["candidate_id"],
-        "rr": candidate["rr"],
-        "trades": s["trades"],
-        "winners": s["winners"],
-        "losers": s["losers"],
-        "win_rate_pct": s["win_rate_pct"],
-        "profit_factor": s["profit_factor"],
-        "total_r": s["total_r"],
-        "expectancy_r": s["expectancy_r"],
-        "max_drawdown_r": s["max_drawdown_r"],
-        "validation2018_plus_trades": val["trades"],
-        "validation2018_plus_pf": val["profit_factor"],
-        "validation2018_plus_r": val["total_r"],
-        "era2020_plus_pf": y20["profit_factor"],
-        "era2020_plus_r": y20["total_r"],
-        "last5y_trades": l5["trades"],
-        "last5y_pf": l5["profit_factor"],
-        "last5y_r": l5["total_r"],
-        "last2y_trades": l2["trades"],
-        "last2y_pf": l2["profit_factor"],
-        "last2y_r": l2["total_r"],
-    }
-
-
-def pv_month_key(t):
-    return (t.year, t.month)
-
-
-def pv_monthly_r(trades):
-    out = defaultdict(float)
-    for t in trades:
-        out[pv_month_key(t["entry_time"])] += float(t["r"])
-    return out
-
-
-def pv_corr(a, b):
-    keys = sorted(set(a) | set(b))
-    if len(keys) < 2:
-        return 0.0
-    x = np.array([a.get(k, 0.0) for k in keys], dtype=float)
-    y = np.array([b.get(k, 0.0) for k in keys], dtype=float)
-    if np.std(x) == 0 or np.std(y) == 0:
-        return 0.0
-    return float(np.corrcoef(x, y)[0, 1])
-
-
-def pv_conflict_counts(rejected, candidate_strategy_id):
-    cand_rej = [
-        r for r in rejected
-        if r["candidate_strategy_id"] == candidate_strategy_id
-    ]
-    h1_short_rej = [
-        r for r in rejected
-        if (
-            r["candidate_pair"] == "EUR_JPY"
-            and r["candidate_side"] == "SELL"
-            and r["candidate_timeframe"] == "H1"
-        )
-    ]
-    h1_long_rej = [
-        r for r in rejected
-        if (
-            r["candidate_pair"] == "EUR_JPY"
-            and r["candidate_side"] == "BUY"
-            and r["candidate_timeframe"] == "H1"
-        )
-    ]
-
-    return {
-        "candidate_m15_long_rejected": len(cand_rej),
-        "eurjpy_h1_short_rejected": len(h1_short_rej),
-        "eurjpy_h1_long_rejected": len(h1_long_rej),
-    }
-
-
-def pv_delta_row(candidate_id, mode, baseline_row, row, conflicts, before_gate, accepted):
-    out = {
-        "candidate_id": candidate_id,
-        "portfolio_mode": mode,
-        "candidate_trades_before_gate": before_gate,
-        "candidate_trades_accepted": accepted,
-        **conflicts,
-    }
-
-    for field in [
-        "trades",
-        "profit_factor",
-        "total_r",
-        "expectancy_r",
-        "signal_order_max_drawdown_r",
-        "exit_order_max_drawdown_r",
-        "cagr_pct_1pct_h1_1pct_m15",
-        "total_return_pct_1pct_h1_1pct_m15",
-        "max_closed_equity_dd_pct",
-        "max_open_risk_floor_dd_pct",
-        "max_open_positions",
-        "max_open_risk_pct_of_realised_equity",
-    ]:
-        out[f"baseline_{field}"] = baseline_row[field]
-        out[f"candidate_{field}"] = row[field]
-        out[f"delta_{field}"] = row[field] - baseline_row[field]
-
-    return out
-
-
-def pv_decision_rows(candidate_summary, delta_rows, roll_summary, corr_rows):
-    s_lookup = {r["candidate_id"]: r for r in candidate_summary}
-    d_lookup = {(r["candidate_id"], r["portfolio_mode"]): r for r in delta_rows}
-    r_lookup = {
-        (r["candidate_id"], r["portfolio_mode"], int(r["months"])): r
-        for r in roll_summary
-    }
-    c_lookup = {(r["candidate_id"], r["portfolio_mode"]): r for r in corr_rows}
-
+def stage1_configs():
     out = []
-    for candidate in PV_RR_CANDIDATES:
-        cid = candidate["candidate_id"]
-        s = s_lookup[cid]
-        for mode in ("LIVE_SAFE_H1_FIRST", "LIVE_SAFE_M15_FIRST"):
-            d = d_lookup[(cid, mode)]
-            r12 = r_lookup.get((cid, mode, 12), {})
-            r24 = r_lookup.get((cid, mode, 24), {})
-            r36 = r_lookup.get((cid, mode, 36), {})
-            cr = c_lookup.get((cid, mode), {})
-            out.append({
-                "candidate_id": cid,
-                "rr": candidate["rr"],
-                "portfolio_mode": mode,
-                "standalone_trades": s["trades"],
-                "standalone_pf": s["profit_factor"],
-                "standalone_total_r": s["total_r"],
-                "standalone_dd_r": s["max_drawdown_r"],
-                "standalone_2018_plus_pf": s["validation2018_plus_pf"],
-                "standalone_last5y_r": s["last5y_r"],
-                "standalone_last2y_r": s["last2y_r"],
-                "candidate_trades_accepted": d["candidate_trades_accepted"],
-                "candidate_m15_long_rejected": d["candidate_m15_long_rejected"],
-                "eurjpy_h1_short_rejected": d["eurjpy_h1_short_rejected"],
-                "eurjpy_h1_long_rejected": d["eurjpy_h1_long_rejected"],
-                "delta_total_r": d["delta_total_r"],
-                "delta_pf": d["delta_profit_factor"],
-                "delta_cagr_pct_points": d["delta_cagr_pct_1pct_h1_1pct_m15"],
-                "delta_closed_dd_pct_points": d["delta_max_closed_equity_dd_pct"],
-                "delta_floor_dd_pct_points": d["delta_max_open_risk_floor_dd_pct"],
-                "delta_max_positions": d["delta_max_open_positions"],
-                "rolling12_positive_pct": r12.get("positive_active_windows_pct", 0.0),
-                "rolling24_positive_pct": r24.get("positive_active_windows_pct", 0.0),
-                "rolling36_positive_pct": r36.get("positive_active_windows_pct", 0.0),
-                "worst12_return_pct": r12.get("worst_return_pct", 0.0),
-                "worst24_return_pct": r24.get("worst_return_pct", 0.0),
-                "worst36_return_pct": r36.get("worst_return_pct", 0.0),
-                "candidate_vs_current22_monthly_r_corr": cr.get("monthly_r_correlation", 0.0),
-            })
+
+    # 1) Exact bearish engulf near prior resistance/high structure.
+    engulf = [
+        (1.00, 0.50, 60, 0.10),
+        (1.00, 0.75, 100, 0.10),
+        (1.20, 0.50, 100, 0.15),
+        (1.20, 0.75, 120, 0.10),
+        (1.20, 1.00, 165, 0.10),
+        (1.35, 0.50, 120, 0.20),
+        (1.35, 0.75, 165, 0.10),
+        (1.35, 1.00, 165, 0.15),
+        (1.50, 0.75, 100, 0.10),
+        (1.50, 1.00, 165, 0.10),
+    ]
+    for i, (br, body, lb, dist) in enumerate(engulf):
+        out.append(cfg(
+            f"S1_ENG_{i}",
+            "BEAR_ENGULF_STRUCTURE",
+            br_min=br,
+            body_atr_min=body,
+            structure_lb=lb,
+            structure_dist_atr_max=dist,
+        ))
+
+    # 2) Sweep prior high, then bearish displacement through previous candle low.
+    sweep = [
+        (20, 0.75, 0.15, 0.50),
+        (20, 1.00, 0.25, 1.00),
+        (40, 0.75, 0.25, 0.50),
+        (40, 1.00, 0.25, 1.00),
+        (40, 1.25, 0.25, 1.25),
+        (60, 0.75, 0.25, 0.75),
+        (60, 1.00, 0.35, 1.00),
+        (60, 1.25, 0.25, 1.50),
+        (100, 1.00, 0.35, 1.25),
+        (100, 1.25, 0.35, 1.50),
+    ]
+    for i, (lb, body, wick, mom) in enumerate(sweep):
+        out.append(cfg(
+            f"S1_SWEEP_{i}",
+            "HIGH_SWEEP_DISPLACEMENT",
+            sweep_lb=lb,
+            body_atr_min=body,
+            upper_wick_body_min=wick,
+            mom4_min=mom,
+        ))
+
+    # 3) False breakout above structure that closes back below it.
+    failed = [
+        (20, 0.50, 0.40),
+        (20, 0.75, 0.30),
+        (40, 0.50, 0.40),
+        (40, 0.75, 0.30),
+        (40, 1.00, 0.25),
+        (60, 0.50, 0.35),
+        (60, 0.75, 0.30),
+        (60, 1.00, 0.25),
+        (100, 0.75, 0.30),
+        (100, 1.00, 0.20),
+    ]
+    for i, (lb, body, close_max) in enumerate(failed):
+        out.append(cfg(
+            f"S1_FAIL_{i}",
+            "FAILED_BREAKOUT_REJECTION",
+            sweep_lb=lb,
+            body_atr_min=body,
+            close_loc_max=close_max,
+        ))
+
+    # 4) Bearish outside bar at/near prior high structure.
+    outside = [
+        (0.50, 0.40, 40, 0.20),
+        (0.75, 0.35, 40, 0.15),
+        (0.75, 0.30, 60, 0.20),
+        (1.00, 0.35, 60, 0.15),
+        (1.00, 0.25, 80, 0.20),
+        (1.25, 0.30, 80, 0.15),
+        (1.25, 0.25, 100, 0.20),
+        (1.50, 0.25, 100, 0.15),
+    ]
+    for i, (body, close_max, lb, dist) in enumerate(outside):
+        out.append(cfg(
+            f"S1_OUT_{i}",
+            "OUTSIDE_REVERSAL",
+            body_atr_min=body,
+            close_loc_max=close_max,
+            structure_lb=lb,
+            structure_dist_atr_max=dist,
+        ))
+
+    # 5) Volatility compression followed by downside range/body expansion.
+    compression = [
+        (0.60, 0.75, 1.20, 10),
+        (0.65, 0.75, 1.30, 10),
+        (0.65, 1.00, 1.40, 10),
+        (0.70, 0.75, 1.30, 10),
+        (0.70, 1.00, 1.40, 10),
+        (0.70, 1.25, 1.50, 10),
+        (0.75, 0.75, 1.30, 10),
+        (0.75, 1.00, 1.40, 10),
+        (0.75, 1.25, 1.50, 20),
+        (0.80, 1.00, 1.50, 20),
+    ]
+    for i, (comp, body, range_min, lb) in enumerate(compression):
+        out.append(cfg(
+            f"S1_COMP_{i}",
+            "COMPRESSION_BREAKDOWN",
+            compression_max=comp,
+            body_atr_min=body,
+            range_atr_min=range_min,
+            breakdown_lb=lb,
+        ))
+
+    # 6) Prior rally into a high sweep/rejection, but not necessarily engulfing.
+    rally_rejection = [
+        (20, 0.50, 0.75, 0.35),
+        (20, 0.75, 1.00, 0.30),
+        (40, 0.50, 1.00, 0.35),
+        (40, 0.75, 1.25, 0.30),
+        (40, 1.00, 1.50, 0.25),
+        (60, 0.75, 1.25, 0.30),
+        (60, 1.00, 1.50, 0.25),
+        (100, 1.00, 1.50, 0.25),
+    ]
+    for i, (lb, body, mom, close_max) in enumerate(rally_rejection):
+        out.append(cfg(
+            f"S1_RALLY_{i}",
+            "RALLY_REJECTION",
+            sweep_lb=lb,
+            body_atr_min=body,
+            mom4_min=mom,
+            close_loc_max=close_max,
+        ))
+
     return out
 
 
+CONTEXTS = [
+    "NONE",
+    "H1_CLOSE_LT_EMA100",
+    "H1_CLOSE_LT_EMA200",
+    "H1_EMA50_LT_EMA200",
+    "H4_CLOSE_LT_EMA100",
+    "H4_CLOSE_LT_EMA200",
+    "D_CLOSE_LT_EMA200",
+    "D_EMA50_LT_EMA200",
+    "H1_ATR_GE_080",
+    "H4_ATR_GE_080",
+    "D_ATR_GE_080",
+    "NY_BLOCK_00-03",
+    "NY_BLOCK_04-07",
+    "NY_BLOCK_08-11",
+    "NY_BLOCK_12-15",
+    "NY_BLOCK_16-19",
+    "NY_BLOCK_20-23",
+    "LDN_BLOCK_00-03",
+    "LDN_BLOCK_04-07",
+    "LDN_BLOCK_08-11",
+    "LDN_BLOCK_12-15",
+    "LDN_BLOCK_16-19",
+    "LDN_BLOCK_20-23",
+    "TOKYO_BLOCK_00-03",
+    "TOKYO_BLOCK_04-07",
+    "TOKYO_BLOCK_08-11",
+    "TOKYO_BLOCK_12-15",
+    "TOKYO_BLOCK_16-19",
+    "TOKYO_BLOCK_20-23",
+    "EXCLUDE_WEEKDAY_0",
+    "EXCLUDE_WEEKDAY_1",
+    "EXCLUDE_WEEKDAY_2",
+    "EXCLUDE_WEEKDAY_3",
+    "EXCLUDE_WEEKDAY_4",
+]
+
+
 # ============================================================
-# MAIN RUNNER
+# SIGNAL EVALUATION
 # ============================================================
 
-def run_eurjpy_m15_long_portfolio_add():
-    try:
-        PV_STATUS.update(
-            state="fetch_eurjpy",
-            message="Fetching EUR/JPY M15 + H1 history",
-            progress=2,
+def context_mask(mask, config, f):
+    ctx = config.get("context", "NONE")
+
+    if ctx == "H1_CLOSE_LT_EMA100":
+        mask &= f["h1_close"] < f["h1_ema100"]
+    elif ctx == "H1_CLOSE_LT_EMA200":
+        mask &= f["h1_close"] < f["h1_ema200"]
+    elif ctx == "H1_EMA50_LT_EMA200":
+        mask &= f["h1_ema50"] < f["h1_ema200"]
+    elif ctx == "H4_CLOSE_LT_EMA100":
+        mask &= f["h4_close"] < f["h4_ema100"]
+    elif ctx == "H4_CLOSE_LT_EMA200":
+        mask &= f["h4_close"] < f["h4_ema200"]
+    elif ctx == "D_CLOSE_LT_EMA200":
+        mask &= f["d_close"] < f["d_ema200"]
+    elif ctx == "D_EMA50_LT_EMA200":
+        mask &= f["d_ema50"] < f["d_ema200"]
+    elif ctx == "H1_ATR_GE_080":
+        mask &= f["h1_atr"] >= 0.80
+    elif ctx == "H4_ATR_GE_080":
+        mask &= f["h4_atr"] >= 0.80
+    elif ctx == "D_ATR_GE_080":
+        mask &= f["d_atr"] >= 0.80
+    elif ctx.startswith("NY_BLOCK_"):
+        a, b = map(int, ctx.split("_")[-1].split("-"))
+        mask &= (f["ny_hour"] >= a) & (f["ny_hour"] <= b)
+    elif ctx.startswith("LDN_BLOCK_"):
+        a, b = map(int, ctx.split("_")[-1].split("-"))
+        mask &= (f["london_hour"] >= a) & (f["london_hour"] <= b)
+    elif ctx.startswith("TOKYO_BLOCK_"):
+        a, b = map(int, ctx.split("_")[-1].split("-"))
+        mask &= (f["tokyo_hour"] >= a) & (f["tokyo_hour"] <= b)
+    elif ctx.startswith("EXCLUDE_WEEKDAY_"):
+        weekday = int(ctx.split("_")[-1])
+        mask &= f["ny_weekday"] != weekday
+
+    for weekday in config.get("excluded_weekdays", set()):
+        mask &= f["ny_weekday"] != weekday
+    for hour in config.get("excluded_ny_hours", set()):
+        mask &= f["ny_hour"] != hour
+
+    return mask
+
+
+def indices(config, f):
+    mask = f["valid_atr"].copy() & f["bearish"]
+    family = config["family"]
+
+    if family == "BEAR_ENGULF_STRUCTURE":
+        mask &= f["exact_bear"]
+        mask &= f["bear_br"] >= config["br_min"]
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= (
+            f["structure_dist_high"][config["structure_lb"]]
+            <= config["structure_dist_atr_max"]
         )
 
-        eurjpy_m15, _ = fetch_history(PV_PAIR, "M15", START, NOW)
-        eurjpy_h1, _ = fetch_history(PV_PAIR, "H1", PV_H1_WARMUP, NOW)
+    elif family == "HIGH_SWEEP_DISPLACEMENT":
+        lb = config["sweep_lb"]
+        mask &= f["high"] > f["prev_high"][lb]
+        previous_low = np.roll(f["low"], 1)
+        mask[0] = False
+        mask &= f["close"] < previous_low
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= f["upper_wick_body"] >= config["upper_wick_body_min"]
+        mask &= f["mom4"] >= config["mom4_min"]
 
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
-            )
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
-            )
+    elif family == "FAILED_BREAKOUT_REJECTION":
+        prior_high = f["prev_high"][config["sweep_lb"]]
+        mask &= f["high"] > prior_high
+        mask &= f["close"] < prior_high
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= f["close_loc"] <= config["close_loc_max"]
 
-        m15_features = pv_m15_features(eurjpy_m15, eurjpy_h1)
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        PV_STATUS.update(
-            state="current22",
-            message="Rebuilding exact current 22-strategy portfolio",
-            progress=8,
+    elif family == "OUTSIDE_REVERSAL":
+        previous_high = np.roll(f["high"], 1)
+        previous_low = np.roll(f["low"], 1)
+        mask[0] = False
+        mask &= f["high"] > previous_high
+        mask &= f["low"] < previous_low
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= f["close_loc"] <= config["close_loc_max"]
+        mask &= (
+            f["structure_dist_high"][config["structure_lb"]]
+            <= config["structure_dist_atr_max"]
         )
 
-        baseline = pv_rebuild_current22(eurjpy_h1, eurjpy_h1_atr)
-        write_csv(PV_OUT["baseline_parity"], baseline["parity"])
+    elif family == "COMPRESSION_BREAKDOWN":
+        mask &= f["compression"] <= config["compression_max"]
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= f["range_atr"] >= config["range_atr_min"]
+        mask &= f["close"] < f["prev_low"][config["breakdown_lb"]]
 
-        baseline_rows = []
-        baseline_lookup = {}
-        baseline_roll_rows = []
-        baseline_cal_rows = []
-        frequency_rows = []
+    elif family == "RALLY_REJECTION":
+        prior_high = f["prev_high"][config["sweep_lb"]]
+        mask &= f["high"] > prior_high
+        mask &= f["close"] < f["prev_high"][10]
+        mask &= f["body_atr"] >= config["body_atr_min"]
+        mask &= f["mom4"] >= config["mom4_min"]
+        mask &= f["close_loc"] <= config["close_loc_max"]
 
-        for mode, trades in [
-            ("LIVE_SAFE_H1_FIRST", baseline["live_h1_first"]),
-            ("LIVE_SAFE_M15_FIRST", baseline["live_m15_first"]),
-        ]:
-            row = ev_portfolio_summary_row("CURRENT_22", mode, trades)
-            sim = row.pop("_sim")
-            baseline_rows.append(row)
-            baseline_lookup[mode] = {
-                "row": row,
-                "sim": sim,
-                "trades": trades,
-            }
-            frequency_rows.extend(ev_frequency_detail("CURRENT_22", mode, trades))
-            baseline_roll_rows.extend(ev_portfolio_rolling_rows("CURRENT_22", mode, trades, sim))
-            baseline_cal_rows.extend(ev_portfolio_calendar_rows("CURRENT_22", mode, trades, sim))
+    else:
+        raise ValueError(f"Unknown family: {family}")
 
-        write_csv(PV_OUT["baseline_summary"], baseline_rows)
-
-        # Hard minimum plus exact-reference diagnostic. Newer history is allowed.
-        for row in baseline_rows:
-            if row["trades"] < PV_CURRENT22_MIN_TRADES:
-                raise RuntimeError(
-                    "Current22 baseline fell below reference: "
-                    f"{row['trades']} < {PV_CURRENT22_MIN_TRADES}"
-                )
-
-        PV_STATUS.update(
-            state="candidate_parity",
-            message="Reproducing the three fixed M15 RR controls",
-            progress=58,
-        )
-
-        candidate_summary = []
-        candidate_parity = []
-        candidate_trade_rows = []
-        candidate_cache = {}
-
-        for candidate in PV_RR_CANDIDATES:
-            cid = candidate["candidate_id"]
-            trades = pv_build_m15_candidate_trades(
-                eurjpy_m15,
-                m15_features,
-                candidate,
-            )
-            candidate_cache[cid] = trades
-            s = pv_candidate_summary(candidate, trades)
-            candidate_summary.append(s)
-
-            ref = PV_REFERENCE[cid]
-            pf_diff = abs(float(s["profit_factor"]) - ref["pf"])
-            r_diff = abs(float(s["total_r"]) - ref["r"])
-            status = (
-                "PASS"
-                if (
-                    s["trades"] == ref["trades"]
-                    and pf_diff <= 0.00005
-                    and r_diff <= 0.02
-                )
-                else (
-                    "PASS_NEWER_TRADES"
-                    if s["trades"] > ref["trades"]
-                    else "FAIL"
-                )
-            )
-
-            candidate_parity.append({
-                "candidate_id": cid,
-                "rr": candidate["rr"],
-                "reference_trades": ref["trades"],
-                "current_trades": s["trades"],
-                "reference_pf": ref["pf"],
-                "current_pf": s["profit_factor"],
-                "pf_abs_diff": pf_diff,
-                "reference_r": ref["r"],
-                "current_r": s["total_r"],
-                "r_abs_diff": r_diff,
-                "status": status,
-            })
-
-            if status == "FAIL":
-                raise RuntimeError(
-                    f"M15 parity failure for {cid}: {candidate_parity[-1]}"
-                )
-
-            for t in trades:
-                candidate_trade_rows.append(pv_serialise_trade(t))
-
-        write_csv(PV_OUT["candidate_parity"], candidate_parity)
-        write_csv(PV_OUT["candidate_summary"], candidate_summary)
-        write_csv(PV_OUT["candidate_trades"], candidate_trade_rows)
-
-        PV_STATUS.update(
-            state="portfolio_add",
-            message="Adding each RR candidate independently to current22",
-            progress=68,
-        )
-
-        portfolio_summary = list(baseline_rows)
-        delta_rows = []
-        rolling_rows_all = list(baseline_roll_rows)
-        calendar_rows_all = list(baseline_cal_rows)
-        gate_conflicts = []
-        corr_rows = []
-
-        for idx, candidate in enumerate(PV_RR_CANDIDATES, 1):
-            cid = candidate["candidate_id"]
-            cand_trades = candidate_cache[cid]
-            cand_sid = f"EUR_JPY_M15_LONG_{cid}"
-
-            combined_independent = sorted(
-                baseline["independent"] + cand_trades,
-                key=lambda t: (t["entry_time"], t["strategy_id"]),
-            )
-
-            for priority, mode in [
-                ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
-                ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
-            ]:
-                accepted, rejected = apply_live_safe_nonhedging_gate(
-                    combined_independent,
-                    priority,
-                )
-
-                accepted_candidate = [
-                    t for t in accepted
-                    if t["strategy_id"] == cand_sid
-                ]
-
-                conflicts = pv_conflict_counts(rejected, cand_sid)
-
-                row = ev_portfolio_summary_row(cid, mode, accepted)
-                sim = row.pop("_sim")
-                row.update({
-                    "candidate_rr": candidate["rr"],
-                    "candidate_trades_before_gate": len(cand_trades),
-                    "candidate_trades_accepted": len(accepted_candidate),
-                    **conflicts,
-                })
-                portfolio_summary.append(row)
-
-                d = pv_delta_row(
-                    cid,
-                    mode,
-                    baseline_lookup[mode]["row"],
-                    row,
-                    conflicts,
-                    len(cand_trades),
-                    len(accepted_candidate),
-                )
-                delta_rows.append(d)
-
-                frequency_rows.extend(
-                    ev_frequency_detail(cid, mode, accepted)
-                )
-                rolling_rows_all.extend(
-                    ev_portfolio_rolling_rows(cid, mode, accepted, sim)
-                )
-                calendar_rows_all.extend(
-                    ev_portfolio_calendar_rows(cid, mode, accepted, sim)
-                )
-
-                for rej in rejected:
-                    if (
-                        rej["candidate_pair"] == "EUR_JPY"
-                        or rej["blocker_strategy_id"].startswith("EUR_JPY")
-                    ):
-                        gate_conflicts.append({
-                            "candidate_id": cid,
-                            "portfolio_mode": mode,
-                            **rej,
-                        })
-
-                corr_rows.append({
-                    "candidate_id": cid,
-                    "portfolio_mode": mode,
-                    "monthly_r_correlation": pv_corr(
-                        pv_monthly_r(cand_trades),
-                        pv_monthly_r(baseline_lookup[mode]["trades"]),
-                    ),
-                    "candidate_months_with_nonzero_r": len(pv_monthly_r(cand_trades)),
-                    "baseline_months_with_nonzero_r": len(pv_monthly_r(baseline_lookup[mode]["trades"])),
-                })
-
-            PV_STATUS.update(
-                state="portfolio_add",
-                message=f"{idx}/{len(PV_RR_CANDIDATES)} completed: {cid}",
-                progress=68 + idx * 8,
-            )
-
-        roll_summary = ev_portfolio_rolling_summary(rolling_rows_all)
-        cal_summary = ev_portfolio_calendar_summary(calendar_rows_all)
-        decision = pv_decision_rows(
-            candidate_summary,
-            delta_rows,
-            roll_summary,
-            corr_rows,
-        )
-
-        write_csv(PV_OUT["portfolio_summary"], portfolio_summary)
-        write_csv(PV_OUT["portfolio_delta"], delta_rows)
-        write_csv(PV_OUT["portfolio_frequency"], frequency_rows)
-        write_csv(PV_OUT["portfolio_rolling"], rolling_rows_all)
-        write_csv(PV_OUT["portfolio_rolling_summary"], roll_summary)
-        write_csv(PV_OUT["portfolio_calendar"], calendar_rows_all)
-        write_csv(PV_OUT["portfolio_calendar_summary"], cal_summary)
-        write_csv(PV_OUT["gate_conflicts"], gate_conflicts)
-        write_csv(PV_OUT["monthly_correlation"], corr_rows)
-        write_csv(PV_OUT["decision_matrix"], decision)
-
-        write_csv(PV_OUT["notes"], [
-            {
-                "item": "scope",
-                "value": "Fixed 22->23 portfolio-add test only; no optimisation. RR3.00 vs RR4.25 vs RR4.50 on one frozen EUR/JPY M15 LONG signal geometry.",
-            },
-            {
-                "item": "frozen_signal",
-                "value": "Exact bullish engulf; BR>=1.50; body>=0.75 ATR14; abs distance to previous100 low<=0.10 ATR14; previous strictly completed H1 EMA50>EMA200; no time/day filters.",
-            },
-            {
-                "item": "execution",
-                "value": "Reference entry=signal close; historical adverse fill=close+1 pip; stop=signal low-10 ticks; target from reference-close risk; next-bar exit testing; exact exit-candle signal eligible; pyramiding0.",
-            },
-            {
-                "item": "current22",
-                "value": "Exact current20 + EUR/JPY H1 LONG + locked EUR/JPY H1 SHORT Candidate B (exclude NY19, RR7.25), then live-safe non-hedging gate.",
-            },
-            {
-                "item": "non_hedging",
-                "value": "Same-pair same-direction overlaps allowed. Opposite-direction same-pair entry blocked while opposite trade open. Both H1_FIRST and M15_FIRST simultaneous-entry orderings are reported.",
-            },
-            {
-                "item": "selection_rule",
-                "value": "Choose on marginal current22 portfolio value: CAGR/R/rolling contribution versus drawdown, concurrency and H1-short conflicts. Do not choose standalone max R mechanically.",
-            },
-            {
-                "item": "reference_current22",
-                "value": "Prior exact H1_FIRST/M15_FIRST reference before any new M15 long: 2446 trades, PF1.979622, +1527.231R, 94.9734% historical CAGR at 1% per accepted trade. Newer valid trades are allowed but counts may not fall below this reference.",
-            },
-        ])
-
-        PV_STATUS.update(
-            state="packaging",
-            message="Packaging EUR/JPY M15 LONG 22->23 portfolio results",
-            progress=97,
-        )
-
-        with zipfile.ZipFile(
-            PV_BUNDLE,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as z:
-            for path in PV_OUT.values():
-                if os.path.exists(path):
-                    z.write(path, arcname=os.path.basename(path))
-
-        PV_STATUS.update(
-            state="complete",
-            message="EUR/JPY M15 LONG 22->23 portfolio-add test complete",
-            progress=100,
-            results=PV_BUNDLE,
-            candidates=len(PV_RR_CANDIDATES),
-            current22_h1_first_trades=len(baseline["live_h1_first"]),
-            current22_m15_first_trades=len(baseline["live_m15_first"]),
-        )
-
-    except Exception as e:
-        PV_STATUS.update(
-            state="error",
-            message=str(e),
-            progress=PV_STATUS.get("progress", 0),
-        )
-        print("EURJPY M15 LONG PORTFOLIO ADD ERROR:", repr(e), flush=True)
+    mask = context_mask(mask, config, f)
+    mask[:200] = False
+    return np.flatnonzero(mask).tolist()
 
 
 # ============================================================
-# ROUTES
+# SHORT BACKTEST
 # ============================================================
 
-@app.route("/eurjpy-m15-long-portfolio/status")
-def eurjpy_m15_long_portfolio_status():
-    return jsonify(PV_STATUS)
+OUTCOME_CACHE = {}
 
 
-@app.route("/eurjpy-m15-long-portfolio/results")
-def eurjpy_m15_long_portfolio_results():
-    if not os.path.exists(PV_BUNDLE):
-        return jsonify({
-            "status": "not_ready",
-            "state": PV_STATUS.get("state"),
-            "message": PV_STATUS.get("message"),
-        }), 404
+def outcome(candles, signal_index, rr, cost_pips):
+    key = (signal_index, round(rr, 4), round(cost_pips, 4))
+    if key in OUTCOME_CACHE:
+        cached = OUTCOME_CACHE[key]
+        return None if cached is None else dict(cached)
 
-    return send_file(
-        os.path.abspath(PV_BUNDLE),
-        as_attachment=True,
-        download_name=PV_BUNDLE,
-    )
-
-
-@app.route("/eurjpy-m15-long-portfolio/info")
-def eurjpy_m15_long_portfolio_info():
-    return jsonify({
-        "service": "EUR/JPY M15 LONG fixed RR 22->23 portfolio test",
-        "status": PV_STATUS.get("state"),
-        "read_only": True,
-        "orders_supported": False,
-        "current_portfolio": 22,
-        "candidate_portfolio": 23,
-        "signal": {
-            "exact_bullish_engulf": True,
-            "br_min": PV_BR_MIN,
-            "body_atr_min": PV_BODY_ATR_MIN,
-            "structure_lookback": PV_STRUCTURE_LB,
-            "absolute_distance_atr_max": PV_STRUCTURE_DIST_ATR_MAX,
-            "h1_context": "previous strictly completed EMA50 > EMA200",
-            "stop_buffer_ticks": PV_STOP_TICKS,
-            "historical_adverse_cost_pips": PV_COST_PIPS,
-        },
-        "rr_candidates": [x["rr"] for x in PV_RR_CANDIDATES],
-        "portfolio_risk": "1% H1 + 1% M15 per accepted trade",
-        "non_hedging": "opposite same-pair entries blocked; same direction overlaps allowed",
-        "routes": [
-            "/eurjpy-m15-long-portfolio/status",
-            "/eurjpy-m15-long-portfolio/results",
-            "/eurjpy-m15-long-portfolio/info",
-        ],
-    })
-
-
-
-# ============================================================
-# EUR/JPY M15 SHORT #24 — FROZEN 23 -> 24 PORTFOLIO ADD TEST
-# ============================================================
-#
-# CURRENT LIVE BASELINE (#23)
-# ---------------------------
-# Exact current 23-strategy portfolio:
-#   - current frozen 22-strategy portfolio
-#   - EUR/JPY M15 LONG #23:
-#       exact bullish engulf
-#       BR>=1.50
-#       body>=0.75 ATR14
-#       abs(signal low - previous100 low)<=0.10 ATR14
-#       previous strictly completed H1 EMA50>EMA200
-#       RR4.25
-#       stop=signal low-10 ticks
-#       1-pip adverse historical fill
-#
-# FROZEN CANDIDATE #24 — TWO TRIGGERS, B PRIORITY
-# ------------------------------------------------
-# A — RALLY_REJECTION, RR4.75
-#   bearish candle
-#   sweep previous 40-bar high
-#   close below previous 10-bar high
-#   body>=0.75 ATR14
-#   prior ~4h M15 momentum>=+1.25 ATR14
-#   close location<=0.30
-#   include NY 16:00-19:59
-#
-# B — HIGH_SWEEP_DISPLACEMENT, RR3.00
-#   bearish candle
-#   sweep previous 60-bar high
-#   close below previous candle low
-#   body>=1.00 ATR14
-#   upper wick/body>=0.35
-#   prior ~4h M15 momentum>=+1.00 ATR14
-#   previous STRICTLY COMPLETED H1 close < H1 EMA100
-#
-# B has priority only when A and B fire on the SAME signal candle.
-# One-position p0 across A+B:
-#   overlap interval [signal_index, exit_index)
-#   exact exit-candle signal remains eligible.
-#
-# Historical execution:
-#   reference entry = signal close
-#   adverse short fill = signal close - 1 pip
-#   stop = signal high + 10 ticks
-#   targets are based on reference-close risk
-#   next-bar exit testing
-#
-# Portfolio gate:
-#   exact existing live-safe non-hedging gate
-#   same-pair/same-direction overlaps allowed
-#   opposite-direction same-pair entries blocked
-#   H1_FIRST and M15_FIRST both reported
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-Q24_STATUS = {
-    "state": "not_started",
-    "message": "EUR/JPY M15 SHORT #24 23->24 portfolio test not started",
-    "progress": 0,
-    "orders_supported": False,
-    "trading_enabled": False,
-}
-
-Q24_BUNDLE = "EURJPY_M15_SHORT_24_23_TO_24_PORTFOLIO_ADD_RESULTS.zip"
-Q24_OUT = {
-    "baseline_parity": "eurjpy_m15_short_24_current23_baseline_parity.csv",
-    "baseline_summary": "eurjpy_m15_short_24_current23_summary.csv",
-    "candidate_parity": "eurjpy_m15_short_24_candidate_parity.csv",
-    "candidate_summary": "eurjpy_m15_short_24_candidate_standalone_summary.csv",
-    "candidate_trades": "eurjpy_m15_short_24_candidate_trades.csv",
-    "portfolio_summary": "eurjpy_m15_short_24_23_to_24_portfolio_summary.csv",
-    "portfolio_delta": "eurjpy_m15_short_24_23_to_24_portfolio_delta.csv",
-    "portfolio_frequency": "eurjpy_m15_short_24_23_to_24_portfolio_frequency.csv",
-    "portfolio_rolling": "eurjpy_m15_short_24_23_to_24_portfolio_rolling.csv",
-    "portfolio_rolling_summary": "eurjpy_m15_short_24_23_to_24_portfolio_rolling_summary.csv",
-    "portfolio_calendar": "eurjpy_m15_short_24_23_to_24_portfolio_calendar.csv",
-    "portfolio_calendar_summary": "eurjpy_m15_short_24_23_to_24_portfolio_calendar_summary.csv",
-    "gate_conflicts": "eurjpy_m15_short_24_23_to_24_gate_conflicts.csv",
-    "gate_displacement_summary": "eurjpy_m15_short_24_23_to_24_gate_displacement_summary.csv",
-    "monthly_correlation": "eurjpy_m15_short_24_23_to_24_monthly_correlation.csv",
-    "decision_matrix": "eurjpy_m15_short_24_23_to_24_decision_matrix.csv",
-    "notes": "eurjpy_m15_short_24_23_to_24_notes.csv",
-}
-
-Q24_PAIR = "EUR_JPY"
-Q24_TICK = 0.001
-Q24_PIP = 0.01
-Q24_COST_PIPS = 1.0
-Q24_STOP_TICKS = 10
-Q24_STRATEGY_ID = "EUR_JPY_M15_SHORT"
-
-Q24_A_RR = 4.75
-Q24_B_RR = 3.00
-
-Q24_REFERENCE = {
-    "trades": 164,
-    "pf": 1.558359,
-    "r": 65.886347,
-}
-
-Q23_LONG_REFERENCE = {
-    "trades": 74,
-    "pf": 1.889369,
-    "r": 44.4685,
-}
-
-Q23_PORTFOLIO_REFERENCE = {
-    "min_trades": 2515,
-    "r": 1563.69,
-    "cagr": 98.11,
-    "closed_dd": -16.40,
-    "risk_floor_dd": -17.25,
-    "max_positions": 6,
-}
-
-
-# ============================================================
-# FROZEN #24 FEATURE CACHE
-# ============================================================
-
-def q24_features(m15, h1_candles):
-    n = len(m15)
-    o = np.array([x["open"] for x in m15], dtype=float)
-    h = np.array([x["high"] for x in m15], dtype=float)
-    l = np.array([x["low"] for x in m15], dtype=float)
-    c = np.array([x["close"] for x in m15], dtype=float)
-    a = atr14(m15)
-
-    body = o - c
-    bearish = c < o
-
-    body_atr = np.divide(
-        body,
-        a,
-        out=np.full(n, np.nan),
-        where=np.isfinite(a) & (a > 0),
-    )
-
-    rng = h - l
-    close_loc = np.divide(
-        c - l,
-        rng,
-        out=np.full(n, np.nan),
-        where=rng > 0,
-    )
-
-    upper_wick = h - np.maximum(o, c)
-    upper_wick_body = np.divide(
-        upper_wick,
-        body,
-        out=np.full(n, np.nan),
-        where=body > 0,
-    )
-
-    p10_high = prev_extreme(h, 10, True)
-    p40_high = prev_extreme(h, 40, True)
-    p60_high = prev_extreme(h, 60, True)
-    previous_low = np.r_[np.nan, l[:-1]]
-
-    # Exact broad/deep-validation definition:
-    # previous ~4 hours, excluding the signal candle.
-    mom4 = np.full(n, np.nan)
-    if n > 17:
-        mom4[17:] = np.divide(
-            c[16:-1] - c[:-17],
-            a[17:],
-            out=np.full(n - 17, np.nan),
-            where=np.isfinite(a[17:]) & (a[17:] > 0),
-        )
-
-    times = [x["time"] for x in m15]
-    ny_hour = np.array(
-        [t.astimezone(NY).hour for t in times],
-        dtype=np.int16,
-    )
-
-    aligned_h1 = align_htf(times, htf_state(h1_candles))
-
-    valid = np.isfinite(a) & (a > 0)
-
-    a_mask = (
-        valid
-        & bearish
-        & np.isfinite(p40_high)
-        & np.isfinite(p10_high)
-        & (h > p40_high)
-        & (c < p10_high)
-        & (body_atr >= 0.75)
-        & (mom4 >= 1.25)
-        & (close_loc <= 0.30)
-        & (ny_hour >= 16)
-        & (ny_hour <= 19)
-    )
-
-    b_mask = (
-        valid
-        & bearish
-        & np.isfinite(p60_high)
-        & np.isfinite(previous_low)
-        & (h > p60_high)
-        & (c < previous_low)
-        & (body_atr >= 1.00)
-        & (upper_wick_body >= 0.35)
-        & (mom4 >= 1.00)
-        & np.isfinite(aligned_h1["close"])
-        & np.isfinite(aligned_h1["ema100"])
-        & (aligned_h1["close"] < aligned_h1["ema100"])
-    )
-
-    # Exact deep-validation convention.
-    a_mask[:200] = False
-    b_mask[:200] = False
-
-    return {
-        "atr": a,
-        "a_indices": np.flatnonzero(a_mask).tolist(),
-        "b_indices": np.flatnonzero(b_mask).tolist(),
-        "aligned_h1": aligned_h1,
-    }
-
-
-# ============================================================
-# FROZEN #24 SHORT EXECUTION / P0 UNION
-# ============================================================
-
-def q24_short_outcome(m15, signal_index, rr):
-    signal = m15[signal_index]
-    reference = float(signal["close"])
-    stop = float(signal["high"]) + Q24_STOP_TICKS * Q24_TICK
+    signal = candles[signal_index]
+    reference = signal["close"]
+    stop = signal["high"] + STOP_TICKS * TICK
     reference_risk = stop - reference
 
     if reference_risk <= 0:
+        OUTCOME_CACHE[key] = None
         return None
 
-    target = reference - float(rr) * reference_risk
-    fill = reference - Q24_COST_PIPS * Q24_PIP
+    target = reference - rr * reference_risk
+    fill = reference - cost_pips * PIP
     actual_risk = stop - fill
 
     if actual_risk <= 0:
+        OUTCOME_CACHE[key] = None
         return None
 
-    for j in range(signal_index + 1, len(m15)):
-        bar = m15[j]
-        hit_stop = float(bar["high"]) >= stop
-        hit_target = float(bar["low"]) <= target
-
-        if not hit_stop and not hit_target:
-            continue
+    for j in range(signal_index + 1, len(candles)):
+        bar = candles[j]
+        hit_stop = bar["high"] >= stop
+        hit_target = bar["low"] <= target
 
         if hit_stop and hit_target:
-            # Exact deep-validation SHORT convention:
-            # if low side is closer to open, assume TARGET first.
-            if (
-                abs(float(bar["open"]) - float(bar["low"]))
-                < abs(float(bar["high"]) - float(bar["open"]))
-            ):
+            # Short target is below. If the low side is closer to the open,
+            # assume target first; otherwise stop first.
+            if abs(bar["open"] - bar["low"]) < abs(bar["high"] - bar["open"]):
                 exit_price = target
                 reason = "TARGET"
             else:
@@ -10040,51 +927,2352 @@ def q24_short_outcome(m15, signal_index, rr):
         elif hit_target:
             exit_price = target
             reason = "TARGET"
-        else:
+        elif hit_stop:
             exit_price = stop
             reason = "STOP"
+        else:
+            continue
 
         result_r = (fill - exit_price) / actual_risk
-
-        return {
+        row = {
             "signal_index": signal_index,
             "exit_index": j,
-            "signal_time": signal["time"],
-            # Live entry occurs at the completed M15 signal candle close.
-            "entry_time": signal["time"] + timedelta(minutes=15),
+            "entry_time": signal["time"],
             "exit_time": bar["time"],
-            "exit_event_time": bar["time"] + timedelta(minutes=15),
+            "entry_time_utc": iso(signal["time"]),
+            "exit_time_utc": iso(bar["time"]),
             "reference_entry": reference,
             "historical_fill": fill,
             "stop": stop,
             "target": target,
-            "exit_price": exit_price,
-            "result": reason,
-            "r": float(result_r),
-            "rr": float(rr),
-            "bars_held": j - signal_index,
-            "hold_hours": (j - signal_index) * 0.25,
-            "cost_model": "M15_1_ADVERSE_PIP",
-            "baseline_cost_value": Q24_COST_PIPS,
-            "early_exit": False,
+            "result_r": result_r,
+            "exit_reason": reason,
+            "rr": rr,
+            "cost_pips": cost_pips,
         }
+        OUTCOME_CACHE[key] = dict(row)
+        return row
 
+    OUTCOME_CACHE[key] = None
     return None
 
 
-def q24_build_candidate_trades(m15, features):
-    """
-    Exact frozen A+B B-priority stream.
+def backtest(candles, candidate_indices, rr, cost_pips, start=None, end=None):
+    use = candidate_indices
 
-    One-position p0:
-        occupied interval [signal_index, exit_index)
-        signal exactly on exit candle remains eligible.
+    if start is not None or end is not None:
+        times = [candles[i]["time"] for i in candidate_indices]
+        a = 0 if start is None else bisect.bisect_left(times, start)
+        b = len(candidate_indices) if end is None else bisect.bisect_left(times, end)
+        use = candidate_indices[a:b]
+
+    trades = []
+    p = 0
+    while p < len(use):
+        trade = outcome(candles, use[p], rr, cost_pips)
+        if trade is None:
+            p += 1
+            continue
+
+        trades.append(dict(trade))
+
+        # p0 half-open [signal_index, exit_index); a signal exactly on the
+        # exit candle is eligible.
+        p = bisect.bisect_left(use, trade["exit_index"], lo=p + 1)
+
+    return trades
+
+
+def stats(trades):
+    results = [float(x["result_r"]) for x in trades]
+    winners = [x for x in results if x > 0]
+    losers = [x for x in results if x < 0]
+
+    gross_profit = sum(winners)
+    gross_loss = abs(sum(losers))
+    pf = (
+        gross_profit / gross_loss
+        if gross_loss > 0
+        else (999.0 if gross_profit > 0 else 0.0)
+    )
+
+    equity = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    streak = 0
+    longest_streak = 0
+
+    for r in results:
+        equity += r
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity - peak)
+        if r < 0:
+            streak += 1
+            longest_streak = max(longest_streak, streak)
+        else:
+            streak = 0
+
+    return {
+        "trades": len(results),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": 100.0 * len(winners) / len(results) if results else 0.0,
+        "profit_factor": pf,
+        "total_r": sum(results),
+        "expectancy_r": sum(results) / len(results) if results else 0.0,
+        "max_drawdown_r": max_dd,
+        "longest_loss_streak": longest_streak,
+    }
+
+
+# ============================================================
+# ROBUSTNESS SCORING / STAGED SEARCH
+# ============================================================
+
+ERAS = [
+    ("ERA_2002_07", START, datetime(2008, 1, 1, tzinfo=timezone.utc)),
+    ("ERA_2008_13", datetime(2008, 1, 1, tzinfo=timezone.utc), datetime(2014, 1, 1, tzinfo=timezone.utc)),
+    ("ERA_2014_19", datetime(2014, 1, 1, tzinfo=timezone.utc), datetime(2020, 1, 1, tzinfo=timezone.utc)),
+    ("ERA_2020_NOW", datetime(2020, 1, 1, tzinfo=timezone.utc), NOW),
+]
+
+
+def config_fields(config):
+    keys = [
+        "br_min",
+        "body_atr_min",
+        "range_atr_min",
+        "close_loc_max",
+        "upper_wick_body_min",
+        "structure_lb",
+        "structure_dist_atr_max",
+        "sweep_lb",
+        "breakdown_lb",
+        "compression_max",
+        "mom4_min",
+    ]
+    return {key: config.get(key) for key in keys}
+
+
+def evaluate(config, candles, candidate_indices):
+    full = stats(backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, candles[0]["time"], NOW))
+    early = stats(backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, candles[0]["time"], datetime(2010, 1, 1, tzinfo=timezone.utc)))
+    late = stats(backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, datetime(2010, 1, 1, tzinfo=timezone.utc), NOW))
+
+    era_pf = []
+    era_r = []
+    era_trades = []
+    for _, a, b in ERAS:
+        s = stats(backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, a, b))
+        era_pf.append(s["profit_factor"])
+        era_r.append(s["total_r"])
+        era_trades.append(s["trades"])
+
+    positive_eras = sum(x > 0 for x in era_r)
+    active_eras = sum(x > 0 for x in era_trades)
+    min_active_era_pf = min(
+        [era_pf[i] for i in range(4) if era_trades[i] > 0],
+        default=0.0,
+    )
+
+    # Deliberately rewards breadth and temporal persistence more than max PF.
+    score = (
+        1.50 * min(full["profit_factor"], 3.0)
+        + 0.75 * min(early["profit_factor"], 2.5)
+        + 0.90 * min(late["profit_factor"], 2.5)
+        + 0.40 * positive_eras
+        + 0.15 * active_eras
+        + 0.20 * min(max(min_active_era_pf, 0.0), 2.0)
+        + 0.15 * min(full["trades"] / 100.0, 2.0)
+        + 0.10 * min(max(full["expectancy_r"], 0.0), 1.0)
+    )
+
+    row = {
+        "config_id": config["config_id"],
+        "family": config["family"],
+        "context": config.get("context", "NONE"),
+        "rr": config["rr"],
+        "full_trades": full["trades"],
+        "full_pf": round(full["profit_factor"], 6),
+        "full_r": round(full["total_r"], 4),
+        "full_exp": round(full["expectancy_r"], 6),
+        "full_dd": round(full["max_drawdown_r"], 4),
+        "full_win_rate": round(full["win_rate"], 4),
+        "pre2010_trades": early["trades"],
+        "pre2010_pf": round(early["profit_factor"], 6),
+        "pre2010_r": round(early["total_r"], 4),
+        "post2010_trades": late["trades"],
+        "post2010_pf": round(late["profit_factor"], 6),
+        "post2010_r": round(late["total_r"], 4),
+        "positive_eras": positive_eras,
+        "active_eras": active_eras,
+        "min_active_era_pf": round(min_active_era_pf, 6),
+        "robust_score": round(score, 6),
+    }
+
+    for i in range(4):
+        row[f"era{i + 1}_trades"] = era_trades[i]
+        row[f"era{i + 1}_pf"] = round(era_pf[i], 6)
+        row[f"era{i + 1}_r"] = round(era_r[i], 4)
+
+    row.update(config_fields(config))
+    return row
+
+
+def sort_rows(rows):
+    return sorted(
+        rows,
+        key=lambda r: (
+            r["positive_eras"],
+            r["pre2010_r"] > 0,
+            r["post2010_r"] > 0,
+            r["robust_score"],
+            r["full_r"],
+            r["full_trades"],
+        ),
+        reverse=True,
+    )
+
+
+def family_summary(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["family"]].append(row)
+
+    out = []
+    for family, sub in grouped.items():
+        ranked = sort_rows(sub)
+        best = ranked[0]
+        out.append({
+            "family": family,
+            "configs": len(sub),
+            "positive_full_configs": sum(r["full_r"] > 0 for r in sub),
+            "positive_pre_and_post_configs": sum(
+                r["pre2010_r"] > 0 and r["post2010_r"] > 0 for r in sub
+            ),
+            "four_positive_era_configs": sum(r["positive_eras"] == 4 for r in sub),
+            "best_config_id": best["config_id"],
+            "best_full_trades": best["full_trades"],
+            "best_full_pf": best["full_pf"],
+            "best_full_r": best["full_r"],
+            "best_pre2010_r": best["pre2010_r"],
+            "best_post2010_r": best["post2010_r"],
+            "best_positive_eras": best["positive_eras"],
+            "best_robust_score": best["robust_score"],
+        })
+
+    return sorted(
+        out,
+        key=lambda r: (
+            r["four_positive_era_configs"],
+            r["positive_pre_and_post_configs"],
+            r["best_positive_eras"],
+            r["best_robust_score"],
+        ),
+        reverse=True,
+    )
+
+
+def select_diverse(rows, per_family, total):
+    """Take a minimum amount of family diversity, then fill globally."""
+    ranked = sort_rows(rows)
+    selected = []
+    seen_ids = set()
+
+    by_family = defaultdict(list)
+    for row in ranked:
+        by_family[row["family"]].append(row)
+
+    for family in sorted(by_family):
+        for row in by_family[family][:per_family]:
+            if row["config_id"] not in seen_ids:
+                selected.append(row)
+                seen_ids.add(row["config_id"])
+
+    for row in ranked:
+        if len(selected) >= total:
+            break
+        if row["config_id"] not in seen_ids:
+            selected.append(row)
+            seen_ids.add(row["config_id"])
+
+    return sort_rows(selected)[:total]
+
+
+def stage2_configs(base_rows, config_by_id):
+    out = []
+    for rank, row in enumerate(base_rows):
+        base = config_by_id[row["config_id"]]
+        for context in CONTEXTS:
+            x = deepcopy(base)
+            x["config_id"] = f"S2_{rank}_{context}"
+            x["context"] = context
+            out.append(x)
+    return out
+
+
+def local_variants(base, rank):
+    out = []
+
+    for rr in [
+        2.50, 2.75, 3.00, 3.25, 3.50, 3.75, 4.00,
+        4.25, 4.50, 4.75, 5.00, 5.25, 5.50, 5.75, 6.00,
+    ]:
+        x = deepcopy(base)
+        x["rr"] = rr
+        x["config_id"] = f"S3_{rank}_RR_{rr:.2f}"
+        out.append(x)
+
+    bumps = {
+        "br_min": [-0.15, -0.05, 0.05, 0.15],
+        "body_atr_min": [-0.20, -0.10, 0.10, 0.20],
+        "range_atr_min": [-0.20, -0.10, 0.10, 0.20],
+        "close_loc_max": [-0.10, -0.05, 0.05, 0.10],
+        "upper_wick_body_min": [-0.10, -0.05, 0.05, 0.10],
+        "structure_dist_atr_max": [-0.05, -0.025, 0.025, 0.05],
+        "compression_max": [-0.05, -0.025, 0.025, 0.05],
+        "mom4_min": [-0.50, -0.25, 0.25, 0.50],
+    }
+
+    for field, deltas in bumps.items():
+        value = base.get(field)
+        if value is None:
+            continue
+        for delta in deltas:
+            new_value = round(value + delta, 4)
+            if field == "close_loc_max":
+                if not (0.05 <= new_value <= 0.95):
+                    continue
+            elif new_value <= 0:
+                continue
+            x = deepcopy(base)
+            x[field] = new_value
+            x["config_id"] = f"S3_{rank}_{field}_{new_value}"
+            out.append(x)
+
+    lookbacks = [10, 20, 40, 60, 80, 100, 120, 165, 200]
+    for field in ["structure_lb", "sweep_lb", "breakdown_lb"]:
+        value = base.get(field)
+        if value not in lookbacks:
+            continue
+        p = lookbacks.index(value)
+        for q in [p - 1, p + 1]:
+            if 0 <= q < len(lookbacks):
+                x = deepcopy(base)
+                x[field] = lookbacks[q]
+                x["config_id"] = f"S3_{rank}_{field}_{lookbacks[q]}"
+                out.append(x)
+
+    return out
+
+
+def stage3_configs(base_rows, config_by_id):
+    out = []
+    seen = set()
+
+    for rank, row in enumerate(base_rows):
+        base = config_by_id[row["config_id"]]
+        for x in local_variants(base, rank):
+            signature = tuple(str(x.get(key)) for key in [
+                "family",
+                "br_min",
+                "body_atr_min",
+                "range_atr_min",
+                "close_loc_max",
+                "upper_wick_body_min",
+                "structure_lb",
+                "structure_dist_atr_max",
+                "sweep_lb",
+                "breakdown_lb",
+                "compression_max",
+                "mom4_min",
+                "context",
+                "rr",
+            ])
+            if signature in seen:
+                continue
+            seen.add(signature)
+            out.append(x)
+
+    return out
+
+
+# ============================================================
+# FINAL SHORTLIST DIAGNOSTICS
+# ============================================================
+
+def stat_row(config, label, trades):
+    s = stats(trades)
+    return {
+        "config_id": config["config_id"],
+        "family": config["family"],
+        "context": config.get("context", "NONE"),
+        "rr": config["rr"],
+        "period": label,
+        **{
+            key: round(value, 6) if isinstance(value, float) else value
+            for key, value in s.items()
+        },
+    }
+
+
+def period_rows(config, candles, candidate_indices):
+    periods = [
+        ("FULL", candles[0]["time"], NOW),
+        ("PRE_2010", candles[0]["time"], datetime(2010, 1, 1, tzinfo=timezone.utc)),
+        ("2010_PLUS", datetime(2010, 1, 1, tzinfo=timezone.utc), NOW),
+        ("DEV_2002_17", candles[0]["time"], datetime(2018, 1, 1, tzinfo=timezone.utc)),
+        ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+        *ERAS,
+        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+    ]
+
+    out = []
+    for label, a, b in periods:
+        row = stat_row(
+            config,
+            label,
+            backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, a, b),
+        )
+        row["start_utc"] = iso(a)
+        row["end_utc"] = iso(b)
+        out.append(row)
+    return out
+
+
+def cost_rows(config, candles, candidate_indices):
+    out = []
+    windows = [
+        ("FULL", candles[0]["time"], NOW),
+        ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+    ]
+
+    for cost in COSTS:
+        for label, a, b in windows:
+            row = stat_row(
+                config,
+                label,
+                backtest(candles, candidate_indices, config["rr"], cost, a, b),
+            )
+            row["cost_pips"] = cost
+            out.append(row)
+    return out
+
+
+def rolling_rows(config, candles, candidate_indices):
+    out = []
+    first = month_floor(max(candles[0]["time"], START))
+    last = month_floor(NOW)
+
+    for months in [12, 24, 36]:
+        start = first
+        while add_months(start, months) <= last:
+            end = add_months(start, months)
+            s = stats(backtest(
+                candles,
+                candidate_indices,
+                config["rr"],
+                PRIMARY_COST,
+                start,
+                end,
+            ))
+            out.append({
+                "config_id": config["config_id"],
+                "months": months,
+                "start_utc": iso(start),
+                "end_utc": iso(end),
+                "trades": s["trades"],
+                "profit_factor": round(s["profit_factor"], 6),
+                "total_r": round(s["total_r"], 4),
+                "positive": s["total_r"] > 0,
+                "zero_trade": s["trades"] == 0,
+            })
+            start = add_months(start, 1)
+
+    return out
+
+
+def rolling_summary(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[(row["config_id"], row["months"])].append(row)
+
+    out = []
+    for (config_id, months), sub in grouped.items():
+        active = [row for row in sub if row["trades"] > 0]
+        out.append({
+            "config_id": config_id,
+            "months": months,
+            "windows": len(sub),
+            "active_windows": len(active),
+            "zero_trade_windows": len(sub) - len(active),
+            "positive_windows_pct": round(
+                100.0 * sum(row["positive"] for row in sub) / len(sub),
+                4,
+            ) if sub else 0.0,
+            "positive_active_windows_pct": round(
+                100.0 * sum(row["positive"] for row in active) / len(active),
+                4,
+            ) if active else 0.0,
+            "median_r_all": round(med([row["total_r"] for row in sub]), 4),
+            "median_r_active": round(med([row["total_r"] for row in active]), 4),
+            "median_pf_active": round(med([row["profit_factor"] for row in active]), 6),
+            "worst_r": round(min((row["total_r"] for row in sub), default=0.0), 4),
+            "best_r": round(max((row["total_r"] for row in sub), default=0.0), 4),
+        })
+    return out
+
+
+def calendar_rows(config, candles, candidate_indices):
+    out = []
+    first_year = max(START.year, candles[0]["time"].year)
+
+    for year in range(first_year, NOW.year):
+        a = datetime(year, 1, 1, tzinfo=timezone.utc)
+        b = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        s = stats(backtest(
+            candles,
+            candidate_indices,
+            config["rr"],
+            PRIMARY_COST,
+            a,
+            b,
+        ))
+        out.append({
+            "config_id": config["config_id"],
+            "year": year,
+            "trades": s["trades"],
+            "profit_factor": round(s["profit_factor"], 6),
+            "total_r": round(s["total_r"], 4),
+            "positive": s["total_r"] > 0,
+            "negative": s["total_r"] < 0,
+            "zero_trade": s["trades"] == 0,
+        })
+    return out
+
+
+def calendar_summary(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["config_id"]].append(row)
+
+    out = []
+    for config_id, sub in grouped.items():
+        active = [row for row in sub if row["trades"] > 0]
+        out.append({
+            "config_id": config_id,
+            "completed_years": len(sub),
+            "active_years": len(active),
+            "positive_years": sum(row["positive"] for row in sub),
+            "negative_years": sum(row["negative"] for row in sub),
+            "zero_trade_years": sum(row["zero_trade"] for row in sub),
+            "positive_years_pct": round(
+                100.0 * sum(row["positive"] for row in sub) / len(sub),
+                4,
+            ) if sub else 0.0,
+            "positive_active_years_pct": round(
+                100.0 * sum(row["positive"] for row in active) / len(active),
+                4,
+            ) if active else 0.0,
+            "median_trades_year": round(med([row["trades"] for row in sub]), 4),
+            "median_year_r": round(med([row["total_r"] for row in sub]), 4),
+            "worst_year_r": round(min((row["total_r"] for row in sub), default=0.0), 4),
+            "best_year_r": round(max((row["total_r"] for row in sub), default=0.0), 4),
+        })
+    return out
+
+
+def shortlist_summary(config, candles, candidate_indices):
+    def window(a, b):
+        return stats(backtest(candles, candidate_indices, config["rr"], PRIMARY_COST, a, b))
+
+    full = window(candles[0]["time"], NOW)
+    pre = window(candles[0]["time"], datetime(2010, 1, 1, tzinfo=timezone.utc))
+    post = window(datetime(2010, 1, 1, tzinfo=timezone.utc), NOW)
+    val = window(datetime(2018, 1, 1, tzinfo=timezone.utc), NOW)
+    y20 = window(datetime(2020, 1, 1, tzinfo=timezone.utc), NOW)
+    l5 = window(NOW - timedelta(days=365.2425 * 5), NOW)
+    l2 = window(NOW - timedelta(days=365.2425 * 2), NOW)
+    l1 = window(NOW - timedelta(days=365.2425), NOW)
+
+    eras = [window(a, b) for _, a, b in ERAS]
+
+    return {
+        "config_id": config["config_id"],
+        "family": config["family"],
+        "context": config.get("context", "NONE"),
+        "rr": config["rr"],
+        **config_fields(config),
+        "full_trades": full["trades"],
+        "full_pf": round(full["profit_factor"], 6),
+        "full_r": round(full["total_r"], 4),
+        "full_exp": round(full["expectancy_r"], 6),
+        "full_dd": round(full["max_drawdown_r"], 4),
+        "full_win_rate": round(full["win_rate"], 4),
+        "pre2010_pf": round(pre["profit_factor"], 6),
+        "pre2010_r": round(pre["total_r"], 4),
+        "post2010_pf": round(post["profit_factor"], 6),
+        "post2010_r": round(post["total_r"], 4),
+        "validation2018_plus_trades": val["trades"],
+        "validation2018_plus_pf": round(val["profit_factor"], 6),
+        "validation2018_plus_r": round(val["total_r"], 4),
+        "era2020_plus_trades": y20["trades"],
+        "era2020_plus_pf": round(y20["profit_factor"], 6),
+        "era2020_plus_r": round(y20["total_r"], 4),
+        "last5y_trades": l5["trades"],
+        "last5y_pf": round(l5["profit_factor"], 6),
+        "last5y_r": round(l5["total_r"], 4),
+        "last2y_trades": l2["trades"],
+        "last2y_pf": round(l2["profit_factor"], 6),
+        "last2y_r": round(l2["total_r"], 4),
+        "last1y_trades": l1["trades"],
+        "last1y_pf": round(l1["profit_factor"], 6),
+        "last1y_r": round(l1["total_r"], 4),
+        "positive_eras": sum(x["trades"] > 0 and x["total_r"] > 0 for x in eras),
+        "active_eras": sum(x["trades"] > 0 for x in eras),
+        "min_active_era_pf": round(
+            min([x["profit_factor"] for x in eras if x["trades"] > 0], default=0.0),
+            6,
+        ),
+    }
+
+
+def serialise_trade(config, trade):
+    row = dict(trade)
+    row.update({
+        "config_id": config["config_id"],
+        "family": config["family"],
+        "context": config.get("context", "NONE"),
+    })
+    row.pop("entry_time", None)
+    row.pop("exit_time", None)
+    return row
+
+
+def decision_rows(shortlist, costs, rollsum, calsum):
+    cost_map = {
+        (row["config_id"], row["period"], row["cost_pips"]): row
+        for row in costs
+    }
+    roll_map = {
+        (row["config_id"], row["months"]): row
+        for row in rollsum
+    }
+    cal_map = {row["config_id"]: row for row in calsum}
+
+    out = []
+    for row in shortlist:
+        cid = row["config_id"]
+        c2_full = cost_map.get((cid, "FULL", 2.0), {})
+        c2_val = cost_map.get((cid, "VALIDATION_2018_PLUS", 2.0), {})
+        r12 = roll_map.get((cid, 12), {})
+        r24 = roll_map.get((cid, 24), {})
+        r36 = roll_map.get((cid, 36), {})
+        cal = cal_map.get(cid, {})
+
+        # Research gate only. PASS means "worth deeper validation", not live approval.
+        checks = {
+            "enough_trades": row["full_trades"] >= 50,
+            "full_pf": row["full_pf"] >= 1.30,
+            "full_positive": row["full_r"] > 0,
+            "eras": row["positive_eras"] >= 3,
+            "2018_positive": row["validation2018_plus_r"] > 0,
+            "2020_positive": row["era2020_plus_r"] > 0,
+            "last5_positive": row["last5y_r"] > 0,
+            "2pip_full": c2_full.get("profit_factor", 0.0) >= 1.15,
+            "2pip_2018": c2_val.get("total_r", 0.0) > 0,
+            "rolling36": r36.get("positive_active_windows_pct", 0.0) >= 60.0,
+        }
+        passed = sum(bool(x) for x in checks.values())
+
+        if all(checks.values()):
+            verdict = "DEEP_VALIDATE"
+        elif passed >= 8 and row["full_r"] > 0:
+            verdict = "WATCH"
+        else:
+            verdict = "REJECT_OR_LOW_PRIORITY"
+
+        out.append({
+            "config_id": cid,
+            "family": row["family"],
+            "context": row["context"],
+            "rr": row["rr"],
+            "research_verdict": verdict,
+            "checks_passed": passed,
+            "checks_total": len(checks),
+            **{f"check_{k}": v for k, v in checks.items()},
+            "full_trades": row["full_trades"],
+            "full_pf": row["full_pf"],
+            "full_r": row["full_r"],
+            "full_dd": row["full_dd"],
+            "validation2018_plus_pf": row["validation2018_plus_pf"],
+            "validation2018_plus_r": row["validation2018_plus_r"],
+            "era2020_plus_pf": row["era2020_plus_pf"],
+            "era2020_plus_r": row["era2020_plus_r"],
+            "last5y_pf": row["last5y_pf"],
+            "last5y_r": row["last5y_r"],
+            "last2y_pf": row["last2y_pf"],
+            "last2y_r": row["last2y_r"],
+            "cost_2pip_full_pf": c2_full.get("profit_factor", 0.0),
+            "cost_2pip_full_r": c2_full.get("total_r", 0.0),
+            "cost_2pip_2018_pf": c2_val.get("profit_factor", 0.0),
+            "cost_2pip_2018_r": c2_val.get("total_r", 0.0),
+            "rolling12_positive_active_pct": r12.get("positive_active_windows_pct", 0.0),
+            "rolling24_positive_active_pct": r24.get("positive_active_windows_pct", 0.0),
+            "rolling36_positive_active_pct": r36.get("positive_active_windows_pct", 0.0),
+            "rolling36_median_r": r36.get("median_r_active", 0.0),
+            "rolling36_worst_r": r36.get("worst_r", 0.0),
+            "active_calendar_years": cal.get("active_years", 0),
+            "positive_active_years_pct": cal.get("positive_active_years_pct", 0.0),
+            "zero_trade_years": cal.get("zero_trade_years", 0),
+            "worst_calendar_year_r": cal.get("worst_year_r", 0.0),
+        })
+
+    order = {"DEEP_VALIDATE": 2, "WATCH": 1, "REJECT_OR_LOW_PRIORITY": 0}
+    return sorted(
+        out,
+        key=lambda x: (
+            order[x["research_verdict"]],
+            x["checks_passed"],
+            x["full_r"],
+        ),
+        reverse=True,
+    )
+
+
+# ============================================================
+# MAIN RESEARCH RUNNER
+# ============================================================
+
+def run_research():
+    try:
+        STATUS.update({
+            "state": "fetch",
+            "message": "Fetching EUR/JPY M15 + H1/H4/D history",
+            "progress": 1,
+        })
+
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        daily = fetch("D", WARMUP, NOW, 3500)
+
+        if not all([m15, h1, h4, daily]):
+            raise RuntimeError("Missing required history")
+
+        write_csv(OUTS["coverage"], [{
+            "instrument": PAIR,
+            "requested_start_utc": iso(START),
+            "actual_first_m15_utc": iso(m15[0]["time"]),
+            "actual_last_m15_utc": iso(m15[-1]["time"]),
+            "m15_candles": len(m15),
+            "h1_candles": len(h1),
+            "h4_candles": len(h4),
+            "daily_candles": len(daily),
+            "baseline_cost_pips": PRIMARY_COST,
+            "side": "SHORT",
+        }])
+
+        STATUS.update({
+            "state": "precompute",
+            "message": "Building strict completed-HTF alignment and M15 feature cache",
+            "progress": 20,
+        })
+
+        m15_times = [x["time"] for x in m15]
+        aligned_h1 = align_htf(m15_times, htf_state(h1))
+        aligned_h4 = align_htf(m15_times, htf_state(h4))
+        aligned_daily = align_htf(m15_times, htf_state(daily))
+        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
+
+        # ---------------- Stage 1 ----------------
+        STATUS.update({
+            "state": "stage1",
+            "message": "Stage 1: raw independent short archetypes",
+            "progress": 28,
+        })
+
+        stage1 = stage1_configs()
+        config_by_id = {x["config_id"]: x for x in stage1}
+        stage1_rows = []
+
+        for i, config in enumerate(stage1, 1):
+            if i % 8 == 0:
+                STATUS.update({
+                    "state": "stage1",
+                    "message": f"Stage 1 {i}/{len(stage1)}",
+                    "progress": 28 + int(12 * i / len(stage1)),
+                })
+            ix = indices(config, f)
+            stage1_rows.append(evaluate(config, m15, ix))
+
+        stage1_rows = sort_rows(stage1_rows)
+        stage1_family = family_summary(stage1_rows)
+        write_csv(OUTS["stage1"], stage1_rows)
+        write_csv(OUTS["stage1_family"], stage1_family)
+
+        stage1_bases = select_diverse(
+            stage1_rows,
+            STAGE1_PER_FAMILY,
+            STAGE1_BASE_KEEP,
+        )
+
+        # ---------------- Stage 2 ----------------
+        STATUS.update({
+            "state": "stage2",
+            "message": "Stage 2: broad HTF / volatility / session / weekday contexts",
+            "progress": 42,
+        })
+
+        stage2 = stage2_configs(stage1_bases, config_by_id)
+        config_by_id.update({x["config_id"]: x for x in stage2})
+        stage2_rows = []
+
+        for i, config in enumerate(stage2, 1):
+            if i % 25 == 0:
+                STATUS.update({
+                    "state": "stage2",
+                    "message": f"Stage 2 {i}/{len(stage2)}",
+                    "progress": 42 + int(20 * i / len(stage2)),
+                })
+            ix = indices(config, f)
+            stage2_rows.append(evaluate(config, m15, ix))
+
+        stage2_rows = sort_rows(stage2_rows)
+        stage2_family = family_summary(stage2_rows)
+        write_csv(OUTS["stage2"], stage2_rows)
+        write_csv(OUTS["stage2_family"], stage2_family)
+
+        stage2_bases = select_diverse(
+            stage2_rows,
+            STAGE2_PER_FAMILY,
+            STAGE2_BASE_KEEP,
+        )
+
+        # ---------------- Stage 3 ----------------
+        STATUS.update({
+            "state": "stage3",
+            "message": "Stage 3: local geometry and RR robustness",
+            "progress": 64,
+        })
+
+        stage3 = stage3_configs(stage2_bases, config_by_id)
+        config_by_id.update({x["config_id"]: x for x in stage3})
+        stage3_rows = []
+
+        for i, config in enumerate(stage3, 1):
+            if i % 25 == 0:
+                STATUS.update({
+                    "state": "stage3",
+                    "message": f"Stage 3 {i}/{len(stage3)}",
+                    "progress": 64 + int(15 * i / len(stage3)),
+                })
+            ix = indices(config, f)
+            stage3_rows.append(evaluate(config, m15, ix))
+
+        stage3_rows = sort_rows(stage3_rows)
+        stage3_family = family_summary(stage3_rows)
+        write_csv(OUTS["stage3"], stage3_rows)
+        write_csv(OUTS["stage3_family"], stage3_family)
+
+        final_rows = select_diverse(
+            stage3_rows,
+            FINAL_PER_FAMILY,
+            FINAL_KEEP,
+        )
+        final_configs = [config_by_id[row["config_id"]] for row in final_rows]
+
+        # ---------------- Deep diagnostics on shortlist ----------------
+        STATUS.update({
+            "state": "shortlist_diagnostics",
+            "message": "Shortlist temporal / cost / rolling / calendar diagnostics",
+            "progress": 80,
+        })
+
+        shortlist = []
+        periods = []
+        costs = []
+        rolling = []
+        calendar = []
+        trades = []
+
+        for i, config in enumerate(final_configs, 1):
+            STATUS.update({
+                "state": "shortlist_diagnostics",
+                "message": f"Shortlist {i}/{len(final_configs)}: {config['config_id']}",
+                "progress": 80 + int(15 * i / max(1, len(final_configs))),
+            })
+
+            ix = indices(config, f)
+            shortlist.append(shortlist_summary(config, m15, ix))
+            periods.extend(period_rows(config, m15, ix))
+            costs.extend(cost_rows(config, m15, ix))
+            rrows = rolling_rows(config, m15, ix)
+            crows = calendar_rows(config, m15, ix)
+            rolling.extend(rrows)
+            calendar.extend(crows)
+
+            for trade in backtest(m15, ix, config["rr"], PRIMARY_COST, m15[0]["time"], NOW):
+                trades.append(serialise_trade(config, trade))
+
+        rollsum = rolling_summary(rolling)
+        calsum = calendar_summary(calendar)
+        decisions = decision_rows(shortlist, costs, rollsum, calsum)
+
+        write_csv(OUTS["shortlist"], shortlist)
+        write_csv(OUTS["periods"], periods)
+        write_csv(OUTS["cost"], costs)
+        write_csv(OUTS["rolling"], rolling)
+        write_csv(OUTS["rolling_summary"], rollsum)
+        write_csv(OUTS["calendar"], calendar)
+        write_csv(OUTS["calendar_summary"], calsum)
+        write_csv(OUTS["trades"], trades)
+        write_csv(OUTS["decision"], decisions)
+
+        write_csv(OUTS["notes"], [
+            {
+                "item": "Scope",
+                "value": "Fresh EUR/JPY M15 SHORT broad research. No existing short rule or EUR/JPY M15 LONG rule is treated as a benchmark.",
+            },
+            {
+                "item": "Families",
+                "value": "Bearish engulf at resistance, high-sweep displacement, failed breakout rejection, outside reversal, compression breakdown, and rally rejection are searched independently.",
+            },
+            {
+                "item": "Historical execution",
+                "value": "OANDA midpoint; reference entry signal close; short fill=close-1 pip baseline; stop=signal high+10 ticks; target from reference-close risk; p0; exact exit-candle signal eligible.",
+            },
+            {
+                "item": "HTF causality",
+                "value": "H1/H4/D values become usable only at the next actual HTF candle open; no same-candle lookahead.",
+            },
+            {
+                "item": "Context search",
+                "value": "Stage 2 tests one context at a time: H1/H4/D bearish trend states, ATR regime, NY/London/Tokyo 4-hour blocks, and weekday exclusions.",
+            },
+            {
+                "item": "Cost stress",
+                "value": "Final shortlist is retested at 0.5, 1.0, 1.5 and 2.0 pip adverse historical entry cost.",
+            },
+            {
+                "item": "No pristine OOS claim",
+                "value": "History has been repeatedly explored. Temporal splits and rolling windows are robustness diagnostics, not untouched out-of-sample evidence.",
+            },
+            {
+                "item": "Decision matrix",
+                "value": "DEEP_VALIDATE only means a candidate merits a separate frozen deep-validation runner. It is not live approval.",
+            },
+            {
+                "item": "Next gate",
+                "value": "After one candidate is frozen and deeply validated, run exact 23->24 portfolio-add analysis with non-hedging same-pair overlap handling before any live integration.",
+            },
+        ])
+
+        STATUS.update({
+            "state": "packaging",
+            "message": "Packaging EUR/JPY M15 SHORT #24 broad research results",
+            "progress": 97,
+        })
+
+        package_results()
+
+        verdict_counts = defaultdict(int)
+        for row in decisions:
+            verdict_counts[row["research_verdict"]] += 1
+
+        STATUS.update({
+            "state": "complete",
+            "message": "EUR/JPY M15 SHORT #24 broad research complete",
+            "progress": 100,
+            "stage1_configs": len(stage1),
+            "stage2_configs": len(stage2),
+            "stage3_configs": len(stage3),
+            "shortlist_configs": len(final_configs),
+            "decision_counts": dict(verdict_counts),
+            "bundle": BUNDLE,
+        })
+
+    except Exception as error:
+        STATUS.update({
+            "state": "error",
+            "message": str(error),
+        })
+        print("ERROR:", repr(error), flush=True)
+
+
+
+
+# ============================================================
+# FROZEN DEEP-VALIDATION STUDY
+# ============================================================
+#
+# Basis: the completed broad-search results.
+#
+# Candidate A (main):
+#   RALLY_REJECTION
+#   sweep previous 40-bar high
+#   close back below previous 10-bar high
+#   bearish body >= 0.75 ATR14
+#   prior 4-hour M15 momentum >= +1.25 ATR14
+#   close location <= 0.30
+#   include 16:00-19:59 America/New_York
+#   RR 4.75
+#
+# Candidate B (sparse complement):
+#   HIGH_SWEEP_DISPLACEMENT
+#   sweep previous 60-bar high
+#   close below previous candle low
+#   bearish body >= 1.00 ATR14
+#   upper wick/body >= 0.35
+#   prior 4-hour M15 momentum >= +1.00 ATR14
+#   previous strictly completed H1 close < H1 EMA100
+#   RR 3.00
+#
+# This runner is NOT another broad optimiser. It performs controlled
+# neighbourhood/stability tests around A and B, then tests A+B with exact
+# p0 overlap handling. It does not auto-deploy or send orders.
+# ============================================================
+
+OUTS = {
+    "coverage": "eurjpy_m15_short_24_deep_coverage.csv",
+    "parity": "eurjpy_m15_short_24_deep_parity.csv",
+    "local_summary": "eurjpy_m15_short_24_deep_local_summary.csv",
+    "rr_plateau": "eurjpy_m15_short_24_deep_rr_plateau.csv",
+    "session_stability": "eurjpy_m15_short_24_deep_session_stability.csv",
+    "hour_diagnostic": "eurjpy_m15_short_24_deep_hour_diagnostic.csv",
+    "weekday_diagnostic": "eurjpy_m15_short_24_deep_weekday_diagnostic.csv",
+    "geometry_rr": "eurjpy_m15_short_24_deep_geometry_rr_matrix.csv",
+    "candidate_b": "eurjpy_m15_short_24_deep_candidate_b_robustness.csv",
+    "primary_summary": "eurjpy_m15_short_24_deep_primary_summary.csv",
+    "periods": "eurjpy_m15_short_24_deep_periods.csv",
+    "cost": "eurjpy_m15_short_24_deep_cost_stress.csv",
+    "rolling": "eurjpy_m15_short_24_deep_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_deep_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_deep_calendar_years.csv",
+    "calendar_summary": "eurjpy_m15_short_24_deep_calendar_summary.csv",
+    "trades": "eurjpy_m15_short_24_deep_trades.csv",
+    "overlap": "eurjpy_m15_short_24_deep_overlap.csv",
+    "combined_rejections": "eurjpy_m15_short_24_deep_combined_rejections.csv",
+    "decision": "eurjpy_m15_short_24_deep_decision_matrix.csv",
+    "notes": "eurjpy_m15_short_24_deep_notes.csv",
+}
+BUNDLE = "EURJPY_M15_SHORT_24_DEEP_VALIDATION_RESULTS.zip"
+
+STATUS = {
+    "state": "not_started",
+    "message": "Not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+
+def a_cfg(
+    config_id,
+    rr=4.75,
+    sweep_lb=40,
+    body_atr_min=0.75,
+    mom4_min=1.25,
+    close_loc_max=0.30,
+    context="NY_BLOCK_16-19",
+    excluded_weekdays=None,
+    test_group="A_CONTROL",
+):
+    return cfg(
+        config_id,
+        "RALLY_REJECTION",
+        rr=rr,
+        sweep_lb=sweep_lb,
+        body_atr_min=body_atr_min,
+        mom4_min=mom4_min,
+        close_loc_max=close_loc_max,
+        context=context,
+        excluded_weekdays=set(excluded_weekdays or set()),
+        test_group=test_group,
+    )
+
+
+def b_cfg(
+    config_id,
+    rr=3.00,
+    sweep_lb=60,
+    body_atr_min=1.00,
+    upper_wick_body_min=0.35,
+    mom4_min=1.00,
+    context="H1_CLOSE_LT_EMA100",
+    test_group="B_CONTROL",
+):
+    return cfg(
+        config_id,
+        "HIGH_SWEEP_DISPLACEMENT",
+        rr=rr,
+        sweep_lb=sweep_lb,
+        body_atr_min=body_atr_min,
+        upper_wick_body_min=upper_wick_body_min,
+        mom4_min=mom4_min,
+        context=context,
+        test_group=test_group,
+    )
+
+
+A_CONTROL_ID = "A_CONTROL_RALLY_RR475"
+B_CONTROL_ID = "B_CONTROL_HIGHSWEEP_RR300"
+
+
+def fixed_deep_configs():
     """
+    Controlled, predeclared neighbourhoods only.
+    No automatic selection is performed inside the runner.
+    """
+    configs = []
+
+    # ---------------- Candidate A control + RR plateau ----------------
+    for rr in [4.50, 4.75, 5.00, 5.25]:
+        cid = A_CONTROL_ID if abs(rr - 4.75) < 1e-12 else f"A_RR_{rr:.2f}"
+        configs.append(a_cfg(
+            cid,
+            rr=rr,
+            test_group="A_RR_PLATEAU",
+        ))
+
+    # ---------------- Session-boundary stability ----------------
+    # These deliberately include the known 16-19 control plus neighbouring
+    # blocks on both sides. The runner reports them; it does NOT cherry-pick.
+    for context in [
+        "NY_BLOCK_15-19",
+        "NY_BLOCK_16-19",
+        "NY_BLOCK_17-19",
+        "NY_BLOCK_16-20",
+        "NY_BLOCK_17-20",
+        "NY_BLOCK_15-20",
+        "NY_BLOCK_16-18",
+    ]:
+        cid = "A_SESSION_" + context.replace("NY_BLOCK_", "").replace("-", "_")
+        if context == "NY_BLOCK_16-19":
+            cid = "A_SESSION_CONTROL_16_19"
+        configs.append(a_cfg(
+            cid,
+            context=context,
+            test_group="A_SESSION_STABILITY",
+        ))
+
+    # ---------------- Per-hour diagnostic ----------------
+    for hour in [15, 16, 17, 18, 19, 20]:
+        configs.append(a_cfg(
+            f"A_HOUR_{hour:02d}",
+            context=f"NY_BLOCK_{hour:02d}-{hour:02d}",
+            test_group="A_HOUR_DIAGNOSTIC",
+        ))
+
+    # ---------------- Weekday exclusion diagnostics ----------------
+    for weekday, name in [
+        (0, "MON"),
+        (1, "TUE"),
+        (2, "WED"),
+        (3, "THU"),
+        (4, "FRI"),
+    ]:
+        configs.append(a_cfg(
+            f"A_EXCL_{name}",
+            excluded_weekdays={weekday},
+            test_group="A_WEEKDAY_DIAGNOSTIC",
+        ))
+
+    # ---------------- Geometry x RR one-factor interactions ----------------
+    rr_grid = [4.50, 4.75, 5.00, 5.25]
+
+    for body in [0.65, 0.75, 0.85]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_BODY_{body:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                body_atr_min=body,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for mom in [1.00, 1.25, 1.50]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_MOM_{mom:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                mom4_min=mom,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for close_max in [0.25, 0.30, 0.35]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_CLOSE_{close_max:.2f}_RR_{rr:.2f}",
+                rr=rr,
+                close_loc_max=close_max,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    for lb in [20, 40, 60]:
+        for rr in rr_grid:
+            configs.append(a_cfg(
+                f"A_GEO_SWEEP_{lb}_RR_{rr:.2f}",
+                rr=rr,
+                sweep_lb=lb,
+                test_group="A_GEOMETRY_RR",
+            ))
+
+    # ---------------- Candidate B sparse robustness ----------------
+    for rr in [2.50, 2.75, 3.00, 3.25, 3.50]:
+        cid = B_CONTROL_ID if abs(rr - 3.00) < 1e-12 else f"B_RR_{rr:.2f}"
+        configs.append(b_cfg(
+            cid,
+            rr=rr,
+            test_group="B_RR_PLATEAU",
+        ))
+
+    for lb in [40, 60, 80]:
+        configs.append(b_cfg(
+            f"B_SWEEP_{lb}",
+            sweep_lb=lb,
+            test_group="B_GEOMETRY",
+        ))
+
+    for body in [0.90, 1.00, 1.10]:
+        configs.append(b_cfg(
+            f"B_BODY_{body:.2f}",
+            body_atr_min=body,
+            test_group="B_GEOMETRY",
+        ))
+
+    for wick in [0.25, 0.35, 0.45]:
+        configs.append(b_cfg(
+            f"B_WICK_{wick:.2f}",
+            upper_wick_body_min=wick,
+            test_group="B_GEOMETRY",
+        ))
+
+    for mom in [0.75, 1.00, 1.25]:
+        configs.append(b_cfg(
+            f"B_MOM_{mom:.2f}",
+            mom4_min=mom,
+            test_group="B_GEOMETRY",
+        ))
+
+    for context in [
+        "NONE",
+        "H1_CLOSE_LT_EMA100",
+        "H1_CLOSE_LT_EMA200",
+        "H1_EMA50_LT_EMA200",
+    ]:
+        configs.append(b_cfg(
+            "B_CONTEXT_" + context,
+            context=context,
+            test_group="B_CONTEXT",
+        ))
+
+    # Remove exact duplicate signatures while preserving the first descriptive id.
+    out = []
+    seen = set()
+    for c in configs:
+        sig = (
+            c["family"],
+            c["rr"],
+            c.get("context"),
+            c.get("sweep_lb"),
+            c.get("body_atr_min"),
+            c.get("upper_wick_body_min"),
+            c.get("mom4_min"),
+            c.get("close_loc_max"),
+            tuple(sorted(c.get("excluded_weekdays", set()))),
+        )
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(c)
+
+    # Ensure the canonical IDs exist even if a duplicate appeared earlier.
+    ids = {x["config_id"] for x in out}
+    if A_CONTROL_ID not in ids:
+        out.append(a_cfg(A_CONTROL_ID))
+    if B_CONTROL_ID not in ids:
+        out.append(b_cfg(B_CONTROL_ID))
+
+    return out
+
+
+def deep_summary_row(config, candles, candidate_indices):
+    row = shortlist_summary(config, candles, candidate_indices)
+    row["test_group"] = config.get("test_group", "")
+    return row
+
+
+def filter_indices_by_time(candles, candidate_indices, start=None, end=None):
+    if start is None and end is None:
+        return candidate_indices
+    times = [candles[i]["time"] for i in candidate_indices]
+    a = 0 if start is None else bisect.bisect_left(times, start)
+    b = len(candidate_indices) if end is None else bisect.bisect_left(times, end)
+    return candidate_indices[a:b]
+
+
+def combined_backtest(
+    candles,
+    ix_a,
+    rr_a,
+    ix_b,
+    rr_b,
+    cost_pips,
+    start=None,
+    end=None,
+    priority="A",
+    collect_rejections=False,
+):
+    """
+    One-position p0 two-trigger portfolio for the eventual single strategy #24.
+
+    Half-open overlap convention:
+        an accepted trade occupies [signal_index, exit_index)
+        a signal exactly on the exit candle remains eligible.
+
+    If both triggers fire on the same signal candle, the selected priority wins.
+    Candidate A priority is the main diagnostic because B is the complement.
+    """
+    use_a = filter_indices_by_time(candles, ix_a, start, end)
+    use_b = filter_indices_by_time(candles, ix_b, start, end)
+
+    pri = {"A": 0, "B": 1} if priority == "A" else {"B": 0, "A": 1}
+
     events = (
-        [(i, 0, "B_HIGH_SWEEP_DISPLACEMENT", Q24_B_RR)
-         for i in features["b_indices"]]
-        + [(i, 1, "A_RALLY_REJECTION", Q24_A_RR)
-           for i in features["a_indices"]]
+        [(i, pri["A"], "A", rr_a) for i in use_a]
+        + [(i, pri["B"], "B", rr_b) for i in use_b]
+    )
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    trades = []
+    rejected = []
+    p = 0
+
+    while p < len(events):
+        signal_index = events[p][0]
+
+        # Gather all triggers on this exact candle in declared priority order.
+        q = p
+        same = []
+        while q < len(events) and events[q][0] == signal_index:
+            same.append(events[q])
+            q += 1
+
+        chosen = None
+        chosen_trade = None
+        for event in same:
+            _, _, trigger, rr = event
+            t = outcome(candles, signal_index, rr, cost_pips)
+            if t is not None:
+                chosen = event
+                chosen_trade = dict(t)
+                break
+
+        if chosen_trade is None:
+            p = q
+            continue
+
+        chosen_trigger = chosen[2]
+        chosen_trade["trigger"] = chosen_trigger
+        chosen_trade["combined_priority"] = priority
+        trades.append(chosen_trade)
+
+        # Same-candle second trigger is rejected by the single-strategy p0 state.
+        for event in same:
+            if event is chosen:
+                continue
+            if collect_rejections:
+                rejected.append({
+                    "signal_index": event[0],
+                    "signal_time_utc": iso(candles[event[0]]["time"]),
+                    "trigger": event[2],
+                    "reason": "SAME_CANDLE_LOWER_PRIORITY",
+                    "blocking_trigger": chosen_trigger,
+                    "blocking_entry_time_utc": chosen_trade["entry_time_utc"],
+                    "blocking_exit_time_utc": chosen_trade["exit_time_utc"],
+                })
+
+        # Reject every signal strictly inside [entry, exit). A signal on the
+        # exact exit candle is intentionally eligible.
+        exit_index = chosen_trade["exit_index"]
+        p = q
+        while p < len(events) and events[p][0] < exit_index:
+            if collect_rejections:
+                rejected.append({
+                    "signal_index": events[p][0],
+                    "signal_time_utc": iso(candles[events[p][0]]["time"]),
+                    "trigger": events[p][2],
+                    "reason": "OPEN_POSITION_P0",
+                    "blocking_trigger": chosen_trigger,
+                    "blocking_entry_time_utc": chosen_trade["entry_time_utc"],
+                    "blocking_exit_time_utc": chosen_trade["exit_time_utc"],
+                })
+            p += 1
+
+    if collect_rejections:
+        return trades, rejected
+    return trades
+
+
+def generic_period_rows(config_id, family, rr_label, trade_fn):
+    periods = [
+        ("FULL", START, NOW),
+        ("PRE_2010", START, datetime(2010, 1, 1, tzinfo=timezone.utc)),
+        ("2010_PLUS", datetime(2010, 1, 1, tzinfo=timezone.utc), NOW),
+        ("DEV_2002_17", START, datetime(2018, 1, 1, tzinfo=timezone.utc)),
+        ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+        *ERAS,
+        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+        ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+    ]
+    rows = []
+    for label, a, b in periods:
+        s = stats(trade_fn(PRIMARY_COST, a, b))
+        rows.append({
+            "config_id": config_id,
+            "family": family,
+            "rr": rr_label,
+            "period": label,
+            **{
+                key: round(value, 6) if isinstance(value, float) else value
+                for key, value in s.items()
+            },
+            "start_utc": iso(a),
+            "end_utc": iso(b),
+        })
+    return rows
+
+
+def generic_cost_rows(config_id, family, rr_label, trade_fn):
+    rows = []
+    for cost in COSTS:
+        for label, a, b in [
+            ("FULL", START, NOW),
+            ("VALIDATION_2018_PLUS", datetime(2018, 1, 1, tzinfo=timezone.utc), NOW),
+            ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+            ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+        ]:
+            s = stats(trade_fn(cost, a, b))
+            rows.append({
+                "config_id": config_id,
+                "family": family,
+                "rr": rr_label,
+                "period": label,
+                "cost_pips": cost,
+                **{
+                    key: round(value, 6) if isinstance(value, float) else value
+                    for key, value in s.items()
+                },
+            })
+    return rows
+
+
+def generic_rolling_rows(config_id, trade_fn):
+    rows = []
+    first = month_floor(START)
+    last = month_floor(NOW)
+
+    for months in [12, 24, 36]:
+        s = first
+        while add_months(s, months) <= last:
+            e = add_months(s, months)
+            st = stats(trade_fn(PRIMARY_COST, s, e))
+            rows.append({
+                "config_id": config_id,
+                "months": months,
+                "start_utc": iso(s),
+                "end_utc": iso(e),
+                "trades": st["trades"],
+                "profit_factor": round(st["profit_factor"], 6),
+                "total_r": round(st["total_r"], 4),
+                "positive": st["total_r"] > 0,
+                "zero_trade": st["trades"] == 0,
+            })
+            s = add_months(s, 1)
+
+    return rows
+
+
+def generic_calendar_rows(config_id, trade_fn):
+    rows = []
+    for year in range(START.year, NOW.year):
+        a = datetime(year, 1, 1, tzinfo=timezone.utc)
+        b = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        st = stats(trade_fn(PRIMARY_COST, a, b))
+        rows.append({
+            "config_id": config_id,
+            "year": year,
+            "trades": st["trades"],
+            "profit_factor": round(st["profit_factor"], 6),
+            "total_r": round(st["total_r"], 4),
+            "positive": st["total_r"] > 0,
+            "negative": st["total_r"] < 0,
+            "zero_trade": st["trades"] == 0,
+        })
+    return rows
+
+
+def primary_summary_from_periods(config_id, family, rr_label, period_rows_):
+    by = {r["period"]: r for r in period_rows_}
+    eras = [
+        by.get("ERA_2002_07", {}),
+        by.get("ERA_2008_13", {}),
+        by.get("ERA_2014_19", {}),
+        by.get("ERA_2020_NOW", {}),
+    ]
+    full = by["FULL"]
+    return {
+        "config_id": config_id,
+        "family": family,
+        "rr": rr_label,
+        "full_trades": full["trades"],
+        "full_pf": full["profit_factor"],
+        "full_r": full["total_r"],
+        "full_exp": full["expectancy_r"],
+        "full_dd": full["max_drawdown_r"],
+        "full_win_rate": full["win_rate"],
+        "validation2018_plus_trades": by["VALIDATION_2018_PLUS"]["trades"],
+        "validation2018_plus_pf": by["VALIDATION_2018_PLUS"]["profit_factor"],
+        "validation2018_plus_r": by["VALIDATION_2018_PLUS"]["total_r"],
+        "era2020_plus_trades": by["ERA_2020_NOW"]["trades"],
+        "era2020_plus_pf": by["ERA_2020_NOW"]["profit_factor"],
+        "era2020_plus_r": by["ERA_2020_NOW"]["total_r"],
+        "last5y_trades": by["LAST_5Y"]["trades"],
+        "last5y_pf": by["LAST_5Y"]["profit_factor"],
+        "last5y_r": by["LAST_5Y"]["total_r"],
+        "last2y_trades": by["LAST_2Y"]["trades"],
+        "last2y_pf": by["LAST_2Y"]["profit_factor"],
+        "last2y_r": by["LAST_2Y"]["total_r"],
+        "last1y_trades": by["LAST_1Y"]["trades"],
+        "last1y_pf": by["LAST_1Y"]["profit_factor"],
+        "last1y_r": by["LAST_1Y"]["total_r"],
+        "positive_eras": sum(
+            int(x.get("trades", 0) > 0 and x.get("total_r", 0.0) > 0)
+            for x in eras
+        ),
+        "min_active_era_pf": round(min(
+            [
+                float(x["profit_factor"])
+                for x in eras
+                if x.get("trades", 0) > 0
+            ],
+            default=0.0,
+        ), 6),
+    }
+
+
+def full_overlap_rows(a_trades, b_trades, combined_a, combined_b):
+    a_times = {t["signal_index"] for t in a_trades}
+    b_times = {t["signal_index"] for t in b_trades}
+    shared = a_times & b_times
+
+    def interval_count(left, right):
+        count = 0
+        for x in left:
+            if any(
+                y["signal_index"] < x["exit_index"]
+                and x["signal_index"] < y["exit_index"]
+                for y in right
+            ):
+                count += 1
+        return count
+
+    return [{
+        "a_standalone_trades": len(a_trades),
+        "b_standalone_trades": len(b_trades),
+        "exact_same_signal_candles": len(shared),
+        "a_trades_with_any_b_interval_overlap": interval_count(a_trades, b_trades),
+        "b_trades_with_any_a_interval_overlap": interval_count(b_trades, a_trades),
+        "combined_a_priority_trades": len(combined_a),
+        "combined_b_priority_trades": len(combined_b),
+        "combined_a_priority_a_trades": sum(t.get("trigger") == "A" for t in combined_a),
+        "combined_a_priority_b_trades": sum(t.get("trigger") == "B" for t in combined_a),
+        "combined_b_priority_a_trades": sum(t.get("trigger") == "A" for t in combined_b),
+        "combined_b_priority_b_trades": sum(t.get("trigger") == "B" for t in combined_b),
+    }]
+
+
+def deep_decision_rows(primary_summary, costs, rollsum, calsum, local_summary, parity_rows):
+    cost_map = {
+        (r["config_id"], r["period"], float(r["cost_pips"])): r
+        for r in costs
+    }
+    roll_map = {
+        (r["config_id"], int(r["months"])): r
+        for r in rollsum
+    }
+    cal_map = {r["config_id"]: r for r in calsum}
+    parity_map = {r["config_id"]: r for r in parity_rows}
+    local_map = {r["config_id"]: r for r in local_summary}
+
+    # Session breadth for A: count neighbouring blocks (not the per-hour rows)
+    # that remain positive in FULL, 2018+, and last5Y.
+    session_rows = [
+        r for r in local_summary
+        if r.get("test_group") == "A_SESSION_STABILITY"
+    ]
+    stable_session_count = sum(
+        r["full_r"] > 0
+        and r["validation2018_plus_r"] > 0
+        and r["last5y_r"] > 0
+        for r in session_rows
+    )
+
+    # Geometry robustness: evaluate the declared one-factor x RR matrix.
+    geo_rows = [
+        r for r in local_summary
+        if r.get("test_group") == "A_GEOMETRY_RR"
+    ]
+    geo_recent_positive_pct = (
+        100.0 * sum(
+            r["full_r"] > 0
+            and r["validation2018_plus_r"] > 0
+            and r["last5y_r"] > 0
+            for r in geo_rows
+        ) / len(geo_rows)
+        if geo_rows else 0.0
+    )
+
+    out = []
+    a_full_r = next(
+        (r["full_r"] for r in primary_summary if r["config_id"] == A_CONTROL_ID),
+        0.0,
+    )
+    a_full_dd = next(
+        (r["full_dd"] for r in primary_summary if r["config_id"] == A_CONTROL_ID),
+        0.0,
+    )
+
+    for row in primary_summary:
+        cid = row["config_id"]
+        c2 = cost_map.get((cid, "FULL", 2.0), {})
+        c3 = cost_map.get((cid, "FULL", 3.0), {})
+        c3_val = cost_map.get((cid, "VALIDATION_2018_PLUS", 3.0), {})
+        r36 = roll_map.get((cid, 36), {})
+        cal = cal_map.get(cid, {})
+
+        if cid == A_CONTROL_ID:
+            checks = {
+                "parity": parity_map.get(cid, {}).get("status") != "FAIL_BELOW_REFERENCE",
+                "full_pf": row["full_pf"] >= 1.25,
+                "all_eras_positive": row["positive_eras"] == 4,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "2020_positive": row["era2020_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "last2_positive": row["last2y_r"] > 0,
+                "2pip_pf": c2.get("profit_factor", 0.0) >= 1.20,
+                "3pip_positive": (
+                    c3.get("profit_factor", 0.0) >= 1.10
+                    and c3.get("total_r", 0.0) > 0
+                    and c3_val.get("total_r", 0.0) > 0
+                ),
+                "rolling36": r36.get("positive_active_windows_pct", 0.0) >= 70.0,
+                "session_breadth": stable_session_count >= 4,
+                "geometry_breadth": geo_recent_positive_pct >= 50.0,
+            }
+            verdict = (
+                "FREEZE_CANDIDATE_A"
+                if all(checks.values())
+                else "A_NEEDS_REVIEW"
+            )
+
+        elif cid == B_CONTROL_ID:
+            checks = {
+                "parity": parity_map.get(cid, {}).get("status") != "FAIL_BELOW_REFERENCE",
+                "full_pf": row["full_pf"] >= 1.50,
+                "all_eras_positive": row["positive_eras"] == 4,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "2pip_pf": c2.get("profit_factor", 0.0) >= 1.40,
+                "3pip_positive": c3.get("total_r", 0.0) > 0,
+            }
+            # Sparse by design: never auto-promote B to standalone.
+            verdict = (
+                "KEEP_AS_SPARSE_COMPLEMENT"
+                if all(checks.values())
+                else "B_REJECT_OR_REVIEW"
+            )
+
+        elif cid == "AB_A_PRIORITY":
+            marginal_r = row["full_r"] - a_full_r
+            dd_change = row["full_dd"] - a_full_dd
+            checks = {
+                "adds_r": marginal_r >= 3.0,
+                "full_pf": row["full_pf"] >= 1.30,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+                "2020_positive": row["era2020_plus_r"] > 0,
+                "last5_positive": row["last5y_r"] > 0,
+                "last2_positive": row["last2y_r"] > 0,
+                "3pip_positive": c3.get("total_r", 0.0) > 0,
+                "dd_not_materially_worse": dd_change >= -2.0,
+                "rolling36": r36.get("positive_active_windows_pct", 0.0) >= 70.0,
+            }
+            verdict = (
+                "PREFERRED_TWO_TRIGGER_CANDIDATE"
+                if all(checks.values())
+                else "COMBINATION_NEEDS_REVIEW"
+            )
+
+        else:  # B-priority diagnostic
+            checks = {
+                "full_positive": row["full_r"] > 0,
+                "2018_positive": row["validation2018_plus_r"] > 0,
+            }
+            verdict = "PRIORITY_DIAGNOSTIC_ONLY"
+
+        out.append({
+            "config_id": cid,
+            "family": row["family"],
+            "rr": row["rr"],
+            "deep_verdict": verdict,
+            "checks_passed": sum(bool(x) for x in checks.values()),
+            "checks_total": len(checks),
+            **{f"check_{k}": v for k, v in checks.items()},
+            "full_trades": row["full_trades"],
+            "full_pf": row["full_pf"],
+            "full_r": row["full_r"],
+            "full_dd": row["full_dd"],
+            "validation2018_plus_pf": row["validation2018_plus_pf"],
+            "validation2018_plus_r": row["validation2018_plus_r"],
+            "era2020_plus_pf": row["era2020_plus_pf"],
+            "era2020_plus_r": row["era2020_plus_r"],
+            "last5y_pf": row["last5y_pf"],
+            "last5y_r": row["last5y_r"],
+            "last2y_pf": row["last2y_pf"],
+            "last2y_r": row["last2y_r"],
+            "cost_2pip_pf": c2.get("profit_factor", 0.0),
+            "cost_2pip_r": c2.get("total_r", 0.0),
+            "cost_3pip_pf": c3.get("profit_factor", 0.0),
+            "cost_3pip_r": c3.get("total_r", 0.0),
+            "cost_3pip_2018_r": c3_val.get("total_r", 0.0),
+            "rolling36_positive_active_pct": r36.get("positive_active_windows_pct", 0.0),
+            "rolling36_median_r": r36.get("median_r_active", 0.0),
+            "rolling36_worst_r": r36.get("worst_r", 0.0),
+            "active_calendar_years": cal.get("active_years", 0),
+            "zero_trade_years": cal.get("zero_trade_years", 0),
+            "positive_active_years_pct": cal.get("positive_active_years_pct", 0.0),
+            "a_session_stable_neighbour_count": stable_session_count if cid == A_CONTROL_ID else "",
+            "a_geometry_recent_positive_pct": round(geo_recent_positive_pct, 4) if cid == A_CONTROL_ID else "",
+            "marginal_r_vs_a": round(row["full_r"] - a_full_r, 4) if cid.startswith("AB_") else "",
+            "dd_change_vs_a": round(row["full_dd"] - a_full_dd, 4) if cid.startswith("AB_") else "",
+        })
+
+    return out
+
+
+def run_deep_validation():
+    try:
+        STATUS.update({
+            "state": "loading",
+            "message": "Downloading EUR/JPY M15/H1/H4/D history",
+            "progress": 2,
+        })
+
+        OUTCOME_CACHE.clear()
+
+        # Same market-data conventions as the broad runner.
+        # Use the exact history-fetch helper/chunking from the successful
+        # EUR/JPY M15 SHORT broad-research runner.
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        daily = fetch("D", WARMUP, NOW, 3500)
+
+        # Keep study sample at/after the declared start.
+        m15 = [x for x in m15 if x["time"] >= START]
+
+        if len(m15) < 1000:
+            raise RuntimeError("Insufficient EUR/JPY M15 history returned")
+
+        coverage_rows = [
+            {
+                "granularity": "M15",
+                "candles": len(m15),
+                "first_utc": iso(m15[0]["time"]),
+                "last_utc": iso(m15[-1]["time"]),
+            },
+            {
+                "granularity": "H1",
+                "candles": len(h1),
+                "first_utc": iso(h1[0]["time"]) if h1 else "",
+                "last_utc": iso(h1[-1]["time"]) if h1 else "",
+            },
+            {
+                "granularity": "H4",
+                "candles": len(h4),
+                "first_utc": iso(h4[0]["time"]) if h4 else "",
+                "last_utc": iso(h4[-1]["time"]) if h4 else "",
+            },
+            {
+                "granularity": "D",
+                "candles": len(daily),
+                "first_utc": iso(daily[0]["time"]) if daily else "",
+                "last_utc": iso(daily[-1]["time"]) if daily else "",
+            },
+        ]
+        write_csv(OUTS["coverage"], coverage_rows)
+
+        STATUS.update({
+            "state": "precompute",
+            "message": "Building strict completed-HTF alignment and feature cache",
+            "progress": 18,
+        })
+
+        m15_times = [x["time"] for x in m15]
+        aligned_h1 = align_htf(m15_times, htf_state(h1))
+        aligned_h4 = align_htf(m15_times, htf_state(h4))
+        aligned_daily = align_htf(m15_times, htf_state(daily))
+        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
+
+        configs = fixed_deep_configs()
+        config_by_id = {c["config_id"]: c for c in configs}
+
+        # Canonical controls must exist under stable ids.
+        if A_CONTROL_ID not in config_by_id:
+            config_by_id[A_CONTROL_ID] = a_cfg(A_CONTROL_ID)
+            configs.append(config_by_id[A_CONTROL_ID])
+        if B_CONTROL_ID not in config_by_id:
+            config_by_id[B_CONTROL_ID] = b_cfg(B_CONTROL_ID)
+            configs.append(config_by_id[B_CONTROL_ID])
+
+        STATUS.update({
+            "state": "local_robustness",
+            "message": f"Evaluating {len(configs)} frozen local robustness variants",
+            "progress": 28,
+        })
+
+        local_summary = []
+        indices_map = {}
+
+        for i, c in enumerate(configs, 1):
+            ix = indices(c, f)
+            indices_map[c["config_id"]] = ix
+            local_summary.append(deep_summary_row(c, m15, ix))
+            if i % 10 == 0 or i == len(configs):
+                STATUS.update({
+                    "state": "local_robustness",
+                    "message": f"Local robustness {i}/{len(configs)}",
+                    "progress": 28 + int(28 * i / len(configs)),
+                })
+
+        local_summary.sort(
+            key=lambda r: (
+                r.get("test_group", ""),
+                r["config_id"],
+            )
+        )
+        write_csv(OUTS["local_summary"], local_summary)
+        write_csv(
+            OUTS["rr_plateau"],
+            [r for r in local_summary if r.get("test_group") == "A_RR_PLATEAU"],
+        )
+        write_csv(
+            OUTS["session_stability"],
+            [r for r in local_summary if r.get("test_group") == "A_SESSION_STABILITY"],
+        )
+        write_csv(
+            OUTS["hour_diagnostic"],
+            [r for r in local_summary if r.get("test_group") == "A_HOUR_DIAGNOSTIC"],
+        )
+        write_csv(
+            OUTS["weekday_diagnostic"],
+            [r for r in local_summary if r.get("test_group") == "A_WEEKDAY_DIAGNOSTIC"],
+        )
+        write_csv(
+            OUTS["geometry_rr"],
+            [r for r in local_summary if r.get("test_group") == "A_GEOMETRY_RR"],
+        )
+        write_csv(
+            OUTS["candidate_b"],
+            [r for r in local_summary if str(r.get("test_group", "")).startswith("B_")],
+        )
+
+        # ---------------- Broad-search parity guards ----------------
+        local_map = {r["config_id"]: r for r in local_summary}
+        parity_rows = []
+        refs = {
+            A_CONTROL_ID: {
+                "reference_min_trades": 140,
+                "reference_pf_if_equal": 1.412597,
+                "reference_r_if_equal": 43.7353,
+            },
+            B_CONTROL_ID: {
+                "reference_min_trades": 29,
+                "reference_pf_if_equal": 2.008885,
+                "reference_r_if_equal": 17.1510,
+            },
+        }
+        for cid, ref in refs.items():
+            row = local_map[cid]
+            if row["full_trades"] < ref["reference_min_trades"]:
+                status = "FAIL_BELOW_REFERENCE"
+            elif row["full_trades"] > ref["reference_min_trades"]:
+                status = "PASS_NEWER_TRADES"
+            else:
+                pf_ok = abs(row["full_pf"] - ref["reference_pf_if_equal"]) <= 0.02
+                r_ok = abs(row["full_r"] - ref["reference_r_if_equal"]) <= 0.50
+                status = "PASS_EQUAL" if pf_ok and r_ok else "FAIL_METRIC_DRIFT"
+            parity_rows.append({
+                "config_id": cid,
+                **ref,
+                "current_trades": row["full_trades"],
+                "current_pf": row["full_pf"],
+                "current_r": row["full_r"],
+                "status": status,
+            })
+
+        write_csv(OUTS["parity"], parity_rows)
+        bad = [x for x in parity_rows if x["status"].startswith("FAIL")]
+        if bad:
+            raise RuntimeError(
+                "Broad-result control parity failure: "
+                + str(bad)
+            )
+
+        STATUS.update({
+            "state": "primary_diagnostics",
+            "message": "Running A, B and A+B deep temporal/cost/rolling diagnostics",
+            "progress": 60,
+        })
+
+        a = config_by_id[A_CONTROL_ID]
+        b = config_by_id[B_CONTROL_ID]
+        ix_a = indices_map[A_CONTROL_ID]
+        ix_b = indices_map[B_CONTROL_ID]
+
+        def a_trade_fn(cost, start, end):
+            return backtest(m15, ix_a, a["rr"], cost, start, end)
+
+        def b_trade_fn(cost, start, end):
+            return backtest(m15, ix_b, b["rr"], cost, start, end)
+
+        def ab_a_trade_fn(cost, start, end):
+            return combined_backtest(
+                m15, ix_a, a["rr"], ix_b, b["rr"], cost,
+                start=start, end=end, priority="A",
+            )
+
+        def ab_b_trade_fn(cost, start, end):
+            return combined_backtest(
+                m15, ix_a, a["rr"], ix_b, b["rr"], cost,
+                start=start, end=end, priority="B",
+            )
+
+        primary_defs = [
+            (A_CONTROL_ID, "RALLY_REJECTION", "4.75", a_trade_fn),
+            (B_CONTROL_ID, "HIGH_SWEEP_DISPLACEMENT", "3.00", b_trade_fn),
+            ("AB_A_PRIORITY", "TWO_TRIGGER_A_PLUS_B", "A4.75+B3.00", ab_a_trade_fn),
+            ("AB_B_PRIORITY", "TWO_TRIGGER_A_PLUS_B", "A4.75+B3.00", ab_b_trade_fn),
+        ]
+
+        primary_summary = []
+        periods_all = []
+        costs_all = []
+        rolling_all = []
+        calendar_all = []
+        trades_all = []
+
+        for n, (cid, family, rr_label, trade_fn) in enumerate(primary_defs, 1):
+            STATUS.update({
+                "state": "primary_diagnostics",
+                "message": f"Primary diagnostic {n}/{len(primary_defs)}: {cid}",
+                "progress": 60 + int(28 * n / len(primary_defs)),
+            })
+
+            prows = generic_period_rows(cid, family, rr_label, trade_fn)
+            periods_all.extend(prows)
+            primary_summary.append(
+                primary_summary_from_periods(cid, family, rr_label, prows)
+            )
+            costs_all.extend(
+                generic_cost_rows(cid, family, rr_label, trade_fn)
+            )
+            rolling_all.extend(
+                generic_rolling_rows(cid, trade_fn)
+            )
+            calendar_all.extend(
+                generic_calendar_rows(cid, trade_fn)
+            )
+
+            full_trades = trade_fn(PRIMARY_COST, START, NOW)
+            for t in full_trades:
+                row = dict(t)
+                row.pop("entry_time", None)
+                row.pop("exit_time", None)
+                row["config_id"] = cid
+                row["family"] = family
+                trades_all.append(row)
+
+        rollsum = rolling_summary(rolling_all)
+        calsum = calendar_summary(calendar_all)
+
+        write_csv(OUTS["primary_summary"], primary_summary)
+        write_csv(OUTS["periods"], periods_all)
+        write_csv(OUTS["cost"], costs_all)
+        write_csv(OUTS["rolling"], rolling_all)
+        write_csv(OUTS["rolling_summary"], rollsum)
+        write_csv(OUTS["calendar"], calendar_all)
+        write_csv(OUTS["calendar_summary"], calsum)
+        write_csv(OUTS["trades"], trades_all)
+
+        a_full = a_trade_fn(PRIMARY_COST, START, NOW)
+        b_full = b_trade_fn(PRIMARY_COST, START, NOW)
+        ab_a_full, rej_a = combined_backtest(
+            m15, ix_a, a["rr"], ix_b, b["rr"], PRIMARY_COST,
+            start=START, end=NOW, priority="A", collect_rejections=True,
+        )
+        ab_b_full, rej_b = combined_backtest(
+            m15, ix_a, a["rr"], ix_b, b["rr"], PRIMARY_COST,
+            start=START, end=NOW, priority="B", collect_rejections=True,
+        )
+
+        write_csv(
+            OUTS["overlap"],
+            full_overlap_rows(a_full, b_full, ab_a_full, ab_b_full),
+        )
+        write_csv(
+            OUTS["combined_rejections"],
+            [
+                {"combined_mode": "A_PRIORITY", **r}
+                for r in rej_a
+            ] + [
+                {"combined_mode": "B_PRIORITY", **r}
+                for r in rej_b
+            ],
+        )
+
+        decisions = deep_decision_rows(
+            primary_summary,
+            costs_all,
+            rollsum,
+            calsum,
+            local_summary,
+            parity_rows,
+        )
+        write_csv(OUTS["decision"], decisions)
+
+        write_csv(OUTS["notes"], [
+            {
+                "item": "Study basis",
+                "value": "Frozen deep validation derived from the completed EUR/JPY M15 SHORT #24 broad-search results. No new trigger family search is performed.",
+            },
+            {
+                "item": "Candidate A",
+                "value": "Rally rejection: sweep prior40 high; close below prior10 high; bearish body>=0.75 ATR14; prior4h M15 momentum>=+1.25 ATR14; close location<=0.30; include NY16:00-19:59; RR4.75.",
+            },
+            {
+                "item": "Candidate B",
+                "value": "Sparse complement: high-sweep displacement; sweep prior60 high; close below previous candle low; body>=1.00 ATR14; upper wick/body>=0.35; prior4h M15 momentum>=+1.00 ATR14; previous strictly completed H1 close<H1 EMA100; RR3.00.",
+            },
+            {
+                "item": "Historical execution",
+                "value": "OANDA midpoint; SHORT fill=signal close minus adverse cost; base cost=1 pip; stop=signal high+10 ticks; targets use reference-close risk; p0; exact exit-candle signal eligible.",
+            },
+            {
+                "item": "Session interpretation",
+                "value": "NY_BLOCK_a-b means INCLUDE signal candles whose America/New_York opening hour is between a and b inclusive.",
+            },
+            {
+                "item": "Session stability",
+                "value": "Neighbouring NY blocks are reported as diagnostics. The runner does not automatically drop hour16 or choose the best block after seeing the results.",
+            },
+            {
+                "item": "Weekday diagnostics",
+                "value": "Each weekday exclusion is tested separately around Candidate A, but no weekday exclusion is automatically adopted.",
+            },
+            {
+                "item": "Geometry x RR",
+                "value": "One-factor neighbourhoods for body, momentum, close location and sweep lookback are crossed with RR4.50/4.75/5.00/5.25 to test whether the edge sits on a broad plateau.",
+            },
+            {
+                "item": "Cost stress",
+                "value": "Primary A/B/A+B variants are stressed at 0.5/1/1.5/2/2.5/3 pip adverse historical entry cost.",
+            },
+            {
+                "item": "Two-trigger overlap",
+                "value": "A+B uses one-position p0 with half-open [signal_index,exit_index) overlap rejection. Exact exit-candle signals remain eligible. A-priority is the intended main combination; B-priority is diagnostic.",
+            },
+            {
+                "item": "No pristine OOS claim",
+                "value": "The same long history has been repeatedly explored. Temporal/rolling/parameter tests are robustness evidence, not untouched out-of-sample evidence.",
+            },
+            {
+                "item": "Next gate",
+                "value": "Only after a frozen A or A+B rule survives this study should we run the exact 23->24 portfolio-add analysis with the live non-hedging gate.",
+            },
+        ])
+
+        STATUS.update({
+            "state": "packaging",
+            "message": "Packaging EUR/JPY M15 SHORT #24 deep-validation results",
+            "progress": 96,
+        })
+        package_results()
+
+        STATUS.update({
+            "state": "complete",
+            "message": "EUR/JPY M15 SHORT #24 deep validation complete",
+            "progress": 100,
+            "local_variants": len(configs),
+            "primary_variants": len(primary_defs),
+            "bundle": BUNDLE,
+            "decision_verdicts": {
+                r["config_id"]: r["deep_verdict"]
+                for r in decisions
+            },
+        })
+
+    except Exception as error:
+        STATUS.update({
+            "state": "error",
+            "message": str(error),
+        })
+        print("ERROR:", repr(error), flush=True)
+
+
+
+# ============================================================
+# EUR/JPY M15 SHORT #24 — CONTROLLED IMPROVEMENT PASS
+# ============================================================
+#
+# OBJECTIVE
+# ---------
+# Improve the UNDERLYING robustness/consistency of frozen #24 before
+# accepting a lower live risk allocation.
+#
+# FROZEN BASELINE
+# ---------------
+# Trigger A — RALLY_REJECTION
+#   sweep previous 40-bar high
+#   close below previous 10-bar high
+#   bearish body >= 0.75 ATR14
+#   prior ~4-hour M15 momentum >= +1.25 ATR14
+#   close location <= 0.30
+#   NY 16:00-19:59
+#   RR 4.75
+#
+# Trigger B — HIGH_SWEEP_DISPLACEMENT
+#   sweep previous 60-bar high
+#   close below previous candle low
+#   bearish body >= 1.00 ATR14
+#   upper wick/body >= 0.35
+#   prior ~4-hour M15 momentum >= +1.00 ATR14
+#   previous strictly completed H1 close < H1 EMA100
+#   RR 3.00
+#
+# Combined:
+#   B priority on same candle
+#   p0 / one open #24 trade
+#   half-open [signal_index, exit_index) overlap
+#   exact exit-candle signal eligible
+#   stop = signal high + 10 ticks
+#   JPY tick = 0.001
+#   historical adverse short fill = 1 pip
+#
+# RESEARCH DISCIPLINE
+# -------------------
+# This runner is intentionally NOT a broad optimiser.
+# It does not search weekdays or delete individual NY hours.
+# It does not scan arbitrary EMA periods.
+# It does not auto-select the best historical row.
+#
+# It tests only:
+#   1) coarse HTF regime filters applied to Trigger A
+#   2) coarse H1/H4 volatility regime filters applied to Trigger A
+#   3) coarse sweep / rejection / upper-wick quality filters on Trigger A
+#   4) a small set of PREDECLARED combined market-context hypotheses
+#   5) stop-buffer robustness around 10 ticks
+#   6) broad RR plateaus around A=4.75 and B=3.00
+#
+# A third trigger is deliberately NOT searched in this pass. The previous
+# broad family search already examined multiple independent families; opening
+# another family search before exhausting context robustness would increase
+# curve-fit risk.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+
+IMP_STATUS = {
+    "state": "not_started",
+    "message": "EURJPY M15 SHORT #24 controlled improvement pass not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+IMP_BUNDLE = "EURJPY_M15_SHORT_24_CONTROLLED_IMPROVEMENT_RESULTS.zip"
+
+IMP_BASELINE_REF = {
+    "trades": 164,
+    "pf": 1.558359,
+    "r": 65.886347,
+    "dd": -16.699219,
+    "validation2018_trades": 84,
+    "validation2018_pf": 1.381923,
+    "validation2018_r": 23.679202,
+    "last5y_trades": 62,
+    "last5y_pf": 1.622345,
+    "last5y_r": 27.383165,
+    "last2y_trades": 26,
+    "last2y_pf": 2.115239,
+    "last2y_r": 18.959070,
+    "last1y_trades": 12,
+    "last1y_pf": 2.871945,
+    "last1y_r": 13.103618,
+    "rolling36_positive_active_pct": 78.9883,
+}
+
+IMP_OUT = {
+    "coverage": "eurjpy_m15_short_24_improvement_coverage.csv",
+    "baseline_parity": "eurjpy_m15_short_24_improvement_baseline_parity.csv",
+    "variant_manifest": "eurjpy_m15_short_24_improvement_variant_manifest.csv",
+    "summary": "eurjpy_m15_short_24_improvement_summary.csv",
+    "delta_vs_baseline": "eurjpy_m15_short_24_improvement_delta_vs_baseline.csv",
+    "periods": "eurjpy_m15_short_24_improvement_periods.csv",
+    "cost_stress": "eurjpy_m15_short_24_improvement_cost_stress.csv",
+    "rolling": "eurjpy_m15_short_24_improvement_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_improvement_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_improvement_calendar.csv",
+    "calendar_summary": "eurjpy_m15_short_24_improvement_calendar_summary.csv",
+    "trigger_mix": "eurjpy_m15_short_24_improvement_trigger_mix.csv",
+    "robustness_view": "eurjpy_m15_short_24_improvement_robustness_view.csv",
+    "notes": "eurjpy_m15_short_24_improvement_notes.csv",
+}
+
+
+IMP_OUTCOME_CACHE = {}
+
+
+def imp_outcome(candles, signal_index, rr, cost_pips, stop_ticks):
+    """
+    Exact frozen short execution convention, parameterising only stop buffer.
+    Target remains based on reference close -> stop distance, exactly as the
+    frozen deep-validation runner.
+    """
+    key = (
+        signal_index,
+        round(float(rr), 4),
+        round(float(cost_pips), 4),
+        int(stop_ticks),
+    )
+
+    if key in IMP_OUTCOME_CACHE:
+        cached = IMP_OUTCOME_CACHE[key]
+        return None if cached is None else dict(cached)
+
+    signal = candles[signal_index]
+    reference = signal["close"]
+    stop = signal["high"] + int(stop_ticks) * TICK
+    reference_risk = stop - reference
+
+    if reference_risk <= 0:
+        IMP_OUTCOME_CACHE[key] = None
+        return None
+
+    target = reference - float(rr) * reference_risk
+    fill = reference - float(cost_pips) * PIP
+    actual_risk = stop - fill
+
+    if actual_risk <= 0:
+        IMP_OUTCOME_CACHE[key] = None
+        return None
+
+    for j in range(signal_index + 1, len(candles)):
+        bar = candles[j]
+
+        hit_stop = bar["high"] >= stop
+        hit_target = bar["low"] <= target
+
+        if hit_stop and hit_target:
+            # Preserve frozen ambiguity convention.
+            if abs(bar["open"] - bar["low"]) < abs(bar["high"] - bar["open"]):
+                exit_price = target
+                reason = "TARGET"
+            else:
+                exit_price = stop
+                reason = "STOP"
+        elif hit_target:
+            exit_price = target
+            reason = "TARGET"
+        elif hit_stop:
+            exit_price = stop
+            reason = "STOP"
+        else:
+            continue
+
+        result_r = (fill - exit_price) / actual_risk
+
+        row = {
+            "signal_index": signal_index,
+            "exit_index": j,
+            "entry_time": signal["time"],
+            "exit_time": bar["time"],
+            "entry_time_utc": iso(signal["time"]),
+            "exit_time_utc": iso(bar["time"]),
+            "reference_entry": reference,
+            "historical_fill": fill,
+            "stop": stop,
+            "target": target,
+            "result_r": result_r,
+            "exit_reason": reason,
+            "rr": float(rr),
+            "cost_pips": float(cost_pips),
+            "stop_ticks": int(stop_ticks),
+        }
+
+        IMP_OUTCOME_CACHE[key] = dict(row)
+        return row
+
+    IMP_OUTCOME_CACHE[key] = None
+    return None
+
+
+def imp_filter_by_time(candles, candidate_indices, start=None, end=None):
+    if start is None and end is None:
+        return candidate_indices
+
+    times = [candles[i]["time"] for i in candidate_indices]
+    a = 0 if start is None else bisect.bisect_left(times, start)
+    b = len(candidate_indices) if end is None else bisect.bisect_left(times, end)
+    return candidate_indices[a:b]
+
+
+def imp_combined_backtest(
+    candles,
+    ix_a,
+    rr_a,
+    ix_b,
+    rr_b,
+    cost_pips=1.0,
+    stop_ticks=10,
+    start=None,
+    end=None,
+    priority="B",
+):
+    """
+    Exact #24 two-trigger p0 engine.
+
+    Half-open overlap:
+        accepted trade occupies [signal_index, exit_index)
+        signal exactly on the exit candle remains eligible.
+
+    Same-candle priority:
+        frozen preferred strategy uses B priority.
+    """
+    use_a = imp_filter_by_time(candles, ix_a, start, end)
+    use_b = imp_filter_by_time(candles, ix_b, start, end)
+
+    pri = {"B": 0, "A": 1} if priority == "B" else {"A": 0, "B": 1}
+
+    events = (
+        [(i, pri["A"], "A", float(rr_a)) for i in use_a]
+        + [(i, pri["B"], "B", float(rr_b)) for i in use_b]
     )
     events.sort(key=lambda x: (x[0], x[1]))
 
@@ -10100,39 +3288,34 @@ def q24_build_candidate_trades(m15, features):
             same.append(events[q])
             q += 1
 
-        chosen = None
-        trade = None
+        chosen_trade = None
+        chosen_trigger = None
 
-        # B priority on exact same-candle overlap.
         for event in same:
             _, _, trigger, rr = event
-            candidate = q24_short_outcome(
-                m15,
+            t = imp_outcome(
+                candles,
                 signal_index,
                 rr,
+                cost_pips,
+                stop_ticks,
             )
-            if candidate is not None:
-                chosen = event
-                trade = candidate
+            if t is not None:
+                chosen_trade = dict(t)
+                chosen_trigger = trigger
                 break
 
-        if trade is None:
+        if chosen_trade is None:
             p = q
             continue
 
-        trade.update({
-            "pair": Q24_PAIR,
-            "strategy_id": Q24_STRATEGY_ID,
-            "trigger": chosen[2],
-            "timeframe": "M15",
-            "side": "SELL",
-            "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-        })
-        trades.append(trade)
+        chosen_trade["trigger"] = chosen_trigger
+        chosen_trade["combined_priority"] = priority
+        trades.append(chosen_trade)
 
-        exit_index = trade["exit_index"]
+        exit_index = chosen_trade["exit_index"]
 
-        # Skip all signals strictly inside the open interval.
+        # Skip every event strictly inside [signal_index, exit_index).
         p = q
         while p < len(events) and events[p][0] < exit_index:
             p += 1
@@ -10140,6169 +3323,1583 @@ def q24_build_candidate_trades(m15, features):
     return trades
 
 
-# ============================================================
-# EXACT CURRENT #23 BASELINE
-# ============================================================
+def imp_bool_array(n, value=True):
+    return np.full(n, bool(value), dtype=bool)
 
-def q24_rebuild_current23(eurjpy_m15, eurjpy_h1, eurjpy_h1_atr):
-    current22 = pv_rebuild_current22(
-        eurjpy_h1,
-        eurjpy_h1_atr,
-    )
 
-    long_features = pv_m15_features(
-        eurjpy_m15,
-        eurjpy_h1,
-    )
+def imp_finite_mask(*arrays):
+    if not arrays:
+        raise ValueError("At least one array required")
+    m = np.ones(len(arrays[0]), dtype=bool)
+    for arr in arrays:
+        m &= np.isfinite(arr)
+    return m
 
-    long_trades = pv_build_m15_candidate_trades(
-        eurjpy_m15,
-        long_features,
-        {
-            "candidate_id": "EURJPY_M15_LONG_RR4_25",
-            "rr": 4.25,
-        },
-    )
 
-    long_stats = calc_stats(long_trades)
-    long_ref = Q23_LONG_REFERENCE
+def imp_a_quality_arrays(f):
+    atr_ = f["atr"]
+    valid = np.isfinite(atr_) & (atr_ > 0)
 
-    if long_stats["trades"] < long_ref["trades"]:
-        raise RuntimeError(
-            "Locked EUR/JPY M15 LONG #23 fell below reference: "
-            f"{long_stats['trades']} < {long_ref['trades']}"
-        )
+    sweep_depth = np.full(f["n"], np.nan)
+    rejection_depth10 = np.full(f["n"], np.nan)
 
-    if long_stats["trades"] == long_ref["trades"]:
-        if (
-            abs(long_stats["profit_factor"] - long_ref["pf"]) > 0.0001
-            or abs(long_stats["total_r"] - long_ref["r"]) > 0.03
-        ):
-            raise RuntimeError(
-                "Locked EUR/JPY M15 LONG #23 metric parity drift: "
-                f"{long_stats}"
-            )
+    prior40 = f["prev_high"][40]
+    prior10 = f["prev_high"][10]
 
-    # Rename from the old research candidate id to the exact live strategy id.
-    for t in long_trades:
-        t["strategy_id"] = "EUR_JPY_M15_LONG"
-        t["candidate_id"] = "EURJPY_M15_LONG_LOCKED_23"
+    ok = valid & np.isfinite(prior40)
+    sweep_depth[ok] = (
+        f["high"][ok] - prior40[ok]
+    ) / atr_[ok]
 
-    independent = sorted(
-        current22["independent"] + long_trades,
-        key=lambda t: (t["entry_time"], t["strategy_id"]),
-    )
-
-    h1_first, rej_h1 = apply_live_safe_nonhedging_gate(
-        independent,
-        "H1_FIRST",
-    )
-    m15_first, rej_m15 = apply_live_safe_nonhedging_gate(
-        independent,
-        "M15_FIRST",
-    )
-
-    parity = list(current22["parity"])
-    parity.append({
-        "strategy_id": "EUR_JPY_M15_LONG",
-        "reference_min_trades": long_ref["trades"],
-        "current_trades": long_stats["trades"],
-        "reference_pf": long_ref["pf"],
-        "current_pf": long_stats["profit_factor"],
-        "reference_r": long_ref["r"],
-        "current_r": long_stats["total_r"],
-        "status": (
-            "PASS_EQUAL"
-            if long_stats["trades"] == long_ref["trades"]
-            else "PASS_NEWER_TRADES"
-        ),
-    })
+    ok = valid & np.isfinite(prior10)
+    rejection_depth10[ok] = (
+        prior10[ok] - f["close"][ok]
+    ) / atr_[ok]
 
     return {
-        "independent": independent,
-        "live_h1_first": h1_first,
-        "live_m15_first": m15_first,
-        "rejected_h1_first": rej_h1,
-        "rejected_m15_first": rej_m15,
-        "parity": parity,
-        "eurjpy_m15_long_trades": long_trades,
-        "current22": current22,
+        "sweep_depth_atr": sweep_depth,
+        "rejection_depth10_atr": rejection_depth10,
     }
 
 
-# ============================================================
-# #24 STANDALONE / GATE HELPERS
-# ============================================================
+def imp_apply_mask(base_indices, mask):
+    return [i for i in base_indices if bool(mask[i])]
 
-def q24_candidate_summary(trades):
-    full = calc_stats(trades)
-    val = calc_stats(subset(
-        trades,
-        datetime(2018, 1, 1, tzinfo=timezone.utc),
-        None,
-    ))
-    y20 = calc_stats(subset(
-        trades,
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-        None,
-    ))
-    l5 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 5),
-        None,
-    ))
-    l2 = calc_stats(subset(
-        trades,
-        NOW - timedelta(days=365.2425 * 2),
-        None,
-    ))
+
+def imp_variant(
+    variant_id,
+    group,
+    description,
+    a_mask=None,
+    rr_a=4.75,
+    rr_b=3.00,
+    stop_ticks=10,
+):
     return {
-        "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-        **full,
-        "validation2018_plus_trades": val["trades"],
-        "validation2018_plus_pf": val["profit_factor"],
-        "validation2018_plus_r": val["total_r"],
-        "2020_plus_trades": y20["trades"],
-        "2020_plus_pf": y20["profit_factor"],
-        "2020_plus_r": y20["total_r"],
-        "last5y_trades": l5["trades"],
-        "last5y_pf": l5["profit_factor"],
-        "last5y_r": l5["total_r"],
-        "last2y_trades": l2["trades"],
-        "last2y_pf": l2["profit_factor"],
-        "last2y_r": l2["total_r"],
+        "variant_id": variant_id,
+        "group": group,
+        "description": description,
+        "a_mask": a_mask,
+        "rr_a": float(rr_a),
+        "rr_b": float(rr_b),
+        "stop_ticks": int(stop_ticks),
     }
 
 
-def q24_trade_identity(t):
-    return (
-        t["strategy_id"],
-        t["entry_time"],
-    )
-
-
-def q24_rejection_identity(r):
-    return (
-        r["candidate_strategy_id"],
-        r["candidate_entry_time"],
-    )
-
-
-def q24_gate_displacement_rows(
-    mode,
-    baseline_trades,
-    baseline_rejected,
-    candidate_portfolio_trades,
-    candidate_rejected,
-    candidate_sid,
-):
-    base_map = {
-        q24_trade_identity(t): t
-        for t in baseline_trades
-    }
-    new_map = {
-        q24_trade_identity(t): t
-        for t in candidate_portfolio_trades
-    }
-
-    candidate_accepted = [
-        t for t in candidate_portfolio_trades
-        if t["strategy_id"] == candidate_sid
-    ]
-    candidate_rej = [
-        r for r in candidate_rejected
-        if r["candidate_strategy_id"] == candidate_sid
-    ]
-
-    displaced_ids = [
-        k for k in base_map
-        if k not in new_map
-    ]
-    recovered_ids = [
-        k for k in new_map
-        if k not in base_map
-        and k[0] != candidate_sid
-    ]
-
-    displaced = [base_map[k] for k in displaced_ids]
-    recovered = [new_map[k] for k in recovered_ids]
-
-    rows = [{
-        "portfolio_mode": mode,
-        "scope": "TOTAL",
-        "candidate_raw_trades": "",
-        "candidate_accepted_trades": len(candidate_accepted),
-        "candidate_accepted_r": sum(float(t["r"]) for t in candidate_accepted),
-        "candidate_rejected_trades": len(candidate_rej),
-        "displaced_existing_trades": len(displaced),
-        "displaced_existing_r": sum(float(t["r"]) for t in displaced),
-        "recovered_existing_trades": len(recovered),
-        "recovered_existing_r": sum(float(t["r"]) for t in recovered),
-        "net_trade_set_r_delta": (
-            sum(float(t["r"]) for t in candidate_accepted)
-            + sum(float(t["r"]) for t in recovered)
-            - sum(float(t["r"]) for t in displaced)
-        ),
-    }]
-
-    grouped = defaultdict(lambda: {
-        "candidate_accepted": [],
-        "candidate_rejected": [],
-        "displaced": [],
-        "recovered": [],
-    })
-
-    for t in candidate_accepted:
-        grouped[candidate_sid]["candidate_accepted"].append(t)
-    for r in candidate_rej:
-        grouped[
-            "CANDIDATE_BLOCKED_BY_" + r["blocker_strategy_id"]
-        ]["candidate_rejected"].append(r)
-    for t in displaced:
-        grouped[t["strategy_id"]]["displaced"].append(t)
-    for t in recovered:
-        grouped[t["strategy_id"]]["recovered"].append(t)
-
-    for scope, g in sorted(grouped.items()):
-        rows.append({
-            "portfolio_mode": mode,
-            "scope": scope,
-            "candidate_raw_trades": "",
-            "candidate_accepted_trades": len(g["candidate_accepted"]),
-            "candidate_accepted_r": sum(
-                float(t["r"]) for t in g["candidate_accepted"]
-            ),
-            "candidate_rejected_trades": len(g["candidate_rejected"]),
-            "displaced_existing_trades": len(g["displaced"]),
-            "displaced_existing_r": sum(
-                float(t["r"]) for t in g["displaced"]
-            ),
-            "recovered_existing_trades": len(g["recovered"]),
-            "recovered_existing_r": sum(
-                float(t["r"]) for t in g["recovered"]
-            ),
-            "net_trade_set_r_delta": (
-                sum(float(t["r"]) for t in g["candidate_accepted"])
-                + sum(float(t["r"]) for t in g["recovered"])
-                - sum(float(t["r"]) for t in g["displaced"])
-            ),
-        })
-
-    return rows
-
-
-def q24_delta_row(
-    mode,
-    baseline_row,
-    candidate_row,
-    candidate_raw,
-    candidate_accepted,
-):
-    out = {
-        "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-        "portfolio_mode": mode,
-        "candidate_trades_before_gate": len(candidate_raw),
-        "candidate_trades_accepted": len(candidate_accepted),
-        "candidate_accepted_r": sum(float(t["r"]) for t in candidate_accepted),
-    }
-
-    fields = [
-        "trades",
-        "profit_factor",
-        "total_r",
-        "expectancy_r",
-        "signal_order_max_drawdown_r",
-        "exit_order_max_drawdown_r",
-        "cagr_pct_1pct_h1_1pct_m15",
-        "total_return_pct_1pct_h1_1pct_m15",
-        "max_closed_equity_dd_pct",
-        "max_open_risk_floor_dd_pct",
-        "max_open_positions",
-        "max_open_risk_pct_of_realised_equity",
-    ]
-
-    for field in fields:
-        out[f"baseline_{field}"] = baseline_row[field]
-        out[f"candidate_{field}"] = candidate_row[field]
-        out[f"delta_{field}"] = (
-            candidate_row[field] - baseline_row[field]
-        )
-
-    return out
-
-
-def q24_decision_row(mode, delta_row, roll_summary, corr_row):
-    lookup = {
-        int(r["months"]): r
-        for r in roll_summary
-        if (
-            r["candidate_id"] == "WITH_EURJPY_M15_SHORT_24"
-            and r["portfolio_mode"] == mode
-        )
-    }
-
-    baseline_lookup = {
-        int(r["months"]): r
-        for r in roll_summary
-        if (
-            r["candidate_id"] == "CURRENT_23"
-            and r["portfolio_mode"] == mode
-        )
-    }
-
-    r36 = lookup.get(36, {})
-    b36 = baseline_lookup.get(36, {})
-
-    checks = {
-        "adds_total_r": delta_row["delta_total_r"] > 0,
-        "adds_cagr": delta_row["delta_cagr_pct_1pct_h1_1pct_m15"] > 0,
-        "closed_dd_not_worse_1_5pp": (
-            delta_row["delta_max_closed_equity_dd_pct"] >= -1.5
-        ),
-        "risk_floor_dd_not_worse_1_5pp": (
-            delta_row["delta_max_open_risk_floor_dd_pct"] >= -1.5
-        ),
-        "rolling36_positive_windows_not_lower": (
-            r36.get("positive_active_windows_pct", 0.0)
-            >= b36.get("positive_active_windows_pct", 0.0)
-        ),
-        "rolling36_median_not_lower": (
-            r36.get("median_compounded_return_pct_active", 0.0)
-            >= b36.get("median_compounded_return_pct_active", 0.0)
-        ),
-    }
-
-    return {
-        "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-        "portfolio_mode": mode,
-        "verdict": (
-            "PORTFOLIO_ADD_PASS"
-            if all(checks.values())
-            else "PORTFOLIO_ADD_REVIEW"
-        ),
-        "checks_passed": sum(bool(x) for x in checks.values()),
-        "checks_total": len(checks),
-        **{f"check_{k}": v for k, v in checks.items()},
-        "delta_total_r": delta_row["delta_total_r"],
-        "delta_cagr_pct": delta_row[
-            "delta_cagr_pct_1pct_h1_1pct_m15"
-        ],
-        "delta_closed_dd_pct": delta_row[
-            "delta_max_closed_equity_dd_pct"
-        ],
-        "delta_risk_floor_dd_pct": delta_row[
-            "delta_max_open_risk_floor_dd_pct"
-        ],
-        "delta_max_open_positions": delta_row[
-            "delta_max_open_positions"
-        ],
-        "candidate_trades_accepted": delta_row[
-            "candidate_trades_accepted"
-        ],
-        "monthly_r_correlation_vs_current23": corr_row[
-            "raw_candidate_vs_current23_monthly_r_corr"
-        ],
-        "rolling36_positive_active_pct": r36.get(
-            "positive_active_windows_pct", 0.0
-        ),
-        "baseline_rolling36_positive_active_pct": b36.get(
-            "positive_active_windows_pct", 0.0
-        ),
-        "rolling36_median_return_pct": r36.get(
-            "median_compounded_return_pct_active", 0.0
-        ),
-        "baseline_rolling36_median_return_pct": b36.get(
-            "median_compounded_return_pct_active", 0.0
-        ),
-        "rolling36_worst_return_pct": r36.get(
-            "worst_compounded_return_pct_active", 0.0
-        ),
-        "baseline_rolling36_worst_return_pct": b36.get(
-            "worst_compounded_return_pct_active", 0.0
-        ),
-    }
-
-
-# ============================================================
-# MAIN 23 -> 24 PORTFOLIO TEST
-# ============================================================
-
-def run_eurjpy_m15_short_24_portfolio_add():
-    try:
-        # Point the inherited current20/current21/current22 rebuild progress
-        # at this task instead of the dormant #23 task status.
-        global EV_STATUS
-        EV_STATUS = Q24_STATUS
-
-        Q24_STATUS.update(
-            state="fetch_eurjpy",
-            message="Fetching EUR/JPY M15 + H1 history",
-            progress=2,
-        )
-
-        eurjpy_m15, _ = fetch_history(
-            Q24_PAIR,
-            "M15",
-            START,
-            NOW,
-        )
-        eurjpy_h1, _ = fetch_history(
-            Q24_PAIR,
-            "H1",
-            PV_H1_WARMUP,
-            NOW,
-        )
-
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
-            )
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
-            )
-
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        Q24_STATUS.update(
-            state="current23",
-            message="Rebuilding exact current 23-strategy live-safe baseline",
-            progress=8,
-        )
-
-        baseline = q24_rebuild_current23(
-            eurjpy_m15,
-            eurjpy_h1,
-            eurjpy_h1_atr,
-        )
-
-        write_csv(
-            Q24_OUT["baseline_parity"],
-            baseline["parity"],
-        )
-
-        baseline_rows = []
-        baseline_lookup = {}
-        rolling_rows_all = []
-        calendar_rows_all = []
-        frequency_rows = []
-
-        for mode, trades, rejected in [
-            (
-                "LIVE_SAFE_H1_FIRST",
-                baseline["live_h1_first"],
-                baseline["rejected_h1_first"],
-            ),
-            (
-                "LIVE_SAFE_M15_FIRST",
-                baseline["live_m15_first"],
-                baseline["rejected_m15_first"],
-            ),
-        ]:
-            row = ev_portfolio_summary_row(
-                "CURRENT_23",
-                mode,
-                trades,
-            )
-            sim = row.pop("_sim")
-            baseline_rows.append(row)
-            baseline_lookup[mode] = {
-                "row": row,
-                "sim": sim,
-                "trades": trades,
-                "rejected": rejected,
-            }
-            frequency_rows.extend(
-                ev_frequency_detail(
-                    "CURRENT_23",
-                    mode,
-                    trades,
-                )
-            )
-            rolling_rows_all.extend(
-                ev_portfolio_rolling_rows(
-                    "CURRENT_23",
-                    mode,
-                    trades,
-                    sim,
-                )
-            )
-            calendar_rows_all.extend(
-                ev_portfolio_calendar_rows(
-                    "CURRENT_23",
-                    mode,
-                    trades,
-                    sim,
-                )
-            )
-
-            if row["trades"] < Q23_PORTFOLIO_REFERENCE["min_trades"]:
-                raise RuntimeError(
-                    "Current23 baseline fell below prior reference: "
-                    f"{row['trades']} < "
-                    f"{Q23_PORTFOLIO_REFERENCE['min_trades']}"
-                )
-
-        write_csv(
-            Q24_OUT["baseline_summary"],
-            baseline_rows,
-        )
-
-        Q24_STATUS.update(
-            state="candidate_parity",
-            message="Reproducing frozen #24 A+B B-priority candidate",
-            progress=62,
-        )
-
-        short_features = q24_features(
-            eurjpy_m15,
-            eurjpy_h1,
-        )
-        candidate_trades = q24_build_candidate_trades(
-            eurjpy_m15,
-            short_features,
-        )
-        candidate_summary = q24_candidate_summary(
-            candidate_trades
-        )
-
-        ref = Q24_REFERENCE
-        if candidate_summary["trades"] < ref["trades"]:
-            parity_status = "FAIL_BELOW_REFERENCE"
-        elif candidate_summary["trades"] > ref["trades"]:
-            parity_status = "PASS_NEWER_TRADES"
-        else:
-            pf_ok = (
-                abs(
-                    candidate_summary["profit_factor"]
-                    - ref["pf"]
-                ) <= 0.0001
-            )
-            r_ok = (
-                abs(
-                    candidate_summary["total_r"]
-                    - ref["r"]
-                ) <= 0.03
-            )
-            parity_status = (
-                "PASS_EQUAL"
-                if pf_ok and r_ok
-                else "FAIL_METRIC_DRIFT"
-            )
-
-        parity_row = {
-            "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-            "reference_trades": ref["trades"],
-            "current_trades": candidate_summary["trades"],
-            "reference_pf": ref["pf"],
-            "current_pf": candidate_summary["profit_factor"],
-            "reference_r": ref["r"],
-            "current_r": candidate_summary["total_r"],
-            "status": parity_status,
-        }
-        write_csv(
-            Q24_OUT["candidate_parity"],
-            [parity_row],
-        )
-
-        if parity_status.startswith("FAIL"):
-            raise RuntimeError(
-                "EUR/JPY M15 SHORT #24 parity failure: "
-                + str(parity_row)
-            )
-
-        write_csv(
-            Q24_OUT["candidate_summary"],
-            [candidate_summary],
-        )
-        write_csv(
-            Q24_OUT["candidate_trades"],
-            [pv_serialise_trade(t) for t in candidate_trades],
-        )
-
-        Q24_STATUS.update(
-            state="portfolio_add",
-            message="Adding frozen #24 to current23 through live non-hedging gate",
-            progress=72,
-        )
-
-        combined_independent = sorted(
-            baseline["independent"] + candidate_trades,
-            key=lambda t: (t["entry_time"], t["strategy_id"]),
-        )
-
-        portfolio_rows = list(baseline_rows)
-        delta_rows = []
-        gate_conflicts = []
-        displacement_rows = []
-        corr_rows = []
-        candidate_lookup = {}
-
-        for idx, (priority, mode) in enumerate([
-            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
-            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
-        ], 1):
-            accepted, rejected = apply_live_safe_nonhedging_gate(
-                combined_independent,
-                priority,
-            )
-
-            accepted_candidate = [
-                t for t in accepted
-                if t["strategy_id"] == Q24_STRATEGY_ID
-            ]
-
-            candidate_lookup[mode] = {
-                "trades": accepted,
-                "rejected": rejected,
-                "accepted_candidate": accepted_candidate,
-            }
-
-            row = ev_portfolio_summary_row(
-                "WITH_EURJPY_M15_SHORT_24",
-                mode,
-                accepted,
-            )
-            sim = row.pop("_sim")
-            row.update({
-                "candidate_trades_before_gate": len(candidate_trades),
-                "candidate_trades_accepted": len(accepted_candidate),
-                "candidate_accepted_r": sum(
-                    float(t["r"]) for t in accepted_candidate
-                ),
-            })
-            portfolio_rows.append(row)
-
-            delta = q24_delta_row(
-                mode,
-                baseline_lookup[mode]["row"],
-                row,
-                candidate_trades,
-                accepted_candidate,
-            )
-            delta_rows.append(delta)
-
-            frequency_rows.extend(
-                ev_frequency_detail(
-                    "WITH_EURJPY_M15_SHORT_24",
-                    mode,
-                    accepted,
-                )
-            )
-            rolling_rows_all.extend(
-                ev_portfolio_rolling_rows(
-                    "WITH_EURJPY_M15_SHORT_24",
-                    mode,
-                    accepted,
-                    sim,
-                )
-            )
-            calendar_rows_all.extend(
-                ev_portfolio_calendar_rows(
-                    "WITH_EURJPY_M15_SHORT_24",
-                    mode,
-                    accepted,
-                    sim,
-                )
-            )
-
-            # Preserve every EUR/JPY-related gate event and flag whether the
-            # rejected entry is newly rejected versus the CURRENT_23 baseline.
-            baseline_rej_ids = {
-                q24_rejection_identity(r)
-                for r in baseline_lookup[mode]["rejected"]
-            }
-
-            for rej in rejected:
-                if (
-                    rej["candidate_pair"] == "EUR_JPY"
-                    or rej["blocker_strategy_id"].startswith("EUR_JPY")
-                ):
-                    r = dict(rej)
-                    r["candidate_test"] = "WITH_EURJPY_M15_SHORT_24"
-                    r["portfolio_mode"] = mode
-                    r["new_vs_current23"] = (
-                        q24_rejection_identity(rej)
-                        not in baseline_rej_ids
-                    )
-                    gate_conflicts.append(r)
-
-            displacement = q24_gate_displacement_rows(
-                mode,
-                baseline_lookup[mode]["trades"],
-                baseline_lookup[mode]["rejected"],
-                accepted,
-                rejected,
-                Q24_STRATEGY_ID,
-            )
-            displacement[0]["candidate_raw_trades"] = len(candidate_trades)
-            displacement_rows.extend(displacement)
-
-            raw_corr = pv_corr(
-                pv_monthly_r(candidate_trades),
-                pv_monthly_r(
-                    baseline_lookup[mode]["trades"]
-                ),
-            )
-            accepted_corr = pv_corr(
-                pv_monthly_r(accepted_candidate),
-                pv_monthly_r(
-                    baseline_lookup[mode]["trades"]
-                ),
-            )
-
-            corr_rows.append({
-                "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-                "portfolio_mode": mode,
-                "raw_candidate_vs_current23_monthly_r_corr": raw_corr,
-                "accepted_candidate_vs_current23_monthly_r_corr": accepted_corr,
-                "raw_candidate_months_with_nonzero_r": len(
-                    pv_monthly_r(candidate_trades)
-                ),
-                "accepted_candidate_months_with_nonzero_r": len(
-                    pv_monthly_r(accepted_candidate)
-                ),
-                "current23_months_with_nonzero_r": len(
-                    pv_monthly_r(
-                        baseline_lookup[mode]["trades"]
-                    )
-                ),
-            })
-
-            Q24_STATUS.update(
-                state="portfolio_add",
-                message=f"{idx}/2 completed: {mode}",
-                progress=72 + idx * 9,
-            )
-
-        roll_summary = ev_portfolio_rolling_summary(
-            rolling_rows_all
-        )
-        cal_summary = ev_portfolio_calendar_summary(
-            calendar_rows_all
-        )
-
-        decisions = []
-        corr_lookup = {
-            r["portfolio_mode"]: r
-            for r in corr_rows
-        }
-        for delta in delta_rows:
-            decisions.append(
-                q24_decision_row(
-                    delta["portfolio_mode"],
-                    delta,
-                    roll_summary,
-                    corr_lookup[delta["portfolio_mode"]],
-                )
-            )
-
-        write_csv(
-            Q24_OUT["portfolio_summary"],
-            portfolio_rows,
-        )
-        write_csv(
-            Q24_OUT["portfolio_delta"],
-            delta_rows,
-        )
-        write_csv(
-            Q24_OUT["portfolio_frequency"],
-            frequency_rows,
-        )
-        write_csv(
-            Q24_OUT["portfolio_rolling"],
-            rolling_rows_all,
-        )
-        write_csv(
-            Q24_OUT["portfolio_rolling_summary"],
-            roll_summary,
-        )
-        write_csv(
-            Q24_OUT["portfolio_calendar"],
-            calendar_rows_all,
-        )
-        write_csv(
-            Q24_OUT["portfolio_calendar_summary"],
-            cal_summary,
-        )
-        write_csv(
-            Q24_OUT["gate_conflicts"],
-            gate_conflicts,
-        )
-        write_csv(
-            Q24_OUT["gate_displacement_summary"],
-            displacement_rows,
-        )
-        write_csv(
-            Q24_OUT["monthly_correlation"],
-            corr_rows,
-        )
-        write_csv(
-            Q24_OUT["decision_matrix"],
-            decisions,
-        )
-
-        write_csv(Q24_OUT["notes"], [
-            {
-                "item": "scope",
-                "value": "Frozen 23->24 portfolio-add test only. No optimisation and no alternate #24 parameter search.",
-            },
-            {
-                "item": "current23",
-                "value": "Exact current22 rebuild plus locked EUR/JPY M15 LONG #23 RR4.25, then the existing live-safe non-hedging gate.",
-            },
-            {
-                "item": "candidate_A",
-                "value": "Rally rejection SELL: sweep previous40 high; close below previous10 high; body>=0.75 ATR14; prior4h M15 momentum>=+1.25 ATR14; close location<=0.30; include NY16-19; RR4.75.",
-            },
-            {
-                "item": "candidate_B",
-                "value": "High-sweep displacement SELL: sweep previous60 high; close below previous candle low; body>=1.00 ATR14; upper wick/body>=0.35; prior4h M15 momentum>=+1.00 ATR14; previous strictly completed H1 close<H1 EMA100; RR3.00.",
-            },
-            {
-                "item": "two_trigger_priority",
-                "value": "B priority only when both triggers fire on the same signal candle. One-position p0 across A+B with half-open [signal_index,exit_index) overlap rejection; exact exit-candle signal eligible.",
-            },
-            {
-                "item": "historical_execution",
-                "value": "Reference entry=signal close; adverse short fill=close-1 pip; stop=signal high+10 ticks; target from reference-close risk; next-bar exit testing.",
-            },
-            {
-                "item": "live_gate",
-                "value": "Same-pair same-direction overlaps allowed. Opposite-direction same-pair entries blocked while opposite trade remains open. Both H1_FIRST and M15_FIRST are reported.",
-            },
-            {
-                "item": "gate_displacement",
-                "value": "Displacement summary explicitly reports accepted #24 R, existing CURRENT_23 trades displaced, and any existing trades recovered through gate cascades.",
-            },
-            {
-                "item": "portfolio_metrics",
-                "value": "1% H1 + 1% M15 per accepted trade, compounded from realised equity; reports total R, CAGR, closed DD, conservative open-risk-floor DD, concurrency, calendar and rolling 12/24/36M performance.",
-            },
-            {
-                "item": "prior_current23_reference",
-                "value": "Prior validated #23 portfolio snapshot: 2515 trades, about +1563.69R, 98.11% historical CAGR, closed DD -16.40%, conservative DD -17.25%, max positions 6. Used as a minimum/diagnostic reference, not a hard exact-match if new trades have appeared.",
-            },
-            {
-                "item": "selection_rule",
-                "value": "Accept #24 only for marginal portfolio value after the real non-hedging gate. Standalone PF/R is not sufficient.",
-            },
-        ])
-
-        Q24_STATUS.update(
-            state="packaging",
-            message="Packaging EUR/JPY M15 SHORT #24 23->24 portfolio results",
-            progress=97,
-        )
-
-        with zipfile.ZipFile(
-            Q24_BUNDLE,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as z:
-            for path in Q24_OUT.values():
-                if os.path.exists(path):
-                    z.write(
-                        path,
-                        arcname=os.path.basename(path),
-                    )
-
-        Q24_STATUS.update(
-            state="complete",
-            message="EUR/JPY M15 SHORT #24 23->24 portfolio-add test complete",
-            progress=100,
-            results=Q24_BUNDLE,
-            current23_h1_first_trades=len(
-                baseline["live_h1_first"]
-            ),
-            current23_m15_first_trades=len(
-                baseline["live_m15_first"]
-            ),
-            candidate_raw_trades=len(candidate_trades),
-            candidate_h1_first_accepted=len(
-                candidate_lookup[
-                    "LIVE_SAFE_H1_FIRST"
-                ]["accepted_candidate"]
-            ),
-            candidate_m15_first_accepted=len(
-                candidate_lookup[
-                    "LIVE_SAFE_M15_FIRST"
-                ]["accepted_candidate"]
-            ),
-        )
-
-    except Exception as e:
-        Q24_STATUS.update(
-            state="error",
-            message=str(e),
-            progress=Q24_STATUS.get("progress", 0),
-        )
-        print(
-            "EURJPY M15 SHORT #24 PORTFOLIO ADD ERROR:",
-            repr(e),
-            flush=True,
-        )
-
-
-# ============================================================
-# #24 ROUTES
-# ============================================================
-
-@app.route("/eurjpy-m15-short-24-portfolio/status")
-def eurjpy_m15_short_24_portfolio_status():
-    return jsonify(Q24_STATUS)
-
-
-@app.route("/eurjpy-m15-short-24-portfolio/results")
-def eurjpy_m15_short_24_portfolio_results():
-    if not os.path.exists(Q24_BUNDLE):
-        return jsonify({
-            "status": "not_ready",
-            "state": Q24_STATUS.get("state"),
-            "message": Q24_STATUS.get("message"),
-        }), 404
-
-    return send_file(
-        os.path.abspath(Q24_BUNDLE),
-        as_attachment=True,
-        download_name=Q24_BUNDLE,
-    )
-
-
-@app.route("/eurjpy-m15-short-24-portfolio/info")
-def eurjpy_m15_short_24_portfolio_info():
-    return jsonify({
-        "service": "EUR/JPY M15 SHORT #24 frozen 23->24 portfolio-add test",
-        "status": Q24_STATUS.get("state"),
-        "read_only": True,
-        "orders_supported": False,
-        "current_portfolio": 23,
-        "candidate_portfolio": 24,
-        "candidate": {
-            "architecture": "A+B two-trigger, B priority on same candle",
-            "A": {
-                "family": "RALLY_REJECTION",
-                "rr": Q24_A_RR,
-                "ny_hours_included": "16-19",
-            },
-            "B": {
-                "family": "HIGH_SWEEP_DISPLACEMENT",
-                "rr": Q24_B_RR,
-                "h1_context": "previous strictly completed close < EMA100",
-            },
-            "stop_buffer_ticks": Q24_STOP_TICKS,
-            "historical_adverse_cost_pips": Q24_COST_PIPS,
-        },
-        "portfolio_risk": "1% H1 + 1% M15 per accepted trade",
-        "non_hedging": "opposite same-pair entries blocked; same-direction overlaps allowed",
-        "routes": [
-            "/eurjpy-m15-short-24-portfolio/status",
-            "/eurjpy-m15-short-24-portfolio/results",
-            "/eurjpy-m15-short-24-portfolio/info",
-        ],
-    })
-
-
-
-# ============================================================
-# EUR/JPY M15 SHORT #24 — CANDIDATE-ONLY RISK SWEEP
-# ============================================================
-#
-# PURPOSE
-# -------
-# Keep the CURRENT 23 live strategies at exactly 1.00% risk each.
-# Keep #24's frozen signals, A+B/B-priority logic and non-hedging acceptance
-# EXACTLY unchanged.
-#
-# Vary ONLY the cash risk used by accepted EUR_JPY_M15_SHORT #24 trades:
-#     0.50%
-#     0.75%
-#     1.00%
-#
-# Baseline:
-#     CURRENT_23 at 1.00% per trade, with no #24.
-#
-# This isolates the sizing decision after the strategy and portfolio gate have
-# already been frozen.
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-Q24R_STATUS = {
-    "state": "not_started",
-    "message": "EUR/JPY M15 SHORT #24 candidate-only risk sweep not started",
-    "progress": 0,
-    "orders_supported": False,
-    "trading_enabled": False,
-}
-
-Q24R_CANDIDATE_RISKS = [0.0050, 0.0075, 0.0100]
-Q24R_EXISTING_RISK = 0.0100
-Q24R_BUNDLE = "EURJPY_M15_SHORT_24_CANDIDATE_ONLY_RISK_SWEEP_RESULTS.zip"
-
-Q24R_OUT = {
-    "baseline_parity": "eurjpy_m15_short_24_risk_sweep_current23_parity.csv",
-    "candidate_parity": "eurjpy_m15_short_24_risk_sweep_candidate_parity.csv",
-    "gate_summary": "eurjpy_m15_short_24_risk_sweep_gate_summary.csv",
-    "summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_summary.csv",
-    "delta": "eurjpy_m15_short_24_candidate_only_risk_sweep_delta.csv",
-    "rolling": "eurjpy_m15_short_24_candidate_only_risk_sweep_rolling.csv",
-    "rolling_summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_rolling_summary.csv",
-    "calendar": "eurjpy_m15_short_24_candidate_only_risk_sweep_calendar.csv",
-    "calendar_summary": "eurjpy_m15_short_24_candidate_only_risk_sweep_calendar_summary.csv",
-    "periods": "eurjpy_m15_short_24_candidate_only_risk_sweep_periods.csv",
-    "trade_equity": "eurjpy_m15_short_24_candidate_only_risk_sweep_trade_equity.csv",
-    "decision": "eurjpy_m15_short_24_candidate_only_risk_sweep_decision_matrix.csv",
-    "notes": "eurjpy_m15_short_24_candidate_only_risk_sweep_notes.csv",
-}
-
-
-# ============================================================
-# STRATEGY-SPECIFIC RISK EQUITY SIMULATOR
-# ============================================================
-
-def q24r_trade_risk_fraction(trade, candidate_risk_fraction):
-    if trade["strategy_id"] == Q24_STRATEGY_ID:
-        return float(candidate_risk_fraction)
-    return Q24R_EXISTING_RISK
-
-
-def q24r_simulate_equity(
-    trades,
-    candidate_risk_fraction,
-    starting_balance=100.0,
-):
+def imp_build_variants(f, quality):
     """
-    Event-driven compounding where every existing strategy stays at 1.00%,
-    while only EUR_JPY_M15_SHORT uses candidate_risk_fraction.
-
-    Each trade fixes its cash risk at entry:
-        risk_cash = then-realised equity * that strategy's risk fraction.
-
-    Existing open positions retain their original cash risk until exit.
-
-    Event order:
-        EXIT before ENTRY at identical timestamps.
-
-    Conservative open-risk floor:
-        realised equity - sum(open trade cash risks).
-
-    As with the prior portfolio runner, this uses realised equity because the
-    historical ledgers do not reconstruct exact intra-trade NAV/MTM paths.
+    Predeclared research matrix. No row is generated conditionally from results.
     """
-    if not trades:
-        return {
-            "summary": {
-                "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-                "candidate_risk_pct": candidate_risk_fraction * 100.0,
-                "starting_balance": starting_balance,
-                "ending_balance": starting_balance,
-                "ending_multiple": 1.0,
-                "total_return_pct": 0.0,
-                "cagr_pct": 0.0,
-                "max_closed_equity_dd_pct": 0.0,
-                "max_open_risk_floor_dd_pct": 0.0,
-                "max_open_positions": 0,
-                "max_open_risk_pct_of_realised_equity": 0.0,
-                "trades": 0,
-                "candidate_trades": 0,
-            },
-            "curve": [],
-            "trade_rows": [],
-            "exit_times": [],
-            "exit_balances": [],
-        }
+    n = f["n"]
+    all_true = imp_bool_array(n, True)
 
-    ordered = sorted(
-        trades,
-        key=lambda t: (t["entry_time"], t["strategy_id"]),
-    )
-
-    events = []
-    for n, t in enumerate(ordered):
-        key = (
-            t["strategy_id"],
-            t["entry_time"],
-            t["exit_event_time"],
-            n,
+    variants = [
+        imp_variant(
+            "BASELINE_AB_B_PRIORITY",
+            "BASELINE",
+            "Frozen A+B/B-priority control",
+            all_true,
         )
-        events.append(
-            (t["entry_time"], 1, t["strategy_id"], key, t)
-        )
-        events.append(
-            (t["exit_event_time"], 0, t["strategy_id"], key, t)
-        )
-
-    # Exit before entry at the exact same timestamp.
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
-
-    balance = float(starting_balance)
-    peak = balance
-    max_closed_dd = 0.0
-    max_floor_dd = 0.0
-
-    open_trades = {}
-    open_risk_cash = 0.0
-    max_open_positions = 0
-    max_open_risk_pct = 0.0
-
-    curve = []
-    trade_rows = []
-    exit_times = []
-    exit_balances = []
-
-    for ts, kind, sid, key, t in events:
-        if kind == 0:  # EXIT
-            rec = open_trades.pop(key, None)
-            if rec is None:
-                raise RuntimeError(
-                    f"Risk sweep exit without entry: {sid} {iso(ts)}"
-                )
-
-            before = balance
-            pnl_cash = rec["risk_cash"] * float(t["r"])
-            balance += pnl_cash
-
-            open_risk_cash -= rec["risk_cash"]
-            if abs(open_risk_cash) < 1e-12:
-                open_risk_cash = 0.0
-
-            peak = max(peak, balance)
-
-            closed_dd = (
-                ((balance / peak) - 1.0) * 100.0
-                if peak > 0 else -100.0
-            )
-            max_closed_dd = min(max_closed_dd, closed_dd)
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = (
-                ((floor_equity / peak) - 1.0) * 100.0
-                if peak > 0 else -100.0
-            )
-            max_floor_dd = min(max_floor_dd, floor_dd)
-
-            open_risk_pct = (
-                (open_risk_cash / balance) * 100.0
-                if balance > 0 else 999.0
-            )
-
-            exit_times.append(ts)
-            exit_balances.append(balance)
-
-            trade_rows.append({
-                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
-                "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-                "candidate_risk_pct": candidate_risk_fraction * 100.0,
-                "pair": t["pair"],
-                "strategy_id": t["strategy_id"],
-                "timeframe": t["timeframe"],
-                "side": t["side"],
-                "entry_time": iso(t["entry_time"]),
-                "exit_time": iso(t["exit_event_time"]),
-                "r": t["r"],
-                "result": t["result"],
-                "risk_fraction": rec["risk_fraction"],
-                "risk_pct": rec["risk_fraction"] * 100.0,
-                "entry_realised_equity": rec["entry_equity"],
-                "risk_cash": rec["risk_cash"],
-                "pnl_cash": pnl_cash,
-                "balance_before_exit": before,
-                "balance_after_exit": balance,
-                "closed_equity_drawdown_pct": closed_dd,
-                "open_positions_after_exit": len(open_trades),
-                "open_risk_cash_after_exit": open_risk_cash,
-                "open_risk_pct_of_realised_equity_after_exit": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-            curve.append({
-                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
-                "time_utc": iso(ts),
-                "event": "EXIT",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": closed_dd,
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_pct_of_realised_equity": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-        else:  # ENTRY
-            if balance <= 0:
-                raise RuntimeError(
-                    f"Risk sweep equity depleted before {sid} at {iso(ts)}"
-                )
-
-            risk_fraction = q24r_trade_risk_fraction(
-                t,
-                candidate_risk_fraction,
-            )
-            risk_cash = balance * risk_fraction
-
-            open_trades[key] = {
-                "risk_cash": risk_cash,
-                "risk_fraction": risk_fraction,
-                "entry_equity": balance,
-            }
-            open_risk_cash += risk_cash
-
-            max_open_positions = max(
-                max_open_positions,
-                len(open_trades),
-            )
-
-            open_risk_pct = (
-                (open_risk_cash / balance) * 100.0
-                if balance > 0 else 999.0
-            )
-            max_open_risk_pct = max(
-                max_open_risk_pct,
-                open_risk_pct,
-            )
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = (
-                ((floor_equity / peak) - 1.0) * 100.0
-                if peak > 0 else -100.0
-            )
-            max_floor_dd = min(max_floor_dd, floor_dd)
-
-            curve.append({
-                "variant": f"Q24_{candidate_risk_fraction*100:.2f}PCT",
-                "time_utc": iso(ts),
-                "event": "ENTRY",
-                "strategy_id": sid,
-                "balance": balance,
-                "peak_balance": peak,
-                "closed_equity_drawdown_pct": (
-                    ((balance / peak) - 1.0) * 100.0
-                    if peak > 0 else -100.0
-                ),
-                "open_positions": len(open_trades),
-                "open_risk_cash": open_risk_cash,
-                "open_risk_pct_of_realised_equity": open_risk_pct,
-                "open_risk_floor_equity": floor_equity,
-                "open_risk_floor_drawdown_pct": floor_dd,
-            })
-
-    if open_trades:
-        raise RuntimeError(
-            f"Risk sweep finished with {len(open_trades)} open trades"
-        )
-
-    first_entry = min(t["entry_time"] for t in ordered)
-    last_exit = max(t["exit_event_time"] for t in ordered)
-    years = max(
-        (last_exit - first_entry).total_seconds()
-        / (365.2425 * 86400.0),
-        1e-9,
-    )
-
-    total_return_pct = (
-        ((balance / starting_balance) - 1.0) * 100.0
-    )
-    cagr_pct = (
-        (
-            (balance / starting_balance) ** (1.0 / years)
-            - 1.0
-        ) * 100.0
-        if balance > 0 and starting_balance > 0
-        else -100.0
-    )
-
-    return {
-        "summary": {
-            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-            "candidate_risk_pct": candidate_risk_fraction * 100.0,
-            "starting_balance": starting_balance,
-            "ending_balance": balance,
-            "ending_multiple": balance / starting_balance,
-            "total_return_pct": total_return_pct,
-            "cagr_pct": cagr_pct,
-            "simulation_start_utc": iso(first_entry),
-            "simulation_end_utc": iso(last_exit),
-            "simulation_years": years,
-            "trades": len(ordered),
-            "candidate_trades": sum(
-                t["strategy_id"] == Q24_STRATEGY_ID
-                for t in ordered
-            ),
-            "max_closed_equity_dd_pct": max_closed_dd,
-            "max_open_risk_floor_dd_pct": max_floor_dd,
-            "max_open_positions": max_open_positions,
-            "max_open_risk_pct_of_realised_equity": max_open_risk_pct,
-        },
-        "curve": curve,
-        "trade_rows": trade_rows,
-        "exit_times": exit_times,
-        "exit_balances": exit_balances,
-    }
-
-
-def q24r_balance_before(sim, ts):
-    j = bisect.bisect_left(
-        sim["exit_times"],
-        ts,
-    ) - 1
-    return (
-        sim["exit_balances"][j]
-        if j >= 0
-        else STARTING_BALANCE
-    )
-
-
-def q24r_period_row(
-    variant,
-    mode,
-    candidate_risk_fraction,
-    sim,
-    trades,
-    label,
-    start,
-    end,
-):
-    sb = q24r_balance_before(sim, start)
-    eb = q24r_balance_before(sim, end)
-
-    exits = [
-        t for t in trades
-        if start <= t["exit_event_time"] < end
     ]
 
-    ret = (
-        ((eb / sb) - 1.0) * 100.0
-        if sb > 0 else 0.0
-    )
-
-    years = max(
-        (end - start).total_seconds()
-        / (365.2425 * 86400.0),
-        1e-9,
-    )
-    annualized = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0
-        else 0.0
-    )
-
-    return {
-        "variant": variant,
-        "portfolio_mode": mode,
-        "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-        "candidate_risk_pct": candidate_risk_fraction * 100.0,
-        "period": label,
-        "start_utc": iso(start),
-        "end_utc": iso(end),
-        "start_balance": sb,
-        "end_balance": eb,
-        "compounded_return_pct": ret,
-        "annualized_return_pct": annualized,
-        "realized_exits": len(exits),
-    }
-
-
-def q24r_rolling_rows(
-    variant,
-    mode,
-    candidate_risk_fraction,
-    sim,
-    trades,
-):
-    first_entry = min(
-        t["entry_time"]
-        for t in trades
-    )
-    start_month = month_floor(first_entry)
-    end_complete = month_floor(NOW)
-
-    rows = []
-    for months in (12, 24, 36):
-        cur = start_month
-        while add_months(cur, months) <= end_complete:
-            end = add_months(cur, months)
-            row = q24r_period_row(
-                variant,
-                mode,
-                candidate_risk_fraction,
-                sim,
-                trades,
-                f"ROLLING_{months}M",
-                cur,
-                end,
-            )
-            row["months"] = months
-            rows.append(row)
-            cur = add_months(cur, 1)
-    return rows
-
-
-def q24r_rolling_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["variant"],
-                r["portfolio_mode"],
-                r["candidate_risk_pct"],
-                r["months"],
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, mode, risk_pct, months = key
-        active = [
-            x for x in group
-            if x["realized_exits"] > 0
-        ]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        values = [
-            x["compounded_return_pct"]
-            for x in active
-        ]
-
-        out.append({
-            "variant": variant,
-            "portfolio_mode": mode,
-            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-            "candidate_risk_pct": risk_pct,
-            "months": months,
-            "total_windows": len(group),
-            "active_windows": len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_compounded_return_pct_active": safe_median(values),
-            "worst_compounded_return_pct_active": min(values) if values else 0.0,
-            "best_compounded_return_pct_active": max(values) if values else 0.0,
-        })
-
-    return out
-
-
-def q24r_calendar_rows(
-    variant,
-    mode,
-    candidate_risk_fraction,
-    sim,
-    trades,
-):
-    first_year = min(
-        t["entry_time"]
-        for t in trades
-    ).year
-
-    rows = []
-    for year in range(first_year, NOW.year + 1):
-        start = datetime(
-            year, 1, 1,
-            tzinfo=timezone.utc,
-        )
-        nominal_end = datetime(
-            year + 1, 1, 1,
-            tzinfo=timezone.utc,
-        )
-        end = min(nominal_end, NOW)
-
-        if end <= start:
-            continue
-
-        row = q24r_period_row(
-            variant,
-            mode,
-            candidate_risk_fraction,
-            sim,
-            trades,
-            str(year),
-            start,
-            end,
-        )
-        row["year"] = year
-        row["complete_year"] = nominal_end <= NOW
-        rows.append(row)
-
-    return rows
-
-
-def q24r_calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["variant"],
-                r["portfolio_mode"],
-                r["candidate_risk_pct"],
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, mode, risk_pct = key
-        complete = [
-            x for x in group
-            if x["complete_year"]
-        ]
-        active = [
-            x for x in complete
-            if x["realized_exits"] > 0
-        ]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        worst = (
-            min(
-                active,
-                key=lambda x: x["compounded_return_pct"],
-            )
-            if active else None
-        )
-        best = (
-            max(
-                active,
-                key=lambda x: x["compounded_return_pct"],
-            )
-            if active else None
-        )
-
-        out.append({
-            "variant": variant,
-            "portfolio_mode": mode,
-            "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-            "candidate_risk_pct": risk_pct,
-            "completed_years": len(complete),
-            "active_completed_years": len(active),
-            "positive_active_completed_years": len(positive),
-            "positive_active_completed_years_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_return_pct_active": safe_median(
-                x["compounded_return_pct"]
-                for x in active
-            ),
-            "worst_year": (
-                worst["year"]
-                if worst else ""
-            ),
-            "worst_year_return_pct": (
-                worst["compounded_return_pct"]
-                if worst else 0.0
-            ),
-            "best_year": (
-                best["year"]
-                if best else ""
-            ),
-            "best_year_return_pct": (
-                best["compounded_return_pct"]
-                if best else 0.0
-            ),
-        })
-
-    return out
-
-
-def q24r_summary_row(
-    variant,
-    mode,
-    candidate_risk_fraction,
-    trades,
-    sim,
-):
-    s = calc_stats(trades)
-    es = sim["summary"]
-
-    return {
-        "variant": variant,
-        "portfolio_mode": mode,
-        "existing_strategy_risk_pct": Q24R_EXISTING_RISK * 100.0,
-        "candidate_risk_pct": candidate_risk_fraction * 100.0,
-        "trades": s["trades"],
-        "portfolio_total_r_unscaled": s["total_r"],
-        "profit_factor_unscaled": s["profit_factor"],
-        "ending_balance_from_100": es["ending_balance"],
-        "ending_multiple": es["ending_multiple"],
-        "total_return_pct": es["total_return_pct"],
-        "historical_cagr_pct": es["cagr_pct"],
-        "max_closed_equity_dd_pct": es["max_closed_equity_dd_pct"],
-        "max_open_risk_floor_dd_pct": es["max_open_risk_floor_dd_pct"],
-        "max_open_positions": es["max_open_positions"],
-        "max_open_risk_pct_of_realised_equity": es[
-            "max_open_risk_pct_of_realised_equity"
-        ],
-        "accepted_candidate_trades": es["candidate_trades"],
-    }
-
-
-def q24r_baseline_summary_row(
-    mode,
-    trades,
-):
-    # Current23: all accepted existing trades at 1%.
-    sim = q24r_simulate_equity(
-        trades,
-        candidate_risk_fraction=Q24R_EXISTING_RISK,
-        starting_balance=STARTING_BALANCE,
-    )
-    # There are no Q24 trades in this set, so the candidate override is inert.
-    row = q24r_summary_row(
-        "CURRENT_23_BASELINE",
-        mode,
-        0.0,
-        trades,
-        sim,
-    )
-    row["candidate_risk_pct"] = 0.0
-    row["accepted_candidate_trades"] = 0
-    return row, sim
-
-
-def q24r_delta_row(
-    baseline,
-    candidate,
-):
-    cagr_gain = (
-        candidate["historical_cagr_pct"]
-        - baseline["historical_cagr_pct"]
-    )
-    closed_dd_change = (
-        candidate["max_closed_equity_dd_pct"]
-        - baseline["max_closed_equity_dd_pct"]
-    )
-    floor_dd_change = (
-        candidate["max_open_risk_floor_dd_pct"]
-        - baseline["max_open_risk_floor_dd_pct"]
-    )
-
-    # Negative DD delta means drawdown became deeper. Express the extra
-    # magnitude as positive percentage points for easier comparison.
-    closed_dd_cost_pp = max(0.0, -closed_dd_change)
-    floor_dd_cost_pp = max(0.0, -floor_dd_change)
-
-    return {
-        "variant": candidate["variant"],
-        "portfolio_mode": candidate["portfolio_mode"],
-        "candidate_risk_pct": candidate["candidate_risk_pct"],
-        "baseline_cagr_pct": baseline["historical_cagr_pct"],
-        "candidate_cagr_pct": candidate["historical_cagr_pct"],
-        "cagr_gain_pp": cagr_gain,
-        "baseline_closed_dd_pct": baseline["max_closed_equity_dd_pct"],
-        "candidate_closed_dd_pct": candidate["max_closed_equity_dd_pct"],
-        "closed_dd_change_pp": closed_dd_change,
-        "extra_closed_dd_magnitude_pp": closed_dd_cost_pp,
-        "baseline_floor_dd_pct": baseline["max_open_risk_floor_dd_pct"],
-        "candidate_floor_dd_pct": candidate["max_open_risk_floor_dd_pct"],
-        "floor_dd_change_pp": floor_dd_change,
-        "extra_floor_dd_magnitude_pp": floor_dd_cost_pp,
-        "cagr_gain_per_extra_closed_dd_pp": (
-            cagr_gain / closed_dd_cost_pp
-            if closed_dd_cost_pp > 0
-            else 999.0 if cagr_gain > 0 else 0.0
-        ),
-        "cagr_gain_per_extra_floor_dd_pp": (
-            cagr_gain / floor_dd_cost_pp
-            if floor_dd_cost_pp > 0
-            else 999.0 if cagr_gain > 0 else 0.0
-        ),
-        "baseline_ending_multiple": baseline["ending_multiple"],
-        "candidate_ending_multiple": candidate["ending_multiple"],
-        "max_open_positions": candidate["max_open_positions"],
-        "max_open_risk_pct_of_realised_equity": candidate[
-            "max_open_risk_pct_of_realised_equity"
-        ],
-    }
-
-
-def q24r_decision_rows(
-    deltas,
-    rolling_summary,
-):
-    roll_lookup = {
+    # ------------------------------------------------------------
+    # 1) COARSE HIGHER-TIMEFRAME REGIME FILTERS ON A ONLY
+    # ------------------------------------------------------------
+    regime_defs = [
         (
-            r["variant"],
-            r["portfolio_mode"],
-            int(r["months"]),
-        ): r
-        for r in rolling_summary
-    }
-
-    out = []
-    for d in deltas:
-        mode = d["portfolio_mode"]
-        variant = d["variant"]
-
-        r12 = roll_lookup.get((variant, mode, 12), {})
-        r24 = roll_lookup.get((variant, mode, 24), {})
-        r36 = roll_lookup.get((variant, mode, 36), {})
-
-        # This is deliberately a comparison aid, not an auto-deployment rule.
-        checks = {
-            "adds_cagr": d["cagr_gain_pp"] > 0,
-            "closed_dd_under_20pct": (
-                d["candidate_closed_dd_pct"] > -20.0
-            ),
-            "floor_dd_under_20pct": (
-                d["candidate_floor_dd_pct"] > -20.0
-            ),
-            "all_12m_positive": (
-                r12.get("positive_active_windows_pct", 0.0)
-                == 100.0
-            ),
-            "all_24m_positive": (
-                r24.get("positive_active_windows_pct", 0.0)
-                == 100.0
-            ),
-            "all_36m_positive": (
-                r36.get("positive_active_windows_pct", 0.0)
-                == 100.0
-            ),
-        }
-
-        out.append({
-            "variant": variant,
-            "portfolio_mode": mode,
-            "candidate_risk_pct": d["candidate_risk_pct"],
-            "comparison_status": (
-                "MEETS_COMPARISON_TARGETS"
-                if all(checks.values())
-                else "REVIEW_TRADEOFF"
-            ),
-            "checks_passed": sum(
-                bool(x)
-                for x in checks.values()
-            ),
-            "checks_total": len(checks),
-            **{
-                f"check_{k}": v
-                for k, v in checks.items()
-            },
-            "cagr_gain_pp": d["cagr_gain_pp"],
-            "candidate_closed_dd_pct": d[
-                "candidate_closed_dd_pct"
-            ],
-            "candidate_floor_dd_pct": d[
-                "candidate_floor_dd_pct"
-            ],
-            "cagr_gain_per_extra_closed_dd_pp": d[
-                "cagr_gain_per_extra_closed_dd_pp"
-            ],
-            "cagr_gain_per_extra_floor_dd_pp": d[
-                "cagr_gain_per_extra_floor_dd_pp"
-            ],
-            "rolling12_positive_pct": r12.get(
-                "positive_active_windows_pct", 0.0
-            ),
-            "rolling12_median_return_pct": r12.get(
-                "median_compounded_return_pct_active", 0.0
-            ),
-            "rolling12_worst_return_pct": r12.get(
-                "worst_compounded_return_pct_active", 0.0
-            ),
-            "rolling24_positive_pct": r24.get(
-                "positive_active_windows_pct", 0.0
-            ),
-            "rolling24_median_return_pct": r24.get(
-                "median_compounded_return_pct_active", 0.0
-            ),
-            "rolling24_worst_return_pct": r24.get(
-                "worst_compounded_return_pct_active", 0.0
-            ),
-            "rolling36_positive_pct": r36.get(
-                "positive_active_windows_pct", 0.0
-            ),
-            "rolling36_median_return_pct": r36.get(
-                "median_compounded_return_pct_active", 0.0
-            ),
-            "rolling36_worst_return_pct": r36.get(
-                "worst_compounded_return_pct_active", 0.0
-            ),
-        })
-
-    return out
-
-
-# ============================================================
-# MAIN RISK-SWEEP RUNNER
-# ============================================================
-
-def run_q24_candidate_only_risk_sweep():
-    try:
-        # Reuse inherited status hooks inside exact current23 rebuild.
-        global EV_STATUS
-        EV_STATUS = Q24R_STATUS
-
-        Q24R_STATUS.update(
-            state="fetch",
-            message="Fetching EUR/JPY M15 + H1 history",
-            progress=2,
-        )
-
-        eurjpy_m15, _ = fetch_history(
-            Q24_PAIR,
-            "M15",
-            START,
-            NOW,
-        )
-        eurjpy_h1, _ = fetch_history(
-            Q24_PAIR,
-            "H1",
-            PV_H1_WARMUP,
-            NOW,
-        )
-
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
-            )
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
-            )
-
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        Q24R_STATUS.update(
-            state="baseline",
-            message="Rebuilding exact current 23-strategy baseline",
-            progress=8,
-        )
-
-        baseline = q24_rebuild_current23(
-            eurjpy_m15,
-            eurjpy_h1,
-            eurjpy_h1_atr,
-        )
-        write_csv(
-            Q24R_OUT["baseline_parity"],
-            baseline["parity"],
-        )
-
-        Q24R_STATUS.update(
-            state="candidate",
-            message="Reproducing frozen #24 A+B/B-priority candidate",
-            progress=62,
-        )
-
-        short_features = q24_features(
-            eurjpy_m15,
-            eurjpy_h1,
-        )
-        candidate_trades = q24_build_candidate_trades(
-            eurjpy_m15,
-            short_features,
-        )
-        candidate_summary = q24_candidate_summary(
-            candidate_trades
-        )
-
-        ref = Q24_REFERENCE
-        if candidate_summary["trades"] < ref["trades"]:
-            parity_status = "FAIL_BELOW_REFERENCE"
-        elif candidate_summary["trades"] > ref["trades"]:
-            parity_status = "PASS_NEWER_TRADES"
-        else:
-            pf_ok = (
-                abs(
-                    candidate_summary["profit_factor"]
-                    - ref["pf"]
-                ) <= 0.0001
-            )
-            r_ok = (
-                abs(
-                    candidate_summary["total_r"]
-                    - ref["r"]
-                ) <= 0.03
-            )
-            parity_status = (
-                "PASS_EQUAL"
-                if pf_ok and r_ok
-                else "FAIL_METRIC_DRIFT"
-            )
-
-        candidate_parity = [{
-            "candidate_id": "EURJPY_M15_SHORT_24_AB_B_PRIORITY",
-            "reference_trades": ref["trades"],
-            "current_trades": candidate_summary["trades"],
-            "reference_pf": ref["pf"],
-            "current_pf": candidate_summary["profit_factor"],
-            "reference_r": ref["r"],
-            "current_r": candidate_summary["total_r"],
-            "status": parity_status,
-        }]
-        write_csv(
-            Q24R_OUT["candidate_parity"],
-            candidate_parity,
-        )
-
-        if parity_status.startswith("FAIL"):
-            raise RuntimeError(
-                "Frozen #24 parity failure: "
-                + json.dumps(candidate_parity)
-            )
-
-        Q24R_STATUS.update(
-            state="gate",
-            message="Applying exact live non-hedging gate once",
-            progress=70,
-        )
-
-        combined_independent = sorted(
-            baseline["independent"] + candidate_trades,
-            key=lambda t: (
-                t["entry_time"],
-                t["strategy_id"],
-            ),
-        )
-
-        all_summary = []
-        all_delta = []
-        all_rolling = []
-        all_calendar = []
-        all_periods = []
-        all_trade_equity = []
-        gate_rows = []
-
-        for mode_index, (priority, mode) in enumerate([
-            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
-            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
-        ]):
-            if mode == "LIVE_SAFE_H1_FIRST":
-                baseline_trades = baseline["live_h1_first"]
-            else:
-                baseline_trades = baseline["live_m15_first"]
-
-            accepted, rejected = apply_live_safe_nonhedging_gate(
-                combined_independent,
-                priority,
-            )
-
-            accepted_candidate = [
-                t for t in accepted
-                if t["strategy_id"] == Q24_STRATEGY_ID
-            ]
-            rejected_candidate = [
-                r for r in rejected
-                if r["candidate_strategy_id"] == Q24_STRATEGY_ID
-            ]
-
-            gate_rows.append({
-                "portfolio_mode": mode,
-                "candidate_raw_trades": len(candidate_trades),
-                "candidate_accepted_trades": len(accepted_candidate),
-                "candidate_rejected_trades": len(rejected_candidate),
-                "accepted_candidate_r_unscaled": sum(
-                    float(t["r"])
-                    for t in accepted_candidate
-                ),
-                "baseline_current23_trades": len(baseline_trades),
-                "with24_accepted_portfolio_trades": len(accepted),
-                "gate_is_identical_for_all_risk_levels": True,
-            })
-
-            # Untouched current23 baseline at 1% for every trade.
-            baseline_row, baseline_sim = q24r_baseline_summary_row(
-                mode,
-                baseline_trades,
-            )
-            all_summary.append(baseline_row)
-
-            baseline_rolling = q24r_rolling_rows(
-                "CURRENT_23_BASELINE",
-                mode,
-                0.0,
-                baseline_sim,
-                baseline_trades,
-            )
-            all_rolling.extend(baseline_rolling)
-
-            baseline_calendar = q24r_calendar_rows(
-                "CURRENT_23_BASELINE",
-                mode,
-                0.0,
-                baseline_sim,
-                baseline_trades,
-            )
-            all_calendar.extend(baseline_calendar)
-
-            period_defs = [
-                (
-                    "FULL",
-                    min(t["entry_time"] for t in baseline_trades),
-                    NOW,
-                ),
-                (
-                    "LAST_5Y",
-                    NOW - timedelta(days=365.2425 * 5),
-                    NOW,
-                ),
-                (
-                    "LAST_3Y",
-                    NOW - timedelta(days=365.2425 * 3),
-                    NOW,
-                ),
-                (
-                    "LAST_2Y",
-                    NOW - timedelta(days=365.2425 * 2),
-                    NOW,
-                ),
-                (
-                    "LAST_1Y",
-                    NOW - timedelta(days=365.2425),
-                    NOW,
-                ),
-            ]
-
-            for label, a, b in period_defs:
-                row = q24r_period_row(
-                    "CURRENT_23_BASELINE",
-                    mode,
-                    0.0,
-                    baseline_sim,
-                    baseline_trades,
-                    label,
-                    a,
-                    b,
-                )
-                row["candidate_risk_pct"] = 0.0
-                all_periods.append(row)
-
-            # Candidate-only risk sweep.
-            for ri, candidate_risk in enumerate(
-                Q24R_CANDIDATE_RISKS,
-                1,
-            ):
-                variant = (
-                    f"WITH_Q24_AT_{candidate_risk*100:.2f}PCT"
-                )
-
-                sim = q24r_simulate_equity(
-                    accepted,
-                    candidate_risk,
-                    STARTING_BALANCE,
-                )
-                row = q24r_summary_row(
-                    variant,
-                    mode,
-                    candidate_risk,
-                    accepted,
-                    sim,
-                )
-                all_summary.append(row)
-
-                delta = q24r_delta_row(
-                    baseline_row,
-                    row,
-                )
-                all_delta.append(delta)
-
-                all_rolling.extend(
-                    q24r_rolling_rows(
-                        variant,
-                        mode,
-                        candidate_risk,
-                        sim,
-                        accepted,
-                    )
-                )
-                all_calendar.extend(
-                    q24r_calendar_rows(
-                        variant,
-                        mode,
-                        candidate_risk,
-                        sim,
-                        accepted,
-                    )
-                )
-
-                for label, a, b in period_defs:
-                    all_periods.append(
-                        q24r_period_row(
-                            variant,
-                            mode,
-                            candidate_risk,
-                            sim,
-                            accepted,
-                            label,
-                            a,
-                            b,
-                        )
-                    )
-
-                for tr in sim["trade_rows"]:
-                    # Keep all trades so cash-risk interactions can be audited.
-                    all_trade_equity.append(tr)
-
-                Q24R_STATUS.update(
-                    state="risk_sweep",
-                    message=(
-                        f"{mode}: candidate risk "
-                        f"{candidate_risk*100:.2f}% complete"
-                    ),
-                    progress=72 + mode_index * 11 + ri * 3,
-                )
-
-        rolling_summary = q24r_rolling_summary(
-            all_rolling
-        )
-        calendar_summary = q24r_calendar_summary(
-            all_calendar
-        )
-        decisions = q24r_decision_rows(
-            all_delta,
-            rolling_summary,
-        )
-
-        write_csv(Q24R_OUT["gate_summary"], gate_rows)
-        write_csv(Q24R_OUT["summary"], all_summary)
-        write_csv(Q24R_OUT["delta"], all_delta)
-        write_csv(Q24R_OUT["rolling"], all_rolling)
-        write_csv(
-            Q24R_OUT["rolling_summary"],
-            rolling_summary,
-        )
-        write_csv(Q24R_OUT["calendar"], all_calendar)
-        write_csv(
-            Q24R_OUT["calendar_summary"],
-            calendar_summary,
-        )
-        write_csv(Q24R_OUT["periods"], all_periods)
-        write_csv(
-            Q24R_OUT["trade_equity"],
-            all_trade_equity,
-        )
-        write_csv(Q24R_OUT["decision"], decisions)
-
-        write_csv(Q24R_OUT["notes"], [
-            {
-                "item": "purpose",
-                "value": "Candidate-only sizing sweep after #24 signal rules and portfolio gate were frozen.",
-            },
-            {
-                "item": "existing23_risk",
-                "value": "Every current live strategy remains at 1.00% of then-realised equity per accepted trade in this historical simulation.",
-            },
-            {
-                "item": "candidate_risk_levels",
-                "value": "Only EUR_JPY_M15_SHORT #24 varies: 0.50%, 0.75%, 1.00%.",
-            },
-            {
-                "item": "signals_and_gate",
-                "value": "Signals, A+B B-priority logic, trade outcomes and non-hedging acceptance are identical across all three risk levels. Risk size does not change which historical trades are accepted.",
-            },
-            {
-                "item": "baseline",
-                "value": "CURRENT_23_BASELINE contains no #24 trades and uses 1.00% risk on all accepted existing strategies.",
-            },
-            {
-                "item": "equity_model",
-                "value": "Event-driven realised-equity compounding. Each position fixes risk cash at entry. Exit before entry at equal timestamps. Conservative floor assumes every open trade simultaneously loses its fixed cash risk.",
-            },
-            {
-                "item": "nav_limit",
-                "value": "The live OANDA executor sizes from current NAV including unrealised P/L; exact historical intra-trade NAV cannot be reconstructed from outcome-only ledgers, so realised equity is used consistently with the prior portfolio tests.",
-            },
-            {
-                "item": "decision",
-                "value": "The decision matrix is a comparison aid only. Choose the risk level from marginal CAGR versus additional drawdown and rolling consistency; it does not alter or deploy the live executor.",
-            },
-        ])
-
-        Q24R_STATUS.update(
-            state="packaging",
-            message="Packaging #24 candidate-only risk sweep",
-            progress=97,
-        )
-
-        with zipfile.ZipFile(
-            Q24R_BUNDLE,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as z:
-            for path in Q24R_OUT.values():
-                if os.path.exists(path):
-                    z.write(
-                        path,
-                        arcname=os.path.basename(path),
-                    )
-
-        Q24R_STATUS.update(
-            state="complete",
-            message="EUR/JPY M15 SHORT #24 candidate-only risk sweep complete",
-            progress=100,
-            results=Q24R_BUNDLE,
-            candidate_risk_levels_pct=[
-                x * 100.0
-                for x in Q24R_CANDIDATE_RISKS
-            ],
-            existing_strategy_risk_pct=1.0,
-        )
-
-    except Exception as e:
-        Q24R_STATUS.update(
-            state="error",
-            message=str(e),
-        )
-        print(
-            "Q24 CANDIDATE-ONLY RISK SWEEP ERROR:",
-            repr(e),
-            flush=True,
-        )
-
-
-# ============================================================
-# ROUTES
-# ============================================================
-
-@app.route("/eurjpy-m15-short-24-risk-sweep/status")
-def eurjpy_m15_short_24_risk_sweep_status():
-    return jsonify(Q24R_STATUS)
-
-
-@app.route("/eurjpy-m15-short-24-risk-sweep/results")
-def eurjpy_m15_short_24_risk_sweep_results():
-    if not os.path.exists(Q24R_BUNDLE):
-        return jsonify({
-            "status": "not_ready",
-            "state": Q24R_STATUS.get("state"),
-            "message": Q24R_STATUS.get("message"),
-        }), 404
-
-    return send_file(
-        os.path.abspath(Q24R_BUNDLE),
-        as_attachment=True,
-        download_name=Q24R_BUNDLE,
-    )
-
-
-@app.route("/eurjpy-m15-short-24-risk-sweep/info")
-def eurjpy_m15_short_24_risk_sweep_info():
-    return jsonify({
-        "service": "EUR/JPY M15 SHORT #24 candidate-only risk sweep",
-        "read_only": True,
-        "orders_supported": False,
-        "existing_23_risk_pct": 1.0,
-        "candidate_24_risk_levels_pct": [0.50, 0.75, 1.00],
-        "candidate_strategy_id": Q24_STRATEGY_ID,
-        "signals": "frozen A+B/B-priority #24",
-        "gate": "same frozen live non-hedging gate at all risk levels",
-        "routes": [
-            "/eurjpy-m15-short-24-risk-sweep/status",
-            "/eurjpy-m15-short-24-risk-sweep/results",
-            "/eurjpy-m15-short-24-risk-sweep/info",
-        ],
-    })
-
-
-
-# ============================================================
-# FULL 24-STRATEGY ONE-AT-A-TIME RISK SENSITIVITY MATRIX
-# ============================================================
-#
-# CONTROL PORTFOLIO
-# -----------------
-#   Existing strategies #1-#23: 1.00% of then-realised equity per trade.
-#   Frozen EUR_JPY_M15_SHORT #24: 0.75% per trade.
-#
-# ONE-AT-A-TIME SWEEP
-# -------------------
-# For EACH of the 24 accepted strategy IDs, vary only that strategy through:
-#       0.50%, 0.75%, 1.00%, 1.25%
-# while every other strategy remains at its CONTROL weight.
-#
-# Signals, trade outcomes, A+B/B-priority logic, and the exact live-safe
-# non-hedging gate are frozen. Risk size never changes which trades are
-# historically accepted.
-#
-# This is deliberately NOT a global optimiser. It is a marginal sensitivity
-# map designed to show which strategies are expensive/cheap in drawdown terms
-# at different risk sizes before any combined weighted portfolio is proposed.
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-W24_STATUS = {
-    'state': 'not_started',
-    'message': '24-strategy one-at-a-time risk sensitivity not started',
-    'progress': 0,
-    'orders_supported': False,
-    'trading_enabled': False,
-}
-
-W24_SWEEP_RISKS = [0.0050, 0.0075, 0.0100, 0.0125]
-W24_DEFAULT_RISK = 0.0100
-W24_Q24_CONTROL_RISK = 0.0075
-W24_CONTROL_VARIANT = 'CONTROL_24_Q24_075'
-W24_BUNDLE = 'FULL_24_STRATEGY_ONE_AT_A_TIME_RISK_SENSITIVITY_RESULTS.zip'
-
-W24_CONTROL_REFERENCE = {
-    'trades': 2666,
-    'candidate24_accepted': 152,
-    'historical_cagr_pct': 102.599436,
-    'closed_dd_pct': -18.144324,
-    'floor_dd_pct': -18.971149,
-    'max_open_positions': 6,
-}
-
-W24_OUT = {
-    'portfolio_parity': 'full24_risk_sensitivity_portfolio_parity.csv',
-    'strategy_manifest': 'full24_risk_sensitivity_strategy_manifest.csv',
-    'control_summary': 'full24_risk_sensitivity_control_summary.csv',
-    'sensitivity_matrix': 'full24_risk_sensitivity_matrix.csv',
-    'marginal_steps': 'full24_risk_sensitivity_marginal_steps.csv',
-    'strategy_diagnostics': 'full24_risk_sensitivity_strategy_diagnostics.csv',
-    'strategy_frontier': 'full24_risk_sensitivity_strategy_frontier.csv',
-    'rolling': 'full24_risk_sensitivity_rolling.csv',
-    'rolling_summary': 'full24_risk_sensitivity_rolling_summary.csv',
-    'calendar': 'full24_risk_sensitivity_calendar.csv',
-    'calendar_summary': 'full24_risk_sensitivity_calendar_summary.csv',
-    'periods': 'full24_risk_sensitivity_periods.csv',
-    'drawdown_events': 'full24_risk_sensitivity_drawdown_events.csv',
-    'gate_summary': 'full24_risk_sensitivity_gate_summary.csv',
-    'notes': 'full24_risk_sensitivity_notes.csv',
-}
-
-
-def w24_control_risk_map(strategy_ids):
-    risks = {sid: W24_DEFAULT_RISK for sid in strategy_ids}
-    if Q24_STRATEGY_ID not in risks:
-        raise RuntimeError(f'Missing frozen #24 strategy id: {Q24_STRATEGY_ID}')
-    risks[Q24_STRATEGY_ID] = W24_Q24_CONTROL_RISK
-    return risks
-
-
-def w24_simulate_equity(trades, risk_by_strategy, starting_balance=100.0):
-    '''
-    Generic event-driven weighted portfolio simulator.
-
-    Risk cash is fixed on ENTRY from then-realised equity:
-        risk_cash = realised_equity * risk_by_strategy[strategy_id]
-
-    EXIT events are processed before ENTRY events at identical timestamps.
-
-    Conservative open-risk floor:
-        realised equity - sum(fixed cash risk of all open positions)
-
-    This exactly generalises the candidate-only risk simulator used in the
-    completed #24 0.50/0.75/1.00 study.
-    '''
-    if not trades:
-        raise RuntimeError('Weighted simulation received no trades')
-
-    ordered = sorted(
-        trades,
-        key=lambda t: (t['entry_time'], t['strategy_id']),
-    )
-
-    strategy_ids = sorted({t['strategy_id'] for t in ordered})
-    missing = [sid for sid in strategy_ids if sid not in risk_by_strategy]
-    if missing:
-        raise RuntimeError(f'Risk map missing strategies: {missing}')
-
-    events = []
-    for n, t in enumerate(ordered):
-        key = (t['strategy_id'], t['entry_time'], t['exit_event_time'], n)
-        events.append((t['entry_time'], 1, t['strategy_id'], key, t))
-        events.append((t['exit_event_time'], 0, t['strategy_id'], key, t))
-
-    # EXIT before ENTRY at exact same timestamp.
-    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
-
-    balance = float(starting_balance)
-    peak = balance
-    max_closed_dd = 0.0
-    max_floor_dd = 0.0
-    max_open_positions = 0
-    max_open_risk_pct = 0.0
-
-    open_trades = {}
-    open_risk_cash = 0.0
-
-    exit_times = []
-    exit_balances = []
-
-    closed_dd_event = None
-    floor_dd_event = None
-    max_open_risk_event = None
-
-    for ts, kind, sid, key, t in events:
-        if kind == 0:  # EXIT
-            rec = open_trades.pop(key, None)
-            if rec is None:
-                raise RuntimeError(
-                    f'Weighted exit without entry: {sid} {iso(ts)}'
-                )
-
-            balance += rec['risk_cash'] * float(t['r'])
-            open_risk_cash -= rec['risk_cash']
-            if abs(open_risk_cash) < 1e-12:
-                open_risk_cash = 0.0
-
-            peak = max(peak, balance)
-            closed_dd = ((balance / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-
-            if closed_dd < max_closed_dd:
-                max_closed_dd = closed_dd
-                closed_dd_event = {
-                    'event_time_utc': iso(ts),
-                    'strategy_id': sid,
-                    'event': 'EXIT',
-                    'balance': balance,
-                    'peak_balance': peak,
-                    'drawdown_pct': closed_dd,
-                    'open_positions': len(open_trades),
-                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
-                }
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            if floor_dd < max_floor_dd:
-                max_floor_dd = floor_dd
-                floor_dd_event = {
-                    'event_time_utc': iso(ts),
-                    'strategy_id': sid,
-                    'event': 'EXIT',
-                    'balance': balance,
-                    'peak_balance': peak,
-                    'floor_equity': floor_equity,
-                    'open_risk_cash': open_risk_cash,
-                    'drawdown_pct': floor_dd,
-                    'open_positions': len(open_trades),
-                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
-                }
-
-            open_risk_pct = (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
-            if open_risk_pct > max_open_risk_pct:
-                max_open_risk_pct = open_risk_pct
-                max_open_risk_event = {
-                    'event_time_utc': iso(ts),
-                    'strategy_id': sid,
-                    'event': 'EXIT',
-                    'balance': balance,
-                    'open_risk_cash': open_risk_cash,
-                    'open_risk_pct': open_risk_pct,
-                    'open_positions': len(open_trades),
-                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
-                }
-
-            exit_times.append(ts)
-            exit_balances.append(balance)
-
-        else:  # ENTRY
-            if balance <= 0:
-                raise RuntimeError(
-                    f'Weighted equity depleted before {sid} at {iso(ts)}'
-                )
-
-            risk_fraction = float(risk_by_strategy[sid])
-            if risk_fraction <= 0 or risk_fraction > 0.05:
-                raise RuntimeError(
-                    f'Invalid risk fraction for {sid}: {risk_fraction}'
-                )
-
-            risk_cash = balance * risk_fraction
-            rec = {
-                'risk_cash': risk_cash,
-                'risk_fraction': risk_fraction,
-                'entry_equity': balance,
-                'strategy_id': sid,
-            }
-            open_trades[key] = rec
-            open_risk_cash += risk_cash
-
-            max_open_positions = max(max_open_positions, len(open_trades))
-            open_risk_pct = (open_risk_cash / balance) * 100.0 if balance > 0 else 999.0
-            if open_risk_pct > max_open_risk_pct:
-                max_open_risk_pct = open_risk_pct
-                max_open_risk_event = {
-                    'event_time_utc': iso(ts),
-                    'strategy_id': sid,
-                    'event': 'ENTRY',
-                    'balance': balance,
-                    'open_risk_cash': open_risk_cash,
-                    'open_risk_pct': open_risk_pct,
-                    'open_positions': len(open_trades),
-                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
-                }
-
-            floor_equity = balance - open_risk_cash
-            floor_dd = ((floor_equity / peak) - 1.0) * 100.0 if peak > 0 else -100.0
-            if floor_dd < max_floor_dd:
-                max_floor_dd = floor_dd
-                floor_dd_event = {
-                    'event_time_utc': iso(ts),
-                    'strategy_id': sid,
-                    'event': 'ENTRY',
-                    'balance': balance,
-                    'peak_balance': peak,
-                    'floor_equity': floor_equity,
-                    'open_risk_cash': open_risk_cash,
-                    'drawdown_pct': floor_dd,
-                    'open_positions': len(open_trades),
-                    'open_strategies': '|'.join(sorted(x['strategy_id'] for x in open_trades.values())),
-                }
-
-    if open_trades:
-        raise RuntimeError(f'Weighted simulation ended with {len(open_trades)} open trades')
-
-    first_entry = min(t['entry_time'] for t in ordered)
-    last_exit = max(t['exit_event_time'] for t in ordered)
-    years = max(
-        (last_exit - first_entry).total_seconds() / (365.2425 * 86400.0),
-        1e-9,
-    )
-
-    total_return_pct = ((balance / starting_balance) - 1.0) * 100.0
-    cagr_pct = (
-        ((balance / starting_balance) ** (1.0 / years) - 1.0) * 100.0
-        if balance > 0 and starting_balance > 0
-        else -100.0
-    )
-
-    weighted_r_equivalent = sum(
-        float(t['r']) * (float(risk_by_strategy[t['strategy_id']]) / 0.01)
-        for t in ordered
-    )
-
-    return {
-        'summary': {
-            'starting_balance': starting_balance,
-            'ending_balance': balance,
-            'ending_multiple': balance / starting_balance,
-            'total_return_pct': total_return_pct,
-            'historical_cagr_pct': cagr_pct,
-            'simulation_start_utc': iso(first_entry),
-            'simulation_end_utc': iso(last_exit),
-            'simulation_years': years,
-            'trades': len(ordered),
-            'weighted_r_equivalent_at_1pct': weighted_r_equivalent,
-            'max_closed_equity_dd_pct': max_closed_dd,
-            'max_open_risk_floor_dd_pct': max_floor_dd,
-            'max_open_positions': max_open_positions,
-            'max_open_risk_pct_of_realised_equity': max_open_risk_pct,
-        },
-        'exit_times': exit_times,
-        'exit_balances': exit_balances,
-        'closed_dd_event': closed_dd_event,
-        'floor_dd_event': floor_dd_event,
-        'max_open_risk_event': max_open_risk_event,
-    }
-
-
-def w24_balance_before(sim, ts):
-    j = bisect.bisect_left(sim['exit_times'], ts) - 1
-    return sim['exit_balances'][j] if j >= 0 else STARTING_BALANCE
-
-
-def w24_period_row(variant, mode, tested_sid, tested_risk, control_risk, sim, trades, label, start, end):
-    sb = w24_balance_before(sim, start)
-    eb = w24_balance_before(sim, end)
-    exits = [t for t in trades if start <= t['exit_event_time'] < end]
-    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
-    years = max((end - start).total_seconds() / (365.2425 * 86400.0), 1e-9)
-    annualized = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0 else 0.0
-    )
-    return {
-        'variant': variant,
-        'portfolio_mode': mode,
-        'tested_strategy_id': tested_sid,
-        'tested_risk_pct': tested_risk * 100.0,
-        'control_risk_pct': control_risk * 100.0,
-        'period': label,
-        'start_utc': iso(start),
-        'end_utc': iso(end),
-        'start_balance': sb,
-        'end_balance': eb,
-        'compounded_return_pct': ret,
-        'annualized_return_pct': annualized,
-        'realized_exits': len(exits),
-    }
-
-
-def w24_rolling_rows(variant, mode, tested_sid, tested_risk, control_risk, sim, trades):
-    first_entry = min(t['entry_time'] for t in trades)
-    start_month = month_floor(first_entry)
-    end_complete = month_floor(NOW)
-    rows = []
-
-    for months in (12, 24, 36):
-        cur = start_month
-        while add_months(cur, months) <= end_complete:
-            end = add_months(cur, months)
-            row = w24_period_row(
-                variant, mode, tested_sid, tested_risk, control_risk,
-                sim, trades, f'ROLLING_{months}M', cur, end,
-            )
-            row['months'] = months
-            rows.append(row)
-            cur = add_months(cur, 1)
-
-    return rows
-
-
-def w24_rolling_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[(
-            r['variant'],
-            r['portfolio_mode'],
-            r['tested_strategy_id'],
-            r['tested_risk_pct'],
-            r['control_risk_pct'],
-            r['months'],
-        )].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, mode, sid, risk_pct, control_pct, months = key
-        active = [x for x in group if x['realized_exits'] > 0]
-        positive = [x for x in active if x['compounded_return_pct'] > 0]
-        vals = [x['compounded_return_pct'] for x in active]
-        out.append({
-            'variant': variant,
-            'portfolio_mode': mode,
-            'tested_strategy_id': sid,
-            'tested_risk_pct': risk_pct,
-            'control_risk_pct': control_pct,
-            'months': months,
-            'total_windows': len(group),
-            'active_windows': len(active),
-            'positive_active_windows': len(positive),
-            'positive_active_windows_pct': pct(len(positive), len(active)),
-            'median_compounded_return_pct_active': safe_median(vals),
-            'worst_compounded_return_pct_active': min(vals) if vals else 0.0,
-            'best_compounded_return_pct_active': max(vals) if vals else 0.0,
-        })
-    return out
-
-
-def w24_calendar_rows(variant, mode, tested_sid, tested_risk, control_risk, sim, trades):
-    first_year = min(t['entry_time'] for t in trades).year
-    rows = []
-    for year in range(first_year, NOW.year + 1):
-        start = datetime(year, 1, 1, tzinfo=timezone.utc)
-        nominal_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-        end = min(nominal_end, NOW)
-        if end <= start:
-            continue
-        row = w24_period_row(
-            variant, mode, tested_sid, tested_risk, control_risk,
-            sim, trades, str(year), start, end,
-        )
-        row['year'] = year
-        row['complete_year'] = nominal_end <= NOW
-        rows.append(row)
-    return rows
-
-
-def w24_calendar_summary(rows):
-    grouped = defaultdict(list)
-    for r in rows:
-        grouped[(
-            r['variant'],
-            r['portfolio_mode'],
-            r['tested_strategy_id'],
-            r['tested_risk_pct'],
-            r['control_risk_pct'],
-        )].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, mode, sid, risk_pct, control_pct = key
-        complete = [x for x in group if x['complete_year']]
-        active = [x for x in complete if x['realized_exits'] > 0]
-        positive = [x for x in active if x['compounded_return_pct'] > 0]
-        worst = min(active, key=lambda x: x['compounded_return_pct']) if active else None
-        best = max(active, key=lambda x: x['compounded_return_pct']) if active else None
-        out.append({
-            'variant': variant,
-            'portfolio_mode': mode,
-            'tested_strategy_id': sid,
-            'tested_risk_pct': risk_pct,
-            'control_risk_pct': control_pct,
-            'completed_years': len(complete),
-            'active_completed_years': len(active),
-            'positive_active_completed_years': len(positive),
-            'positive_active_completed_years_pct': pct(len(positive), len(active)),
-            'median_return_pct_active': safe_median(x['compounded_return_pct'] for x in active),
-            'worst_year': worst['year'] if worst else '',
-            'worst_year_return_pct': worst['compounded_return_pct'] if worst else 0.0,
-            'best_year': best['year'] if best else '',
-            'best_year_return_pct': best['compounded_return_pct'] if best else 0.0,
-        })
-    return out
-
-
-def w24_summary_row(variant, mode, tested_sid, tested_risk, control_risk, trade_count, sim, control_summary):
-    s = sim['summary']
-    row = {
-        'variant': variant,
-        'portfolio_mode': mode,
-        'tested_strategy_id': tested_sid,
-        'tested_strategy_trade_count': trade_count,
-        'tested_risk_pct': tested_risk * 100.0,
-        'control_risk_pct': control_risk * 100.0,
-        'is_control_weight': abs(tested_risk - control_risk) < 1e-12,
-        **s,
-    }
-
-    if control_summary is not None:
-        row.update({
-            'delta_cagr_pp_vs_control': s['historical_cagr_pct'] - control_summary['historical_cagr_pct'],
-            'delta_closed_dd_pp_vs_control': s['max_closed_equity_dd_pct'] - control_summary['max_closed_equity_dd_pct'],
-            'delta_floor_dd_pp_vs_control': s['max_open_risk_floor_dd_pct'] - control_summary['max_open_risk_floor_dd_pct'],
-            'delta_max_open_risk_pp_vs_control': s['max_open_risk_pct_of_realised_equity'] - control_summary['max_open_risk_pct_of_realised_equity'],
-            'delta_ending_multiple_vs_control': s['ending_multiple'] - control_summary['ending_multiple'],
-        })
-    else:
-        row.update({
-            'delta_cagr_pp_vs_control': 0.0,
-            'delta_closed_dd_pp_vs_control': 0.0,
-            'delta_floor_dd_pp_vs_control': 0.0,
-            'delta_max_open_risk_pp_vs_control': 0.0,
-            'delta_ending_multiple_vs_control': 0.0,
-        })
-
-    return row
-
-
-def w24_drawdown_event_rows(variant, mode, sid, tested_risk, control_risk, sim):
-    rows = []
-    for event_type, event in [
-        ('MAX_CLOSED_DD', sim.get('closed_dd_event')),
-        ('MAX_OPEN_RISK_FLOOR_DD', sim.get('floor_dd_event')),
-        ('MAX_OPEN_RISK_PCT', sim.get('max_open_risk_event')),
-    ]:
-        if event is None:
-            continue
-        rows.append({
-            'variant': variant,
-            'portfolio_mode': mode,
-            'tested_strategy_id': sid,
-            'tested_risk_pct': tested_risk * 100.0,
-            'control_risk_pct': control_risk * 100.0,
-            'event_type': event_type,
-            **event,
-        })
-    return rows
-
-
-def w24_strategy_diagnostics(trades, mode, control_risks):
-    by_sid = defaultdict(list)
-    for t in trades:
-        by_sid[t['strategy_id']].append(t)
-
-    all_monthly = pv_monthly_r(trades)
-    rows = []
-    for sid in sorted(by_sid):
-        g = by_sid[sid]
-        rest = [t for t in trades if t['strategy_id'] != sid]
-        s = calc_stats(g)
-        monthly = pv_monthly_r(g)
-        rest_monthly = pv_monthly_r(rest)
-        sample = g[0]
-        rows.append({
-            'portfolio_mode': mode,
-            'strategy_id': sid,
-            'pair': sample['pair'],
-            'timeframe': sample['timeframe'],
-            'side': sample['side'],
-            'control_risk_pct': control_risks[sid] * 100.0,
-            'accepted_trades': len(g),
-            'total_r_unscaled': s['total_r'],
-            'profit_factor_unscaled': s['profit_factor'],
-            'expectancy_r_unscaled': s['expectancy_r'],
-            'max_drawdown_r_unscaled': s['max_drawdown_r'],
-            'monthly_r_corr_vs_rest': pv_corr(monthly, rest_monthly),
-            'monthly_r_corr_vs_full_portfolio': pv_corr(monthly, all_monthly),
-            'months_with_nonzero_r': len(monthly),
-        })
-    return rows
-
-
-def w24_marginal_step_rows(matrix_rows):
-    grouped = defaultdict(list)
-    for r in matrix_rows:
-        grouped[(r['portfolio_mode'], r['tested_strategy_id'])].append(r)
-
-    out = []
-    for (mode, sid), group in grouped.items():
-        group = sorted(group, key=lambda x: x['tested_risk_pct'])
-        for lo, hi in zip(group[:-1], group[1:]):
-            cagr_gain = hi['historical_cagr_pct'] - lo['historical_cagr_pct']
-            closed_change = hi['max_closed_equity_dd_pct'] - lo['max_closed_equity_dd_pct']
-            floor_change = hi['max_open_risk_floor_dd_pct'] - lo['max_open_risk_floor_dd_pct']
-            extra_closed_dd = max(0.0, -closed_change)
-            extra_floor_dd = max(0.0, -floor_change)
-            out.append({
-                'portfolio_mode': mode,
-                'strategy_id': sid,
-                'from_risk_pct': lo['tested_risk_pct'],
-                'to_risk_pct': hi['tested_risk_pct'],
-                'cagr_gain_pp': cagr_gain,
-                'closed_dd_change_pp': closed_change,
-                'extra_closed_dd_magnitude_pp': extra_closed_dd,
-                'floor_dd_change_pp': floor_change,
-                'extra_floor_dd_magnitude_pp': extra_floor_dd,
-                'cagr_gain_per_extra_closed_dd_pp': (
-                    cagr_gain / extra_closed_dd if extra_closed_dd > 0 else (999.0 if cagr_gain > 0 else 0.0)
-                ),
-                'cagr_gain_per_extra_floor_dd_pp': (
-                    cagr_gain / extra_floor_dd if extra_floor_dd > 0 else (999.0 if cagr_gain > 0 else 0.0)
-                ),
-                'ending_multiple_change': hi['ending_multiple'] - lo['ending_multiple'],
-                'max_open_risk_change_pp': hi['max_open_risk_pct_of_realised_equity'] - lo['max_open_risk_pct_of_realised_equity'],
-            })
-    return out
-
-
-def w24_strategy_frontier_rows(matrix_rows, rolling_summary, diagnostics_rows):
-    roll = {
-        (r['portfolio_mode'], r['tested_strategy_id'], r['tested_risk_pct'], int(r['months'])): r
-        for r in rolling_summary
-    }
-    diag = {
-        (r['portfolio_mode'], r['strategy_id']): r
-        for r in diagnostics_rows
-    }
-
-    grouped = defaultdict(list)
-    for r in matrix_rows:
-        grouped[(r['portfolio_mode'], r['tested_strategy_id'])].append(r)
-
-    out = []
-    for (mode, sid), group in grouped.items():
-        group = sorted(group, key=lambda x: x['tested_risk_pct'])
-        control = next((x for x in group if x['is_control_weight']), None)
-        if control is None:
-            raise RuntimeError(f'No control-weight row for {mode} {sid}')
-
-        lower = [x for x in group if x['tested_risk_pct'] < control['tested_risk_pct']]
-        higher = [x for x in group if x['tested_risk_pct'] > control['tested_risk_pct']]
-        one_step_down = max(lower, key=lambda x: x['tested_risk_pct']) if lower else None
-        one_step_up = min(higher, key=lambda x: x['tested_risk_pct']) if higher else None
-
-        def valid_under_floor(x, limit_abs):
-            r12 = roll.get((mode, sid, x['tested_risk_pct'], 12), {})
-            r24 = roll.get((mode, sid, x['tested_risk_pct'], 24), {})
-            r36 = roll.get((mode, sid, x['tested_risk_pct'], 36), {})
-            return (
-                x['max_open_risk_floor_dd_pct'] >= -float(limit_abs)
-                and r24.get('positive_active_windows_pct', 0.0) == 100.0
-                and r36.get('positive_active_windows_pct', 0.0) == 100.0
-                and r12.get('positive_active_windows_pct', 0.0) == 100.0
-            )
-
-        under19 = [x for x in group if valid_under_floor(x, 19.0)]
-        under20 = [x for x in group if valid_under_floor(x, 20.0)]
-        best19 = max(under19, key=lambda x: x['historical_cagr_pct']) if under19 else None
-        best20 = max(under20, key=lambda x: x['historical_cagr_pct']) if under20 else None
-
-        d = diag[(mode, sid)]
-
-        row = {
-            'portfolio_mode': mode,
-            'strategy_id': sid,
-            'pair': d['pair'],
-            'timeframe': d['timeframe'],
-            'side': d['side'],
-            'accepted_trades': d['accepted_trades'],
-            'profit_factor_unscaled': d['profit_factor_unscaled'],
-            'total_r_unscaled': d['total_r_unscaled'],
-            'monthly_r_corr_vs_rest': d['monthly_r_corr_vs_rest'],
-            'control_risk_pct': control['tested_risk_pct'],
-            'control_cagr_pct': control['historical_cagr_pct'],
-            'control_floor_dd_pct': control['max_open_risk_floor_dd_pct'],
-            'control_closed_dd_pct': control['max_closed_equity_dd_pct'],
-            'one_step_down_risk_pct': one_step_down['tested_risk_pct'] if one_step_down else '',
-            'one_step_down_cagr_loss_pp': (
-                control['historical_cagr_pct'] - one_step_down['historical_cagr_pct']
-                if one_step_down else ''
-            ),
-            'one_step_down_floor_dd_saved_pp': (
-                one_step_down['max_open_risk_floor_dd_pct'] - control['max_open_risk_floor_dd_pct']
-                if one_step_down else ''
-            ),
-            'one_step_down_closed_dd_saved_pp': (
-                one_step_down['max_closed_equity_dd_pct'] - control['max_closed_equity_dd_pct']
-                if one_step_down else ''
-            ),
-            'one_step_up_risk_pct': one_step_up['tested_risk_pct'] if one_step_up else '',
-            'one_step_up_cagr_gain_pp': (
-                one_step_up['historical_cagr_pct'] - control['historical_cagr_pct']
-                if one_step_up else ''
-            ),
-            'one_step_up_extra_floor_dd_pp': (
-                max(0.0, control['max_open_risk_floor_dd_pct'] - one_step_up['max_open_risk_floor_dd_pct'])
-                if one_step_up else ''
-            ),
-            'one_step_up_extra_closed_dd_pp': (
-                max(0.0, control['max_closed_equity_dd_pct'] - one_step_up['max_closed_equity_dd_pct'])
-                if one_step_up else ''
-            ),
-            'best_tested_risk_under_19pct_floor_dd': best19['tested_risk_pct'] if best19 else '',
-            'best_tested_cagr_under_19pct_floor_dd': best19['historical_cagr_pct'] if best19 else '',
-            'best_tested_risk_under_20pct_floor_dd': best20['tested_risk_pct'] if best20 else '',
-            'best_tested_cagr_under_20pct_floor_dd': best20['historical_cagr_pct'] if best20 else '',
-        }
-
-        if one_step_down:
-            loss = control['historical_cagr_pct'] - one_step_down['historical_cagr_pct']
-            save = one_step_down['max_open_risk_floor_dd_pct'] - control['max_open_risk_floor_dd_pct']
-            row['floor_dd_saved_per_cagr_pp_lost_on_downshift'] = (
-                save / loss if loss > 0 else (999.0 if save > 0 else 0.0)
-            )
-        else:
-            row['floor_dd_saved_per_cagr_pp_lost_on_downshift'] = ''
-
-        if one_step_up:
-            gain = one_step_up['historical_cagr_pct'] - control['historical_cagr_pct']
-            cost = max(0.0, control['max_open_risk_floor_dd_pct'] - one_step_up['max_open_risk_floor_dd_pct'])
-            row['cagr_pp_gained_per_extra_floor_dd_pp_on_upshift'] = (
-                gain / cost if cost > 0 else (999.0 if gain > 0 else 0.0)
-            )
-        else:
-            row['cagr_pp_gained_per_extra_floor_dd_pp_on_upshift'] = ''
-
-        out.append(row)
-
-    return out
-
-
-def run_full24_one_at_a_time_risk_sensitivity():
-    try:
-        global EV_STATUS
-        EV_STATUS = W24_STATUS
-
-        W24_STATUS.update(
-            state='fetch',
-            message='Fetching EUR/JPY M15 + H1 history',
-            progress=2,
-        )
-
-        eurjpy_m15, _ = fetch_history(Q24_PAIR, 'M15', START, NOW)
-        eurjpy_h1, _ = fetch_history(Q24_PAIR, 'H1', PV_H1_WARMUP, NOW)
-
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(f'Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}')
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(f'Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}')
-
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        W24_STATUS.update(
-            state='rebuild',
-            message='Rebuilding exact current23 plus frozen #24 trade set',
-            progress=8,
-        )
-
-        current23 = q24_rebuild_current23(
-            eurjpy_m15,
-            eurjpy_h1,
-            eurjpy_h1_atr,
-        )
-
-        short_features = q24_features(eurjpy_m15, eurjpy_h1)
-        raw_q24 = q24_build_candidate_trades(eurjpy_m15, short_features)
-        q24_summary = q24_candidate_summary(raw_q24)
-
-        # Frozen standalone candidate parity.
-        if q24_summary['trades'] < Q24_REFERENCE['trades']:
-            raise RuntimeError(
-                f'#24 candidate fell below frozen reference: {q24_summary}'
-            )
-        if q24_summary['trades'] == Q24_REFERENCE['trades']:
-            if (
-                abs(q24_summary['profit_factor'] - Q24_REFERENCE['pf']) > 0.0001
-                or abs(q24_summary['total_r'] - Q24_REFERENCE['r']) > 0.03
-            ):
-                raise RuntimeError(
-                    f'#24 candidate metric parity drift: {q24_summary}'
-                )
-
-        combined_independent = sorted(
-            current23['independent'] + raw_q24,
-            key=lambda t: (t['entry_time'], t['strategy_id']),
-        )
-
-        gate_sets = {}
-        gate_rows = []
-        for priority, mode in [
-            ('H1_FIRST', 'LIVE_SAFE_H1_FIRST'),
-            ('M15_FIRST', 'LIVE_SAFE_M15_FIRST'),
-        ]:
-            accepted, rejected = apply_live_safe_nonhedging_gate(
-                combined_independent,
-                priority,
-            )
-            accepted_q24 = [
-                t for t in accepted
-                if t['strategy_id'] == Q24_STRATEGY_ID
-            ]
-            gate_sets[mode] = {
-                'accepted': accepted,
-                'rejected': rejected,
-                'accepted_q24': accepted_q24,
-            }
-            gate_rows.append({
-                'portfolio_mode': mode,
-                'accepted_portfolio_trades': len(accepted),
-                'raw_q24_trades': len(raw_q24),
-                'accepted_q24_trades': len(accepted_q24),
-                'rejected_q24_trades': len(raw_q24) - len(accepted_q24),
-                'unique_strategy_ids': len({t['strategy_id'] for t in accepted}),
-            })
-
-            if len(accepted) < W24_CONTROL_REFERENCE['trades']:
-                raise RuntimeError(
-                    f'Current24 gate fell below reference in {mode}: {len(accepted)}'
-                )
-            if len(accepted_q24) < W24_CONTROL_REFERENCE['candidate24_accepted']:
-                raise RuntimeError(
-                    f'#24 accepted gate trades fell below reference in {mode}: {len(accepted_q24)}'
-                )
-
-        write_csv(W24_OUT['gate_summary'], gate_rows)
-
-        all_matrix = []
-        all_rolling = []
-        all_calendar = []
-        all_periods = []
-        all_drawdowns = []
-        all_diagnostics = []
-        all_manifest = []
-        control_rows = []
-        parity_rows = []
-
-        modes = ['LIVE_SAFE_H1_FIRST', 'LIVE_SAFE_M15_FIRST']
-
-        total_variants = 0
-        for mode in modes:
-            ids = sorted({t['strategy_id'] for t in gate_sets[mode]['accepted']})
-            total_variants += len(ids) * len(W24_SWEEP_RISKS)
-
-        completed_variants = 0
-
-        for mode in modes:
-            trades = gate_sets[mode]['accepted']
-            strategy_ids = sorted({t['strategy_id'] for t in trades})
-
-            if len(strategy_ids) != 24:
-                raise RuntimeError(
-                    f'Expected 24 strategy IDs in {mode}, got {len(strategy_ids)}: {strategy_ids}'
-                )
-
-            control_risks = w24_control_risk_map(strategy_ids)
-            by_sid = defaultdict(list)
-            for t in trades:
-                by_sid[t['strategy_id']].append(t)
-
-            for sid in strategy_ids:
-                g = by_sid[sid]
-                first = g[0]
-                all_manifest.append({
-                    'portfolio_mode': mode,
-                    'strategy_id': sid,
-                    'pair': first['pair'],
-                    'timeframe': first['timeframe'],
-                    'side': first['side'],
-                    'control_risk_pct': control_risks[sid] * 100.0,
-                    'accepted_trades': len(g),
-                })
-
-            all_diagnostics.extend(
-                w24_strategy_diagnostics(trades, mode, control_risks)
-            )
-
-            control_sim = w24_simulate_equity(
-                trades,
-                control_risks,
-                STARTING_BALANCE,
-            )
-            cs = control_sim['summary']
-            control_row = {
-                'variant': W24_CONTROL_VARIANT,
-                'portfolio_mode': mode,
-                'strategies': len(strategy_ids),
-                'trades': len(trades),
-                'q24_control_risk_pct': W24_Q24_CONTROL_RISK * 100.0,
-                'other_strategy_control_risk_pct': W24_DEFAULT_RISK * 100.0,
-                **cs,
-            }
-            control_rows.append(control_row)
-
-            parity_status = 'PASS'
-            parity_notes = []
-            if len(trades) == W24_CONTROL_REFERENCE['trades']:
-                if abs(cs['historical_cagr_pct'] - W24_CONTROL_REFERENCE['historical_cagr_pct']) > 0.002:
-                    parity_status = 'FAIL'
-                    parity_notes.append('CAGR drift')
-                if abs(cs['max_closed_equity_dd_pct'] - W24_CONTROL_REFERENCE['closed_dd_pct']) > 0.002:
-                    parity_status = 'FAIL'
-                    parity_notes.append('closed DD drift')
-                if abs(cs['max_open_risk_floor_dd_pct'] - W24_CONTROL_REFERENCE['floor_dd_pct']) > 0.002:
-                    parity_status = 'FAIL'
-                    parity_notes.append('floor DD drift')
-                if cs['max_open_positions'] != W24_CONTROL_REFERENCE['max_open_positions']:
-                    parity_status = 'FAIL'
-                    parity_notes.append('concurrency drift')
-            else:
-                parity_status = 'PASS_NEWER_TRADES'
-
-            parity_rows.append({
-                'portfolio_mode': mode,
-                'reference_trades': W24_CONTROL_REFERENCE['trades'],
-                'current_trades': len(trades),
-                'reference_cagr_pct': W24_CONTROL_REFERENCE['historical_cagr_pct'],
-                'current_cagr_pct': cs['historical_cagr_pct'],
-                'reference_closed_dd_pct': W24_CONTROL_REFERENCE['closed_dd_pct'],
-                'current_closed_dd_pct': cs['max_closed_equity_dd_pct'],
-                'reference_floor_dd_pct': W24_CONTROL_REFERENCE['floor_dd_pct'],
-                'current_floor_dd_pct': cs['max_open_risk_floor_dd_pct'],
-                'status': parity_status,
-                'notes': '|'.join(parity_notes),
-            })
-
-            if parity_status == 'FAIL':
-                raise RuntimeError(
-                    f'24-strategy control parity failure in {mode}: {parity_rows[-1]}'
-                )
-
-            all_drawdowns.extend(
-                w24_drawdown_event_rows(
-                    W24_CONTROL_VARIANT,
-                    mode,
-                    'CONTROL_PORTFOLIO',
-                    W24_Q24_CONTROL_RISK,
-                    W24_Q24_CONTROL_RISK,
-                    control_sim,
-                )
-            )
-
-            period_defs = [
-                ('FULL', min(t['entry_time'] for t in trades), NOW),
-                ('LAST_5Y', NOW - timedelta(days=365.2425 * 5), NOW),
-                ('LAST_3Y', NOW - timedelta(days=365.2425 * 3), NOW),
-                ('LAST_2Y', NOW - timedelta(days=365.2425 * 2), NOW),
-                ('LAST_1Y', NOW - timedelta(days=365.2425), NOW),
-            ]
-
-            for sid in strategy_ids:
-                control_risk = control_risks[sid]
-                trade_count = len(by_sid[sid])
-
-                for tested_risk in W24_SWEEP_RISKS:
-                    variant = f'{sid}__RISK_{tested_risk*100:.2f}PCT'
-
-                    if abs(tested_risk - control_risk) < 1e-12:
-                        sim = control_sim
-                    else:
-                        risk_map = dict(control_risks)
-                        risk_map[sid] = tested_risk
-                        sim = w24_simulate_equity(
-                            trades,
-                            risk_map,
-                            STARTING_BALANCE,
-                        )
-
-                    matrix_row = w24_summary_row(
-                        variant,
-                        mode,
-                        sid,
-                        tested_risk,
-                        control_risk,
-                        trade_count,
-                        sim,
-                        cs,
-                    )
-                    all_matrix.append(matrix_row)
-
-                    all_drawdowns.extend(
-                        w24_drawdown_event_rows(
-                            variant,
-                            mode,
-                            sid,
-                            tested_risk,
-                            control_risk,
-                            sim,
-                        )
-                    )
-
-                    all_rolling.extend(
-                        w24_rolling_rows(
-                            variant,
-                            mode,
-                            sid,
-                            tested_risk,
-                            control_risk,
-                            sim,
-                            trades,
-                        )
-                    )
-
-                    all_calendar.extend(
-                        w24_calendar_rows(
-                            variant,
-                            mode,
-                            sid,
-                            tested_risk,
-                            control_risk,
-                            sim,
-                            trades,
-                        )
-                    )
-
-                    for label, a, b in period_defs:
-                        all_periods.append(
-                            w24_period_row(
-                                variant,
-                                mode,
-                                sid,
-                                tested_risk,
-                                control_risk,
-                                sim,
-                                trades,
-                                label,
-                                a,
-                                b,
-                            )
-                        )
-
-                    completed_variants += 1
-                    if completed_variants % 4 == 0 or completed_variants == total_variants:
-                        W24_STATUS.update(
-                            state='risk_matrix',
-                            message=f'Completed {completed_variants}/{total_variants} one-at-a-time risk variants',
-                            progress=72 + int(23 * completed_variants / total_variants),
-                        )
-
-        rolling_summary = w24_rolling_summary(all_rolling)
-        calendar_summary = w24_calendar_summary(all_calendar)
-        marginal_steps = w24_marginal_step_rows(all_matrix)
-        frontier = w24_strategy_frontier_rows(
-            all_matrix,
-            rolling_summary,
-            all_diagnostics,
-        )
-
-        write_csv(W24_OUT['portfolio_parity'], parity_rows)
-        write_csv(W24_OUT['strategy_manifest'], all_manifest)
-        write_csv(W24_OUT['control_summary'], control_rows)
-        write_csv(W24_OUT['sensitivity_matrix'], all_matrix)
-        write_csv(W24_OUT['marginal_steps'], marginal_steps)
-        write_csv(W24_OUT['strategy_diagnostics'], all_diagnostics)
-        write_csv(W24_OUT['strategy_frontier'], frontier)
-        write_csv(W24_OUT['rolling'], all_rolling)
-        write_csv(W24_OUT['rolling_summary'], rolling_summary)
-        write_csv(W24_OUT['calendar'], all_calendar)
-        write_csv(W24_OUT['calendar_summary'], calendar_summary)
-        write_csv(W24_OUT['periods'], all_periods)
-        write_csv(W24_OUT['drawdown_events'], all_drawdowns)
-
-        write_csv(W24_OUT['notes'], [
-            {
-                'item': 'control_portfolio',
-                'value': 'Proposed frozen 24-strategy control: current #1-#23 at 1.00% each and EUR_JPY_M15_SHORT #24 at 0.75%. This is a research control, not a claim that #24 has already been deployed.',
-            },
-            {
-                'item': 'one_at_a_time_rule',
-                'value': 'Each strategy is tested at 0.50%, 0.75%, 1.00%, 1.25% while every other strategy remains at its control weight. No two strategy weights are changed together in this runner.',
-            },
-            {
-                'item': 'not_an_optimizer',
-                'value': 'This runner does not choose a globally optimal weight vector. It maps marginal sensitivity only, reducing the risk of fitting one historical portfolio optimum.',
-            },
-            {
-                'item': 'frozen_trades',
-                'value': 'All signal rules, historical fills, stops/targets, A+B/B-priority logic and live-safe non-hedging acceptance are frozen before the risk sweep. Risk changes do not change the accepted historical trade set.',
-            },
-            {
-                'item': 'equity_model',
-                'value': 'Event-driven realised-equity compounding. Each trade fixes cash risk at entry. Exit events process before entries at equal timestamps. Conservative DD floor assumes all open positions lose their fixed cash risk simultaneously.',
-            },
-            {
-                'item': 'nav_limitation',
-                'value': 'Live OANDA sizing uses current NAV including unrealised P/L. Exact historical intra-trade NAV cannot be reconstructed from outcome-only ledgers, so realised equity is used consistently with prior portfolio studies.',
-            },
-            {
-                'item': 'frontier_file',
-                'value': 'strategy_frontier.csv is diagnostic only. It reports one-step up/down effects and highest tested CAGR satisfying 100% positive 12/24/36M windows plus <19% or <20% conservative DD. It is not a final combined allocation.',
-            },
-            {
-                'item': 'next_stage',
-                'value': 'After reviewing this matrix, choose a small number of sensible under/overweights and run one or two combined weighted portfolio candidates against the unchanged control.',
-            },
-        ])
-
-        W24_STATUS.update(
-            state='packaging',
-            message='Packaging 24-strategy risk sensitivity matrix',
-            progress=97,
-        )
-
-        with zipfile.ZipFile(
-            W24_BUNDLE,
-            'w',
-            compression=zipfile.ZIP_DEFLATED,
-        ) as z:
-            for path in W24_OUT.values():
-                if os.path.exists(path):
-                    z.write(path, arcname=os.path.basename(path))
-
-        W24_STATUS.update(
-            state='complete',
-            message='24-strategy one-at-a-time risk sensitivity complete',
-            progress=100,
-            results=W24_BUNDLE,
-            strategies_tested=24,
-            risk_levels_pct=[x * 100.0 for x in W24_SWEEP_RISKS],
-            control_existing23_risk_pct=1.0,
-            control_q24_risk_pct=0.75,
-            total_variants=total_variants,
-        )
-
-    except Exception as e:
-        W24_STATUS.update(
-            state='error',
-            message=str(e),
-        )
-        print('FULL24 RISK SENSITIVITY ERROR:', repr(e), flush=True)
-
-
-# ============================================================
-# ROUTES
-# ============================================================
-
-@app.route('/full24-risk-sensitivity/status')
-def full24_risk_sensitivity_status():
-    return jsonify(W24_STATUS)
-
-
-@app.route('/full24-risk-sensitivity/results')
-def full24_risk_sensitivity_results():
-    if not os.path.exists(W24_BUNDLE):
-        return jsonify({
-            'status': 'not_ready',
-            'state': W24_STATUS.get('state'),
-            'message': W24_STATUS.get('message'),
-        }), 404
-
-    return send_file(
-        os.path.abspath(W24_BUNDLE),
-        as_attachment=True,
-        download_name=W24_BUNDLE,
-    )
-
-
-@app.route('/full24-risk-sensitivity/info')
-def full24_risk_sensitivity_info():
-    return jsonify({
-        'service': 'Full 24-strategy one-at-a-time risk sensitivity matrix',
-        'read_only': True,
-        'orders_supported': False,
-        'control': {
-            'strategies_1_to_23_risk_pct': 1.00,
-            'eur_jpy_m15_short_24_risk_pct': 0.75,
-        },
-        'sweep_each_strategy_pct': [0.50, 0.75, 1.00, 1.25],
-        'method': 'change one strategy at a time; all others fixed at control weight',
-        'portfolio_gate': 'frozen live-safe non-hedging gate',
-        'routes': [
-            '/full24-risk-sensitivity/status',
-            '/full24-risk-sensitivity/results',
-            '/full24-risk-sensitivity/info',
-        ],
-    })
-
-
-
-# ============================================================
-# FULL 24 — PREDECLARED COMBINED WEIGHT PORTFOLIO TEST
-# ============================================================
-#
-# CONTROL
-# -------
-# All existing #1-#23 strategies = 1.00%
-# EUR_JPY_M15_SHORT #24         = 0.75%
-#
-# The one-at-a-time sensitivity study is now FROZEN.
-# This runner DOES NOT search combinations or optimise weights.
-#
-# Three predeclared candidates:
-#
-# CANDIDATE_3_CONSERVATIVE
-#   USD_JPY_H1_LONG       1.25%
-#   USD_JPY_M15_LONG      1.25%
-#   GBP_USD_H1_SHORT      1.25%
-#
-# CANDIDATE_6_CORE
-#   above three, plus:
-#   EUR_USD_H1_SHORT      1.25%
-#   EUR_JPY_H1_LONG       1.25%
-#   EUR_USD_M15_LONG      1.25%
-#
-# CANDIDATE_9_BROAD
-#   above six, plus:
-#   EUR_USD_H1_LONG       1.25%
-#   USD_JPY_H1_SHORT      1.25%
-#   GBP_USD_M15_LONG      1.25%
-#
-# Everything not named remains at its CONTROL risk.
-# #24 remains 0.75% in every candidate.
-#
-# Rationale for broader additions:
-#   Their one-at-a-time 1.25% tests remained positive over recent periods.
-#   We deliberately DO NOT include:
-#     - EUR_JPY_H1_SHORT (negative last-1Y marginal effect)
-#     - EUR_GBP_M15_SHORT (flat/negative last-1Y/2Y marginal effect)
-#     - USD_CAD_M15_LONG (negative last-1Y/2Y/3Y marginal effect)
-#   despite attractive full-history one-at-a-time numbers.
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
-
-CW24_STATUS = {
-    "state": "not_started",
-    "message": "Combined 24-strategy weight test not started",
-    "progress": 0,
-    "orders_supported": False,
-    "trading_enabled": False,
-}
-
-CW24_BUNDLE = "FULL_24_PREDECLARED_COMBINED_WEIGHT_TEST_RESULTS.zip"
-
-CW24_OUT = {
-    "portfolio_parity": "full24_combined_weight_portfolio_parity.csv",
-    "allocation_manifest": "full24_combined_weight_allocation_manifest.csv",
-    "summary": "full24_combined_weight_summary.csv",
-    "delta_vs_control": "full24_combined_weight_delta_vs_control.csv",
-    "rolling": "full24_combined_weight_rolling.csv",
-    "rolling_summary": "full24_combined_weight_rolling_summary.csv",
-    "calendar": "full24_combined_weight_calendar.csv",
-    "calendar_summary": "full24_combined_weight_calendar_summary.csv",
-    "periods": "full24_combined_weight_periods.csv",
-    "drawdown_events": "full24_combined_weight_drawdown_events.csv",
-    "strategy_weighted_r": "full24_combined_weight_strategy_weighted_r.csv",
-    "decision_matrix": "full24_combined_weight_decision_matrix.csv",
-    "gate_summary": "full24_combined_weight_gate_summary.csv",
-    "notes": "full24_combined_weight_notes.csv",
-}
-
-CW24_CONTROL_REFERENCE = {
-    "trades": 2666,
-    "historical_cagr_pct": 102.599436,
-    "closed_dd_pct": -18.144324,
-    "floor_dd_pct": -18.971149,
-    "max_open_positions": 6,
-}
-
-CW24_UPWEIGHT_3 = {
-    "USD_JPY_H1_LONG",
-    "USD_JPY_M15_LONG",
-    "GBP_USD_H1_SHORT",
-}
-
-CW24_UPWEIGHT_6 = CW24_UPWEIGHT_3 | {
-    "EUR_USD_H1_SHORT",
-    "EUR_JPY_H1_LONG",
-    "EUR_USD_M15_LONG",
-}
-
-CW24_UPWEIGHT_9 = CW24_UPWEIGHT_6 | {
-    "EUR_USD_H1_LONG",
-    "USD_JPY_H1_SHORT",
-    "GBP_USD_M15_LONG",
-}
-
-CW24_ALLOCATIONS = {
-    "CONTROL_24_Q24_075": set(),
-    "CANDIDATE_3_CONSERVATIVE": CW24_UPWEIGHT_3,
-    "CANDIDATE_6_CORE": CW24_UPWEIGHT_6,
-    "CANDIDATE_9_BROAD": CW24_UPWEIGHT_9,
-}
-
-
-def cw24_control_risk_map(strategy_ids):
-    risks = {sid: 0.0100 for sid in strategy_ids}
-    if Q24_STRATEGY_ID not in risks:
-        raise RuntimeError(
-            f"Missing #24 strategy ID in accepted portfolio: {Q24_STRATEGY_ID}"
-        )
-    risks[Q24_STRATEGY_ID] = 0.0075
-    return risks
-
-
-def cw24_allocation_risk_map(strategy_ids, allocation_name):
-    if allocation_name not in CW24_ALLOCATIONS:
-        raise KeyError(allocation_name)
-
-    risks = cw24_control_risk_map(strategy_ids)
-    upweights = CW24_ALLOCATIONS[allocation_name]
-
-    unknown = sorted(upweights - set(strategy_ids))
-    if unknown:
-        raise RuntimeError(
-            f"{allocation_name} contains unknown strategy IDs: {unknown}"
-        )
-
-    for sid in upweights:
-        risks[sid] = 0.0125
-
-    # Explicit invariant: #24 stays at 0.75% in every candidate.
-    if abs(risks[Q24_STRATEGY_ID] - 0.0075) > 1e-12:
-        raise RuntimeError(
-            f"{allocation_name} unexpectedly changed #24 risk"
-        )
-
-    return risks
-
-
-def cw24_summary_row(
-    allocation_name,
-    mode,
-    trades,
-    risk_map,
-    sim,
-):
-    s = sim["summary"]
-    return {
-        "allocation": allocation_name,
-        "portfolio_mode": mode,
-        "strategies": len(risk_map),
-        "trades": len(trades),
-        "upweighted_strategy_count": len(CW24_ALLOCATIONS[allocation_name]),
-        "q24_risk_pct": risk_map[Q24_STRATEGY_ID] * 100.0,
-        "ending_balance_from_100": s["ending_balance"],
-        "ending_multiple": s["ending_multiple"],
-        "total_return_pct": s["total_return_pct"],
-        "historical_cagr_pct": s["historical_cagr_pct"],
-        "weighted_r_equivalent_at_1pct": s[
-            "weighted_r_equivalent_at_1pct"
-        ],
-        "max_closed_equity_dd_pct": s[
-            "max_closed_equity_dd_pct"
-        ],
-        "max_open_risk_floor_dd_pct": s[
-            "max_open_risk_floor_dd_pct"
-        ],
-        "max_open_positions": s["max_open_positions"],
-        "max_open_risk_pct_of_realised_equity": s[
-            "max_open_risk_pct_of_realised_equity"
-        ],
-    }
-
-
-def cw24_balance_before(sim, ts):
-    j = bisect.bisect_left(
-        sim["exit_times"],
-        ts,
-    ) - 1
-    return (
-        sim["exit_balances"][j]
-        if j >= 0
-        else STARTING_BALANCE
-    )
-
-
-def cw24_period_row(
-    allocation_name,
-    mode,
-    sim,
-    trades,
-    label,
-    start,
-    end,
-):
-    sb = cw24_balance_before(sim, start)
-    eb = cw24_balance_before(sim, end)
-
-    exits = [
-        t for t in trades
-        if start <= t["exit_event_time"] < end
+            "A_REGIME_H1_CLOSE_LT_EMA50",
+            imp_finite_mask(f["h1_close"], f["h1_ema50"])
+            & (f["h1_close"] < f["h1_ema50"]),
+            "A only: previous strictly completed H1 close < H1 EMA50",
+        ),
+        (
+            "A_REGIME_H1_CLOSE_LT_EMA100",
+            imp_finite_mask(f["h1_close"], f["h1_ema100"])
+            & (f["h1_close"] < f["h1_ema100"]),
+            "A only: previous strictly completed H1 close < H1 EMA100",
+        ),
+        (
+            "A_REGIME_H1_CLOSE_LT_EMA200",
+            imp_finite_mask(f["h1_close"], f["h1_ema200"])
+            & (f["h1_close"] < f["h1_ema200"]),
+            "A only: previous strictly completed H1 close < H1 EMA200",
+        ),
+        (
+            "A_REGIME_H1_EMA50_LT_EMA200",
+            imp_finite_mask(f["h1_ema50"], f["h1_ema200"])
+            & (f["h1_ema50"] < f["h1_ema200"]),
+            "A only: previous strictly completed H1 EMA50 < EMA200",
+        ),
+        (
+            "A_REGIME_H4_CLOSE_LT_EMA100",
+            imp_finite_mask(f["h4_close"], f["h4_ema100"])
+            & (f["h4_close"] < f["h4_ema100"]),
+            "A only: previous strictly completed H4 close < H4 EMA100",
+        ),
+        (
+            "A_REGIME_H4_CLOSE_LT_EMA200",
+            imp_finite_mask(f["h4_close"], f["h4_ema200"])
+            & (f["h4_close"] < f["h4_ema200"]),
+            "A only: previous strictly completed H4 close < H4 EMA200",
+        ),
+        (
+            "A_REGIME_D_CLOSE_LT_EMA200",
+            imp_finite_mask(f["d_close"], f["d_ema200"])
+            & (f["d_close"] < f["d_ema200"]),
+            "A only: previous strictly completed daily close < daily EMA200",
+        ),
     ]
 
-    ret = (
-        ((eb / sb) - 1.0) * 100.0
-        if sb > 0
-        else 0.0
-    )
-
-    years = max(
-        (end - start).total_seconds()
-        / (365.2425 * 86400.0),
-        1e-9,
-    )
-
-    ann = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0
-        else 0.0
-    )
-
-    return {
-        "allocation": allocation_name,
-        "portfolio_mode": mode,
-        "period": label,
-        "start_utc": iso(start),
-        "end_utc": iso(end),
-        "start_balance": sb,
-        "end_balance": eb,
-        "compounded_return_pct": ret,
-        "annualized_return_pct": ann,
-        "realized_exits": len(exits),
-    }
-
-
-def cw24_rolling_rows(
-    allocation_name,
-    mode,
-    sim,
-    trades,
-):
-    first_entry = min(
-        t["entry_time"]
-        for t in trades
-    )
-    start_month = month_floor(first_entry)
-    end_complete = month_floor(NOW)
-
-    rows = []
-    for months in (12, 24, 36):
-        cur = start_month
-        while add_months(cur, months) <= end_complete:
-            end = add_months(cur, months)
-            row = cw24_period_row(
-                allocation_name,
-                mode,
-                sim,
-                trades,
-                f"ROLLING_{months}M",
-                cur,
-                end,
+    for vid, mask, desc in regime_defs:
+        variants.append(
+            imp_variant(
+                vid,
+                "A_HTF_REGIME",
+                desc,
+                mask,
             )
-            row["months"] = months
-            rows.append(row)
-            cur = add_months(cur, 1)
-
-    return rows
-
-
-def cw24_rolling_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["allocation"],
-                r["portfolio_mode"],
-                int(r["months"]),
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        allocation, mode, months = key
-
-        active = [
-            x for x in group
-            if x["realized_exits"] > 0
-        ]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-        values = [
-            x["compounded_return_pct"]
-            for x in active
-        ]
-
-        out.append({
-            "allocation": allocation,
-            "portfolio_mode": mode,
-            "months": months,
-            "total_windows": len(group),
-            "active_windows": len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_compounded_return_pct_active": safe_median(
-                values
-            ),
-            "worst_compounded_return_pct_active": (
-                min(values) if values else 0.0
-            ),
-            "best_compounded_return_pct_active": (
-                max(values) if values else 0.0
-            ),
-        })
-
-    return out
-
-
-def cw24_calendar_rows(
-    allocation_name,
-    mode,
-    sim,
-    trades,
-):
-    first_year = min(
-        t["entry_time"]
-        for t in trades
-    ).year
-
-    rows = []
-    for year in range(first_year, NOW.year + 1):
-        start = datetime(
-            year, 1, 1,
-            tzinfo=timezone.utc,
-        )
-        nominal_end = datetime(
-            year + 1, 1, 1,
-            tzinfo=timezone.utc,
-        )
-        end = min(nominal_end, NOW)
-
-        if end <= start:
-            continue
-
-        row = cw24_period_row(
-            allocation_name,
-            mode,
-            sim,
-            trades,
-            str(year),
-            start,
-            end,
-        )
-        row["year"] = year
-        row["complete_year"] = nominal_end <= NOW
-        rows.append(row)
-
-    return rows
-
-
-def cw24_calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["allocation"],
-                r["portfolio_mode"],
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        allocation, mode = key
-
-        complete = [
-            x for x in group
-            if x["complete_year"]
-        ]
-        active = [
-            x for x in complete
-            if x["realized_exits"] > 0
-        ]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        worst = (
-            min(
-                active,
-                key=lambda x: x["compounded_return_pct"],
-            )
-            if active
-            else None
-        )
-        best = (
-            max(
-                active,
-                key=lambda x: x["compounded_return_pct"],
-            )
-            if active
-            else None
         )
 
-        out.append({
-            "allocation": allocation,
-            "portfolio_mode": mode,
-            "completed_years": len(complete),
-            "active_completed_years": len(active),
-            "positive_active_completed_years": len(positive),
-            "positive_active_completed_years_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_return_pct_active": safe_median(
-                x["compounded_return_pct"]
-                for x in active
-            ),
-            "worst_year": (
-                worst["year"]
-                if worst else ""
-            ),
-            "worst_year_return_pct": (
-                worst["compounded_return_pct"]
-                if worst else 0.0
-            ),
-            "best_year": (
-                best["year"]
-                if best else ""
-            ),
-            "best_year_return_pct": (
-                best["compounded_return_pct"]
-                if best else 0.0
-            ),
-        })
-
-    return out
-
-
-def cw24_drawdown_event_rows(
-    allocation_name,
-    mode,
-    sim,
-):
-    rows = []
-
-    for event_type, event in [
-        ("MAX_CLOSED_DD", sim.get("closed_dd_event")),
-        (
-            "MAX_OPEN_RISK_FLOOR_DD",
-            sim.get("floor_dd_event"),
-        ),
-        (
-            "MAX_OPEN_RISK_PCT",
-            sim.get("max_open_risk_event"),
-        ),
+    # ------------------------------------------------------------
+    # 2) BROAD VOLATILITY REGIMES ON A ONLY
+    # atr_ratio50 is completed HTF ATR14 / its own 50-bar ATR14 mean.
+    # Only elevated-volatility hypotheses are tested, avoiding two-sided
+    # mining of both high and low regimes.
+    # ------------------------------------------------------------
+    for tf_name, arr in [
+        ("H1", f["h1_atr"]),
+        ("H4", f["h4_atr"]),
     ]:
-        if not event:
-            continue
-
-        rows.append({
-            "allocation": allocation_name,
-            "portfolio_mode": mode,
-            "event_type": event_type,
-            **event,
-        })
-
-    return rows
-
-
-def cw24_weighted_r_rows(
-    allocation_name,
-    mode,
-    trades,
-    risk_map,
-):
-    grouped = defaultdict(list)
-
-    for t in trades:
-        grouped[t["strategy_id"]].append(t)
-
-    rows = []
-    for sid in sorted(grouped):
-        g = grouped[sid]
-        stats_ = calc_stats(g)
-        risk = risk_map[sid]
-
-        rows.append({
-            "allocation": allocation_name,
-            "portfolio_mode": mode,
-            "strategy_id": sid,
-            "pair": g[0]["pair"],
-            "timeframe": g[0]["timeframe"],
-            "side": g[0]["side"],
-            "risk_pct": risk * 100.0,
-            "accepted_trades": len(g),
-            "unscaled_total_r": stats_["total_r"],
-            "weighted_r_equivalent_at_1pct": (
-                stats_["total_r"]
-                * (risk / 0.01)
-            ),
-            "profit_factor_unscaled": stats_["profit_factor"],
-            "expectancy_r_unscaled": stats_["expectancy_r"],
-        })
-
-    return rows
-
-
-def cw24_delta_rows(summary_rows):
-    grouped = defaultdict(list)
-
-    for r in summary_rows:
-        grouped[r["portfolio_mode"]].append(r)
-
-    out = []
-    for mode, group in grouped.items():
-        control = next(
-            x for x in group
-            if x["allocation"] == "CONTROL_24_Q24_075"
-        )
-
-        for r in group:
-            if r["allocation"] == "CONTROL_24_Q24_075":
-                continue
-
-            out.append({
-                "allocation": r["allocation"],
-                "portfolio_mode": mode,
-                "delta_historical_cagr_pp": (
-                    r["historical_cagr_pct"]
-                    - control["historical_cagr_pct"]
-                ),
-                "delta_closed_dd_pp": (
-                    r["max_closed_equity_dd_pct"]
-                    - control["max_closed_equity_dd_pct"]
-                ),
-                "extra_closed_dd_magnitude_pp": max(
-                    0.0,
-                    control["max_closed_equity_dd_pct"]
-                    - r["max_closed_equity_dd_pct"],
-                ),
-                "delta_floor_dd_pp": (
-                    r["max_open_risk_floor_dd_pct"]
-                    - control["max_open_risk_floor_dd_pct"]
-                ),
-                "extra_floor_dd_magnitude_pp": max(
-                    0.0,
-                    control["max_open_risk_floor_dd_pct"]
-                    - r["max_open_risk_floor_dd_pct"],
-                ),
-                "delta_max_open_risk_pp": (
-                    r["max_open_risk_pct_of_realised_equity"]
-                    - control[
-                        "max_open_risk_pct_of_realised_equity"
-                    ]
-                ),
-                "delta_ending_multiple": (
-                    r["ending_multiple"]
-                    - control["ending_multiple"]
-                ),
-                "control_cagr_pct": control[
-                    "historical_cagr_pct"
-                ],
-                "candidate_cagr_pct": r[
-                    "historical_cagr_pct"
-                ],
-                "control_closed_dd_pct": control[
-                    "max_closed_equity_dd_pct"
-                ],
-                "candidate_closed_dd_pct": r[
-                    "max_closed_equity_dd_pct"
-                ],
-                "control_floor_dd_pct": control[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "candidate_floor_dd_pct": r[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "control_max_open_risk_pct": control[
-                    "max_open_risk_pct_of_realised_equity"
-                ],
-                "candidate_max_open_risk_pct": r[
-                    "max_open_risk_pct_of_realised_equity"
-                ],
-            })
-
-    return out
-
-
-def cw24_decision_rows(
-    summary_rows,
-    delta_rows,
-    rolling_summary,
-    calendar_summary,
-):
-    summary_lookup = {
-        (x["portfolio_mode"], x["allocation"]): x
-        for x in summary_rows
-    }
-    delta_lookup = {
-        (x["portfolio_mode"], x["allocation"]): x
-        for x in delta_rows
-    }
-    roll_lookup = {
-        (
-            x["portfolio_mode"],
-            x["allocation"],
-            int(x["months"]),
-        ): x
-        for x in rolling_summary
-    }
-    cal_lookup = {
-        (
-            x["portfolio_mode"],
-            x["allocation"],
-        ): x
-        for x in calendar_summary
-    }
-
-    rows = []
-
-    for mode in sorted(
-        {x["portfolio_mode"] for x in summary_rows}
-    ):
-        control = summary_lookup[
-            (mode, "CONTROL_24_Q24_075")
-        ]
-
-        for allocation in [
-            "CANDIDATE_3_CONSERVATIVE",
-            "CANDIDATE_6_CORE",
-            "CANDIDATE_9_BROAD",
-        ]:
-            s = summary_lookup[(mode, allocation)]
-            d = delta_lookup[(mode, allocation)]
-
-            r12 = roll_lookup[(mode, allocation, 12)]
-            r24 = roll_lookup[(mode, allocation, 24)]
-            r36 = roll_lookup[(mode, allocation, 36)]
-            cal = cal_lookup[(mode, allocation)]
-
-            checks = {
-                "adds_cagr": (
-                    d["delta_historical_cagr_pp"] > 0
-                ),
-                "closed_dd_under_20pct": (
-                    s["max_closed_equity_dd_pct"] >= -20.0
-                ),
-                "floor_dd_under_20pct": (
-                    s["max_open_risk_floor_dd_pct"] >= -20.0
-                ),
-                "all_12m_positive": (
-                    r12["positive_active_windows_pct"] == 100.0
-                ),
-                "all_24m_positive": (
-                    r24["positive_active_windows_pct"] == 100.0
-                ),
-                "all_36m_positive": (
-                    r36["positive_active_windows_pct"] == 100.0
-                ),
-                "all_completed_years_positive": (
-                    cal[
-                        "positive_active_completed_years_pct"
-                    ] == 100.0
-                ),
-                "max_open_positions_not_higher": (
-                    s["max_open_positions"]
-                    <= control["max_open_positions"]
-                ),
-            }
-
-            rows.append({
-                "allocation": allocation,
-                "portfolio_mode": mode,
-                "comparison_status": (
-                    "MEETS_PREDECLARED_TARGETS"
-                    if all(checks.values())
-                    else "REVIEW_TRADEOFF"
-                ),
-                "checks_passed": sum(
-                    bool(v)
-                    for v in checks.values()
-                ),
-                "checks_total": len(checks),
-                **{
-                    f"check_{k}": v
-                    for k, v in checks.items()
-                },
-                "historical_cagr_pct": s[
-                    "historical_cagr_pct"
-                ],
-                "delta_cagr_pp_vs_control": d[
-                    "delta_historical_cagr_pp"
-                ],
-                "closed_dd_pct": s[
-                    "max_closed_equity_dd_pct"
-                ],
-                "floor_dd_pct": s[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "extra_floor_dd_pp_vs_control": d[
-                    "extra_floor_dd_magnitude_pp"
-                ],
-                "max_open_positions": s[
-                    "max_open_positions"
-                ],
-                "max_open_risk_pct": s[
-                    "max_open_risk_pct_of_realised_equity"
-                ],
-                "rolling12_positive_pct": r12[
-                    "positive_active_windows_pct"
-                ],
-                "rolling12_median_pct": r12[
-                    "median_compounded_return_pct_active"
-                ],
-                "rolling12_worst_pct": r12[
-                    "worst_compounded_return_pct_active"
-                ],
-                "rolling24_positive_pct": r24[
-                    "positive_active_windows_pct"
-                ],
-                "rolling24_median_pct": r24[
-                    "median_compounded_return_pct_active"
-                ],
-                "rolling24_worst_pct": r24[
-                    "worst_compounded_return_pct_active"
-                ],
-                "rolling36_positive_pct": r36[
-                    "positive_active_windows_pct"
-                ],
-                "rolling36_median_pct": r36[
-                    "median_compounded_return_pct_active"
-                ],
-                "rolling36_worst_pct": r36[
-                    "worst_compounded_return_pct_active"
-                ],
-                "completed_year_positive_pct": cal[
-                    "positive_active_completed_years_pct"
-                ],
-                "worst_calendar_year": cal[
-                    "worst_year"
-                ],
-                "worst_calendar_return_pct": cal[
-                    "worst_year_return_pct"
-                ],
-            })
-
-    return rows
-
-
-def run_full24_predeclared_combined_weight_test():
-    try:
-        global EV_STATUS
-        EV_STATUS = CW24_STATUS
-
-        CW24_STATUS.update(
-            state="fetch",
-            message="Fetching EUR/JPY M15 + H1 history",
-            progress=2,
-        )
-
-        eurjpy_m15, _ = fetch_history(
-            Q24_PAIR,
-            "M15",
-            START,
-            NOW,
-        )
-        eurjpy_h1, _ = fetch_history(
-            Q24_PAIR,
-            "H1",
-            PV_H1_WARMUP,
-            NOW,
-        )
-
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
-            )
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
-            )
-
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        CW24_STATUS.update(
-            state="rebuild",
-            message="Rebuilding frozen 24-strategy accepted trade set",
-            progress=8,
-        )
-
-        current23 = q24_rebuild_current23(
-            eurjpy_m15,
-            eurjpy_h1,
-            eurjpy_h1_atr,
-        )
-
-        short_features = q24_features(
-            eurjpy_m15,
-            eurjpy_h1,
-        )
-        raw_q24 = q24_build_candidate_trades(
-            eurjpy_m15,
-            short_features,
-        )
-
-        q24_summary = q24_candidate_summary(raw_q24)
-
-        if q24_summary["trades"] < Q24_REFERENCE["trades"]:
-            raise RuntimeError(
-                f"#24 candidate below frozen reference: "
-                f"{q24_summary}"
-            )
-
-        if q24_summary["trades"] == Q24_REFERENCE["trades"]:
-            if (
-                abs(
-                    q24_summary["profit_factor"]
-                    - Q24_REFERENCE["pf"]
-                ) > 0.0001
-                or abs(
-                    q24_summary["total_r"]
-                    - Q24_REFERENCE["r"]
-                ) > 0.03
-            ):
-                raise RuntimeError(
-                    f"#24 candidate metric parity drift: "
-                    f"{q24_summary}"
-                )
-
-        combined_independent = sorted(
-            current23["independent"] + raw_q24,
-            key=lambda t: (
-                t["entry_time"],
-                t["strategy_id"],
-            ),
-        )
-
-        gate_sets = {}
-        gate_rows = []
-
-        for priority, mode in [
-            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
-            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
-        ]:
-            accepted, rejected = apply_live_safe_nonhedging_gate(
-                combined_independent,
-                priority,
-            )
-
-            accepted_q24 = [
-                t for t in accepted
-                if t["strategy_id"] == Q24_STRATEGY_ID
-            ]
-
-            strategy_ids = sorted({
-                t["strategy_id"]
-                for t in accepted
-            })
-
-            if len(strategy_ids) != 24:
-                raise RuntimeError(
-                    f"Expected 24 strategy IDs in {mode}, "
-                    f"got {len(strategy_ids)}"
-                )
-
-            if len(accepted) < CW24_CONTROL_REFERENCE["trades"]:
-                raise RuntimeError(
-                    f"Accepted portfolio below reference in {mode}: "
-                    f"{len(accepted)}"
-                )
-
-            gate_sets[mode] = {
-                "accepted": accepted,
-                "rejected": rejected,
-                "strategy_ids": strategy_ids,
-                "accepted_q24": accepted_q24,
-            }
-
-            gate_rows.append({
-                "portfolio_mode": mode,
-                "accepted_portfolio_trades": len(accepted),
-                "strategy_ids": len(strategy_ids),
-                "raw_q24_trades": len(raw_q24),
-                "accepted_q24_trades": len(accepted_q24),
-                "rejected_q24_trades": (
-                    len(raw_q24) - len(accepted_q24)
-                ),
-            })
-
-        write_csv(
-            CW24_OUT["gate_summary"],
-            gate_rows,
-        )
-
-        summary_rows = []
-        rolling_rows = []
-        calendar_rows = []
-        period_rows = []
-        drawdown_rows = []
-        weighted_r_rows = []
-        manifest_rows = []
-        parity_rows = []
-
-        total_runs = len(gate_sets) * len(CW24_ALLOCATIONS)
-        completed = 0
-
-        for mode in [
-            "LIVE_SAFE_H1_FIRST",
-            "LIVE_SAFE_M15_FIRST",
-        ]:
-            trades = gate_sets[mode]["accepted"]
-            strategy_ids = gate_sets[mode]["strategy_ids"]
-
-            # Allocation manifest first, including unchanged weights.
-            for allocation_name in CW24_ALLOCATIONS:
-                risk_map = cw24_allocation_risk_map(
-                    strategy_ids,
-                    allocation_name,
-                )
-
-                for sid in strategy_ids:
-                    sample = next(
-                        t for t in trades
-                        if t["strategy_id"] == sid
-                    )
-                    manifest_rows.append({
-                        "allocation": allocation_name,
-                        "portfolio_mode": mode,
-                        "strategy_id": sid,
-                        "pair": sample["pair"],
-                        "timeframe": sample["timeframe"],
-                        "side": sample["side"],
-                        "risk_pct": (
-                            risk_map[sid] * 100.0
-                        ),
-                        "is_upweighted_vs_control": (
-                            sid
-                            in CW24_ALLOCATIONS[
-                                allocation_name
-                            ]
-                        ),
-                    })
-
-                sim = w24_simulate_equity(
-                    trades,
-                    risk_map,
-                    STARTING_BALANCE,
-                )
-
-                row = cw24_summary_row(
-                    allocation_name,
-                    mode,
-                    trades,
-                    risk_map,
-                    sim,
-                )
-                summary_rows.append(row)
-
-                rolling_rows.extend(
-                    cw24_rolling_rows(
-                        allocation_name,
-                        mode,
-                        sim,
-                        trades,
-                    )
-                )
-
-                calendar_rows.extend(
-                    cw24_calendar_rows(
-                        allocation_name,
-                        mode,
-                        sim,
-                        trades,
-                    )
-                )
-
-                drawdown_rows.extend(
-                    cw24_drawdown_event_rows(
-                        allocation_name,
-                        mode,
-                        sim,
-                    )
-                )
-
-                weighted_r_rows.extend(
-                    cw24_weighted_r_rows(
-                        allocation_name,
-                        mode,
-                        trades,
-                        risk_map,
-                    )
-                )
-
-                period_defs = [
+        for threshold in [0.80, 1.00, 1.20]:
+            mask = np.isfinite(arr) & (arr >= threshold)
+            variants.append(
+                imp_variant(
+                    f"A_VOL_{tf_name}_ATR50_GE_{threshold:.2f}",
+                    "A_VOLATILITY",
                     (
-                        "FULL",
-                        min(
-                            t["entry_time"]
-                            for t in trades
-                        ),
-                        NOW,
+                        f"A only: completed {tf_name} ATR14 / "
+                        f"ATR14-mean50 >= {threshold:.2f}"
                     ),
-                    (
-                        "LAST_5Y",
-                        NOW
-                        - timedelta(
-                            days=365.2425 * 5
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_3Y",
-                        NOW
-                        - timedelta(
-                            days=365.2425 * 3
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_2Y",
-                        NOW
-                        - timedelta(
-                            days=365.2425 * 2
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_1Y",
-                        NOW
-                        - timedelta(
-                            days=365.2425
-                        ),
-                        NOW,
-                    ),
-                ]
-
-                for label, a, b in period_defs:
-                    period_rows.append(
-                        cw24_period_row(
-                            allocation_name,
-                            mode,
-                            sim,
-                            trades,
-                            label,
-                            a,
-                            b,
-                        )
-                    )
-
-                completed += 1
-                CW24_STATUS.update(
-                    state="combined_test",
-                    message=(
-                        f"{completed}/{total_runs}: "
-                        f"{mode} {allocation_name}"
-                    ),
-                    progress=70
-                    + int(
-                        24 * completed / total_runs
-                    ),
-                )
-
-            # Hard parity on CONTROL only.
-            control = next(
-                x for x in summary_rows
-                if (
-                    x["portfolio_mode"] == mode
-                    and x["allocation"]
-                    == "CONTROL_24_Q24_075"
+                    mask,
                 )
             )
 
-            parity_status = "PASS"
-            notes = []
+    # ------------------------------------------------------------
+    # 3) SIGNAL-QUALITY TESTS ON A ONLY
+    # ------------------------------------------------------------
+    sweep_depth = quality["sweep_depth_atr"]
+    reject_depth = quality["rejection_depth10_atr"]
 
-            if control["trades"] == CW24_CONTROL_REFERENCE["trades"]:
-                if abs(
-                    control["historical_cagr_pct"]
-                    - CW24_CONTROL_REFERENCE[
-                        "historical_cagr_pct"
-                    ]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("CAGR drift")
-
-                if abs(
-                    control["max_closed_equity_dd_pct"]
-                    - CW24_CONTROL_REFERENCE[
-                        "closed_dd_pct"
-                    ]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("closed DD drift")
-
-                if abs(
-                    control[
-                        "max_open_risk_floor_dd_pct"
-                    ]
-                    - CW24_CONTROL_REFERENCE[
-                        "floor_dd_pct"
-                    ]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("floor DD drift")
-
-                if (
-                    control["max_open_positions"]
-                    != CW24_CONTROL_REFERENCE[
-                        "max_open_positions"
-                    ]
-                ):
-                    parity_status = "FAIL"
-                    notes.append("concurrency drift")
-            else:
-                parity_status = "PASS_NEWER_TRADES"
-
-            parity_rows.append({
-                "portfolio_mode": mode,
-                "reference_trades": CW24_CONTROL_REFERENCE["trades"],
-                "current_trades": control["trades"],
-                "reference_cagr_pct": CW24_CONTROL_REFERENCE[
-                    "historical_cagr_pct"
-                ],
-                "current_cagr_pct": control[
-                    "historical_cagr_pct"
-                ],
-                "reference_closed_dd_pct": CW24_CONTROL_REFERENCE[
-                    "closed_dd_pct"
-                ],
-                "current_closed_dd_pct": control[
-                    "max_closed_equity_dd_pct"
-                ],
-                "reference_floor_dd_pct": CW24_CONTROL_REFERENCE[
-                    "floor_dd_pct"
-                ],
-                "current_floor_dd_pct": control[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "reference_max_positions": CW24_CONTROL_REFERENCE[
-                    "max_open_positions"
-                ],
-                "current_max_positions": control[
-                    "max_open_positions"
-                ],
-                "status": parity_status,
-                "notes": "|".join(notes),
-            })
-
-            if parity_status == "FAIL":
-                raise RuntimeError(
-                    f"Combined-weight control parity failure "
-                    f"in {mode}: {parity_rows[-1]}"
-                )
-
-        rolling_summary = cw24_rolling_summary(
-            rolling_rows
-        )
-        calendar_summary = cw24_calendar_summary(
-            calendar_rows
-        )
-        delta_rows = cw24_delta_rows(
-            summary_rows
-        )
-        decision_rows = cw24_decision_rows(
-            summary_rows,
-            delta_rows,
-            rolling_summary,
-            calendar_summary,
+    for threshold in [0.05, 0.10, 0.20]:
+        variants.append(
+            imp_variant(
+                f"A_QUALITY_SWEEP_DEPTH_GE_{threshold:.2f}",
+                "A_SWEEP_QUALITY",
+                (
+                    "A only: signal high exceeds previous 40-bar high "
+                    f"by >= {threshold:.2f} ATR14"
+                ),
+                np.isfinite(sweep_depth) & (sweep_depth >= threshold),
+            )
         )
 
-        write_csv(
-            CW24_OUT["portfolio_parity"],
-            parity_rows,
-        )
-        write_csv(
-            CW24_OUT["allocation_manifest"],
-            manifest_rows,
-        )
-        write_csv(
-            CW24_OUT["summary"],
-            summary_rows,
-        )
-        write_csv(
-            CW24_OUT["delta_vs_control"],
-            delta_rows,
-        )
-        write_csv(
-            CW24_OUT["rolling"],
-            rolling_rows,
-        )
-        write_csv(
-            CW24_OUT["rolling_summary"],
-            rolling_summary,
-        )
-        write_csv(
-            CW24_OUT["calendar"],
-            calendar_rows,
-        )
-        write_csv(
-            CW24_OUT["calendar_summary"],
-            calendar_summary,
-        )
-        write_csv(
-            CW24_OUT["periods"],
-            period_rows,
-        )
-        write_csv(
-            CW24_OUT["drawdown_events"],
-            drawdown_rows,
-        )
-        write_csv(
-            CW24_OUT["strategy_weighted_r"],
-            weighted_r_rows,
-        )
-        write_csv(
-            CW24_OUT["decision_matrix"],
-            decision_rows,
+    for threshold in [0.05, 0.10, 0.20]:
+        variants.append(
+            imp_variant(
+                f"A_QUALITY_REJECTION_DEPTH_GE_{threshold:.2f}",
+                "A_REJECTION_QUALITY",
+                (
+                    "A only: signal closes >= "
+                    f"{threshold:.2f} ATR14 back below previous 10-bar high"
+                ),
+                np.isfinite(reject_depth) & (reject_depth >= threshold),
+            )
         )
 
-        write_csv(
-            CW24_OUT["notes"],
-            [
-                {
-                    "item": "scope",
-                    "value": (
-                        "Predeclared combined-weight validation only. "
-                        "No optimisation or combination search."
-                    ),
-                },
-                {
-                    "item": "control",
-                    "value": (
-                        "All #1-#23 at 1.00%; "
-                        "EUR_JPY_M15_SHORT #24 at 0.75%."
-                    ),
-                },
-                {
-                    "item": "candidate_3",
-                    "value": (
-                        "USD_JPY_H1_LONG, USD_JPY_M15_LONG, "
-                        "GBP_USD_H1_SHORT at 1.25%; "
-                        "all others at control."
-                    ),
-                },
-                {
-                    "item": "candidate_6",
-                    "value": (
-                        "Candidate3 plus EUR_USD_H1_SHORT, "
-                        "EUR_JPY_H1_LONG, EUR_USD_M15_LONG "
-                        "at 1.25%; all others at control."
-                    ),
-                },
-                {
-                    "item": "candidate_9",
-                    "value": (
-                        "Candidate6 plus EUR_USD_H1_LONG, "
-                        "USD_JPY_H1_SHORT, GBP_USD_M15_LONG "
-                        "at 1.25%; all others at control."
-                    ),
-                },
-                {
-                    "item": "deliberate_exclusions",
-                    "value": (
-                        "EUR_JPY_H1_SHORT, EUR_GBP_M15_SHORT "
-                        "and USD_CAD_M15_LONG were not added "
-                        "to the broad candidate despite strong "
-                        "full-history sensitivity because their "
-                        "recent marginal behaviour was weaker."
-                    ),
-                },
-                {
-                    "item": "frozen_trade_set",
-                    "value": (
-                        "Signals, stops, targets, historical fills, "
-                        "#24 A+B/B-priority logic and live-safe "
-                        "non-hedging acceptance are frozen before "
-                        "weight changes."
-                    ),
-                },
-                {
-                    "item": "equity_model",
-                    "value": (
-                        "Event-driven realised-equity compounding. "
-                        "Each trade fixes cash risk at entry; exits "
-                        "process before entries at equal timestamps. "
-                        "Conservative floor assumes all open trades "
-                        "lose their fixed cash risk simultaneously."
-                    ),
-                },
-                {
-                    "item": "decision_targets",
-                    "value": (
-                        "Diagnostic targets: positive CAGR gain, "
-                        "closed and conservative DD no worse than "
-                        "20%, 100% positive 12/24/36M rolling "
-                        "windows, 100% positive completed active "
-                        "calendar years, and no increase in max "
-                        "simultaneous positions."
-                    ),
-                },
-                {
-                    "item": "historical_not_forecast",
-                    "value": (
-                        "CAGR and drawdown figures are historical "
-                        "backtest outputs, not forecasts."
-                    ),
-                },
-            ],
+    for threshold in [0.15, 0.30, 0.45]:
+        variants.append(
+            imp_variant(
+                f"A_QUALITY_UPPER_WICK_BODY_GE_{threshold:.2f}",
+                "A_REJECTION_QUALITY",
+                (
+                    "A only: upper wick / bearish body >= "
+                    f"{threshold:.2f}"
+                ),
+                np.isfinite(f["upper_wick_body"])
+                & (f["upper_wick_body"] >= threshold),
+            )
         )
 
-        CW24_STATUS.update(
-            state="packaging",
-            message="Packaging combined-weight results",
-            progress=97,
+    # Broad exhaustion/momentum neighbourhood.
+    for threshold in [1.00, 1.50]:
+        variants.append(
+            imp_variant(
+                f"A_MOM4_GE_{threshold:.2f}",
+                "A_EXHAUSTION",
+                (
+                    "A only: prior ~4-hour M15 momentum >= "
+                    f"{threshold:.2f} ATR14"
+                ),
+                np.isfinite(f["mom4"])
+                & (f["mom4"] >= threshold),
+            )
         )
 
-        with zipfile.ZipFile(
-            CW24_BUNDLE,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as z:
-            for path in CW24_OUT.values():
-                if os.path.exists(path):
-                    z.write(
-                        path,
-                        arcname=os.path.basename(path),
-                    )
-
-        CW24_STATUS.update(
-            state="complete",
-            message=(
-                "Full 24 predeclared combined-weight "
-                "portfolio test complete"
-            ),
-            progress=100,
-            results=CW24_BUNDLE,
-            allocations=list(
-                CW24_ALLOCATIONS.keys()
-            ),
-        )
-
-    except Exception as e:
-        CW24_STATUS.update(
-            state="error",
-            message=str(e),
-        )
-        print(
-            "COMBINED WEIGHT TEST ERROR:",
-            repr(e),
-            flush=True,
-        )
-
-
-# ============================================================
-# ROUTES
-# ============================================================
-
-@app.route("/full24-combined-weight-test/status")
-def full24_combined_weight_test_status():
-    return jsonify(CW24_STATUS)
-
-
-@app.route("/full24-combined-weight-test/results")
-def full24_combined_weight_test_results():
-    if not os.path.exists(CW24_BUNDLE):
-        return jsonify({
-            "status": "not_ready",
-            "state": CW24_STATUS.get("state"),
-            "message": CW24_STATUS.get("message"),
-        }), 404
-
-    return send_file(
-        os.path.abspath(CW24_BUNDLE),
-        as_attachment=True,
-        download_name=CW24_BUNDLE,
+    # ------------------------------------------------------------
+    # 4) PREDECLARED TWO-FACTOR MARKET-CONTEXT HYPOTHESES
+    # These are declared BEFORE results. No best one-factor row is fed
+    # automatically into a combination.
+    # ------------------------------------------------------------
+    h1_below_100 = (
+        imp_finite_mask(f["h1_close"], f["h1_ema100"])
+        & (f["h1_close"] < f["h1_ema100"])
     )
+    h1_below_200 = (
+        imp_finite_mask(f["h1_close"], f["h1_ema200"])
+        & (f["h1_close"] < f["h1_ema200"])
+    )
+    h1_bear_align = (
+        imp_finite_mask(f["h1_ema50"], f["h1_ema200"])
+        & (f["h1_ema50"] < f["h1_ema200"])
+    )
+    h4_below_100 = (
+        imp_finite_mask(f["h4_close"], f["h4_ema100"])
+        & (f["h4_close"] < f["h4_ema100"])
+    )
+    h1_vol_080 = np.isfinite(f["h1_atr"]) & (f["h1_atr"] >= 0.80)
+    sweep_005 = np.isfinite(sweep_depth) & (sweep_depth >= 0.05)
+    reject_005 = np.isfinite(reject_depth) & (reject_depth >= 0.05)
 
-
-@app.route("/full24-combined-weight-test/info")
-def full24_combined_weight_test_info():
-    return jsonify({
-        "service": (
-            "Full 24 predeclared combined-weight "
-            "portfolio validation"
+    combo_defs = [
+        (
+            "A_CTX_H1_LT_EMA100_AND_H1VOL080",
+            h1_below_100 & h1_vol_080,
+            "A only: H1 close < EMA100 AND H1 ATR ratio50 >= 0.80",
         ),
-        "read_only": True,
-        "orders_supported": False,
-        "control": {
-            "strategies_1_to_23_risk_pct": 1.00,
-            "eur_jpy_m15_short_24_risk_pct": 0.75,
-        },
-        "candidates": {
-            "CANDIDATE_3_CONSERVATIVE": sorted(
-                CW24_UPWEIGHT_3
-            ),
-            "CANDIDATE_6_CORE": sorted(
-                CW24_UPWEIGHT_6
-            ),
-            "CANDIDATE_9_BROAD": sorted(
-                CW24_UPWEIGHT_9
-            ),
-        },
-        "upweighted_risk_pct": 1.25,
-        "method": (
-            "predeclared combined allocations; "
-            "no optimisation"
+        (
+            "A_CTX_H1_LT_EMA200_AND_H1VOL080",
+            h1_below_200 & h1_vol_080,
+            "A only: H1 close < EMA200 AND H1 ATR ratio50 >= 0.80",
         ),
-        "routes": [
-            "/full24-combined-weight-test/status",
-            "/full24-combined-weight-test/results",
-            "/full24-combined-weight-test/info",
-        ],
-    })
+        (
+            "A_CTX_H1_BEAR_ALIGN_AND_H1VOL080",
+            h1_bear_align & h1_vol_080,
+            "A only: H1 EMA50 < EMA200 AND H1 ATR ratio50 >= 0.80",
+        ),
+        (
+            "A_CTX_H4_LT_EMA100_AND_H1VOL080",
+            h4_below_100 & h1_vol_080,
+            "A only: H4 close < EMA100 AND H1 ATR ratio50 >= 0.80",
+        ),
+        (
+            "A_CTX_H1_LT_EMA100_AND_SWEEP005",
+            h1_below_100 & sweep_005,
+            "A only: H1 close < EMA100 AND sweep depth >= 0.05 ATR",
+        ),
+        (
+            "A_CTX_H1_LT_EMA100_AND_REJECT005",
+            h1_below_100 & reject_005,
+            "A only: H1 close < EMA100 AND rejection depth >= 0.05 ATR",
+        ),
+    ]
 
+    for vid, mask, desc in combo_defs:
+        variants.append(
+            imp_variant(
+                vid,
+                "A_PREDECLARED_CONTEXT_COMBO",
+                desc,
+                mask,
+            )
+        )
 
+    # ------------------------------------------------------------
+    # 5) EXECUTION ROBUSTNESS — STOP BUFFER
+    # ------------------------------------------------------------
+    for ticks in [0, 5, 15, 20]:
+        variants.append(
+            imp_variant(
+                f"EXEC_STOP_BUFFER_{ticks}_TICKS",
+                "STOP_BUFFER_ROBUSTNESS",
+                (
+                    "Frozen A+B signal set; stop buffer = "
+                    f"{ticks} ticks instead of 10"
+                ),
+                all_true,
+                stop_ticks=ticks,
+            )
+        )
 
-# ============================================================
-# FULL 24 — PORTFOLIO-WIDE RISK SCALING CURVE
-# ============================================================
-#
-# PURPOSE
-# -------
-# Compare selective weighting against simple portfolio-level scaling.
-#
-# FROZEN SIGNAL / GATE STATE
-# --------------------------
-# Uses the exact frozen 24-strategy accepted trade set:
-#   - current #1-#23
-#   - EUR_JPY_M15_SHORT #24 A+B / B-priority
-#   - same live-safe non-hedging gate
-#
-# No signals, stops, targets, sessions, filters or trade outcomes change.
-#
-# TRACK A — UNIFORM ALL 24
-# ------------------------
-# Every accepted strategy uses the SAME risk:
-#   1.00%, 1.10%, 1.15%, 1.20%, 1.25%
-#
-# TRACK B — #1-#23 SCALED, #24 FIXED
-# -----------------------------------
-# Existing #1-#23 all use:
-#   1.00%, 1.10%, 1.15%, 1.20%, 1.25%
-# while EUR_JPY_M15_SHORT #24 remains fixed at 0.75%.
-#
-# BENCHMARKS
-# ----------
-# CURRENT_CONTROL:
-#   #1-#23 = 1.00%
-#   #24    = 0.75%
-#
-# CORE_6:
-#   same CURRENT_CONTROL, but the six previously selected strategies
-#   are 1.25%:
-#       USD_JPY_H1_LONG
-#       USD_JPY_M15_LONG
-#       GBP_USD_H1_SHORT
-#       EUR_USD_H1_SHORT
-#       EUR_JPY_H1_LONG
-#       EUR_USD_M15_LONG
-#
-# READ ONLY. NEVER SENDS ORDERS.
-# ============================================================
+    # ------------------------------------------------------------
+    # 6) RR PLATEAUS — combined B-priority strategy
+    # ------------------------------------------------------------
+    for rr in [4.00, 4.25, 4.50, 5.00, 5.25, 5.50]:
+        variants.append(
+            imp_variant(
+                f"RR_A_{rr:.2f}_B_3.00",
+                "A_RR_PLATEAU_COMBINED",
+                (
+                    "Frozen signal set; A RR "
+                    f"{rr:.2f}, B RR 3.00"
+                ),
+                all_true,
+                rr_a=rr,
+                rr_b=3.00,
+            )
+        )
 
-GS24_STATUS = {
-    "state": "not_started",
-    "message": "Full 24 portfolio risk scaling study not started",
-    "progress": 0,
-    "orders_supported": False,
-    "trading_enabled": False,
-}
+    for rr in [2.50, 2.75, 3.25, 3.50]:
+        variants.append(
+            imp_variant(
+                f"RR_A_4.75_B_{rr:.2f}",
+                "B_RR_PLATEAU_COMBINED",
+                (
+                    "Frozen signal set; A RR 4.75, B RR "
+                    f"{rr:.2f}"
+                ),
+                all_true,
+                rr_a=4.75,
+                rr_b=rr,
+            )
+        )
 
-GS24_LEVELS = [0.0100, 0.0110, 0.0115, 0.0120, 0.0125]
-GS24_Q24_FIXED = 0.0075
-GS24_BUNDLE = "FULL_24_PORTFOLIO_WIDE_RISK_SCALING_RESULTS.zip"
-
-GS24_CONTROL_REFERENCE = {
-    "trades": 2666,
-    "cagr_pct": 102.599436,
-    "closed_dd_pct": -18.144324,
-    "floor_dd_pct": -18.971149,
-    "max_positions": 6,
-}
-
-GS24_CORE6_REFERENCE = {
-    "cagr_pct": 114.17,
-    "closed_dd_pct": -18.01,
-    "floor_dd_pct": -18.84,
-}
-
-GS24_CORE6 = {
-    "USD_JPY_H1_LONG",
-    "USD_JPY_M15_LONG",
-    "GBP_USD_H1_SHORT",
-    "EUR_USD_H1_SHORT",
-    "EUR_JPY_H1_LONG",
-    "EUR_USD_M15_LONG",
-}
-
-GS24_OUT = {
-    "portfolio_parity": "full24_global_scaling_portfolio_parity.csv",
-    "allocation_manifest": "full24_global_scaling_allocation_manifest.csv",
-    "summary": "full24_global_scaling_summary.csv",
-    "delta_vs_control": "full24_global_scaling_delta_vs_control.csv",
-    "efficiency": "full24_global_scaling_efficiency.csv",
-    "rolling": "full24_global_scaling_rolling.csv",
-    "rolling_summary": "full24_global_scaling_rolling_summary.csv",
-    "calendar": "full24_global_scaling_calendar.csv",
-    "calendar_summary": "full24_global_scaling_calendar_summary.csv",
-    "periods": "full24_global_scaling_periods.csv",
-    "drawdown_events": "full24_global_scaling_drawdown_events.csv",
-    "decision_matrix": "full24_global_scaling_decision_matrix.csv",
-    "gate_summary": "full24_global_scaling_gate_summary.csv",
-    "notes": "full24_global_scaling_notes.csv",
-}
-
-
-def gs24_control_map(strategy_ids):
-    risks = {sid: 0.0100 for sid in strategy_ids}
-    if Q24_STRATEGY_ID not in risks:
-        raise RuntimeError(f"Missing #24 strategy id: {Q24_STRATEGY_ID}")
-    risks[Q24_STRATEGY_ID] = GS24_Q24_FIXED
-    return risks
-
-
-def gs24_uniform_map(strategy_ids, level):
-    return {sid: float(level) for sid in strategy_ids}
-
-
-def gs24_existing23_scaled_map(strategy_ids, level):
-    risks = {sid: float(level) for sid in strategy_ids}
-    if Q24_STRATEGY_ID not in risks:
-        raise RuntimeError(f"Missing #24 strategy id: {Q24_STRATEGY_ID}")
-    risks[Q24_STRATEGY_ID] = GS24_Q24_FIXED
-    return risks
-
-
-def gs24_core6_map(strategy_ids):
-    risks = gs24_control_map(strategy_ids)
-
-    unknown = sorted(GS24_CORE6 - set(strategy_ids))
-    if unknown:
-        raise RuntimeError(f"Core6 contains unknown strategy IDs: {unknown}")
-
-    for sid in GS24_CORE6:
-        risks[sid] = 0.0125
-
-    return risks
-
-
-def gs24_variant_definitions(strategy_ids):
-    variants = []
-
-    # Current proposed control.
-    variants.append({
-        "variant": "CURRENT_CONTROL_23x1PCT_Q24x075",
-        "track": "BENCHMARK",
-        "level_pct": "",
-        "risk_map": gs24_control_map(strategy_ids),
-    })
-
-    # Previous Core-6 selective allocation.
-    variants.append({
-        "variant": "CORE_6_SELECTIVE",
-        "track": "BENCHMARK",
-        "level_pct": "",
-        "risk_map": gs24_core6_map(strategy_ids),
-    })
-
-    # Track A: all 24 use exactly the same risk.
-    for level in GS24_LEVELS:
-        variants.append({
-            "variant": f"UNIFORM_ALL24_{level*100:.2f}PCT",
-            "track": "UNIFORM_ALL24",
-            "level_pct": level * 100.0,
-            "risk_map": gs24_uniform_map(strategy_ids, level),
-        })
-
-    # Track B: existing23 scale together, #24 remains at 0.75%.
-    for level in GS24_LEVELS:
-        variants.append({
-            "variant": f"EXISTING23_{level*100:.2f}PCT_Q24_0.75PCT",
-            "track": "EXISTING23_SCALED_Q24_FIXED",
-            "level_pct": level * 100.0,
-            "risk_map": gs24_existing23_scaled_map(strategy_ids, level),
-        })
+    # Guard against accidental duplicate IDs.
+    ids = [v["variant_id"] for v in variants]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Duplicate controlled-improvement variant IDs")
 
     return variants
 
 
-def gs24_summary_row(variant_def, mode, trades, sim):
-    s = sim["summary"]
-    rm = variant_def["risk_map"]
-
-    risks = sorted(set(round(v * 100.0, 10) for v in rm.values()))
-
+def imp_stats_row(trades):
+    s = stats(trades)
     return {
-        "variant": variant_def["variant"],
-        "track": variant_def["track"],
-        "portfolio_mode": mode,
-        "level_pct": variant_def["level_pct"],
-        "strategies": len(rm),
-        "trades": len(trades),
-        "unique_risk_levels_pct": "|".join(str(x) for x in risks),
-        "q24_risk_pct": rm[Q24_STRATEGY_ID] * 100.0,
-        "ending_balance_from_100": s["ending_balance"],
-        "ending_multiple": s["ending_multiple"],
-        "total_return_pct": s["total_return_pct"],
-        "historical_cagr_pct": s["historical_cagr_pct"],
-        "weighted_r_equivalent_at_1pct": s["weighted_r_equivalent_at_1pct"],
-        "max_closed_equity_dd_pct": s["max_closed_equity_dd_pct"],
-        "max_open_risk_floor_dd_pct": s["max_open_risk_floor_dd_pct"],
-        "max_open_positions": s["max_open_positions"],
-        "max_open_risk_pct_of_realised_equity": s[
-            "max_open_risk_pct_of_realised_equity"
-        ],
+        "trades": s["trades"],
+        "winners": s["winners"],
+        "losers": s["losers"],
+        "win_rate": round(s["win_rate"], 6),
+        "profit_factor": round(s["profit_factor"], 6),
+        "total_r": round(s["total_r"], 6),
+        "expectancy_r": round(s["expectancy_r"], 6),
+        "max_drawdown_r": round(s["max_drawdown_r"], 6),
+        "longest_loss_streak": s["longest_loss_streak"],
     }
 
 
-def gs24_balance_before(sim, ts):
-    j = bisect.bisect_left(sim["exit_times"], ts) - 1
-    return sim["exit_balances"][j] if j >= 0 else STARTING_BALANCE
-
-
-def gs24_period_row(variant_def, mode, sim, trades, label, start, end):
-    sb = gs24_balance_before(sim, start)
-    eb = gs24_balance_before(sim, end)
-
-    exits = [
-        t for t in trades
-        if start <= t["exit_event_time"] < end
+def imp_period_definitions(candles):
+    return [
+        ("FULL", candles[0]["time"], NOW),
+        (
+            "VALIDATION_2018_PLUS",
+            datetime(2018, 1, 1, tzinfo=timezone.utc),
+            NOW,
+        ),
+        (
+            "ERA_2020_PLUS",
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            NOW,
+        ),
+        (
+            "LAST_5Y",
+            NOW - timedelta(days=365.2425 * 5),
+            NOW,
+        ),
+        (
+            "LAST_3Y",
+            NOW - timedelta(days=365.2425 * 3),
+            NOW,
+        ),
+        (
+            "LAST_2Y",
+            NOW - timedelta(days=365.2425 * 2),
+            NOW,
+        ),
+        (
+            "LAST_1Y",
+            NOW - timedelta(days=365.2425),
+            NOW,
+        ),
+        *ERAS,
     ]
 
-    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
 
-    years = max(
-        (end - start).total_seconds() / (365.2425 * 86400.0),
-        1e-9,
-    )
-
-    ann = (
-        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
-        if sb > 0 and eb > 0
-        else 0.0
-    )
-
-    return {
-        "variant": variant_def["variant"],
-        "track": variant_def["track"],
-        "portfolio_mode": mode,
-        "level_pct": variant_def["level_pct"],
-        "period": label,
-        "start_utc": iso(start),
-        "end_utc": iso(end),
-        "start_balance": sb,
-        "end_balance": eb,
-        "compounded_return_pct": ret,
-        "annualized_return_pct": ann,
-        "realized_exits": len(exits),
-    }
-
-
-def gs24_rolling_rows(variant_def, mode, sim, trades):
-    first_entry = min(t["entry_time"] for t in trades)
-    start_month = month_floor(first_entry)
-    end_complete = month_floor(NOW)
-
-    rows = []
-    for months in (12, 24, 36):
-        cur = start_month
-        while add_months(cur, months) <= end_complete:
-            end = add_months(cur, months)
-            row = gs24_period_row(
-                variant_def,
-                mode,
-                sim,
-                trades,
-                f"ROLLING_{months}M",
-                cur,
-                end,
-            )
-            row["months"] = months
-            rows.append(row)
-            cur = add_months(cur, 1)
-
-    return rows
-
-
-def gs24_rolling_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["variant"],
-                r["track"],
-                r["portfolio_mode"],
-                r["level_pct"],
-                int(r["months"]),
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, track, mode, level_pct, months = key
-
-        active = [
-            x for x in group
-            if x["realized_exits"] > 0
-        ]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-        vals = [
-            x["compounded_return_pct"]
-            for x in active
-        ]
-
-        out.append({
-            "variant": variant,
-            "track": track,
-            "portfolio_mode": mode,
-            "level_pct": level_pct,
-            "months": months,
-            "total_windows": len(group),
-            "active_windows": len(active),
-            "positive_active_windows": len(positive),
-            "positive_active_windows_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_compounded_return_pct_active": safe_median(vals),
-            "worst_compounded_return_pct_active": min(vals) if vals else 0.0,
-            "best_compounded_return_pct_active": max(vals) if vals else 0.0,
-        })
-
-    return out
-
-
-def gs24_calendar_rows(variant_def, mode, sim, trades):
-    first_year = min(t["entry_time"] for t in trades).year
-
-    rows = []
-    for year in range(first_year, NOW.year + 1):
-        start = datetime(year, 1, 1, tzinfo=timezone.utc)
-        nominal_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-        end = min(nominal_end, NOW)
-
-        if end <= start:
-            continue
-
-        row = gs24_period_row(
-            variant_def,
-            mode,
-            sim,
-            trades,
-            str(year),
-            start,
-            end,
-        )
-        row["year"] = year
-        row["complete_year"] = nominal_end <= NOW
-        rows.append(row)
-
-    return rows
-
-
-def gs24_calendar_summary(rows):
-    grouped = defaultdict(list)
-
-    for r in rows:
-        grouped[
-            (
-                r["variant"],
-                r["track"],
-                r["portfolio_mode"],
-                r["level_pct"],
-            )
-        ].append(r)
-
-    out = []
-    for key, group in grouped.items():
-        variant, track, mode, level_pct = key
-
-        complete = [x for x in group if x["complete_year"]]
-        active = [x for x in complete if x["realized_exits"] > 0]
-        positive = [
-            x for x in active
-            if x["compounded_return_pct"] > 0
-        ]
-
-        worst = (
-            min(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-        best = (
-            max(active, key=lambda x: x["compounded_return_pct"])
-            if active else None
-        )
-
-        out.append({
-            "variant": variant,
-            "track": track,
-            "portfolio_mode": mode,
-            "level_pct": level_pct,
-            "completed_years": len(complete),
-            "active_completed_years": len(active),
-            "positive_active_completed_years": len(positive),
-            "positive_active_completed_years_pct": pct(
-                len(positive),
-                len(active),
-            ),
-            "median_return_pct_active": safe_median(
-                x["compounded_return_pct"]
-                for x in active
-            ),
-            "worst_year": worst["year"] if worst else "",
-            "worst_year_return_pct": (
-                worst["compounded_return_pct"]
-                if worst else 0.0
-            ),
-            "best_year": best["year"] if best else "",
-            "best_year_return_pct": (
-                best["compounded_return_pct"]
-                if best else 0.0
-            ),
-        })
-
-    return out
-
-
-def gs24_drawdown_rows(variant_def, mode, sim):
+def imp_eval_variant_periods(variant, candles, ix_a, ix_b):
     rows = []
 
-    for event_type, event in [
-        ("MAX_CLOSED_DD", sim.get("closed_dd_event")),
-        ("MAX_OPEN_RISK_FLOOR_DD", sim.get("floor_dd_event")),
-        ("MAX_OPEN_RISK_PCT", sim.get("max_open_risk_event")),
-    ]:
-        if not event:
-            continue
+    for label, start, end in imp_period_definitions(candles):
+        trades = imp_combined_backtest(
+            candles,
+            ix_a,
+            variant["rr_a"],
+            ix_b,
+            variant["rr_b"],
+            cost_pips=PRIMARY_COST,
+            stop_ticks=variant["stop_ticks"],
+            start=start,
+            end=end,
+            priority="B",
+        )
 
         rows.append({
-            "variant": variant_def["variant"],
-            "track": variant_def["track"],
-            "portfolio_mode": mode,
-            "level_pct": variant_def["level_pct"],
-            "event_type": event_type,
-            **event,
+            "variant_id": variant["variant_id"],
+            "group": variant["group"],
+            "period": label,
+            "start_utc": iso(start),
+            "end_utc": iso(end),
+            **imp_stats_row(trades),
         })
 
     return rows
 
 
-def gs24_delta_rows(summary_rows):
+def imp_cost_rows(variant, candles, ix_a, ix_b):
+    """
+    Keep cost stress coarse: 1/2/3 pips.
+    The purpose is robustness, not optimising cost assumptions.
+    """
+    rows = []
+
+    windows = [
+        ("FULL", candles[0]["time"], NOW),
+        (
+            "VALIDATION_2018_PLUS",
+            datetime(2018, 1, 1, tzinfo=timezone.utc),
+            NOW,
+        ),
+        (
+            "LAST_5Y",
+            NOW - timedelta(days=365.2425 * 5),
+            NOW,
+        ),
+        (
+            "LAST_2Y",
+            NOW - timedelta(days=365.2425 * 2),
+            NOW,
+        ),
+    ]
+
+    for cost in [1.0, 2.0, 3.0]:
+        for label, start, end in windows:
+            trades = imp_combined_backtest(
+                candles,
+                ix_a,
+                variant["rr_a"],
+                ix_b,
+                variant["rr_b"],
+                cost_pips=cost,
+                stop_ticks=variant["stop_ticks"],
+                start=start,
+                end=end,
+                priority="B",
+            )
+
+            rows.append({
+                "variant_id": variant["variant_id"],
+                "group": variant["group"],
+                "cost_pips": cost,
+                "period": label,
+                **imp_stats_row(trades),
+            })
+
+    return rows
+
+
+def imp_rolling_rows(variant, candles, ix_a, ix_b):
+    rows = []
+
+    first = month_floor(max(candles[0]["time"], START))
+    last = month_floor(NOW)
+
+    for months in [12, 24, 36]:
+        start = first
+
+        while add_months(start, months) <= last:
+            end = add_months(start, months)
+
+            trades = imp_combined_backtest(
+                candles,
+                ix_a,
+                variant["rr_a"],
+                ix_b,
+                variant["rr_b"],
+                cost_pips=PRIMARY_COST,
+                stop_ticks=variant["stop_ticks"],
+                start=start,
+                end=end,
+                priority="B",
+            )
+
+            s = stats(trades)
+
+            rows.append({
+                "variant_id": variant["variant_id"],
+                "group": variant["group"],
+                "months": months,
+                "start_utc": iso(start),
+                "end_utc": iso(end),
+                "trades": s["trades"],
+                "profit_factor": round(s["profit_factor"], 6),
+                "total_r": round(s["total_r"], 6),
+                "positive": s["total_r"] > 0,
+                "zero_trade": s["trades"] == 0,
+            })
+
+            start = add_months(start, 1)
+
+    return rows
+
+
+def imp_rolling_summary(rows):
     grouped = defaultdict(list)
-    for r in summary_rows:
-        grouped[r["portfolio_mode"]].append(r)
+
+    for row in rows:
+        grouped[
+            (
+                row["variant_id"],
+                row["group"],
+                int(row["months"]),
+            )
+        ].append(row)
 
     out = []
 
-    for mode, rows in grouped.items():
-        control = next(
-            x for x in rows
-            if x["variant"] == "CURRENT_CONTROL_23x1PCT_Q24x075"
-        )
+    for (vid, group, months), sub in grouped.items():
+        active = [x for x in sub if x["trades"] > 0]
 
-        for r in rows:
-            if r["variant"] == control["variant"]:
-                continue
-
-            cagr_gain = (
-                r["historical_cagr_pct"]
-                - control["historical_cagr_pct"]
-            )
-            closed_change = (
-                r["max_closed_equity_dd_pct"]
-                - control["max_closed_equity_dd_pct"]
-            )
-            floor_change = (
-                r["max_open_risk_floor_dd_pct"]
-                - control["max_open_risk_floor_dd_pct"]
-            )
-
-            extra_closed = max(0.0, -closed_change)
-            extra_floor = max(0.0, -floor_change)
-
-            out.append({
-                "variant": r["variant"],
-                "track": r["track"],
-                "portfolio_mode": mode,
-                "level_pct": r["level_pct"],
-                "control_cagr_pct": control["historical_cagr_pct"],
-                "candidate_cagr_pct": r["historical_cagr_pct"],
-                "delta_cagr_pp": cagr_gain,
-                "control_closed_dd_pct": control[
-                    "max_closed_equity_dd_pct"
-                ],
-                "candidate_closed_dd_pct": r[
-                    "max_closed_equity_dd_pct"
-                ],
-                "delta_closed_dd_pp": closed_change,
-                "extra_closed_dd_magnitude_pp": extra_closed,
-                "control_floor_dd_pct": control[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "candidate_floor_dd_pct": r[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "delta_floor_dd_pp": floor_change,
-                "extra_floor_dd_magnitude_pp": extra_floor,
-                "cagr_gain_per_extra_closed_dd_pp": (
-                    cagr_gain / extra_closed
-                    if extra_closed > 0
-                    else 999.0 if cagr_gain > 0
-                    else 0.0
-                ),
-                "cagr_gain_per_extra_floor_dd_pp": (
-                    cagr_gain / extra_floor
-                    if extra_floor > 0
-                    else 999.0 if cagr_gain > 0
-                    else 0.0
-                ),
-                "delta_max_open_risk_pp": (
-                    r["max_open_risk_pct_of_realised_equity"]
-                    - control[
-                        "max_open_risk_pct_of_realised_equity"
-                    ]
-                ),
-                "delta_ending_multiple": (
-                    r["ending_multiple"]
-                    - control["ending_multiple"]
-                ),
-            })
+        out.append({
+            "variant_id": vid,
+            "group": group,
+            "months": months,
+            "windows": len(sub),
+            "active_windows": len(active),
+            "zero_trade_windows": len(sub) - len(active),
+            "positive_windows_pct": round(
+                100.0
+                * sum(bool(x["positive"]) for x in sub)
+                / len(sub),
+                6,
+            ) if sub else 0.0,
+            "positive_active_windows_pct": round(
+                100.0
+                * sum(bool(x["positive"]) for x in active)
+                / len(active),
+                6,
+            ) if active else 0.0,
+            "median_r_all": round(
+                med([x["total_r"] for x in sub]),
+                6,
+            ),
+            "median_r_active": round(
+                med([x["total_r"] for x in active]),
+                6,
+            ),
+            "median_pf_active": round(
+                med([x["profit_factor"] for x in active]),
+                6,
+            ),
+            "worst_r": round(
+                min((x["total_r"] for x in sub), default=0.0),
+                6,
+            ),
+            "best_r": round(
+                max((x["total_r"] for x in sub), default=0.0),
+                6,
+            ),
+        })
 
     return out
 
 
-def gs24_efficiency_rows(summary_rows):
+def imp_calendar_rows(variant, candles, ix_a, ix_b):
+    rows = []
+    first_year = max(START.year, candles[0]["time"].year)
+
+    for year in range(first_year, NOW.year):
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+
+        trades = imp_combined_backtest(
+            candles,
+            ix_a,
+            variant["rr_a"],
+            ix_b,
+            variant["rr_b"],
+            cost_pips=PRIMARY_COST,
+            stop_ticks=variant["stop_ticks"],
+            start=start,
+            end=end,
+            priority="B",
+        )
+
+        s = stats(trades)
+
+        rows.append({
+            "variant_id": variant["variant_id"],
+            "group": variant["group"],
+            "year": year,
+            "trades": s["trades"],
+            "profit_factor": round(s["profit_factor"], 6),
+            "total_r": round(s["total_r"], 6),
+            "positive": s["total_r"] > 0,
+            "negative": s["total_r"] < 0,
+            "zero_trade": s["trades"] == 0,
+        })
+
+    return rows
+
+
+def imp_calendar_summary(rows):
     grouped = defaultdict(list)
-    for r in summary_rows:
-        if r["track"] in {
-            "UNIFORM_ALL24",
-            "EXISTING23_SCALED_Q24_FIXED",
-        }:
-            grouped[
-                (
-                    r["portfolio_mode"],
-                    r["track"],
-                )
-            ].append(r)
+
+    for row in rows:
+        grouped[
+            (
+                row["variant_id"],
+                row["group"],
+            )
+        ].append(row)
 
     out = []
 
-    for (mode, track), rows in grouped.items():
-        rows = sorted(
-            rows,
-            key=lambda x: float(x["level_pct"]),
-        )
+    for (vid, group), sub in grouped.items():
+        active = [x for x in sub if x["trades"] > 0]
 
-        for lo, hi in zip(rows[:-1], rows[1:]):
-            cagr_gain = (
-                hi["historical_cagr_pct"]
-                - lo["historical_cagr_pct"]
-            )
-            closed_change = (
-                hi["max_closed_equity_dd_pct"]
-                - lo["max_closed_equity_dd_pct"]
-            )
-            floor_change = (
-                hi["max_open_risk_floor_dd_pct"]
-                - lo["max_open_risk_floor_dd_pct"]
-            )
-
-            extra_closed = max(0.0, -closed_change)
-            extra_floor = max(0.0, -floor_change)
-
-            out.append({
-                "portfolio_mode": mode,
-                "track": track,
-                "from_level_pct": lo["level_pct"],
-                "to_level_pct": hi["level_pct"],
-                "cagr_gain_pp": cagr_gain,
-                "closed_dd_change_pp": closed_change,
-                "extra_closed_dd_magnitude_pp": extra_closed,
-                "floor_dd_change_pp": floor_change,
-                "extra_floor_dd_magnitude_pp": extra_floor,
-                "cagr_gain_per_extra_closed_dd_pp": (
-                    cagr_gain / extra_closed
-                    if extra_closed > 0
-                    else 999.0 if cagr_gain > 0
-                    else 0.0
-                ),
-                "cagr_gain_per_extra_floor_dd_pp": (
-                    cagr_gain / extra_floor
-                    if extra_floor > 0
-                    else 999.0 if cagr_gain > 0
-                    else 0.0
-                ),
-                "max_open_risk_change_pp": (
-                    hi["max_open_risk_pct_of_realised_equity"]
-                    - lo["max_open_risk_pct_of_realised_equity"]
-                ),
-            })
+        out.append({
+            "variant_id": vid,
+            "group": group,
+            "completed_years": len(sub),
+            "active_years": len(active),
+            "positive_years": sum(bool(x["positive"]) for x in sub),
+            "negative_years": sum(bool(x["negative"]) for x in sub),
+            "zero_trade_years": sum(bool(x["zero_trade"]) for x in sub),
+            "positive_years_pct": round(
+                100.0
+                * sum(bool(x["positive"]) for x in sub)
+                / len(sub),
+                6,
+            ) if sub else 0.0,
+            "positive_active_years_pct": round(
+                100.0
+                * sum(bool(x["positive"]) for x in active)
+                / len(active),
+                6,
+            ) if active else 0.0,
+            "median_year_r": round(
+                med([x["total_r"] for x in active]),
+                6,
+            ),
+            "worst_year_r": round(
+                min((x["total_r"] for x in active), default=0.0),
+                6,
+            ),
+            "best_year_r": round(
+                max((x["total_r"] for x in active), default=0.0),
+                6,
+            ),
+        })
 
     return out
 
 
-def gs24_decision_rows(
+def imp_trigger_mix_row(variant, trades, raw_a_count, raw_b_count):
+    accepted_a = sum(t.get("trigger") == "A" for t in trades)
+    accepted_b = sum(t.get("trigger") == "B" for t in trades)
+
+    return {
+        "variant_id": variant["variant_id"],
+        "group": variant["group"],
+        "raw_a_signals_after_variant_filter": raw_a_count,
+        "raw_b_signals_frozen": raw_b_count,
+        "accepted_combined_trades": len(trades),
+        "accepted_a_trades": accepted_a,
+        "accepted_b_trades": accepted_b,
+        "accepted_a_pct": (
+            round(100.0 * accepted_a / len(trades), 6)
+            if trades else 0.0
+        ),
+        "accepted_b_pct": (
+            round(100.0 * accepted_b / len(trades), 6)
+            if trades else 0.0
+        ),
+    }
+
+
+def imp_summary_from_period_rows(period_rows):
+    by_variant = defaultdict(dict)
+
+    for r in period_rows:
+        by_variant[r["variant_id"]][r["period"]] = r
+
+    out = []
+
+    for vid, periods in by_variant.items():
+        full = periods["FULL"]
+        v18 = periods["VALIDATION_2018_PLUS"]
+        p20 = periods["ERA_2020_PLUS"]
+        p5 = periods["LAST_5Y"]
+        p3 = periods["LAST_3Y"]
+        p2 = periods["LAST_2Y"]
+        p1 = periods["LAST_1Y"]
+
+        era_rows = [
+            periods.get("ERA_2002_07"),
+            periods.get("ERA_2008_13"),
+            periods.get("ERA_2014_19"),
+            periods.get("ERA_2020_NOW"),
+        ]
+        era_rows = [x for x in era_rows if x is not None and x["trades"] > 0]
+
+        out.append({
+            "variant_id": vid,
+            "group": full["group"],
+            "full_trades": full["trades"],
+            "full_pf": full["profit_factor"],
+            "full_r": full["total_r"],
+            "full_expectancy_r": full["expectancy_r"],
+            "full_dd_r": full["max_drawdown_r"],
+            "full_win_rate": full["win_rate"],
+            "validation2018_trades": v18["trades"],
+            "validation2018_pf": v18["profit_factor"],
+            "validation2018_r": v18["total_r"],
+            "era2020_trades": p20["trades"],
+            "era2020_pf": p20["profit_factor"],
+            "era2020_r": p20["total_r"],
+            "last5y_trades": p5["trades"],
+            "last5y_pf": p5["profit_factor"],
+            "last5y_r": p5["total_r"],
+            "last3y_trades": p3["trades"],
+            "last3y_pf": p3["profit_factor"],
+            "last3y_r": p3["total_r"],
+            "last2y_trades": p2["trades"],
+            "last2y_pf": p2["profit_factor"],
+            "last2y_r": p2["total_r"],
+            "last1y_trades": p1["trades"],
+            "last1y_pf": p1["profit_factor"],
+            "last1y_r": p1["total_r"],
+            "positive_eras": sum(x["total_r"] > 0 for x in era_rows),
+            "active_eras": len(era_rows),
+            "min_active_era_pf": (
+                round(min(x["profit_factor"] for x in era_rows), 6)
+                if era_rows else 0.0
+            ),
+        })
+
+    return out
+
+
+def imp_delta_rows(summary_rows):
+    base = next(
+        x for x in summary_rows
+        if x["variant_id"] == "BASELINE_AB_B_PRIORITY"
+    )
+
+    out = []
+
+    for r in summary_rows:
+        out.append({
+            "variant_id": r["variant_id"],
+            "group": r["group"],
+            "delta_full_trades": r["full_trades"] - base["full_trades"],
+            "delta_full_pf": round(r["full_pf"] - base["full_pf"], 6),
+            "delta_full_r": round(r["full_r"] - base["full_r"], 6),
+            "delta_full_expectancy_r": round(
+                r["full_expectancy_r"] - base["full_expectancy_r"],
+                6,
+            ),
+            "delta_full_dd_r": round(
+                r["full_dd_r"] - base["full_dd_r"],
+                6,
+            ),
+            "delta_validation2018_pf": round(
+                r["validation2018_pf"] - base["validation2018_pf"],
+                6,
+            ),
+            "delta_validation2018_r": round(
+                r["validation2018_r"] - base["validation2018_r"],
+                6,
+            ),
+            "delta_last5y_pf": round(
+                r["last5y_pf"] - base["last5y_pf"],
+                6,
+            ),
+            "delta_last5y_r": round(
+                r["last5y_r"] - base["last5y_r"],
+                6,
+            ),
+            "delta_last3y_pf": round(
+                r["last3y_pf"] - base["last3y_pf"],
+                6,
+            ),
+            "delta_last3y_r": round(
+                r["last3y_r"] - base["last3y_r"],
+                6,
+            ),
+            "delta_last2y_pf": round(
+                r["last2y_pf"] - base["last2y_pf"],
+                6,
+            ),
+            "delta_last2y_r": round(
+                r["last2y_r"] - base["last2y_r"],
+                6,
+            ),
+            "delta_last1y_pf": round(
+                r["last1y_pf"] - base["last1y_pf"],
+                6,
+            ),
+            "delta_last1y_r": round(
+                r["last1y_r"] - base["last1y_r"],
+                6,
+            ),
+        })
+
+    return out
+
+
+def imp_robustness_view(
     summary_rows,
-    delta_rows,
     rolling_summary,
     calendar_summary,
+    cost_rows,
+    trigger_mix_rows,
 ):
-    delta_lookup = {
-        (x["portfolio_mode"], x["variant"]): x
-        for x in delta_rows
-    }
-    roll_lookup = {
-        (
-            x["portfolio_mode"],
-            x["variant"],
-            int(x["months"]),
-        ): x
+    roll = {
+        (x["variant_id"], int(x["months"])): x
         for x in rolling_summary
     }
-    cal_lookup = {
-        (x["portfolio_mode"], x["variant"]): x
+
+    cal = {
+        x["variant_id"]: x
         for x in calendar_summary
     }
+
+    costs = {
+        (
+            x["variant_id"],
+            float(x["cost_pips"]),
+            x["period"],
+        ): x
+        for x in cost_rows
+    }
+
+    mix = {
+        x["variant_id"]: x
+        for x in trigger_mix_rows
+    }
+
+    base = next(
+        x for x in summary_rows
+        if x["variant_id"] == "BASELINE_AB_B_PRIORITY"
+    )
+
+    base_r24 = roll[("BASELINE_AB_B_PRIORITY", 24)]
+    base_r36 = roll[("BASELINE_AB_B_PRIORITY", 36)]
+    base_cal = cal["BASELINE_AB_B_PRIORITY"]
 
     out = []
 
     for s in summary_rows:
-        if s["variant"] == "CURRENT_CONTROL_23x1PCT_Q24x075":
-            continue
+        vid = s["variant_id"]
+        r12 = roll[(vid, 12)]
+        r24 = roll[(vid, 24)]
+        r36 = roll[(vid, 36)]
+        c = cal[vid]
+        c2 = costs[(vid, 2.0, "FULL")]
+        c3 = costs[(vid, 3.0, "FULL")]
+        c3v = costs[(vid, 3.0, "VALIDATION_2018_PLUS")]
+        m = mix[vid]
 
-        mode = s["portfolio_mode"]
-        variant = s["variant"]
-        d = delta_lookup[(mode, variant)]
-
-        r12 = roll_lookup[(mode, variant, 12)]
-        r24 = roll_lookup[(mode, variant, 24)]
-        r36 = roll_lookup[(mode, variant, 36)]
-        cal = cal_lookup[(mode, variant)]
-
+        # Diagnostics only. They DO NOT constitute automatic approval.
         checks = {
-            "adds_cagr": d["delta_cagr_pp"] > 0,
-            "closed_dd_under_20pct": (
-                s["max_closed_equity_dd_pct"] >= -20.0
+            "sample_not_collapsed_70pct": (
+                s["full_trades"] >= 0.70 * base["full_trades"]
             ),
-            "floor_dd_under_20pct": (
-                s["max_open_risk_floor_dd_pct"] >= -20.0
+            "full_pf_not_weaker": (
+                s["full_pf"] >= base["full_pf"]
             ),
-            "all_12m_positive": (
-                r12["positive_active_windows_pct"] == 100.0
+            "full_dd_not_worse": (
+                s["full_dd_r"] >= base["full_dd_r"]
             ),
-            "all_24m_positive": (
-                r24["positive_active_windows_pct"] == 100.0
+            "validation2018_positive": (
+                s["validation2018_r"] > 0
             ),
-            "all_36m_positive": (
-                r36["positive_active_windows_pct"] == 100.0
+            "last5y_positive": (
+                s["last5y_r"] > 0
             ),
-            "all_completed_years_positive": (
-                cal["positive_active_completed_years_pct"] == 100.0
+            "last3y_positive": (
+                s["last3y_r"] > 0
             ),
-            "max_positions_not_higher": (
-                s["max_open_positions"]
-                <= GS24_CONTROL_REFERENCE["max_positions"]
+            "last2y_positive": (
+                s["last2y_r"] > 0
+            ),
+            "rolling24_not_weaker": (
+                r24["positive_active_windows_pct"]
+                >= base_r24["positive_active_windows_pct"]
+            ),
+            "rolling36_not_weaker": (
+                r36["positive_active_windows_pct"]
+                >= base_r36["positive_active_windows_pct"]
+            ),
+            "calendar_not_weaker": (
+                c["positive_active_years_pct"]
+                >= base_cal["positive_active_years_pct"]
+            ),
+            "cost2_pf_ge_1_30": (
+                c2["profit_factor"] >= 1.30
+            ),
+            "cost3_pf_ge_1_20": (
+                c3["profit_factor"] >= 1.20
+            ),
+            "cost3_validation_positive": (
+                c3v["total_r"] > 0
             ),
         }
 
         out.append({
-            "variant": variant,
-            "track": s["track"],
-            "portfolio_mode": mode,
-            "level_pct": s["level_pct"],
-            "comparison_status": (
-                "MEETS_PREDECLARED_TARGETS"
-                if all(checks.values())
-                else "REVIEW_TRADEOFF"
-            ),
+            "variant_id": vid,
+            "group": s["group"],
+            "diagnostic_only": True,
             "checks_passed": sum(bool(v) for v in checks.values()),
             "checks_total": len(checks),
             **{
                 f"check_{k}": v
                 for k, v in checks.items()
             },
-            "historical_cagr_pct": s["historical_cagr_pct"],
-            "delta_cagr_pp_vs_control": d["delta_cagr_pp"],
-            "closed_dd_pct": s["max_closed_equity_dd_pct"],
-            "floor_dd_pct": s["max_open_risk_floor_dd_pct"],
-            "extra_floor_dd_pp_vs_control": d[
-                "extra_floor_dd_magnitude_pp"
-            ],
-            "max_open_positions": s["max_open_positions"],
-            "max_open_risk_pct": s[
-                "max_open_risk_pct_of_realised_equity"
-            ],
-            "rolling12_positive_pct": r12[
+            "full_trades": s["full_trades"],
+            "raw_a_signals": m["raw_a_signals_after_variant_filter"],
+            "accepted_a_trades": m["accepted_a_trades"],
+            "accepted_b_trades": m["accepted_b_trades"],
+            "full_pf": s["full_pf"],
+            "full_r": s["full_r"],
+            "full_dd_r": s["full_dd_r"],
+            "validation2018_pf": s["validation2018_pf"],
+            "validation2018_r": s["validation2018_r"],
+            "last5y_pf": s["last5y_pf"],
+            "last5y_r": s["last5y_r"],
+            "last3y_pf": s["last3y_pf"],
+            "last3y_r": s["last3y_r"],
+            "last2y_pf": s["last2y_pf"],
+            "last2y_r": s["last2y_r"],
+            "last1y_pf": s["last1y_pf"],
+            "last1y_r": s["last1y_r"],
+            "cost2_full_pf": c2["profit_factor"],
+            "cost2_full_r": c2["total_r"],
+            "cost3_full_pf": c3["profit_factor"],
+            "cost3_full_r": c3["total_r"],
+            "cost3_validation2018_r": c3v["total_r"],
+            "rolling12_positive_active_pct": r12[
                 "positive_active_windows_pct"
             ],
-            "rolling12_median_pct": r12[
-                "median_compounded_return_pct_active"
-            ],
-            "rolling12_worst_pct": r12[
-                "worst_compounded_return_pct_active"
-            ],
-            "rolling24_positive_pct": r24[
+            "rolling12_median_r": r12["median_r_active"],
+            "rolling12_worst_r": r12["worst_r"],
+            "rolling24_positive_active_pct": r24[
                 "positive_active_windows_pct"
             ],
-            "rolling24_median_pct": r24[
-                "median_compounded_return_pct_active"
-            ],
-            "rolling24_worst_pct": r24[
-                "worst_compounded_return_pct_active"
-            ],
-            "rolling36_positive_pct": r36[
+            "rolling24_median_r": r24["median_r_active"],
+            "rolling24_worst_r": r24["worst_r"],
+            "rolling36_positive_active_pct": r36[
                 "positive_active_windows_pct"
             ],
-            "rolling36_median_pct": r36[
-                "median_compounded_return_pct_active"
+            "rolling36_median_r": r36["median_r_active"],
+            "rolling36_worst_r": r36["worst_r"],
+            "active_calendar_years": c["active_years"],
+            "positive_active_years_pct": c[
+                "positive_active_years_pct"
             ],
-            "rolling36_worst_pct": r36[
-                "worst_compounded_return_pct_active"
-            ],
-            "completed_year_positive_pct": cal[
-                "positive_active_completed_years_pct"
-            ],
-            "worst_calendar_year": cal["worst_year"],
-            "worst_calendar_return_pct": cal[
-                "worst_year_return_pct"
-            ],
+            "worst_calendar_year_r": c["worst_year_r"],
+            "delta_rolling24_positive_active_pp": round(
+                r24["positive_active_windows_pct"]
+                - base_r24["positive_active_windows_pct"],
+                6,
+            ),
+            "delta_rolling36_positive_active_pp": round(
+                r36["positive_active_windows_pct"]
+                - base_r36["positive_active_windows_pct"],
+                6,
+            ),
+            "delta_calendar_positive_active_pp": round(
+                c["positive_active_years_pct"]
+                - base_cal["positive_active_years_pct"],
+                6,
+            ),
         })
 
     return out
 
 
-def run_full24_global_scaling():
+def run_controlled_improvement():
     try:
-        global EV_STATUS
-        EV_STATUS = GS24_STATUS
+        IMP_STATUS.update({
+            "state": "loading",
+            "message": "Downloading EUR/JPY M15/H1/H4/D history",
+            "progress": 2,
+        })
 
-        GS24_STATUS.update(
-            state="fetch",
-            message="Fetching EUR/JPY M15 + H1 history",
-            progress=2,
+        IMP_OUTCOME_CACHE.clear()
+        OUTCOME_CACHE.clear()
+
+        # Exact successful history-fetch convention from frozen deep validation.
+        m15 = fetch("M15", START, NOW, 35)
+        h1 = fetch("H1", WARMUP, NOW, 180)
+        h4 = fetch("H4", WARMUP, NOW, 700)
+        daily = fetch("D", WARMUP, NOW, 3500)
+
+        m15 = [x for x in m15 if x["time"] >= START]
+
+        if len(m15) < 1000:
+            raise RuntimeError("Insufficient EUR/JPY M15 history returned")
+
+        coverage_rows = [
+            {
+                "granularity": "M15",
+                "candles": len(m15),
+                "first_utc": iso(m15[0]["time"]),
+                "last_utc": iso(m15[-1]["time"]),
+            },
+            {
+                "granularity": "H1",
+                "candles": len(h1),
+                "first_utc": iso(h1[0]["time"]) if h1 else "",
+                "last_utc": iso(h1[-1]["time"]) if h1 else "",
+            },
+            {
+                "granularity": "H4",
+                "candles": len(h4),
+                "first_utc": iso(h4[0]["time"]) if h4 else "",
+                "last_utc": iso(h4[-1]["time"]) if h4 else "",
+            },
+            {
+                "granularity": "D",
+                "candles": len(daily),
+                "first_utc": iso(daily[0]["time"]) if daily else "",
+                "last_utc": iso(daily[-1]["time"]) if daily else "",
+            },
+        ]
+        write_csv(IMP_OUT["coverage"], coverage_rows)
+
+        IMP_STATUS.update({
+            "state": "precompute",
+            "message": "Building strict completed-HTF alignment and feature cache",
+            "progress": 12,
+        })
+
+        m15_times = [x["time"] for x in m15]
+        aligned_h1 = align_htf(m15_times, htf_state(h1))
+        aligned_h4 = align_htf(m15_times, htf_state(h4))
+        aligned_daily = align_htf(m15_times, htf_state(daily))
+        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
+
+        quality = imp_a_quality_arrays(f)
+
+        # Exact frozen controls.
+        a_control = a_cfg(
+            A_CONTROL_ID,
+            rr=4.75,
+            sweep_lb=40,
+            body_atr_min=0.75,
+            mom4_min=1.25,
+            close_loc_max=0.30,
+            context="NY_BLOCK_16-19",
+        )
+        b_control = b_cfg(
+            B_CONTROL_ID,
+            rr=3.00,
+            sweep_lb=60,
+            body_atr_min=1.00,
+            upper_wick_body_min=0.35,
+            mom4_min=1.00,
+            context="H1_CLOSE_LT_EMA100",
         )
 
-        eurjpy_m15, _ = fetch_history(
-            Q24_PAIR,
-            "M15",
-            START,
-            NOW,
-        )
-        eurjpy_h1, _ = fetch_history(
-            Q24_PAIR,
-            "H1",
-            PV_H1_WARMUP,
-            NOW,
+        base_a = indices(a_control, f)
+        base_b = indices(b_control, f)
+
+        variants = imp_build_variants(f, quality)
+
+        IMP_STATUS.update({
+            "state": "baseline_parity",
+            "message": "Checking exact frozen #24 baseline parity",
+            "progress": 18,
+        })
+
+        baseline_trades = imp_combined_backtest(
+            m15,
+            base_a,
+            4.75,
+            base_b,
+            3.00,
+            cost_pips=1.0,
+            stop_ticks=10,
+            start=m15[0]["time"],
+            end=NOW,
+            priority="B",
         )
 
-        if len(eurjpy_m15) < 400000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
+        baseline_stats = stats(baseline_trades)
+
+        baseline_2018 = stats(
+            imp_combined_backtest(
+                m15,
+                base_a,
+                4.75,
+                base_b,
+                3.00,
+                cost_pips=1.0,
+                stop_ticks=10,
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=NOW,
+                priority="B",
             )
-        if len(eurjpy_h1) < 100000:
-            raise RuntimeError(
-                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
+        )
+
+        parity_status = "PASS"
+        parity_notes = []
+
+        if baseline_stats["trades"] < IMP_BASELINE_REF["trades"]:
+            parity_status = "FAIL"
+            parity_notes.append("trade count below frozen reference")
+
+        elif baseline_stats["trades"] == IMP_BASELINE_REF["trades"]:
+            if abs(
+                baseline_stats["profit_factor"]
+                - IMP_BASELINE_REF["pf"]
+            ) > 0.001:
+                parity_status = "FAIL"
+                parity_notes.append("full PF drift")
+
+            if abs(
+                baseline_stats["total_r"]
+                - IMP_BASELINE_REF["r"]
+            ) > 0.05:
+                parity_status = "FAIL"
+                parity_notes.append("full R drift")
+
+            if abs(
+                baseline_stats["max_drawdown_r"]
+                - IMP_BASELINE_REF["dd"]
+            ) > 0.05:
+                parity_status = "FAIL"
+                parity_notes.append("full DD drift")
+
+            if baseline_2018["trades"] != IMP_BASELINE_REF[
+                "validation2018_trades"
+            ]:
+                parity_status = "FAIL"
+                parity_notes.append("2018+ trade-count drift")
+
+            if abs(
+                baseline_2018["profit_factor"]
+                - IMP_BASELINE_REF["validation2018_pf"]
+            ) > 0.002:
+                parity_status = "FAIL"
+                parity_notes.append("2018+ PF drift")
+
+        else:
+            parity_status = "PASS_NEWER_TRADES"
+            parity_notes.append(
+                "current history contains additional accepted baseline trades"
             )
 
-        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
-
-        GS24_STATUS.update(
-            state="rebuild",
-            message="Rebuilding frozen current23 + #24 accepted trade set",
-            progress=8,
-        )
-
-        current23 = q24_rebuild_current23(
-            eurjpy_m15,
-            eurjpy_h1,
-            eurjpy_h1_atr,
-        )
-
-        short_features = q24_features(
-            eurjpy_m15,
-            eurjpy_h1,
-        )
-        raw_q24 = q24_build_candidate_trades(
-            eurjpy_m15,
-            short_features,
-        )
-
-        q24_summary = q24_candidate_summary(raw_q24)
-
-        if q24_summary["trades"] < Q24_REFERENCE["trades"]:
-            raise RuntimeError(
-                f"#24 candidate below frozen reference: {q24_summary}"
-            )
-
-        if q24_summary["trades"] == Q24_REFERENCE["trades"]:
-            if (
-                abs(
-                    q24_summary["profit_factor"]
-                    - Q24_REFERENCE["pf"]
-                ) > 0.0001
-                or abs(
-                    q24_summary["total_r"]
-                    - Q24_REFERENCE["r"]
-                ) > 0.03
-            ):
-                raise RuntimeError(
-                    f"#24 candidate metric parity drift: {q24_summary}"
-                )
-
-        combined_independent = sorted(
-            current23["independent"] + raw_q24,
-            key=lambda t: (
-                t["entry_time"],
-                t["strategy_id"],
+        parity_rows = [{
+            "status": parity_status,
+            "notes": "|".join(parity_notes),
+            "raw_a_signals": len(base_a),
+            "raw_b_signals": len(base_b),
+            "reference_combined_trades": IMP_BASELINE_REF["trades"],
+            "current_combined_trades": baseline_stats["trades"],
+            "reference_pf": IMP_BASELINE_REF["pf"],
+            "current_pf": round(baseline_stats["profit_factor"], 6),
+            "reference_r": IMP_BASELINE_REF["r"],
+            "current_r": round(baseline_stats["total_r"], 6),
+            "reference_dd_r": IMP_BASELINE_REF["dd"],
+            "current_dd_r": round(
+                baseline_stats["max_drawdown_r"],
+                6,
             ),
-        )
+            "reference_2018_trades": IMP_BASELINE_REF[
+                "validation2018_trades"
+            ],
+            "current_2018_trades": baseline_2018["trades"],
+            "reference_2018_pf": IMP_BASELINE_REF[
+                "validation2018_pf"
+            ],
+            "current_2018_pf": round(
+                baseline_2018["profit_factor"],
+                6,
+            ),
+            "reference_2018_r": IMP_BASELINE_REF[
+                "validation2018_r"
+            ],
+            "current_2018_r": round(
+                baseline_2018["total_r"],
+                6,
+            ),
+        }]
+        write_csv(IMP_OUT["baseline_parity"], parity_rows)
 
-        gate_sets = {}
-        gate_rows = []
-
-        for priority, mode in [
-            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
-            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
-        ]:
-            accepted, rejected = apply_live_safe_nonhedging_gate(
-                combined_independent,
-                priority,
+        if parity_status == "FAIL":
+            raise RuntimeError(
+                f"Frozen #24 baseline parity failed: {parity_rows[0]}"
             )
 
-            strategy_ids = sorted({
-                t["strategy_id"]
-                for t in accepted
-            })
-            accepted_q24 = [
-                t for t in accepted
-                if t["strategy_id"] == Q24_STRATEGY_ID
-            ]
-
-            if len(strategy_ids) != 24:
-                raise RuntimeError(
-                    f"Expected 24 strategies in {mode}, got {len(strategy_ids)}"
-                )
-
-            if len(accepted) < GS24_CONTROL_REFERENCE["trades"]:
-                raise RuntimeError(
-                    f"Accepted trade set below reference in {mode}: "
-                    f"{len(accepted)}"
-                )
-
-            gate_sets[mode] = {
-                "accepted": accepted,
-                "rejected": rejected,
-                "strategy_ids": strategy_ids,
-                "accepted_q24": accepted_q24,
-            }
-
-            gate_rows.append({
-                "portfolio_mode": mode,
-                "accepted_portfolio_trades": len(accepted),
-                "unique_strategy_ids": len(strategy_ids),
-                "raw_q24_trades": len(raw_q24),
-                "accepted_q24_trades": len(accepted_q24),
-                "rejected_q24_trades": (
-                    len(raw_q24) - len(accepted_q24)
-                ),
-            })
-
-        write_csv(
-            GS24_OUT["gate_summary"],
-            gate_rows,
-        )
-
-        summary_rows = []
+        manifest_rows = []
+        period_rows = []
+        cost_rows = []
         rolling_rows = []
         calendar_rows = []
-        period_rows = []
-        drawdown_rows = []
-        manifest_rows = []
-        parity_rows = []
+        trigger_mix_rows = []
 
-        modes = [
-            "LIVE_SAFE_H1_FIRST",
-            "LIVE_SAFE_M15_FIRST",
-        ]
+        total = len(variants)
 
-        total_runs = 0
-        variants_by_mode = {}
+        IMP_STATUS.update({
+            "state": "controlled_matrix",
+            "message": f"Evaluating {total} predeclared variants",
+            "progress": 24,
+        })
 
-        for mode in modes:
-            ids = gate_sets[mode]["strategy_ids"]
-            defs = gs24_variant_definitions(ids)
-            variants_by_mode[mode] = defs
-            total_runs += len(defs)
-
-        completed = 0
-
-        for mode in modes:
-            trades = gate_sets[mode]["accepted"]
-            defs = variants_by_mode[mode]
-
-            for vd in defs:
-                risk_map = vd["risk_map"]
-
-                for sid in gate_sets[mode]["strategy_ids"]:
-                    sample = next(
-                        t for t in trades
-                        if t["strategy_id"] == sid
-                    )
-
-                    manifest_rows.append({
-                        "variant": vd["variant"],
-                        "track": vd["track"],
-                        "portfolio_mode": mode,
-                        "level_pct": vd["level_pct"],
-                        "strategy_id": sid,
-                        "pair": sample["pair"],
-                        "timeframe": sample["timeframe"],
-                        "side": sample["side"],
-                        "risk_pct": risk_map[sid] * 100.0,
-                    })
-
-                sim = w24_simulate_equity(
-                    trades,
-                    risk_map,
-                    STARTING_BALANCE,
+        for n, variant in enumerate(variants, 1):
+            if variant["a_mask"] is None:
+                ix_a = base_a
+            else:
+                ix_a = imp_apply_mask(
+                    base_a,
+                    variant["a_mask"],
                 )
 
-                summary_rows.append(
-                    gs24_summary_row(
-                        vd,
-                        mode,
-                        trades,
-                        sim,
-                    )
-                )
+            ix_b = base_b
 
-                rolling_rows.extend(
-                    gs24_rolling_rows(
-                        vd,
-                        mode,
-                        sim,
-                        trades,
-                    )
-                )
+            manifest_rows.append({
+                "variant_id": variant["variant_id"],
+                "group": variant["group"],
+                "description": variant["description"],
+                "rr_a": variant["rr_a"],
+                "rr_b": variant["rr_b"],
+                "stop_ticks": variant["stop_ticks"],
+                "cost_pips_primary": PRIMARY_COST,
+                "raw_a_signals_after_filter": len(ix_a),
+                "raw_a_control_signals": len(base_a),
+                "a_signal_retention_pct": round(
+                    100.0 * len(ix_a) / len(base_a),
+                    6,
+                ) if base_a else 0.0,
+                "raw_b_signals_frozen": len(ix_b),
+                "same_candle_priority": "B",
+                "pyramiding": 0,
+            })
 
-                calendar_rows.extend(
-                    gs24_calendar_rows(
-                        vd,
-                        mode,
-                        sim,
-                        trades,
-                    )
-                )
+            p_rows = imp_eval_variant_periods(
+                variant,
+                m15,
+                ix_a,
+                ix_b,
+            )
+            period_rows.extend(p_rows)
 
-                drawdown_rows.extend(
-                    gs24_drawdown_rows(
-                        vd,
-                        mode,
-                        sim,
-                    )
-                )
+            c_rows = imp_cost_rows(
+                variant,
+                m15,
+                ix_a,
+                ix_b,
+            )
+            cost_rows.extend(c_rows)
 
-                period_defs = [
-                    (
-                        "FULL",
-                        min(
-                            t["entry_time"]
-                            for t in trades
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_5Y",
-                        NOW - timedelta(
-                            days=365.2425 * 5
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_3Y",
-                        NOW - timedelta(
-                            days=365.2425 * 3
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_2Y",
-                        NOW - timedelta(
-                            days=365.2425 * 2
-                        ),
-                        NOW,
-                    ),
-                    (
-                        "LAST_1Y",
-                        NOW - timedelta(
-                            days=365.2425
-                        ),
-                        NOW,
-                    ),
-                ]
+            r_rows = imp_rolling_rows(
+                variant,
+                m15,
+                ix_a,
+                ix_b,
+            )
+            rolling_rows.extend(r_rows)
 
-                for label, a, b in period_defs:
-                    period_rows.append(
-                        gs24_period_row(
-                            vd,
-                            mode,
-                            sim,
-                            trades,
-                            label,
-                            a,
-                            b,
-                        )
-                    )
+            y_rows = imp_calendar_rows(
+                variant,
+                m15,
+                ix_a,
+                ix_b,
+            )
+            calendar_rows.extend(y_rows)
 
-                completed += 1
-                GS24_STATUS.update(
-                    state="scaling_test",
-                    message=f"{completed}/{total_runs}: {mode} {vd['variant']}",
-                    progress=70 + int(
-                        24 * completed / total_runs
-                    ),
-                )
+            full_trades = imp_combined_backtest(
+                m15,
+                ix_a,
+                variant["rr_a"],
+                ix_b,
+                variant["rr_b"],
+                cost_pips=PRIMARY_COST,
+                stop_ticks=variant["stop_ticks"],
+                start=m15[0]["time"],
+                end=NOW,
+                priority="B",
+            )
 
-            # Hard parity on CURRENT_CONTROL.
-            control = next(
-                r for r in summary_rows
-                if (
-                    r["portfolio_mode"] == mode
-                    and r["variant"]
-                    == "CURRENT_CONTROL_23x1PCT_Q24x075"
+            trigger_mix_rows.append(
+                imp_trigger_mix_row(
+                    variant,
+                    full_trades,
+                    len(ix_a),
+                    len(ix_b),
                 )
             )
 
-            parity_status = "PASS"
-            notes = []
-
-            if control["trades"] == GS24_CONTROL_REFERENCE["trades"]:
-                if abs(
-                    control["historical_cagr_pct"]
-                    - GS24_CONTROL_REFERENCE["cagr_pct"]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("CAGR drift")
-
-                if abs(
-                    control["max_closed_equity_dd_pct"]
-                    - GS24_CONTROL_REFERENCE["closed_dd_pct"]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("closed DD drift")
-
-                if abs(
-                    control["max_open_risk_floor_dd_pct"]
-                    - GS24_CONTROL_REFERENCE["floor_dd_pct"]
-                ) > 0.002:
-                    parity_status = "FAIL"
-                    notes.append("floor DD drift")
-
-                if (
-                    control["max_open_positions"]
-                    != GS24_CONTROL_REFERENCE["max_positions"]
-                ):
-                    parity_status = "FAIL"
-                    notes.append("max positions drift")
-            else:
-                parity_status = "PASS_NEWER_TRADES"
-
-            parity_rows.append({
-                "portfolio_mode": mode,
-                "reference_trades": GS24_CONTROL_REFERENCE["trades"],
-                "current_trades": control["trades"],
-                "reference_cagr_pct": GS24_CONTROL_REFERENCE["cagr_pct"],
-                "current_cagr_pct": control["historical_cagr_pct"],
-                "reference_closed_dd_pct": GS24_CONTROL_REFERENCE[
-                    "closed_dd_pct"
-                ],
-                "current_closed_dd_pct": control[
-                    "max_closed_equity_dd_pct"
-                ],
-                "reference_floor_dd_pct": GS24_CONTROL_REFERENCE[
-                    "floor_dd_pct"
-                ],
-                "current_floor_dd_pct": control[
-                    "max_open_risk_floor_dd_pct"
-                ],
-                "reference_max_positions": GS24_CONTROL_REFERENCE[
-                    "max_positions"
-                ],
-                "current_max_positions": control["max_open_positions"],
-                "status": parity_status,
-                "notes": "|".join(notes),
+            IMP_STATUS.update({
+                "state": "controlled_matrix",
+                "message": f"Controlled variant {n}/{total}",
+                "progress": 24 + int(62 * n / total),
             })
 
-            if parity_status == "FAIL":
-                raise RuntimeError(
-                    f"Global scaling control parity failure in {mode}: "
-                    f"{parity_rows[-1]}"
-                )
+        summary_rows = imp_summary_from_period_rows(period_rows)
+        summary_rows.sort(
+            key=lambda x: (
+                x["group"],
+                x["variant_id"],
+            )
+        )
 
-        rolling_summary = gs24_rolling_summary(
-            rolling_rows
-        )
-        calendar_summary = gs24_calendar_summary(
-            calendar_rows
-        )
-        delta_rows = gs24_delta_rows(
-            summary_rows
-        )
-        efficiency_rows = gs24_efficiency_rows(
-            summary_rows
-        )
-        decision_rows = gs24_decision_rows(
+        delta_rows = imp_delta_rows(summary_rows)
+        rolling_summary_rows = imp_rolling_summary(rolling_rows)
+        calendar_summary_rows = imp_calendar_summary(calendar_rows)
+
+        robustness_rows = imp_robustness_view(
             summary_rows,
-            delta_rows,
-            rolling_summary,
-            calendar_summary,
+            rolling_summary_rows,
+            calendar_summary_rows,
+            cost_rows,
+            trigger_mix_rows,
         )
 
-        write_csv(
-            GS24_OUT["portfolio_parity"],
-            parity_rows,
-        )
-        write_csv(
-            GS24_OUT["allocation_manifest"],
-            manifest_rows,
-        )
-        write_csv(
-            GS24_OUT["summary"],
-            summary_rows,
-        )
-        write_csv(
-            GS24_OUT["delta_vs_control"],
-            delta_rows,
-        )
-        write_csv(
-            GS24_OUT["efficiency"],
-            efficiency_rows,
-        )
-        write_csv(
-            GS24_OUT["rolling"],
-            rolling_rows,
-        )
-        write_csv(
-            GS24_OUT["rolling_summary"],
-            rolling_summary,
-        )
-        write_csv(
-            GS24_OUT["calendar"],
-            calendar_rows,
-        )
-        write_csv(
-            GS24_OUT["calendar_summary"],
-            calendar_summary,
-        )
-        write_csv(
-            GS24_OUT["periods"],
-            period_rows,
-        )
-        write_csv(
-            GS24_OUT["drawdown_events"],
-            drawdown_rows,
-        )
-        write_csv(
-            GS24_OUT["decision_matrix"],
-            decision_rows,
+        # Keep diagnostic table grouped; do NOT sort by "best" result.
+        robustness_rows.sort(
+            key=lambda x: (
+                x["group"],
+                x["variant_id"],
+            )
         )
 
+        write_csv(IMP_OUT["variant_manifest"], manifest_rows)
+        write_csv(IMP_OUT["summary"], summary_rows)
+        write_csv(IMP_OUT["delta_vs_baseline"], delta_rows)
+        write_csv(IMP_OUT["periods"], period_rows)
+        write_csv(IMP_OUT["cost_stress"], cost_rows)
+        write_csv(IMP_OUT["rolling"], rolling_rows)
+        write_csv(IMP_OUT["rolling_summary"], rolling_summary_rows)
+        write_csv(IMP_OUT["calendar"], calendar_rows)
+        write_csv(IMP_OUT["calendar_summary"], calendar_summary_rows)
+        write_csv(IMP_OUT["trigger_mix"], trigger_mix_rows)
+        write_csv(IMP_OUT["robustness_view"], robustness_rows)
+
         write_csv(
-            GS24_OUT["notes"],
+            IMP_OUT["notes"],
             [
                 {
-                    "item": "scope",
+                    "item": "purpose",
                     "value": (
-                        "Portfolio-level risk scaling only. "
-                        "No signal optimisation and no strategy weight search."
+                        "One final controlled attempt to improve EURJPY M15 "
+                        "SHORT #24 underlying robustness before accepting a "
+                        "lower risk allocation."
                     ),
                 },
                 {
-                    "item": "control",
+                    "item": "frozen_baseline",
                     "value": (
-                        "#1-#23 at 1.00%; EUR_JPY_M15_SHORT #24 at 0.75%."
+                        "A=RALLY_REJECTION RR4.75, B=HIGH_SWEEP_DISPLACEMENT "
+                        "RR3.00, B priority, stop +10 ticks, 1-pip adverse "
+                        "short fill, p0 half-open overlap."
                     ),
                 },
                 {
-                    "item": "uniform_track",
+                    "item": "anti_overfit_rule",
                     "value": (
-                        "All 24 strategies use the same risk: "
-                        "1.00%, 1.10%, 1.15%, 1.20%, 1.25%."
+                        "No weekday deletion, no individual-hour deletion, "
+                        "no arbitrary EMA-period scan, no automated parameter "
+                        "selection, and no best-row-to-next-stage feedback "
+                        "inside this runner."
                     ),
                 },
                 {
-                    "item": "q24_fixed_track",
+                    "item": "a_regime_scope",
                     "value": (
-                        "#1-#23 scale together through "
-                        "1.00%, 1.10%, 1.15%, 1.20%, 1.25%, "
-                        "while #24 remains fixed at 0.75%."
+                        "Only coarse, standard completed HTF regime states "
+                        "are tested on Trigger A: H1 close vs EMA50/100/200, "
+                        "H1 EMA50 vs EMA200, H4 close vs EMA100/200, daily "
+                        "close vs EMA200."
                     ),
                 },
                 {
-                    "item": "core6_benchmark",
+                    "item": "volatility_scope",
                     "value": (
-                        "Includes the frozen selective Core-6 allocation "
-                        "for direct comparison: USD_JPY_H1_LONG, "
-                        "USD_JPY_M15_LONG, GBP_USD_H1_SHORT, "
-                        "EUR_USD_H1_SHORT, EUR_JPY_H1_LONG and "
-                        "EUR_USD_M15_LONG at 1.25%; #24 at 0.75%; "
-                        "all other strategies at 1.00%."
+                        "Only elevated completed H1/H4 ATR14-to-mean50 ratios "
+                        "0.80/1.00/1.20 are tested. Low-volatility inverse "
+                        "screens are deliberately omitted to reduce two-sided "
+                        "data mining."
                     ),
                 },
                 {
-                    "item": "frozen_trade_set",
+                    "item": "quality_scope",
                     "value": (
-                        "Same accepted 24-strategy trade set across every "
-                        "risk variant. Risk never changes signals or the "
-                        "non-hedging gate."
+                        "Sweep depth, rejection depth and upper-wick/body are "
+                        "tested only at broad coarse thresholds. Existing "
+                        "body and close-location local geometry was already "
+                        "tested in frozen deep validation and is not reopened."
                     ),
                 },
                 {
-                    "item": "equity_model",
+                    "item": "predeclared_combos",
                     "value": (
-                        "Event-driven realised-equity compounding. "
-                        "Each trade fixes cash risk at entry. "
-                        "Exit before entry at equal timestamps. "
-                        "Conservative floor assumes all open trades lose "
-                        "their fixed cash risk simultaneously."
+                        "Six two-factor context hypotheses are declared in "
+                        "code before results. The runner never constructs a "
+                        "combination from whichever one-factor rows perform "
+                        "best."
                     ),
                 },
                 {
-                    "item": "decision_targets",
+                    "item": "third_trigger",
                     "value": (
-                        "Diagnostic targets: CAGR higher than control, "
-                        "closed and conservative DD <=20% in magnitude, "
-                        "100% positive 12/24/36M rolling windows, "
-                        "100% positive completed active years, "
-                        "and no increase in max simultaneous positions."
+                        "No third-trigger family search in this pass. Earlier "
+                        "broad research already screened multiple short "
+                        "families. A third family should only be reconsidered "
+                        "if this controlled context pass fails."
+                    ),
+                },
+                {
+                    "item": "decision_principle",
+                    "value": (
+                        "Do not judge on full-history PF alone. Prefer broad "
+                        "improvement in 24M/36M rolling positivity, calendar "
+                        "consistency, 2018+/recent eras, cost stress and "
+                        "parameter-neighbour behaviour without collapsing "
+                        "sample size."
+                    ),
+                },
+                {
+                    "item": "portfolio_next_step",
+                    "value": (
+                        "Any genuinely stronger frozen replacement must still "
+                        "be re-run through the exact 23->24 live-safe portfolio "
+                        "add test at 1% risk before live integration."
                     ),
                 },
                 {
                     "item": "historical_not_forecast",
                     "value": (
-                        "CAGR and drawdown are historical backtest outputs, "
-                        "not forecasts."
+                        "All performance figures are historical backtest "
+                        "outputs, not forecasts."
                     ),
                 },
             ],
         )
 
-        GS24_STATUS.update(
-            state="packaging",
-            message="Packaging portfolio-wide risk scaling results",
-            progress=97,
-        )
+        IMP_STATUS.update({
+            "state": "packaging",
+            "message": "Packaging controlled-improvement results",
+            "progress": 94,
+        })
 
         with zipfile.ZipFile(
-            GS24_BUNDLE,
+            IMP_BUNDLE,
             "w",
             compression=zipfile.ZIP_DEFLATED,
         ) as z:
-            for path in GS24_OUT.values():
+            for path in IMP_OUT.values():
                 if os.path.exists(path):
                     z.write(
                         path,
                         arcname=os.path.basename(path),
                     )
 
-        GS24_STATUS.update(
-            state="complete",
-            message="Full 24 portfolio-wide risk scaling study complete",
-            progress=100,
-            results=GS24_BUNDLE,
-            risk_levels_pct=[
-                x * 100.0
-                for x in GS24_LEVELS
-            ],
-            tracks=[
-                "UNIFORM_ALL24",
-                "EXISTING23_SCALED_Q24_FIXED",
-            ],
-            benchmarks=[
-                "CURRENT_CONTROL_23x1PCT_Q24x075",
-                "CORE_6_SELECTIVE",
-            ],
-        )
+        IMP_STATUS.update({
+            "state": "complete",
+            "message": (
+                "EURJPY M15 SHORT #24 controlled improvement pass complete"
+            ),
+            "progress": 100,
+            "results": IMP_BUNDLE,
+            "variants_tested": len(variants),
+            "baseline_parity": parity_status,
+        })
 
-    except Exception as e:
-        GS24_STATUS.update(
-            state="error",
-            message=str(e),
-        )
+    except Exception as error:
+        IMP_STATUS.update({
+            "state": "error",
+            "message": str(error),
+        })
         print(
-            "GLOBAL SCALING STUDY ERROR:",
-            repr(e),
+            "CONTROLLED IMPROVEMENT ERROR:",
+            repr(error),
             flush=True,
         )
 
 
 # ============================================================
-# ROUTES
+# FLASK ROUTES
 # ============================================================
 
-@app.route("/full24-global-scaling/status")
-def full24_global_scaling_status():
-    return jsonify(GS24_STATUS)
-
-
-@app.route("/full24-global-scaling/results")
-def full24_global_scaling_results():
-    if not os.path.exists(GS24_BUNDLE):
-        return jsonify({
-            "status": "not_ready",
-            "state": GS24_STATUS.get("state"),
-            "message": GS24_STATUS.get("message"),
-        }), 404
-
-    return send_file(
-        os.path.abspath(GS24_BUNDLE),
-        as_attachment=True,
-        download_name=GS24_BUNDLE,
-    )
-
-
-@app.route("/full24-global-scaling/info")
-def full24_global_scaling_info():
+@app.route("/")
+def improvement_root():
     return jsonify({
-        "service": "Full 24 portfolio-wide risk scaling study",
+        "service": "EURJPY M15 SHORT #24 Controlled Improvement Pass",
+        "status": IMP_STATUS["state"],
+        "instrument": PAIR,
+        "timeframe": "M15",
+        "side": "SELL",
+        "orders_supported": False,
+        "trading_enabled": False,
+        "baseline": {
+            "trigger_a_rr": 4.75,
+            "trigger_b_rr": 3.00,
+            "same_candle_priority": "B",
+            "stop_buffer_ticks": 10,
+            "historical_cost_pips": 1.0,
+        },
+        "research_scope": [
+            "coarse HTF regime on A",
+            "coarse HTF volatility on A",
+            "sweep/rejection quality on A",
+            "predeclared context combinations",
+            "stop-buffer robustness",
+            "combined RR plateaus",
+        ],
+        "routes": [
+            "/eurjpy-m15-short-24-improvement/status",
+            "/eurjpy-m15-short-24-improvement/results",
+            "/eurjpy-m15-short-24-improvement/info",
+        ],
+    })
+
+
+@app.route("/eurjpy-m15-short-24-improvement/status")
+def improvement_status():
+    return jsonify(IMP_STATUS)
+
+
+@app.route("/eurjpy-m15-short-24-improvement/results")
+def improvement_results():
+    return download(IMP_BUNDLE)
+
+
+@app.route("/eurjpy-m15-short-24-improvement/info")
+def improvement_info():
+    return jsonify({
+        "service": "EURJPY M15 SHORT #24 Controlled Improvement Pass",
         "read_only": True,
         "orders_supported": False,
-        "risk_levels_pct": [1.00, 1.10, 1.15, 1.20, 1.25],
-        "tracks": {
-            "UNIFORM_ALL24": (
-                "all 24 strategies use the same risk level"
-            ),
-            "EXISTING23_SCALED_Q24_FIXED": (
-                "#1-#23 scale together; #24 stays at 0.75%"
-            ),
-        },
-        "benchmarks": {
-            "CURRENT_CONTROL": (
-                "#1-#23 1.00%; #24 0.75%"
-            ),
-            "CORE_6_SELECTIVE": (
-                "six selected strategies 1.25%; "
-                "#24 0.75%; all others 1.00%"
-            ),
-        },
+        "auto_selects_winner": False,
+        "searches_weekdays": False,
+        "deletes_individual_hours": False,
+        "searches_arbitrary_ema_periods": False,
+        "searches_third_trigger": False,
+        "primary_cost_pips": 1.0,
+        "cost_stress_pips": [1.0, 2.0, 3.0],
+        "rolling_months": [12, 24, 36],
         "routes": [
-            "/full24-global-scaling/status",
-            "/full24-global-scaling/results",
-            "/full24-global-scaling/info",
+            "/eurjpy-m15-short-24-improvement/status",
+            "/eurjpy-m15-short-24-improvement/results",
+            "/eurjpy-m15-short-24-improvement/info",
         ],
     })
 
 
 if __name__ == "__main__":
     threading.Thread(
-        target=run_full24_global_scaling,
+        target=run_controlled_improvement,
         daemon=True,
     ).start()
 
