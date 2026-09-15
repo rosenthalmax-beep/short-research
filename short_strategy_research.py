@@ -16651,7 +16651,7 @@ def sd24_standalone_summary(period_rows):
             "full_trades": p["FULL"]["trades"],
             "full_winners": p["FULL"]["winners"],
             "full_losers": p["FULL"]["losers"],
-            "full_win_rate": p["FULL"]["win_rate"],
+            "full_win_rate_pct": p["FULL"]["win_rate_pct"],
             "full_pf": p["FULL"]["profit_factor"],
             "full_r": p["FULL"]["total_r"],
             "full_expectancy_r": p["FULL"]["expectancy_r"],
@@ -17150,9 +17150,13 @@ def sd24_displacement_rows(mode, baseline_trades, candidate_trades, rejected):
             "strategy_id": Q24_STRATEGY_ID,
             "pair": Q24_PAIR,
             "side": "SELL",
-            "entry_time_utc": iso(r["candidate_entry_time"]),
+            "entry_time_utc": r["candidate_entry_time"],
             "r": "",
-            "reason": r.get("reason", ""),
+            "reason": (
+                    f"blocked_by_{r.get('blocker_strategy_id', '')}"
+                    f"_{r.get('blocker_side', '')}"
+                    f"_{r.get('blocker_timeframe', '')}"
+                ),
         })
 
     return rows
