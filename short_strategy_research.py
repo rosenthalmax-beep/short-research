@@ -14955,9 +14955,1354 @@ def full24_combined_weight_test_info():
     })
 
 
+
+# ============================================================
+# FULL 24 — PORTFOLIO-WIDE RISK SCALING CURVE
+# ============================================================
+#
+# PURPOSE
+# -------
+# Compare selective weighting against simple portfolio-level scaling.
+#
+# FROZEN SIGNAL / GATE STATE
+# --------------------------
+# Uses the exact frozen 24-strategy accepted trade set:
+#   - current #1-#23
+#   - EUR_JPY_M15_SHORT #24 A+B / B-priority
+#   - same live-safe non-hedging gate
+#
+# No signals, stops, targets, sessions, filters or trade outcomes change.
+#
+# TRACK A — UNIFORM ALL 24
+# ------------------------
+# Every accepted strategy uses the SAME risk:
+#   1.00%, 1.10%, 1.15%, 1.20%, 1.25%
+#
+# TRACK B — #1-#23 SCALED, #24 FIXED
+# -----------------------------------
+# Existing #1-#23 all use:
+#   1.00%, 1.10%, 1.15%, 1.20%, 1.25%
+# while EUR_JPY_M15_SHORT #24 remains fixed at 0.75%.
+#
+# BENCHMARKS
+# ----------
+# CURRENT_CONTROL:
+#   #1-#23 = 1.00%
+#   #24    = 0.75%
+#
+# CORE_6:
+#   same CURRENT_CONTROL, but the six previously selected strategies
+#   are 1.25%:
+#       USD_JPY_H1_LONG
+#       USD_JPY_M15_LONG
+#       GBP_USD_H1_SHORT
+#       EUR_USD_H1_SHORT
+#       EUR_JPY_H1_LONG
+#       EUR_USD_M15_LONG
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+GS24_STATUS = {
+    "state": "not_started",
+    "message": "Full 24 portfolio risk scaling study not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+GS24_LEVELS = [0.0100, 0.0110, 0.0115, 0.0120, 0.0125]
+GS24_Q24_FIXED = 0.0075
+GS24_BUNDLE = "FULL_24_PORTFOLIO_WIDE_RISK_SCALING_RESULTS.zip"
+
+GS24_CONTROL_REFERENCE = {
+    "trades": 2666,
+    "cagr_pct": 102.599436,
+    "closed_dd_pct": -18.144324,
+    "floor_dd_pct": -18.971149,
+    "max_positions": 6,
+}
+
+GS24_CORE6_REFERENCE = {
+    "cagr_pct": 114.17,
+    "closed_dd_pct": -18.01,
+    "floor_dd_pct": -18.84,
+}
+
+GS24_CORE6 = {
+    "USD_JPY_H1_LONG",
+    "USD_JPY_M15_LONG",
+    "GBP_USD_H1_SHORT",
+    "EUR_USD_H1_SHORT",
+    "EUR_JPY_H1_LONG",
+    "EUR_USD_M15_LONG",
+}
+
+GS24_OUT = {
+    "portfolio_parity": "full24_global_scaling_portfolio_parity.csv",
+    "allocation_manifest": "full24_global_scaling_allocation_manifest.csv",
+    "summary": "full24_global_scaling_summary.csv",
+    "delta_vs_control": "full24_global_scaling_delta_vs_control.csv",
+    "efficiency": "full24_global_scaling_efficiency.csv",
+    "rolling": "full24_global_scaling_rolling.csv",
+    "rolling_summary": "full24_global_scaling_rolling_summary.csv",
+    "calendar": "full24_global_scaling_calendar.csv",
+    "calendar_summary": "full24_global_scaling_calendar_summary.csv",
+    "periods": "full24_global_scaling_periods.csv",
+    "drawdown_events": "full24_global_scaling_drawdown_events.csv",
+    "decision_matrix": "full24_global_scaling_decision_matrix.csv",
+    "gate_summary": "full24_global_scaling_gate_summary.csv",
+    "notes": "full24_global_scaling_notes.csv",
+}
+
+
+def gs24_control_map(strategy_ids):
+    risks = {sid: 0.0100 for sid in strategy_ids}
+    if Q24_STRATEGY_ID not in risks:
+        raise RuntimeError(f"Missing #24 strategy id: {Q24_STRATEGY_ID}")
+    risks[Q24_STRATEGY_ID] = GS24_Q24_FIXED
+    return risks
+
+
+def gs24_uniform_map(strategy_ids, level):
+    return {sid: float(level) for sid in strategy_ids}
+
+
+def gs24_existing23_scaled_map(strategy_ids, level):
+    risks = {sid: float(level) for sid in strategy_ids}
+    if Q24_STRATEGY_ID not in risks:
+        raise RuntimeError(f"Missing #24 strategy id: {Q24_STRATEGY_ID}")
+    risks[Q24_STRATEGY_ID] = GS24_Q24_FIXED
+    return risks
+
+
+def gs24_core6_map(strategy_ids):
+    risks = gs24_control_map(strategy_ids)
+
+    unknown = sorted(GS24_CORE6 - set(strategy_ids))
+    if unknown:
+        raise RuntimeError(f"Core6 contains unknown strategy IDs: {unknown}")
+
+    for sid in GS24_CORE6:
+        risks[sid] = 0.0125
+
+    return risks
+
+
+def gs24_variant_definitions(strategy_ids):
+    variants = []
+
+    # Current proposed control.
+    variants.append({
+        "variant": "CURRENT_CONTROL_23x1PCT_Q24x075",
+        "track": "BENCHMARK",
+        "level_pct": "",
+        "risk_map": gs24_control_map(strategy_ids),
+    })
+
+    # Previous Core-6 selective allocation.
+    variants.append({
+        "variant": "CORE_6_SELECTIVE",
+        "track": "BENCHMARK",
+        "level_pct": "",
+        "risk_map": gs24_core6_map(strategy_ids),
+    })
+
+    # Track A: all 24 use exactly the same risk.
+    for level in GS24_LEVELS:
+        variants.append({
+            "variant": f"UNIFORM_ALL24_{level*100:.2f}PCT",
+            "track": "UNIFORM_ALL24",
+            "level_pct": level * 100.0,
+            "risk_map": gs24_uniform_map(strategy_ids, level),
+        })
+
+    # Track B: existing23 scale together, #24 remains at 0.75%.
+    for level in GS24_LEVELS:
+        variants.append({
+            "variant": f"EXISTING23_{level*100:.2f}PCT_Q24_0.75PCT",
+            "track": "EXISTING23_SCALED_Q24_FIXED",
+            "level_pct": level * 100.0,
+            "risk_map": gs24_existing23_scaled_map(strategy_ids, level),
+        })
+
+    return variants
+
+
+def gs24_summary_row(variant_def, mode, trades, sim):
+    s = sim["summary"]
+    rm = variant_def["risk_map"]
+
+    risks = sorted(set(round(v * 100.0, 10) for v in rm.values()))
+
+    return {
+        "variant": variant_def["variant"],
+        "track": variant_def["track"],
+        "portfolio_mode": mode,
+        "level_pct": variant_def["level_pct"],
+        "strategies": len(rm),
+        "trades": len(trades),
+        "unique_risk_levels_pct": "|".join(str(x) for x in risks),
+        "q24_risk_pct": rm[Q24_STRATEGY_ID] * 100.0,
+        "ending_balance_from_100": s["ending_balance"],
+        "ending_multiple": s["ending_multiple"],
+        "total_return_pct": s["total_return_pct"],
+        "historical_cagr_pct": s["historical_cagr_pct"],
+        "weighted_r_equivalent_at_1pct": s["weighted_r_equivalent_at_1pct"],
+        "max_closed_equity_dd_pct": s["max_closed_equity_dd_pct"],
+        "max_open_risk_floor_dd_pct": s["max_open_risk_floor_dd_pct"],
+        "max_open_positions": s["max_open_positions"],
+        "max_open_risk_pct_of_realised_equity": s[
+            "max_open_risk_pct_of_realised_equity"
+        ],
+    }
+
+
+def gs24_balance_before(sim, ts):
+    j = bisect.bisect_left(sim["exit_times"], ts) - 1
+    return sim["exit_balances"][j] if j >= 0 else STARTING_BALANCE
+
+
+def gs24_period_row(variant_def, mode, sim, trades, label, start, end):
+    sb = gs24_balance_before(sim, start)
+    eb = gs24_balance_before(sim, end)
+
+    exits = [
+        t for t in trades
+        if start <= t["exit_event_time"] < end
+    ]
+
+    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
+
+    years = max(
+        (end - start).total_seconds() / (365.2425 * 86400.0),
+        1e-9,
+    )
+
+    ann = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0
+        else 0.0
+    )
+
+    return {
+        "variant": variant_def["variant"],
+        "track": variant_def["track"],
+        "portfolio_mode": mode,
+        "level_pct": variant_def["level_pct"],
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": ann,
+        "realized_exits": len(exits),
+    }
+
+
+def gs24_rolling_rows(variant_def, mode, sim, trades):
+    first_entry = min(t["entry_time"] for t in trades)
+    start_month = month_floor(first_entry)
+    end_complete = month_floor(NOW)
+
+    rows = []
+    for months in (12, 24, 36):
+        cur = start_month
+        while add_months(cur, months) <= end_complete:
+            end = add_months(cur, months)
+            row = gs24_period_row(
+                variant_def,
+                mode,
+                sim,
+                trades,
+                f"ROLLING_{months}M",
+                cur,
+                end,
+            )
+            row["months"] = months
+            rows.append(row)
+            cur = add_months(cur, 1)
+
+    return rows
+
+
+def gs24_rolling_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["variant"],
+                r["track"],
+                r["portfolio_mode"],
+                r["level_pct"],
+                int(r["months"]),
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, track, mode, level_pct, months = key
+
+        active = [
+            x for x in group
+            if x["realized_exits"] > 0
+        ]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+        vals = [
+            x["compounded_return_pct"]
+            for x in active
+        ]
+
+        out.append({
+            "variant": variant,
+            "track": track,
+            "portfolio_mode": mode,
+            "level_pct": level_pct,
+            "months": months,
+            "total_windows": len(group),
+            "active_windows": len(active),
+            "positive_active_windows": len(positive),
+            "positive_active_windows_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_compounded_return_pct_active": safe_median(vals),
+            "worst_compounded_return_pct_active": min(vals) if vals else 0.0,
+            "best_compounded_return_pct_active": max(vals) if vals else 0.0,
+        })
+
+    return out
+
+
+def gs24_calendar_rows(variant_def, mode, sim, trades):
+    first_year = min(t["entry_time"] for t in trades).year
+
+    rows = []
+    for year in range(first_year, NOW.year + 1):
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        nominal_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        end = min(nominal_end, NOW)
+
+        if end <= start:
+            continue
+
+        row = gs24_period_row(
+            variant_def,
+            mode,
+            sim,
+            trades,
+            str(year),
+            start,
+            end,
+        )
+        row["year"] = year
+        row["complete_year"] = nominal_end <= NOW
+        rows.append(row)
+
+    return rows
+
+
+def gs24_calendar_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["variant"],
+                r["track"],
+                r["portfolio_mode"],
+                r["level_pct"],
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        variant, track, mode, level_pct = key
+
+        complete = [x for x in group if x["complete_year"]]
+        active = [x for x in complete if x["realized_exits"] > 0]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+
+        worst = (
+            min(active, key=lambda x: x["compounded_return_pct"])
+            if active else None
+        )
+        best = (
+            max(active, key=lambda x: x["compounded_return_pct"])
+            if active else None
+        )
+
+        out.append({
+            "variant": variant,
+            "track": track,
+            "portfolio_mode": mode,
+            "level_pct": level_pct,
+            "completed_years": len(complete),
+            "active_completed_years": len(active),
+            "positive_active_completed_years": len(positive),
+            "positive_active_completed_years_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_return_pct_active": safe_median(
+                x["compounded_return_pct"]
+                for x in active
+            ),
+            "worst_year": worst["year"] if worst else "",
+            "worst_year_return_pct": (
+                worst["compounded_return_pct"]
+                if worst else 0.0
+            ),
+            "best_year": best["year"] if best else "",
+            "best_year_return_pct": (
+                best["compounded_return_pct"]
+                if best else 0.0
+            ),
+        })
+
+    return out
+
+
+def gs24_drawdown_rows(variant_def, mode, sim):
+    rows = []
+
+    for event_type, event in [
+        ("MAX_CLOSED_DD", sim.get("closed_dd_event")),
+        ("MAX_OPEN_RISK_FLOOR_DD", sim.get("floor_dd_event")),
+        ("MAX_OPEN_RISK_PCT", sim.get("max_open_risk_event")),
+    ]:
+        if not event:
+            continue
+
+        rows.append({
+            "variant": variant_def["variant"],
+            "track": variant_def["track"],
+            "portfolio_mode": mode,
+            "level_pct": variant_def["level_pct"],
+            "event_type": event_type,
+            **event,
+        })
+
+    return rows
+
+
+def gs24_delta_rows(summary_rows):
+    grouped = defaultdict(list)
+    for r in summary_rows:
+        grouped[r["portfolio_mode"]].append(r)
+
+    out = []
+
+    for mode, rows in grouped.items():
+        control = next(
+            x for x in rows
+            if x["variant"] == "CURRENT_CONTROL_23x1PCT_Q24x075"
+        )
+
+        for r in rows:
+            if r["variant"] == control["variant"]:
+                continue
+
+            cagr_gain = (
+                r["historical_cagr_pct"]
+                - control["historical_cagr_pct"]
+            )
+            closed_change = (
+                r["max_closed_equity_dd_pct"]
+                - control["max_closed_equity_dd_pct"]
+            )
+            floor_change = (
+                r["max_open_risk_floor_dd_pct"]
+                - control["max_open_risk_floor_dd_pct"]
+            )
+
+            extra_closed = max(0.0, -closed_change)
+            extra_floor = max(0.0, -floor_change)
+
+            out.append({
+                "variant": r["variant"],
+                "track": r["track"],
+                "portfolio_mode": mode,
+                "level_pct": r["level_pct"],
+                "control_cagr_pct": control["historical_cagr_pct"],
+                "candidate_cagr_pct": r["historical_cagr_pct"],
+                "delta_cagr_pp": cagr_gain,
+                "control_closed_dd_pct": control[
+                    "max_closed_equity_dd_pct"
+                ],
+                "candidate_closed_dd_pct": r[
+                    "max_closed_equity_dd_pct"
+                ],
+                "delta_closed_dd_pp": closed_change,
+                "extra_closed_dd_magnitude_pp": extra_closed,
+                "control_floor_dd_pct": control[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "candidate_floor_dd_pct": r[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "delta_floor_dd_pp": floor_change,
+                "extra_floor_dd_magnitude_pp": extra_floor,
+                "cagr_gain_per_extra_closed_dd_pp": (
+                    cagr_gain / extra_closed
+                    if extra_closed > 0
+                    else 999.0 if cagr_gain > 0
+                    else 0.0
+                ),
+                "cagr_gain_per_extra_floor_dd_pp": (
+                    cagr_gain / extra_floor
+                    if extra_floor > 0
+                    else 999.0 if cagr_gain > 0
+                    else 0.0
+                ),
+                "delta_max_open_risk_pp": (
+                    r["max_open_risk_pct_of_realised_equity"]
+                    - control[
+                        "max_open_risk_pct_of_realised_equity"
+                    ]
+                ),
+                "delta_ending_multiple": (
+                    r["ending_multiple"]
+                    - control["ending_multiple"]
+                ),
+            })
+
+    return out
+
+
+def gs24_efficiency_rows(summary_rows):
+    grouped = defaultdict(list)
+    for r in summary_rows:
+        if r["track"] in {
+            "UNIFORM_ALL24",
+            "EXISTING23_SCALED_Q24_FIXED",
+        }:
+            grouped[
+                (
+                    r["portfolio_mode"],
+                    r["track"],
+                )
+            ].append(r)
+
+    out = []
+
+    for (mode, track), rows in grouped.items():
+        rows = sorted(
+            rows,
+            key=lambda x: float(x["level_pct"]),
+        )
+
+        for lo, hi in zip(rows[:-1], rows[1:]):
+            cagr_gain = (
+                hi["historical_cagr_pct"]
+                - lo["historical_cagr_pct"]
+            )
+            closed_change = (
+                hi["max_closed_equity_dd_pct"]
+                - lo["max_closed_equity_dd_pct"]
+            )
+            floor_change = (
+                hi["max_open_risk_floor_dd_pct"]
+                - lo["max_open_risk_floor_dd_pct"]
+            )
+
+            extra_closed = max(0.0, -closed_change)
+            extra_floor = max(0.0, -floor_change)
+
+            out.append({
+                "portfolio_mode": mode,
+                "track": track,
+                "from_level_pct": lo["level_pct"],
+                "to_level_pct": hi["level_pct"],
+                "cagr_gain_pp": cagr_gain,
+                "closed_dd_change_pp": closed_change,
+                "extra_closed_dd_magnitude_pp": extra_closed,
+                "floor_dd_change_pp": floor_change,
+                "extra_floor_dd_magnitude_pp": extra_floor,
+                "cagr_gain_per_extra_closed_dd_pp": (
+                    cagr_gain / extra_closed
+                    if extra_closed > 0
+                    else 999.0 if cagr_gain > 0
+                    else 0.0
+                ),
+                "cagr_gain_per_extra_floor_dd_pp": (
+                    cagr_gain / extra_floor
+                    if extra_floor > 0
+                    else 999.0 if cagr_gain > 0
+                    else 0.0
+                ),
+                "max_open_risk_change_pp": (
+                    hi["max_open_risk_pct_of_realised_equity"]
+                    - lo["max_open_risk_pct_of_realised_equity"]
+                ),
+            })
+
+    return out
+
+
+def gs24_decision_rows(
+    summary_rows,
+    delta_rows,
+    rolling_summary,
+    calendar_summary,
+):
+    delta_lookup = {
+        (x["portfolio_mode"], x["variant"]): x
+        for x in delta_rows
+    }
+    roll_lookup = {
+        (
+            x["portfolio_mode"],
+            x["variant"],
+            int(x["months"]),
+        ): x
+        for x in rolling_summary
+    }
+    cal_lookup = {
+        (x["portfolio_mode"], x["variant"]): x
+        for x in calendar_summary
+    }
+
+    out = []
+
+    for s in summary_rows:
+        if s["variant"] == "CURRENT_CONTROL_23x1PCT_Q24x075":
+            continue
+
+        mode = s["portfolio_mode"]
+        variant = s["variant"]
+        d = delta_lookup[(mode, variant)]
+
+        r12 = roll_lookup[(mode, variant, 12)]
+        r24 = roll_lookup[(mode, variant, 24)]
+        r36 = roll_lookup[(mode, variant, 36)]
+        cal = cal_lookup[(mode, variant)]
+
+        checks = {
+            "adds_cagr": d["delta_cagr_pp"] > 0,
+            "closed_dd_under_20pct": (
+                s["max_closed_equity_dd_pct"] >= -20.0
+            ),
+            "floor_dd_under_20pct": (
+                s["max_open_risk_floor_dd_pct"] >= -20.0
+            ),
+            "all_12m_positive": (
+                r12["positive_active_windows_pct"] == 100.0
+            ),
+            "all_24m_positive": (
+                r24["positive_active_windows_pct"] == 100.0
+            ),
+            "all_36m_positive": (
+                r36["positive_active_windows_pct"] == 100.0
+            ),
+            "all_completed_years_positive": (
+                cal["positive_active_completed_years_pct"] == 100.0
+            ),
+            "max_positions_not_higher": (
+                s["max_open_positions"]
+                <= GS24_CONTROL_REFERENCE["max_positions"]
+            ),
+        }
+
+        out.append({
+            "variant": variant,
+            "track": s["track"],
+            "portfolio_mode": mode,
+            "level_pct": s["level_pct"],
+            "comparison_status": (
+                "MEETS_PREDECLARED_TARGETS"
+                if all(checks.values())
+                else "REVIEW_TRADEOFF"
+            ),
+            "checks_passed": sum(bool(v) for v in checks.values()),
+            "checks_total": len(checks),
+            **{
+                f"check_{k}": v
+                for k, v in checks.items()
+            },
+            "historical_cagr_pct": s["historical_cagr_pct"],
+            "delta_cagr_pp_vs_control": d["delta_cagr_pp"],
+            "closed_dd_pct": s["max_closed_equity_dd_pct"],
+            "floor_dd_pct": s["max_open_risk_floor_dd_pct"],
+            "extra_floor_dd_pp_vs_control": d[
+                "extra_floor_dd_magnitude_pp"
+            ],
+            "max_open_positions": s["max_open_positions"],
+            "max_open_risk_pct": s[
+                "max_open_risk_pct_of_realised_equity"
+            ],
+            "rolling12_positive_pct": r12[
+                "positive_active_windows_pct"
+            ],
+            "rolling12_median_pct": r12[
+                "median_compounded_return_pct_active"
+            ],
+            "rolling12_worst_pct": r12[
+                "worst_compounded_return_pct_active"
+            ],
+            "rolling24_positive_pct": r24[
+                "positive_active_windows_pct"
+            ],
+            "rolling24_median_pct": r24[
+                "median_compounded_return_pct_active"
+            ],
+            "rolling24_worst_pct": r24[
+                "worst_compounded_return_pct_active"
+            ],
+            "rolling36_positive_pct": r36[
+                "positive_active_windows_pct"
+            ],
+            "rolling36_median_pct": r36[
+                "median_compounded_return_pct_active"
+            ],
+            "rolling36_worst_pct": r36[
+                "worst_compounded_return_pct_active"
+            ],
+            "completed_year_positive_pct": cal[
+                "positive_active_completed_years_pct"
+            ],
+            "worst_calendar_year": cal["worst_year"],
+            "worst_calendar_return_pct": cal[
+                "worst_year_return_pct"
+            ],
+        })
+
+    return out
+
+
+def run_full24_global_scaling():
+    try:
+        global EV_STATUS
+        EV_STATUS = GS24_STATUS
+
+        GS24_STATUS.update(
+            state="fetch",
+            message="Fetching EUR/JPY M15 + H1 history",
+            progress=2,
+        )
+
+        eurjpy_m15, _ = fetch_history(
+            Q24_PAIR,
+            "M15",
+            START,
+            NOW,
+        )
+        eurjpy_h1, _ = fetch_history(
+            Q24_PAIR,
+            "H1",
+            PV_H1_WARMUP,
+            NOW,
+        )
+
+        if len(eurjpy_m15) < 400000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
+            )
+        if len(eurjpy_h1) < 100000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
+            )
+
+        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
+
+        GS24_STATUS.update(
+            state="rebuild",
+            message="Rebuilding frozen current23 + #24 accepted trade set",
+            progress=8,
+        )
+
+        current23 = q24_rebuild_current23(
+            eurjpy_m15,
+            eurjpy_h1,
+            eurjpy_h1_atr,
+        )
+
+        short_features = q24_features(
+            eurjpy_m15,
+            eurjpy_h1,
+        )
+        raw_q24 = q24_build_candidate_trades(
+            eurjpy_m15,
+            short_features,
+        )
+
+        q24_summary = q24_candidate_summary(raw_q24)
+
+        if q24_summary["trades"] < Q24_REFERENCE["trades"]:
+            raise RuntimeError(
+                f"#24 candidate below frozen reference: {q24_summary}"
+            )
+
+        if q24_summary["trades"] == Q24_REFERENCE["trades"]:
+            if (
+                abs(
+                    q24_summary["profit_factor"]
+                    - Q24_REFERENCE["pf"]
+                ) > 0.0001
+                or abs(
+                    q24_summary["total_r"]
+                    - Q24_REFERENCE["r"]
+                ) > 0.03
+            ):
+                raise RuntimeError(
+                    f"#24 candidate metric parity drift: {q24_summary}"
+                )
+
+        combined_independent = sorted(
+            current23["independent"] + raw_q24,
+            key=lambda t: (
+                t["entry_time"],
+                t["strategy_id"],
+            ),
+        )
+
+        gate_sets = {}
+        gate_rows = []
+
+        for priority, mode in [
+            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+        ]:
+            accepted, rejected = apply_live_safe_nonhedging_gate(
+                combined_independent,
+                priority,
+            )
+
+            strategy_ids = sorted({
+                t["strategy_id"]
+                for t in accepted
+            })
+            accepted_q24 = [
+                t for t in accepted
+                if t["strategy_id"] == Q24_STRATEGY_ID
+            ]
+
+            if len(strategy_ids) != 24:
+                raise RuntimeError(
+                    f"Expected 24 strategies in {mode}, got {len(strategy_ids)}"
+                )
+
+            if len(accepted) < GS24_CONTROL_REFERENCE["trades"]:
+                raise RuntimeError(
+                    f"Accepted trade set below reference in {mode}: "
+                    f"{len(accepted)}"
+                )
+
+            gate_sets[mode] = {
+                "accepted": accepted,
+                "rejected": rejected,
+                "strategy_ids": strategy_ids,
+                "accepted_q24": accepted_q24,
+            }
+
+            gate_rows.append({
+                "portfolio_mode": mode,
+                "accepted_portfolio_trades": len(accepted),
+                "unique_strategy_ids": len(strategy_ids),
+                "raw_q24_trades": len(raw_q24),
+                "accepted_q24_trades": len(accepted_q24),
+                "rejected_q24_trades": (
+                    len(raw_q24) - len(accepted_q24)
+                ),
+            })
+
+        write_csv(
+            GS24_OUT["gate_summary"],
+            gate_rows,
+        )
+
+        summary_rows = []
+        rolling_rows = []
+        calendar_rows = []
+        period_rows = []
+        drawdown_rows = []
+        manifest_rows = []
+        parity_rows = []
+
+        modes = [
+            "LIVE_SAFE_H1_FIRST",
+            "LIVE_SAFE_M15_FIRST",
+        ]
+
+        total_runs = 0
+        variants_by_mode = {}
+
+        for mode in modes:
+            ids = gate_sets[mode]["strategy_ids"]
+            defs = gs24_variant_definitions(ids)
+            variants_by_mode[mode] = defs
+            total_runs += len(defs)
+
+        completed = 0
+
+        for mode in modes:
+            trades = gate_sets[mode]["accepted"]
+            defs = variants_by_mode[mode]
+
+            for vd in defs:
+                risk_map = vd["risk_map"]
+
+                for sid in gate_sets[mode]["strategy_ids"]:
+                    sample = next(
+                        t for t in trades
+                        if t["strategy_id"] == sid
+                    )
+
+                    manifest_rows.append({
+                        "variant": vd["variant"],
+                        "track": vd["track"],
+                        "portfolio_mode": mode,
+                        "level_pct": vd["level_pct"],
+                        "strategy_id": sid,
+                        "pair": sample["pair"],
+                        "timeframe": sample["timeframe"],
+                        "side": sample["side"],
+                        "risk_pct": risk_map[sid] * 100.0,
+                    })
+
+                sim = w24_simulate_equity(
+                    trades,
+                    risk_map,
+                    STARTING_BALANCE,
+                )
+
+                summary_rows.append(
+                    gs24_summary_row(
+                        vd,
+                        mode,
+                        trades,
+                        sim,
+                    )
+                )
+
+                rolling_rows.extend(
+                    gs24_rolling_rows(
+                        vd,
+                        mode,
+                        sim,
+                        trades,
+                    )
+                )
+
+                calendar_rows.extend(
+                    gs24_calendar_rows(
+                        vd,
+                        mode,
+                        sim,
+                        trades,
+                    )
+                )
+
+                drawdown_rows.extend(
+                    gs24_drawdown_rows(
+                        vd,
+                        mode,
+                        sim,
+                    )
+                )
+
+                period_defs = [
+                    (
+                        "FULL",
+                        min(
+                            t["entry_time"]
+                            for t in trades
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_5Y",
+                        NOW - timedelta(
+                            days=365.2425 * 5
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_3Y",
+                        NOW - timedelta(
+                            days=365.2425 * 3
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_2Y",
+                        NOW - timedelta(
+                            days=365.2425 * 2
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_1Y",
+                        NOW - timedelta(
+                            days=365.2425
+                        ),
+                        NOW,
+                    ),
+                ]
+
+                for label, a, b in period_defs:
+                    period_rows.append(
+                        gs24_period_row(
+                            vd,
+                            mode,
+                            sim,
+                            trades,
+                            label,
+                            a,
+                            b,
+                        )
+                    )
+
+                completed += 1
+                GS24_STATUS.update(
+                    state="scaling_test",
+                    message=f"{completed}/{total_runs}: {mode} {vd['variant']}",
+                    progress=70 + int(
+                        24 * completed / total_runs
+                    ),
+                )
+
+            # Hard parity on CURRENT_CONTROL.
+            control = next(
+                r for r in summary_rows
+                if (
+                    r["portfolio_mode"] == mode
+                    and r["variant"]
+                    == "CURRENT_CONTROL_23x1PCT_Q24x075"
+                )
+            )
+
+            parity_status = "PASS"
+            notes = []
+
+            if control["trades"] == GS24_CONTROL_REFERENCE["trades"]:
+                if abs(
+                    control["historical_cagr_pct"]
+                    - GS24_CONTROL_REFERENCE["cagr_pct"]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("CAGR drift")
+
+                if abs(
+                    control["max_closed_equity_dd_pct"]
+                    - GS24_CONTROL_REFERENCE["closed_dd_pct"]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("closed DD drift")
+
+                if abs(
+                    control["max_open_risk_floor_dd_pct"]
+                    - GS24_CONTROL_REFERENCE["floor_dd_pct"]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("floor DD drift")
+
+                if (
+                    control["max_open_positions"]
+                    != GS24_CONTROL_REFERENCE["max_positions"]
+                ):
+                    parity_status = "FAIL"
+                    notes.append("max positions drift")
+            else:
+                parity_status = "PASS_NEWER_TRADES"
+
+            parity_rows.append({
+                "portfolio_mode": mode,
+                "reference_trades": GS24_CONTROL_REFERENCE["trades"],
+                "current_trades": control["trades"],
+                "reference_cagr_pct": GS24_CONTROL_REFERENCE["cagr_pct"],
+                "current_cagr_pct": control["historical_cagr_pct"],
+                "reference_closed_dd_pct": GS24_CONTROL_REFERENCE[
+                    "closed_dd_pct"
+                ],
+                "current_closed_dd_pct": control[
+                    "max_closed_equity_dd_pct"
+                ],
+                "reference_floor_dd_pct": GS24_CONTROL_REFERENCE[
+                    "floor_dd_pct"
+                ],
+                "current_floor_dd_pct": control[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "reference_max_positions": GS24_CONTROL_REFERENCE[
+                    "max_positions"
+                ],
+                "current_max_positions": control["max_open_positions"],
+                "status": parity_status,
+                "notes": "|".join(notes),
+            })
+
+            if parity_status == "FAIL":
+                raise RuntimeError(
+                    f"Global scaling control parity failure in {mode}: "
+                    f"{parity_rows[-1]}"
+                )
+
+        rolling_summary = gs24_rolling_summary(
+            rolling_rows
+        )
+        calendar_summary = gs24_calendar_summary(
+            calendar_rows
+        )
+        delta_rows = gs24_delta_rows(
+            summary_rows
+        )
+        efficiency_rows = gs24_efficiency_rows(
+            summary_rows
+        )
+        decision_rows = gs24_decision_rows(
+            summary_rows,
+            delta_rows,
+            rolling_summary,
+            calendar_summary,
+        )
+
+        write_csv(
+            GS24_OUT["portfolio_parity"],
+            parity_rows,
+        )
+        write_csv(
+            GS24_OUT["allocation_manifest"],
+            manifest_rows,
+        )
+        write_csv(
+            GS24_OUT["summary"],
+            summary_rows,
+        )
+        write_csv(
+            GS24_OUT["delta_vs_control"],
+            delta_rows,
+        )
+        write_csv(
+            GS24_OUT["efficiency"],
+            efficiency_rows,
+        )
+        write_csv(
+            GS24_OUT["rolling"],
+            rolling_rows,
+        )
+        write_csv(
+            GS24_OUT["rolling_summary"],
+            rolling_summary,
+        )
+        write_csv(
+            GS24_OUT["calendar"],
+            calendar_rows,
+        )
+        write_csv(
+            GS24_OUT["calendar_summary"],
+            calendar_summary,
+        )
+        write_csv(
+            GS24_OUT["periods"],
+            period_rows,
+        )
+        write_csv(
+            GS24_OUT["drawdown_events"],
+            drawdown_rows,
+        )
+        write_csv(
+            GS24_OUT["decision_matrix"],
+            decision_rows,
+        )
+
+        write_csv(
+            GS24_OUT["notes"],
+            [
+                {
+                    "item": "scope",
+                    "value": (
+                        "Portfolio-level risk scaling only. "
+                        "No signal optimisation and no strategy weight search."
+                    ),
+                },
+                {
+                    "item": "control",
+                    "value": (
+                        "#1-#23 at 1.00%; EUR_JPY_M15_SHORT #24 at 0.75%."
+                    ),
+                },
+                {
+                    "item": "uniform_track",
+                    "value": (
+                        "All 24 strategies use the same risk: "
+                        "1.00%, 1.10%, 1.15%, 1.20%, 1.25%."
+                    ),
+                },
+                {
+                    "item": "q24_fixed_track",
+                    "value": (
+                        "#1-#23 scale together through "
+                        "1.00%, 1.10%, 1.15%, 1.20%, 1.25%, "
+                        "while #24 remains fixed at 0.75%."
+                    ),
+                },
+                {
+                    "item": "core6_benchmark",
+                    "value": (
+                        "Includes the frozen selective Core-6 allocation "
+                        "for direct comparison: USD_JPY_H1_LONG, "
+                        "USD_JPY_M15_LONG, GBP_USD_H1_SHORT, "
+                        "EUR_USD_H1_SHORT, EUR_JPY_H1_LONG and "
+                        "EUR_USD_M15_LONG at 1.25%; #24 at 0.75%; "
+                        "all other strategies at 1.00%."
+                    ),
+                },
+                {
+                    "item": "frozen_trade_set",
+                    "value": (
+                        "Same accepted 24-strategy trade set across every "
+                        "risk variant. Risk never changes signals or the "
+                        "non-hedging gate."
+                    ),
+                },
+                {
+                    "item": "equity_model",
+                    "value": (
+                        "Event-driven realised-equity compounding. "
+                        "Each trade fixes cash risk at entry. "
+                        "Exit before entry at equal timestamps. "
+                        "Conservative floor assumes all open trades lose "
+                        "their fixed cash risk simultaneously."
+                    ),
+                },
+                {
+                    "item": "decision_targets",
+                    "value": (
+                        "Diagnostic targets: CAGR higher than control, "
+                        "closed and conservative DD <=20% in magnitude, "
+                        "100% positive 12/24/36M rolling windows, "
+                        "100% positive completed active years, "
+                        "and no increase in max simultaneous positions."
+                    ),
+                },
+                {
+                    "item": "historical_not_forecast",
+                    "value": (
+                        "CAGR and drawdown are historical backtest outputs, "
+                        "not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        GS24_STATUS.update(
+            state="packaging",
+            message="Packaging portfolio-wide risk scaling results",
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            GS24_BUNDLE,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in GS24_OUT.values():
+                if os.path.exists(path):
+                    z.write(
+                        path,
+                        arcname=os.path.basename(path),
+                    )
+
+        GS24_STATUS.update(
+            state="complete",
+            message="Full 24 portfolio-wide risk scaling study complete",
+            progress=100,
+            results=GS24_BUNDLE,
+            risk_levels_pct=[
+                x * 100.0
+                for x in GS24_LEVELS
+            ],
+            tracks=[
+                "UNIFORM_ALL24",
+                "EXISTING23_SCALED_Q24_FIXED",
+            ],
+            benchmarks=[
+                "CURRENT_CONTROL_23x1PCT_Q24x075",
+                "CORE_6_SELECTIVE",
+            ],
+        )
+
+    except Exception as e:
+        GS24_STATUS.update(
+            state="error",
+            message=str(e),
+        )
+        print(
+            "GLOBAL SCALING STUDY ERROR:",
+            repr(e),
+            flush=True,
+        )
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route("/full24-global-scaling/status")
+def full24_global_scaling_status():
+    return jsonify(GS24_STATUS)
+
+
+@app.route("/full24-global-scaling/results")
+def full24_global_scaling_results():
+    if not os.path.exists(GS24_BUNDLE):
+        return jsonify({
+            "status": "not_ready",
+            "state": GS24_STATUS.get("state"),
+            "message": GS24_STATUS.get("message"),
+        }), 404
+
+    return send_file(
+        os.path.abspath(GS24_BUNDLE),
+        as_attachment=True,
+        download_name=GS24_BUNDLE,
+    )
+
+
+@app.route("/full24-global-scaling/info")
+def full24_global_scaling_info():
+    return jsonify({
+        "service": "Full 24 portfolio-wide risk scaling study",
+        "read_only": True,
+        "orders_supported": False,
+        "risk_levels_pct": [1.00, 1.10, 1.15, 1.20, 1.25],
+        "tracks": {
+            "UNIFORM_ALL24": (
+                "all 24 strategies use the same risk level"
+            ),
+            "EXISTING23_SCALED_Q24_FIXED": (
+                "#1-#23 scale together; #24 stays at 0.75%"
+            ),
+        },
+        "benchmarks": {
+            "CURRENT_CONTROL": (
+                "#1-#23 1.00%; #24 0.75%"
+            ),
+            "CORE_6_SELECTIVE": (
+                "six selected strategies 1.25%; "
+                "#24 0.75%; all others 1.00%"
+            ),
+        },
+        "routes": [
+            "/full24-global-scaling/status",
+            "/full24-global-scaling/results",
+            "/full24-global-scaling/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_full24_predeclared_combined_weight_test,
+        target=run_full24_global_scaling,
         daemon=True,
     ).start()
 
