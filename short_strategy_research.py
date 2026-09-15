@@ -13530,14 +13530,1439 @@ def full24_risk_sensitivity_info():
     })
 
 
-if __name__ == '__main__':
+
+# ============================================================
+# FULL 24 — PREDECLARED COMBINED WEIGHT PORTFOLIO TEST
+# ============================================================
+#
+# CONTROL
+# -------
+# All existing #1-#23 strategies = 1.00%
+# EUR_JPY_M15_SHORT #24         = 0.75%
+#
+# The one-at-a-time sensitivity study is now FROZEN.
+# This runner DOES NOT search combinations or optimise weights.
+#
+# Three predeclared candidates:
+#
+# CANDIDATE_3_CONSERVATIVE
+#   USD_JPY_H1_LONG       1.25%
+#   USD_JPY_M15_LONG      1.25%
+#   GBP_USD_H1_SHORT      1.25%
+#
+# CANDIDATE_6_CORE
+#   above three, plus:
+#   EUR_USD_H1_SHORT      1.25%
+#   EUR_JPY_H1_LONG       1.25%
+#   EUR_USD_M15_LONG      1.25%
+#
+# CANDIDATE_9_BROAD
+#   above six, plus:
+#   EUR_USD_H1_LONG       1.25%
+#   USD_JPY_H1_SHORT      1.25%
+#   GBP_USD_M15_LONG      1.25%
+#
+# Everything not named remains at its CONTROL risk.
+# #24 remains 0.75% in every candidate.
+#
+# Rationale for broader additions:
+#   Their one-at-a-time 1.25% tests remained positive over recent periods.
+#   We deliberately DO NOT include:
+#     - EUR_JPY_H1_SHORT (negative last-1Y marginal effect)
+#     - EUR_GBP_M15_SHORT (flat/negative last-1Y/2Y marginal effect)
+#     - USD_CAD_M15_LONG (negative last-1Y/2Y/3Y marginal effect)
+#   despite attractive full-history one-at-a-time numbers.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+CW24_STATUS = {
+    "state": "not_started",
+    "message": "Combined 24-strategy weight test not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+CW24_BUNDLE = "FULL_24_PREDECLARED_COMBINED_WEIGHT_TEST_RESULTS.zip"
+
+CW24_OUT = {
+    "portfolio_parity": "full24_combined_weight_portfolio_parity.csv",
+    "allocation_manifest": "full24_combined_weight_allocation_manifest.csv",
+    "summary": "full24_combined_weight_summary.csv",
+    "delta_vs_control": "full24_combined_weight_delta_vs_control.csv",
+    "rolling": "full24_combined_weight_rolling.csv",
+    "rolling_summary": "full24_combined_weight_rolling_summary.csv",
+    "calendar": "full24_combined_weight_calendar.csv",
+    "calendar_summary": "full24_combined_weight_calendar_summary.csv",
+    "periods": "full24_combined_weight_periods.csv",
+    "drawdown_events": "full24_combined_weight_drawdown_events.csv",
+    "strategy_weighted_r": "full24_combined_weight_strategy_weighted_r.csv",
+    "decision_matrix": "full24_combined_weight_decision_matrix.csv",
+    "gate_summary": "full24_combined_weight_gate_summary.csv",
+    "notes": "full24_combined_weight_notes.csv",
+}
+
+CW24_CONTROL_REFERENCE = {
+    "trades": 2666,
+    "historical_cagr_pct": 102.599436,
+    "closed_dd_pct": -18.144324,
+    "floor_dd_pct": -18.971149,
+    "max_open_positions": 6,
+}
+
+CW24_UPWEIGHT_3 = {
+    "USD_JPY_H1_LONG",
+    "USD_JPY_M15_LONG",
+    "GBP_USD_H1_SHORT",
+}
+
+CW24_UPWEIGHT_6 = CW24_UPWEIGHT_3 | {
+    "EUR_USD_H1_SHORT",
+    "EUR_JPY_H1_LONG",
+    "EUR_USD_M15_LONG",
+}
+
+CW24_UPWEIGHT_9 = CW24_UPWEIGHT_6 | {
+    "EUR_USD_H1_LONG",
+    "USD_JPY_H1_SHORT",
+    "GBP_USD_M15_LONG",
+}
+
+CW24_ALLOCATIONS = {
+    "CONTROL_24_Q24_075": set(),
+    "CANDIDATE_3_CONSERVATIVE": CW24_UPWEIGHT_3,
+    "CANDIDATE_6_CORE": CW24_UPWEIGHT_6,
+    "CANDIDATE_9_BROAD": CW24_UPWEIGHT_9,
+}
+
+
+def cw24_control_risk_map(strategy_ids):
+    risks = {sid: 0.0100 for sid in strategy_ids}
+    if Q24_STRATEGY_ID not in risks:
+        raise RuntimeError(
+            f"Missing #24 strategy ID in accepted portfolio: {Q24_STRATEGY_ID}"
+        )
+    risks[Q24_STRATEGY_ID] = 0.0075
+    return risks
+
+
+def cw24_allocation_risk_map(strategy_ids, allocation_name):
+    if allocation_name not in CW24_ALLOCATIONS:
+        raise KeyError(allocation_name)
+
+    risks = cw24_control_risk_map(strategy_ids)
+    upweights = CW24_ALLOCATIONS[allocation_name]
+
+    unknown = sorted(upweights - set(strategy_ids))
+    if unknown:
+        raise RuntimeError(
+            f"{allocation_name} contains unknown strategy IDs: {unknown}"
+        )
+
+    for sid in upweights:
+        risks[sid] = 0.0125
+
+    # Explicit invariant: #24 stays at 0.75% in every candidate.
+    if abs(risks[Q24_STRATEGY_ID] - 0.0075) > 1e-12:
+        raise RuntimeError(
+            f"{allocation_name} unexpectedly changed #24 risk"
+        )
+
+    return risks
+
+
+def cw24_summary_row(
+    allocation_name,
+    mode,
+    trades,
+    risk_map,
+    sim,
+):
+    s = sim["summary"]
+    return {
+        "allocation": allocation_name,
+        "portfolio_mode": mode,
+        "strategies": len(risk_map),
+        "trades": len(trades),
+        "upweighted_strategy_count": len(CW24_ALLOCATIONS[allocation_name]),
+        "q24_risk_pct": risk_map[Q24_STRATEGY_ID] * 100.0,
+        "ending_balance_from_100": s["ending_balance"],
+        "ending_multiple": s["ending_multiple"],
+        "total_return_pct": s["total_return_pct"],
+        "historical_cagr_pct": s["historical_cagr_pct"],
+        "weighted_r_equivalent_at_1pct": s[
+            "weighted_r_equivalent_at_1pct"
+        ],
+        "max_closed_equity_dd_pct": s[
+            "max_closed_equity_dd_pct"
+        ],
+        "max_open_risk_floor_dd_pct": s[
+            "max_open_risk_floor_dd_pct"
+        ],
+        "max_open_positions": s["max_open_positions"],
+        "max_open_risk_pct_of_realised_equity": s[
+            "max_open_risk_pct_of_realised_equity"
+        ],
+    }
+
+
+def cw24_balance_before(sim, ts):
+    j = bisect.bisect_left(
+        sim["exit_times"],
+        ts,
+    ) - 1
+    return (
+        sim["exit_balances"][j]
+        if j >= 0
+        else STARTING_BALANCE
+    )
+
+
+def cw24_period_row(
+    allocation_name,
+    mode,
+    sim,
+    trades,
+    label,
+    start,
+    end,
+):
+    sb = cw24_balance_before(sim, start)
+    eb = cw24_balance_before(sim, end)
+
+    exits = [
+        t for t in trades
+        if start <= t["exit_event_time"] < end
+    ]
+
+    ret = (
+        ((eb / sb) - 1.0) * 100.0
+        if sb > 0
+        else 0.0
+    )
+
+    years = max(
+        (end - start).total_seconds()
+        / (365.2425 * 86400.0),
+        1e-9,
+    )
+
+    ann = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0
+        else 0.0
+    )
+
+    return {
+        "allocation": allocation_name,
+        "portfolio_mode": mode,
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": ann,
+        "realized_exits": len(exits),
+    }
+
+
+def cw24_rolling_rows(
+    allocation_name,
+    mode,
+    sim,
+    trades,
+):
+    first_entry = min(
+        t["entry_time"]
+        for t in trades
+    )
+    start_month = month_floor(first_entry)
+    end_complete = month_floor(NOW)
+
+    rows = []
+    for months in (12, 24, 36):
+        cur = start_month
+        while add_months(cur, months) <= end_complete:
+            end = add_months(cur, months)
+            row = cw24_period_row(
+                allocation_name,
+                mode,
+                sim,
+                trades,
+                f"ROLLING_{months}M",
+                cur,
+                end,
+            )
+            row["months"] = months
+            rows.append(row)
+            cur = add_months(cur, 1)
+
+    return rows
+
+
+def cw24_rolling_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["allocation"],
+                r["portfolio_mode"],
+                int(r["months"]),
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        allocation, mode, months = key
+
+        active = [
+            x for x in group
+            if x["realized_exits"] > 0
+        ]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+        values = [
+            x["compounded_return_pct"]
+            for x in active
+        ]
+
+        out.append({
+            "allocation": allocation,
+            "portfolio_mode": mode,
+            "months": months,
+            "total_windows": len(group),
+            "active_windows": len(active),
+            "positive_active_windows": len(positive),
+            "positive_active_windows_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_compounded_return_pct_active": safe_median(
+                values
+            ),
+            "worst_compounded_return_pct_active": (
+                min(values) if values else 0.0
+            ),
+            "best_compounded_return_pct_active": (
+                max(values) if values else 0.0
+            ),
+        })
+
+    return out
+
+
+def cw24_calendar_rows(
+    allocation_name,
+    mode,
+    sim,
+    trades,
+):
+    first_year = min(
+        t["entry_time"]
+        for t in trades
+    ).year
+
+    rows = []
+    for year in range(first_year, NOW.year + 1):
+        start = datetime(
+            year, 1, 1,
+            tzinfo=timezone.utc,
+        )
+        nominal_end = datetime(
+            year + 1, 1, 1,
+            tzinfo=timezone.utc,
+        )
+        end = min(nominal_end, NOW)
+
+        if end <= start:
+            continue
+
+        row = cw24_period_row(
+            allocation_name,
+            mode,
+            sim,
+            trades,
+            str(year),
+            start,
+            end,
+        )
+        row["year"] = year
+        row["complete_year"] = nominal_end <= NOW
+        rows.append(row)
+
+    return rows
+
+
+def cw24_calendar_summary(rows):
+    grouped = defaultdict(list)
+
+    for r in rows:
+        grouped[
+            (
+                r["allocation"],
+                r["portfolio_mode"],
+            )
+        ].append(r)
+
+    out = []
+    for key, group in grouped.items():
+        allocation, mode = key
+
+        complete = [
+            x for x in group
+            if x["complete_year"]
+        ]
+        active = [
+            x for x in complete
+            if x["realized_exits"] > 0
+        ]
+        positive = [
+            x for x in active
+            if x["compounded_return_pct"] > 0
+        ]
+
+        worst = (
+            min(
+                active,
+                key=lambda x: x["compounded_return_pct"],
+            )
+            if active
+            else None
+        )
+        best = (
+            max(
+                active,
+                key=lambda x: x["compounded_return_pct"],
+            )
+            if active
+            else None
+        )
+
+        out.append({
+            "allocation": allocation,
+            "portfolio_mode": mode,
+            "completed_years": len(complete),
+            "active_completed_years": len(active),
+            "positive_active_completed_years": len(positive),
+            "positive_active_completed_years_pct": pct(
+                len(positive),
+                len(active),
+            ),
+            "median_return_pct_active": safe_median(
+                x["compounded_return_pct"]
+                for x in active
+            ),
+            "worst_year": (
+                worst["year"]
+                if worst else ""
+            ),
+            "worst_year_return_pct": (
+                worst["compounded_return_pct"]
+                if worst else 0.0
+            ),
+            "best_year": (
+                best["year"]
+                if best else ""
+            ),
+            "best_year_return_pct": (
+                best["compounded_return_pct"]
+                if best else 0.0
+            ),
+        })
+
+    return out
+
+
+def cw24_drawdown_event_rows(
+    allocation_name,
+    mode,
+    sim,
+):
+    rows = []
+
+    for event_type, event in [
+        ("MAX_CLOSED_DD", sim.get("closed_dd_event")),
+        (
+            "MAX_OPEN_RISK_FLOOR_DD",
+            sim.get("floor_dd_event"),
+        ),
+        (
+            "MAX_OPEN_RISK_PCT",
+            sim.get("max_open_risk_event"),
+        ),
+    ]:
+        if not event:
+            continue
+
+        rows.append({
+            "allocation": allocation_name,
+            "portfolio_mode": mode,
+            "event_type": event_type,
+            **event,
+        })
+
+    return rows
+
+
+def cw24_weighted_r_rows(
+    allocation_name,
+    mode,
+    trades,
+    risk_map,
+):
+    grouped = defaultdict(list)
+
+    for t in trades:
+        grouped[t["strategy_id"]].append(t)
+
+    rows = []
+    for sid in sorted(grouped):
+        g = grouped[sid]
+        stats_ = calc_stats(g)
+        risk = risk_map[sid]
+
+        rows.append({
+            "allocation": allocation_name,
+            "portfolio_mode": mode,
+            "strategy_id": sid,
+            "pair": g[0]["pair"],
+            "timeframe": g[0]["timeframe"],
+            "side": g[0]["side"],
+            "risk_pct": risk * 100.0,
+            "accepted_trades": len(g),
+            "unscaled_total_r": stats_["total_r"],
+            "weighted_r_equivalent_at_1pct": (
+                stats_["total_r"]
+                * (risk / 0.01)
+            ),
+            "profit_factor_unscaled": stats_["profit_factor"],
+            "expectancy_r_unscaled": stats_["expectancy_r"],
+        })
+
+    return rows
+
+
+def cw24_delta_rows(summary_rows):
+    grouped = defaultdict(list)
+
+    for r in summary_rows:
+        grouped[r["portfolio_mode"]].append(r)
+
+    out = []
+    for mode, group in grouped.items():
+        control = next(
+            x for x in group
+            if x["allocation"] == "CONTROL_24_Q24_075"
+        )
+
+        for r in group:
+            if r["allocation"] == "CONTROL_24_Q24_075":
+                continue
+
+            out.append({
+                "allocation": r["allocation"],
+                "portfolio_mode": mode,
+                "delta_historical_cagr_pp": (
+                    r["historical_cagr_pct"]
+                    - control["historical_cagr_pct"]
+                ),
+                "delta_closed_dd_pp": (
+                    r["max_closed_equity_dd_pct"]
+                    - control["max_closed_equity_dd_pct"]
+                ),
+                "extra_closed_dd_magnitude_pp": max(
+                    0.0,
+                    control["max_closed_equity_dd_pct"]
+                    - r["max_closed_equity_dd_pct"],
+                ),
+                "delta_floor_dd_pp": (
+                    r["max_open_risk_floor_dd_pct"]
+                    - control["max_open_risk_floor_dd_pct"]
+                ),
+                "extra_floor_dd_magnitude_pp": max(
+                    0.0,
+                    control["max_open_risk_floor_dd_pct"]
+                    - r["max_open_risk_floor_dd_pct"],
+                ),
+                "delta_max_open_risk_pp": (
+                    r["max_open_risk_pct_of_realised_equity"]
+                    - control[
+                        "max_open_risk_pct_of_realised_equity"
+                    ]
+                ),
+                "delta_ending_multiple": (
+                    r["ending_multiple"]
+                    - control["ending_multiple"]
+                ),
+                "control_cagr_pct": control[
+                    "historical_cagr_pct"
+                ],
+                "candidate_cagr_pct": r[
+                    "historical_cagr_pct"
+                ],
+                "control_closed_dd_pct": control[
+                    "max_closed_equity_dd_pct"
+                ],
+                "candidate_closed_dd_pct": r[
+                    "max_closed_equity_dd_pct"
+                ],
+                "control_floor_dd_pct": control[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "candidate_floor_dd_pct": r[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "control_max_open_risk_pct": control[
+                    "max_open_risk_pct_of_realised_equity"
+                ],
+                "candidate_max_open_risk_pct": r[
+                    "max_open_risk_pct_of_realised_equity"
+                ],
+            })
+
+    return out
+
+
+def cw24_decision_rows(
+    summary_rows,
+    delta_rows,
+    rolling_summary,
+    calendar_summary,
+):
+    summary_lookup = {
+        (x["portfolio_mode"], x["allocation"]): x
+        for x in summary_rows
+    }
+    delta_lookup = {
+        (x["portfolio_mode"], x["allocation"]): x
+        for x in delta_rows
+    }
+    roll_lookup = {
+        (
+            x["portfolio_mode"],
+            x["allocation"],
+            int(x["months"]),
+        ): x
+        for x in rolling_summary
+    }
+    cal_lookup = {
+        (
+            x["portfolio_mode"],
+            x["allocation"],
+        ): x
+        for x in calendar_summary
+    }
+
+    rows = []
+
+    for mode in sorted(
+        {x["portfolio_mode"] for x in summary_rows}
+    ):
+        control = summary_lookup[
+            (mode, "CONTROL_24_Q24_075")
+        ]
+
+        for allocation in [
+            "CANDIDATE_3_CONSERVATIVE",
+            "CANDIDATE_6_CORE",
+            "CANDIDATE_9_BROAD",
+        ]:
+            s = summary_lookup[(mode, allocation)]
+            d = delta_lookup[(mode, allocation)]
+
+            r12 = roll_lookup[(mode, allocation, 12)]
+            r24 = roll_lookup[(mode, allocation, 24)]
+            r36 = roll_lookup[(mode, allocation, 36)]
+            cal = cal_lookup[(mode, allocation)]
+
+            checks = {
+                "adds_cagr": (
+                    d["delta_historical_cagr_pp"] > 0
+                ),
+                "closed_dd_under_20pct": (
+                    s["max_closed_equity_dd_pct"] >= -20.0
+                ),
+                "floor_dd_under_20pct": (
+                    s["max_open_risk_floor_dd_pct"] >= -20.0
+                ),
+                "all_12m_positive": (
+                    r12["positive_active_windows_pct"] == 100.0
+                ),
+                "all_24m_positive": (
+                    r24["positive_active_windows_pct"] == 100.0
+                ),
+                "all_36m_positive": (
+                    r36["positive_active_windows_pct"] == 100.0
+                ),
+                "all_completed_years_positive": (
+                    cal[
+                        "positive_active_completed_years_pct"
+                    ] == 100.0
+                ),
+                "max_open_positions_not_higher": (
+                    s["max_open_positions"]
+                    <= control["max_open_positions"]
+                ),
+            }
+
+            rows.append({
+                "allocation": allocation,
+                "portfolio_mode": mode,
+                "comparison_status": (
+                    "MEETS_PREDECLARED_TARGETS"
+                    if all(checks.values())
+                    else "REVIEW_TRADEOFF"
+                ),
+                "checks_passed": sum(
+                    bool(v)
+                    for v in checks.values()
+                ),
+                "checks_total": len(checks),
+                **{
+                    f"check_{k}": v
+                    for k, v in checks.items()
+                },
+                "historical_cagr_pct": s[
+                    "historical_cagr_pct"
+                ],
+                "delta_cagr_pp_vs_control": d[
+                    "delta_historical_cagr_pp"
+                ],
+                "closed_dd_pct": s[
+                    "max_closed_equity_dd_pct"
+                ],
+                "floor_dd_pct": s[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "extra_floor_dd_pp_vs_control": d[
+                    "extra_floor_dd_magnitude_pp"
+                ],
+                "max_open_positions": s[
+                    "max_open_positions"
+                ],
+                "max_open_risk_pct": s[
+                    "max_open_risk_pct_of_realised_equity"
+                ],
+                "rolling12_positive_pct": r12[
+                    "positive_active_windows_pct"
+                ],
+                "rolling12_median_pct": r12[
+                    "median_compounded_return_pct_active"
+                ],
+                "rolling12_worst_pct": r12[
+                    "worst_compounded_return_pct_active"
+                ],
+                "rolling24_positive_pct": r24[
+                    "positive_active_windows_pct"
+                ],
+                "rolling24_median_pct": r24[
+                    "median_compounded_return_pct_active"
+                ],
+                "rolling24_worst_pct": r24[
+                    "worst_compounded_return_pct_active"
+                ],
+                "rolling36_positive_pct": r36[
+                    "positive_active_windows_pct"
+                ],
+                "rolling36_median_pct": r36[
+                    "median_compounded_return_pct_active"
+                ],
+                "rolling36_worst_pct": r36[
+                    "worst_compounded_return_pct_active"
+                ],
+                "completed_year_positive_pct": cal[
+                    "positive_active_completed_years_pct"
+                ],
+                "worst_calendar_year": cal[
+                    "worst_year"
+                ],
+                "worst_calendar_return_pct": cal[
+                    "worst_year_return_pct"
+                ],
+            })
+
+    return rows
+
+
+def run_full24_predeclared_combined_weight_test():
+    try:
+        global EV_STATUS
+        EV_STATUS = CW24_STATUS
+
+        CW24_STATUS.update(
+            state="fetch",
+            message="Fetching EUR/JPY M15 + H1 history",
+            progress=2,
+        )
+
+        eurjpy_m15, _ = fetch_history(
+            Q24_PAIR,
+            "M15",
+            START,
+            NOW,
+        )
+        eurjpy_h1, _ = fetch_history(
+            Q24_PAIR,
+            "H1",
+            PV_H1_WARMUP,
+            NOW,
+        )
+
+        if len(eurjpy_m15) < 400000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
+            )
+        if len(eurjpy_h1) < 100000:
+            raise RuntimeError(
+                f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
+            )
+
+        eurjpy_h1_atr = ev_atr14(eurjpy_h1)
+
+        CW24_STATUS.update(
+            state="rebuild",
+            message="Rebuilding frozen 24-strategy accepted trade set",
+            progress=8,
+        )
+
+        current23 = q24_rebuild_current23(
+            eurjpy_m15,
+            eurjpy_h1,
+            eurjpy_h1_atr,
+        )
+
+        short_features = q24_features(
+            eurjpy_m15,
+            eurjpy_h1,
+        )
+        raw_q24 = q24_build_candidate_trades(
+            eurjpy_m15,
+            short_features,
+        )
+
+        q24_summary = q24_candidate_summary(raw_q24)
+
+        if q24_summary["trades"] < Q24_REFERENCE["trades"]:
+            raise RuntimeError(
+                f"#24 candidate below frozen reference: "
+                f"{q24_summary}"
+            )
+
+        if q24_summary["trades"] == Q24_REFERENCE["trades"]:
+            if (
+                abs(
+                    q24_summary["profit_factor"]
+                    - Q24_REFERENCE["pf"]
+                ) > 0.0001
+                or abs(
+                    q24_summary["total_r"]
+                    - Q24_REFERENCE["r"]
+                ) > 0.03
+            ):
+                raise RuntimeError(
+                    f"#24 candidate metric parity drift: "
+                    f"{q24_summary}"
+                )
+
+        combined_independent = sorted(
+            current23["independent"] + raw_q24,
+            key=lambda t: (
+                t["entry_time"],
+                t["strategy_id"],
+            ),
+        )
+
+        gate_sets = {}
+        gate_rows = []
+
+        for priority, mode in [
+            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+        ]:
+            accepted, rejected = apply_live_safe_nonhedging_gate(
+                combined_independent,
+                priority,
+            )
+
+            accepted_q24 = [
+                t for t in accepted
+                if t["strategy_id"] == Q24_STRATEGY_ID
+            ]
+
+            strategy_ids = sorted({
+                t["strategy_id"]
+                for t in accepted
+            })
+
+            if len(strategy_ids) != 24:
+                raise RuntimeError(
+                    f"Expected 24 strategy IDs in {mode}, "
+                    f"got {len(strategy_ids)}"
+                )
+
+            if len(accepted) < CW24_CONTROL_REFERENCE["trades"]:
+                raise RuntimeError(
+                    f"Accepted portfolio below reference in {mode}: "
+                    f"{len(accepted)}"
+                )
+
+            gate_sets[mode] = {
+                "accepted": accepted,
+                "rejected": rejected,
+                "strategy_ids": strategy_ids,
+                "accepted_q24": accepted_q24,
+            }
+
+            gate_rows.append({
+                "portfolio_mode": mode,
+                "accepted_portfolio_trades": len(accepted),
+                "strategy_ids": len(strategy_ids),
+                "raw_q24_trades": len(raw_q24),
+                "accepted_q24_trades": len(accepted_q24),
+                "rejected_q24_trades": (
+                    len(raw_q24) - len(accepted_q24)
+                ),
+            })
+
+        write_csv(
+            CW24_OUT["gate_summary"],
+            gate_rows,
+        )
+
+        summary_rows = []
+        rolling_rows = []
+        calendar_rows = []
+        period_rows = []
+        drawdown_rows = []
+        weighted_r_rows = []
+        manifest_rows = []
+        parity_rows = []
+
+        total_runs = len(gate_sets) * len(CW24_ALLOCATIONS)
+        completed = 0
+
+        for mode in [
+            "LIVE_SAFE_H1_FIRST",
+            "LIVE_SAFE_M15_FIRST",
+        ]:
+            trades = gate_sets[mode]["accepted"]
+            strategy_ids = gate_sets[mode]["strategy_ids"]
+
+            # Allocation manifest first, including unchanged weights.
+            for allocation_name in CW24_ALLOCATIONS:
+                risk_map = cw24_allocation_risk_map(
+                    strategy_ids,
+                    allocation_name,
+                )
+
+                for sid in strategy_ids:
+                    sample = next(
+                        t for t in trades
+                        if t["strategy_id"] == sid
+                    )
+                    manifest_rows.append({
+                        "allocation": allocation_name,
+                        "portfolio_mode": mode,
+                        "strategy_id": sid,
+                        "pair": sample["pair"],
+                        "timeframe": sample["timeframe"],
+                        "side": sample["side"],
+                        "risk_pct": (
+                            risk_map[sid] * 100.0
+                        ),
+                        "is_upweighted_vs_control": (
+                            sid
+                            in CW24_ALLOCATIONS[
+                                allocation_name
+                            ]
+                        ),
+                    })
+
+                sim = w24_simulate_equity(
+                    trades,
+                    risk_map,
+                    STARTING_BALANCE,
+                )
+
+                row = cw24_summary_row(
+                    allocation_name,
+                    mode,
+                    trades,
+                    risk_map,
+                    sim,
+                )
+                summary_rows.append(row)
+
+                rolling_rows.extend(
+                    cw24_rolling_rows(
+                        allocation_name,
+                        mode,
+                        sim,
+                        trades,
+                    )
+                )
+
+                calendar_rows.extend(
+                    cw24_calendar_rows(
+                        allocation_name,
+                        mode,
+                        sim,
+                        trades,
+                    )
+                )
+
+                drawdown_rows.extend(
+                    cw24_drawdown_event_rows(
+                        allocation_name,
+                        mode,
+                        sim,
+                    )
+                )
+
+                weighted_r_rows.extend(
+                    cw24_weighted_r_rows(
+                        allocation_name,
+                        mode,
+                        trades,
+                        risk_map,
+                    )
+                )
+
+                period_defs = [
+                    (
+                        "FULL",
+                        min(
+                            t["entry_time"]
+                            for t in trades
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_5Y",
+                        NOW
+                        - timedelta(
+                            days=365.2425 * 5
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_3Y",
+                        NOW
+                        - timedelta(
+                            days=365.2425 * 3
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_2Y",
+                        NOW
+                        - timedelta(
+                            days=365.2425 * 2
+                        ),
+                        NOW,
+                    ),
+                    (
+                        "LAST_1Y",
+                        NOW
+                        - timedelta(
+                            days=365.2425
+                        ),
+                        NOW,
+                    ),
+                ]
+
+                for label, a, b in period_defs:
+                    period_rows.append(
+                        cw24_period_row(
+                            allocation_name,
+                            mode,
+                            sim,
+                            trades,
+                            label,
+                            a,
+                            b,
+                        )
+                    )
+
+                completed += 1
+                CW24_STATUS.update(
+                    state="combined_test",
+                    message=(
+                        f"{completed}/{total_runs}: "
+                        f"{mode} {allocation_name}"
+                    ),
+                    progress=70
+                    + int(
+                        24 * completed / total_runs
+                    ),
+                )
+
+            # Hard parity on CONTROL only.
+            control = next(
+                x for x in summary_rows
+                if (
+                    x["portfolio_mode"] == mode
+                    and x["allocation"]
+                    == "CONTROL_24_Q24_075"
+                )
+            )
+
+            parity_status = "PASS"
+            notes = []
+
+            if control["trades"] == CW24_CONTROL_REFERENCE["trades"]:
+                if abs(
+                    control["historical_cagr_pct"]
+                    - CW24_CONTROL_REFERENCE[
+                        "historical_cagr_pct"
+                    ]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("CAGR drift")
+
+                if abs(
+                    control["max_closed_equity_dd_pct"]
+                    - CW24_CONTROL_REFERENCE[
+                        "closed_dd_pct"
+                    ]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("closed DD drift")
+
+                if abs(
+                    control[
+                        "max_open_risk_floor_dd_pct"
+                    ]
+                    - CW24_CONTROL_REFERENCE[
+                        "floor_dd_pct"
+                    ]
+                ) > 0.002:
+                    parity_status = "FAIL"
+                    notes.append("floor DD drift")
+
+                if (
+                    control["max_open_positions"]
+                    != CW24_CONTROL_REFERENCE[
+                        "max_open_positions"
+                    ]
+                ):
+                    parity_status = "FAIL"
+                    notes.append("concurrency drift")
+            else:
+                parity_status = "PASS_NEWER_TRADES"
+
+            parity_rows.append({
+                "portfolio_mode": mode,
+                "reference_trades": CW24_CONTROL_REFERENCE["trades"],
+                "current_trades": control["trades"],
+                "reference_cagr_pct": CW24_CONTROL_REFERENCE[
+                    "historical_cagr_pct"
+                ],
+                "current_cagr_pct": control[
+                    "historical_cagr_pct"
+                ],
+                "reference_closed_dd_pct": CW24_CONTROL_REFERENCE[
+                    "closed_dd_pct"
+                ],
+                "current_closed_dd_pct": control[
+                    "max_closed_equity_dd_pct"
+                ],
+                "reference_floor_dd_pct": CW24_CONTROL_REFERENCE[
+                    "floor_dd_pct"
+                ],
+                "current_floor_dd_pct": control[
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "reference_max_positions": CW24_CONTROL_REFERENCE[
+                    "max_open_positions"
+                ],
+                "current_max_positions": control[
+                    "max_open_positions"
+                ],
+                "status": parity_status,
+                "notes": "|".join(notes),
+            })
+
+            if parity_status == "FAIL":
+                raise RuntimeError(
+                    f"Combined-weight control parity failure "
+                    f"in {mode}: {parity_rows[-1]}"
+                )
+
+        rolling_summary = cw24_rolling_summary(
+            rolling_rows
+        )
+        calendar_summary = cw24_calendar_summary(
+            calendar_rows
+        )
+        delta_rows = cw24_delta_rows(
+            summary_rows
+        )
+        decision_rows = cw24_decision_rows(
+            summary_rows,
+            delta_rows,
+            rolling_summary,
+            calendar_summary,
+        )
+
+        write_csv(
+            CW24_OUT["portfolio_parity"],
+            parity_rows,
+        )
+        write_csv(
+            CW24_OUT["allocation_manifest"],
+            manifest_rows,
+        )
+        write_csv(
+            CW24_OUT["summary"],
+            summary_rows,
+        )
+        write_csv(
+            CW24_OUT["delta_vs_control"],
+            delta_rows,
+        )
+        write_csv(
+            CW24_OUT["rolling"],
+            rolling_rows,
+        )
+        write_csv(
+            CW24_OUT["rolling_summary"],
+            rolling_summary,
+        )
+        write_csv(
+            CW24_OUT["calendar"],
+            calendar_rows,
+        )
+        write_csv(
+            CW24_OUT["calendar_summary"],
+            calendar_summary,
+        )
+        write_csv(
+            CW24_OUT["periods"],
+            period_rows,
+        )
+        write_csv(
+            CW24_OUT["drawdown_events"],
+            drawdown_rows,
+        )
+        write_csv(
+            CW24_OUT["strategy_weighted_r"],
+            weighted_r_rows,
+        )
+        write_csv(
+            CW24_OUT["decision_matrix"],
+            decision_rows,
+        )
+
+        write_csv(
+            CW24_OUT["notes"],
+            [
+                {
+                    "item": "scope",
+                    "value": (
+                        "Predeclared combined-weight validation only. "
+                        "No optimisation or combination search."
+                    ),
+                },
+                {
+                    "item": "control",
+                    "value": (
+                        "All #1-#23 at 1.00%; "
+                        "EUR_JPY_M15_SHORT #24 at 0.75%."
+                    ),
+                },
+                {
+                    "item": "candidate_3",
+                    "value": (
+                        "USD_JPY_H1_LONG, USD_JPY_M15_LONG, "
+                        "GBP_USD_H1_SHORT at 1.25%; "
+                        "all others at control."
+                    ),
+                },
+                {
+                    "item": "candidate_6",
+                    "value": (
+                        "Candidate3 plus EUR_USD_H1_SHORT, "
+                        "EUR_JPY_H1_LONG, EUR_USD_M15_LONG "
+                        "at 1.25%; all others at control."
+                    ),
+                },
+                {
+                    "item": "candidate_9",
+                    "value": (
+                        "Candidate6 plus EUR_USD_H1_LONG, "
+                        "USD_JPY_H1_SHORT, GBP_USD_M15_LONG "
+                        "at 1.25%; all others at control."
+                    ),
+                },
+                {
+                    "item": "deliberate_exclusions",
+                    "value": (
+                        "EUR_JPY_H1_SHORT, EUR_GBP_M15_SHORT "
+                        "and USD_CAD_M15_LONG were not added "
+                        "to the broad candidate despite strong "
+                        "full-history sensitivity because their "
+                        "recent marginal behaviour was weaker."
+                    ),
+                },
+                {
+                    "item": "frozen_trade_set",
+                    "value": (
+                        "Signals, stops, targets, historical fills, "
+                        "#24 A+B/B-priority logic and live-safe "
+                        "non-hedging acceptance are frozen before "
+                        "weight changes."
+                    ),
+                },
+                {
+                    "item": "equity_model",
+                    "value": (
+                        "Event-driven realised-equity compounding. "
+                        "Each trade fixes cash risk at entry; exits "
+                        "process before entries at equal timestamps. "
+                        "Conservative floor assumes all open trades "
+                        "lose their fixed cash risk simultaneously."
+                    ),
+                },
+                {
+                    "item": "decision_targets",
+                    "value": (
+                        "Diagnostic targets: positive CAGR gain, "
+                        "closed and conservative DD no worse than "
+                        "20%, 100% positive 12/24/36M rolling "
+                        "windows, 100% positive completed active "
+                        "calendar years, and no increase in max "
+                        "simultaneous positions."
+                    ),
+                },
+                {
+                    "item": "historical_not_forecast",
+                    "value": (
+                        "CAGR and drawdown figures are historical "
+                        "backtest outputs, not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        CW24_STATUS.update(
+            state="packaging",
+            message="Packaging combined-weight results",
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            CW24_BUNDLE,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in CW24_OUT.values():
+                if os.path.exists(path):
+                    z.write(
+                        path,
+                        arcname=os.path.basename(path),
+                    )
+
+        CW24_STATUS.update(
+            state="complete",
+            message=(
+                "Full 24 predeclared combined-weight "
+                "portfolio test complete"
+            ),
+            progress=100,
+            results=CW24_BUNDLE,
+            allocations=list(
+                CW24_ALLOCATIONS.keys()
+            ),
+        )
+
+    except Exception as e:
+        CW24_STATUS.update(
+            state="error",
+            message=str(e),
+        )
+        print(
+            "COMBINED WEIGHT TEST ERROR:",
+            repr(e),
+            flush=True,
+        )
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route("/full24-combined-weight-test/status")
+def full24_combined_weight_test_status():
+    return jsonify(CW24_STATUS)
+
+
+@app.route("/full24-combined-weight-test/results")
+def full24_combined_weight_test_results():
+    if not os.path.exists(CW24_BUNDLE):
+        return jsonify({
+            "status": "not_ready",
+            "state": CW24_STATUS.get("state"),
+            "message": CW24_STATUS.get("message"),
+        }), 404
+
+    return send_file(
+        os.path.abspath(CW24_BUNDLE),
+        as_attachment=True,
+        download_name=CW24_BUNDLE,
+    )
+
+
+@app.route("/full24-combined-weight-test/info")
+def full24_combined_weight_test_info():
+    return jsonify({
+        "service": (
+            "Full 24 predeclared combined-weight "
+            "portfolio validation"
+        ),
+        "read_only": True,
+        "orders_supported": False,
+        "control": {
+            "strategies_1_to_23_risk_pct": 1.00,
+            "eur_jpy_m15_short_24_risk_pct": 0.75,
+        },
+        "candidates": {
+            "CANDIDATE_3_CONSERVATIVE": sorted(
+                CW24_UPWEIGHT_3
+            ),
+            "CANDIDATE_6_CORE": sorted(
+                CW24_UPWEIGHT_6
+            ),
+            "CANDIDATE_9_BROAD": sorted(
+                CW24_UPWEIGHT_9
+            ),
+        },
+        "upweighted_risk_pct": 1.25,
+        "method": (
+            "predeclared combined allocations; "
+            "no optimisation"
+        ),
+        "routes": [
+            "/full24-combined-weight-test/status",
+            "/full24-combined-weight-test/results",
+            "/full24-combined-weight-test/info",
+        ],
+    })
+
+
+if __name__ == "__main__":
     threading.Thread(
-        target=run_full24_one_at_a_time_risk_sensitivity,
+        target=run_full24_predeclared_combined_weight_test,
         daemon=True,
     ).start()
 
     app.run(
-        host='0.0.0.0',
-        port=int(os.getenv('PORT', '5000')),
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
         debug=False,
     )
