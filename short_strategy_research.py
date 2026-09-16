@@ -17905,9 +17905,1543 @@ def sd24_info():
     })
 
 
+
+# ============================================================
+# EUR/JPY M15 SHORT #24 — TRIGGER A FOLLOW-THROUGH CONFIRMATION
+# ============================================================
+#
+# FINAL STRUCTURAL RESEARCH PASS.
+#
+# The original Trigger A signal definition is frozen. No sweep-depth filter,
+# weekday deletion, hour deletion, EMA scan, or arbitrary numeric threshold
+# search is applied to the confirmation variants.
+#
+# Trigger B remains EXACTLY frozen and enters immediately.
+#
+# PREDECLARED A ENTRY METHODS
+# ---------------------------
+# 1) ORIGINAL_IMMEDIATE
+#       Original #24 control. Enter at A signal close.
+#
+# 2) NEXT_BAR_LOWER_CLOSE
+#       After an A signal, wait exactly one M15 bar.
+#       Enter only if that next bar closes below the A signal close.
+#
+# 3) NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW
+#       After an A signal, wait exactly one M15 bar.
+#       Enter only if that next bar closes below the A signal low.
+#
+# 4) CLOSE_BELOW_SIGNAL_LOW_WITHIN_2
+#       After an A signal, allow at most two completed M15 bars.
+#       Enter on the FIRST bar whose close is below the A signal low.
+#
+# In all confirmation variants:
+#   - original A signal high +10 ticks defines the stop
+#   - any pre-entry touch of that stop invalidates the pending setup
+#   - A target remains 4.75R from confirmation reference close to original stop
+#   - historical short fill remains 1 pip adverse to confirmation close
+#   - only one pending A setup is allowed at a time
+#   - earliest pending A signal has priority
+#   - a B signal at the same prospective entry close has priority and cancels A
+#   - once a #24 trade is open, all #24 signals are ignored until exit
+#   - exact exit-candle signal remains eligible
+#
+# BENCHMARK ONLY:
+#   SWEEP_0P10_IMMEDIATE reproduces the prior 0.10 ATR sweep-depth candidate.
+#   It is NOT combined with any confirmation method.
+#
+# Every variant is also run through the exact current23 -> 24 live-safe gate
+# at full 1.00% risk. No automatic winner selection.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+CF24_STATUS = {
+    "state": "not_started",
+    "message": "EURJPY M15 SHORT #24 follow-through confirmation not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+CF24_BUNDLE = "EURJPY_M15_SHORT_24_FOLLOWTHROUGH_CONFIRMATION_RESULTS.zip"
+
+CF24_VARIANTS = [
+    "ORIGINAL_IMMEDIATE",
+    "SWEEP_0P10_IMMEDIATE",
+    "NEXT_BAR_LOWER_CLOSE",
+    "NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW",
+    "CLOSE_BELOW_SIGNAL_LOW_WITHIN_2",
+]
+
+CF24_CONFIRMATION_VARIANTS = [
+    "NEXT_BAR_LOWER_CLOSE",
+    "NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW",
+    "CLOSE_BELOW_SIGNAL_LOW_WITHIN_2",
+]
+
+CF24_COSTS = [1.0, 2.0, 3.0]
+
+CF24_OUT = {
+    "baseline_parity": "eurjpy_m15_short_24_followthrough_baseline_parity.csv",
+    "variant_manifest": "eurjpy_m15_short_24_followthrough_variant_manifest.csv",
+    "confirmation_funnel": "eurjpy_m15_short_24_followthrough_confirmation_funnel.csv",
+    "standalone_summary": "eurjpy_m15_short_24_followthrough_standalone_summary.csv",
+    "standalone_periods": "eurjpy_m15_short_24_followthrough_standalone_periods.csv",
+    "cost_stress": "eurjpy_m15_short_24_followthrough_cost_stress.csv",
+    "rolling": "eurjpy_m15_short_24_followthrough_rolling.csv",
+    "rolling_summary": "eurjpy_m15_short_24_followthrough_rolling_summary.csv",
+    "calendar": "eurjpy_m15_short_24_followthrough_calendar.csv",
+    "calendar_summary": "eurjpy_m15_short_24_followthrough_calendar_summary.csv",
+    "portfolio_summary": "eurjpy_m15_short_24_followthrough_portfolio_summary.csv",
+    "portfolio_delta": "eurjpy_m15_short_24_followthrough_portfolio_delta.csv",
+    "portfolio_gate_summary": "eurjpy_m15_short_24_followthrough_portfolio_gate_summary.csv",
+    "portfolio_rolling": "eurjpy_m15_short_24_followthrough_portfolio_rolling.csv",
+    "portfolio_rolling_summary": "eurjpy_m15_short_24_followthrough_portfolio_rolling_summary.csv",
+    "portfolio_calendar": "eurjpy_m15_short_24_followthrough_portfolio_calendar.csv",
+    "portfolio_calendar_summary": "eurjpy_m15_short_24_followthrough_portfolio_calendar_summary.csv",
+    "portfolio_periods": "eurjpy_m15_short_24_followthrough_portfolio_periods.csv",
+    "notes": "eurjpy_m15_short_24_followthrough_notes.csv",
+}
+
+CF24_BASELINE_REF = {
+    "trades": 164,
+    "pf": 1.558359,
+    "r": 65.886347,
+    "dd_r": -16.699219,
+}
+
+
+# ============================================================
+# EXECUTION HELPERS
+# ============================================================
+
+def cf24_immediate_short_outcome(m15, signal_index, rr, cost_pips):
+    signal = m15[signal_index]
+    reference = float(signal["close"])
+    stop = float(signal["high"]) + Q24_STOP_TICKS * Q24_TICK
+    reference_risk = stop - reference
+
+    if reference_risk <= 0:
+        return None
+
+    target = reference - float(rr) * reference_risk
+    fill = reference - float(cost_pips) * Q24_PIP
+    actual_risk = stop - fill
+
+    if actual_risk <= 0:
+        return None
+
+    for j in range(signal_index + 1, len(m15)):
+        bar = m15[j]
+        hit_stop = float(bar["high"]) >= stop
+        hit_target = float(bar["low"]) <= target
+
+        if not hit_stop and not hit_target:
+            continue
+
+        if hit_stop and hit_target:
+            if (
+                abs(float(bar["open"]) - float(bar["low"]))
+                < abs(float(bar["high"]) - float(bar["open"]))
+            ):
+                exit_price = target
+                reason = "TARGET"
+            else:
+                exit_price = stop
+                reason = "STOP"
+        elif hit_target:
+            exit_price = target
+            reason = "TARGET"
+        else:
+            exit_price = stop
+            reason = "STOP"
+
+        result_r = (fill - exit_price) / actual_risk
+
+        return {
+            "signal_index": signal_index,
+            "entry_index": signal_index,
+            "confirmation_index": signal_index,
+            "exit_index": j,
+            "signal_time": signal["time"],
+            "entry_time": signal["time"] + timedelta(minutes=15),
+            "exit_time": bar["time"],
+            "exit_event_time": bar["time"] + timedelta(minutes=15),
+            "reference_entry": reference,
+            "historical_fill": fill,
+            "stop": stop,
+            "target": target,
+            "exit_price": exit_price,
+            "result": reason,
+            "r": float(result_r),
+            "rr": float(rr),
+            "bars_from_signal_to_entry": 0,
+            "bars_held_after_entry": j - signal_index,
+            "hold_hours": (j - signal_index) * 0.25,
+            "cost_model": f"M15_{float(cost_pips):.2f}_ADVERSE_PIP",
+            "baseline_cost_value": float(cost_pips),
+            "early_exit": False,
+        }
+
+    return None
+
+
+def cf24_confirmed_a_outcome(
+    m15,
+    signal_index,
+    confirmation_index,
+    cost_pips,
+):
+    """
+    Entry occurs only AFTER confirmation candle has completed.
+    Stop is anchored to the ORIGINAL A signal high +10 ticks.
+    """
+    signal = m15[signal_index]
+    confirm = m15[confirmation_index]
+
+    stop = float(signal["high"]) + Q24_STOP_TICKS * Q24_TICK
+    reference = float(confirm["close"])
+    reference_risk = stop - reference
+
+    if reference_risk <= 0:
+        return None
+
+    target = reference - Q24_A_RR * reference_risk
+    fill = reference - float(cost_pips) * Q24_PIP
+    actual_risk = stop - fill
+
+    if actual_risk <= 0:
+        return None
+
+    for j in range(confirmation_index + 1, len(m15)):
+        bar = m15[j]
+        hit_stop = float(bar["high"]) >= stop
+        hit_target = float(bar["low"]) <= target
+
+        if not hit_stop and not hit_target:
+            continue
+
+        if hit_stop and hit_target:
+            if (
+                abs(float(bar["open"]) - float(bar["low"]))
+                < abs(float(bar["high"]) - float(bar["open"]))
+            ):
+                exit_price = target
+                reason = "TARGET"
+            else:
+                exit_price = stop
+                reason = "STOP"
+        elif hit_target:
+            exit_price = target
+            reason = "TARGET"
+        else:
+            exit_price = stop
+            reason = "STOP"
+
+        result_r = (fill - exit_price) / actual_risk
+
+        return {
+            "signal_index": signal_index,
+            "entry_index": confirmation_index,
+            "confirmation_index": confirmation_index,
+            "exit_index": j,
+            "signal_time": signal["time"],
+            "entry_time": confirm["time"] + timedelta(minutes=15),
+            "exit_time": bar["time"],
+            "exit_event_time": bar["time"] + timedelta(minutes=15),
+            "reference_entry": reference,
+            "historical_fill": fill,
+            "stop": stop,
+            "target": target,
+            "exit_price": exit_price,
+            "result": reason,
+            "r": float(result_r),
+            "rr": Q24_A_RR,
+            "bars_from_signal_to_entry": confirmation_index - signal_index,
+            "bars_held_after_entry": j - confirmation_index,
+            "hold_hours": (j - confirmation_index) * 0.25,
+            "cost_model": f"M15_{float(cost_pips):.2f}_ADVERSE_PIP",
+            "baseline_cost_value": float(cost_pips),
+            "early_exit": False,
+        }
+
+    return None
+
+
+def cf24_immediate_union(m15, a_indices, b_indices, cost_pips, candidate_id):
+    """
+    Exact original B-priority p0 union, with parameterised adverse fill cost.
+    """
+    events = (
+        [(i, 0, "B_HIGH_SWEEP_DISPLACEMENT", Q24_B_RR) for i in b_indices]
+        + [(i, 1, "A_RALLY_REJECTION", Q24_A_RR) for i in a_indices]
+    )
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    trades = []
+    p = 0
+
+    while p < len(events):
+        signal_index = events[p][0]
+
+        q = p
+        same = []
+        while q < len(events) and events[q][0] == signal_index:
+            same.append(events[q])
+            q += 1
+
+        chosen = None
+        trade = None
+
+        for event in same:
+            _, _, trigger, rr = event
+            candidate = cf24_immediate_short_outcome(
+                m15,
+                signal_index,
+                rr,
+                cost_pips,
+            )
+            if candidate is not None:
+                chosen = event
+                trade = candidate
+                break
+
+        if trade is None:
+            p = q
+            continue
+
+        trade.update({
+            "pair": Q24_PAIR,
+            "strategy_id": Q24_STRATEGY_ID,
+            "trigger": chosen[2],
+            "timeframe": "M15",
+            "side": "SELL",
+            "candidate_id": candidate_id,
+            "confirmation_method": "IMMEDIATE",
+        })
+        trades.append(trade)
+
+        exit_index = trade["exit_index"]
+
+        p = q
+        while p < len(events) and events[p][0] < exit_index:
+            p += 1
+
+    return trades
+
+
+def cf24_confirmation_condition(mode, m15, signal_index, k):
+    signal = m15[signal_index]
+    bar = m15[k]
+
+    if mode == "NEXT_BAR_LOWER_CLOSE":
+        return (
+            k == signal_index + 1
+            and float(bar["close"]) < float(signal["close"])
+        )
+
+    if mode == "NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW":
+        return (
+            k == signal_index + 1
+            and float(bar["close"]) < float(signal["low"])
+        )
+
+    if mode == "CLOSE_BELOW_SIGNAL_LOW_WITHIN_2":
+        return (
+            signal_index + 1 <= k <= signal_index + 2
+            and float(bar["close"]) < float(signal["low"])
+        )
+
+    raise KeyError(mode)
+
+
+def cf24_confirmation_max_wait(mode):
+    if mode in {
+        "NEXT_BAR_LOWER_CLOSE",
+        "NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW",
+    }:
+        return 1
+    if mode == "CLOSE_BELOW_SIGNAL_LOW_WITHIN_2":
+        return 2
+    raise KeyError(mode)
+
+
+def cf24_build_confirmation_variant(
+    m15,
+    a_indices,
+    b_indices,
+    mode,
+    cost_pips=1.0,
+):
+    """
+    Bar-by-bar candidate-internal state machine.
+
+    Important live-like semantics:
+    - one open #24 position at a time
+    - one pending A confirmation at a time
+    - signals during an open #24 trade are ignored
+    - B signal at a close has priority over an A confirmation at that close
+    - B signal on the original A signal candle means no pending A is created
+    - original stop touch before confirmation invalidates pending A
+    - exact exit candle can create a fresh signal
+    """
+    if mode not in CF24_CONFIRMATION_VARIANTS:
+        raise KeyError(mode)
+
+    a_set = set(a_indices)
+    b_set = set(b_indices)
+
+    trades = []
+    open_exit_index = None
+    pending = None
+
+    funnel = {
+        "variant": mode,
+        "raw_a_signals": len(a_indices),
+        "raw_b_signals": len(b_indices),
+        "a_pending_created": 0,
+        "a_pending_ignored_while_trade_open": 0,
+        "a_signals_ignored_pending_exists": 0,
+        "a_invalidated_by_original_stop_pre_entry": 0,
+        "a_expired_without_confirmation": 0,
+        "a_confirmations": 0,
+        "a_confirmation_outcome_missing_end_of_data": 0,
+        "a_entries_accepted_internal_p0": 0,
+        "b_entries_accepted_internal_p0": 0,
+        "b_canceled_pending_a": 0,
+    }
+
+    start_i = 200
+    n = len(m15)
+
+    for k in range(start_i, n):
+        # Existing trade exits intrabar on candle k -> candle-k close signal eligible.
+        if open_exit_index is not None and open_exit_index <= k:
+            open_exit_index = None
+
+        # While a trade remains open through candle k, ignore every #24 signal.
+        if open_exit_index is not None and open_exit_index > k:
+            if k in a_set:
+                funnel["a_pending_ignored_while_trade_open"] += 1
+            continue
+
+        # --------------------------------------------------------
+        # Frozen B gets priority at this candle close.
+        # --------------------------------------------------------
+        if k in b_set:
+            b_trade = cf24_immediate_short_outcome(
+                m15,
+                k,
+                Q24_B_RR,
+                cost_pips,
+            )
+
+            if b_trade is not None:
+                if pending is not None:
+                    funnel["b_canceled_pending_a"] += 1
+                    pending = None
+
+                b_trade.update({
+                    "pair": Q24_PAIR,
+                    "strategy_id": Q24_STRATEGY_ID,
+                    "trigger": "B_HIGH_SWEEP_DISPLACEMENT",
+                    "timeframe": "M15",
+                    "side": "SELL",
+                    "candidate_id": f"EURJPY_M15_SHORT_24_{mode}",
+                    "confirmation_method": "B_IMMEDIATE",
+                })
+                trades.append(b_trade)
+                open_exit_index = b_trade["exit_index"]
+                funnel["b_entries_accepted_internal_p0"] += 1
+                continue
+
+        # --------------------------------------------------------
+        # Evaluate an existing pending A.
+        # --------------------------------------------------------
+        if pending is not None:
+            signal_index = pending["signal_index"]
+            expiry_index = pending["expiry_index"]
+            stop = pending["stop"]
+
+            # Stop was traded before we could enter: setup invalid.
+            if float(m15[k]["high"]) >= stop:
+                funnel["a_invalidated_by_original_stop_pre_entry"] += 1
+                pending = None
+
+            else:
+                confirmed = cf24_confirmation_condition(
+                    mode,
+                    m15,
+                    signal_index,
+                    k,
+                )
+
+                if confirmed:
+                    funnel["a_confirmations"] += 1
+
+                    a_trade = cf24_confirmed_a_outcome(
+                        m15,
+                        signal_index,
+                        k,
+                        cost_pips,
+                    )
+
+                    pending = None
+
+                    if a_trade is None:
+                        funnel["a_confirmation_outcome_missing_end_of_data"] += 1
+                    else:
+                        a_trade.update({
+                            "pair": Q24_PAIR,
+                            "strategy_id": Q24_STRATEGY_ID,
+                            "trigger": "A_RALLY_REJECTION_CONFIRMED",
+                            "timeframe": "M15",
+                            "side": "SELL",
+                            "candidate_id": f"EURJPY_M15_SHORT_24_{mode}",
+                            "confirmation_method": mode,
+                        })
+                        trades.append(a_trade)
+                        open_exit_index = a_trade["exit_index"]
+                        funnel["a_entries_accepted_internal_p0"] += 1
+                        continue
+
+                elif k >= expiry_index:
+                    funnel["a_expired_without_confirmation"] += 1
+                    pending = None
+
+        # --------------------------------------------------------
+        # If no earlier A is pending, today's A signal may create one.
+        # B same-candle signal has already had first refusal above.
+        # --------------------------------------------------------
+        if pending is None and k in a_set:
+            # No confirmation can happen on the signal candle itself.
+            max_wait = cf24_confirmation_max_wait(mode)
+            pending = {
+                "signal_index": k,
+                "expiry_index": k + max_wait,
+                "stop": float(m15[k]["high"]) + Q24_STOP_TICKS * Q24_TICK,
+            }
+            funnel["a_pending_created"] += 1
+
+        elif pending is not None and k in a_set:
+            # Earliest pending A retains priority. Do not stack pending signals.
+            if pending["signal_index"] != k:
+                funnel["a_signals_ignored_pending_exists"] += 1
+
+    return trades, funnel
+
+
+def cf24_sweep_010_a_indices(m15, features):
+    high = np.array([float(x["high"]) for x in m15], dtype=float)
+    prior40 = prev_extreme(high, 40, True)
+    atr_ = features["atr"]
+
+    out = []
+    for i in features["a_indices"]:
+        if (
+            np.isfinite(prior40[i])
+            and np.isfinite(atr_[i])
+            and atr_[i] > 0
+            and (high[i] - prior40[i]) / atr_[i] >= 0.10
+        ):
+            out.append(i)
+    return out
+
+
+def cf24_build_variant(m15, features, variant, cost_pips=1.0):
+    base_a = features["a_indices"]
+    base_b = features["b_indices"]
+
+    if variant == "ORIGINAL_IMMEDIATE":
+        trades = cf24_immediate_union(
+            m15,
+            base_a,
+            base_b,
+            cost_pips,
+            "EURJPY_M15_SHORT_24_ORIGINAL_IMMEDIATE",
+        )
+        funnel = {
+            "variant": variant,
+            "raw_a_signals": len(base_a),
+            "raw_b_signals": len(base_b),
+            "a_pending_created": "",
+            "a_invalidated_by_original_stop_pre_entry": "",
+            "a_expired_without_confirmation": "",
+            "a_confirmations": "",
+            "a_entries_accepted_internal_p0": sum(
+                t["trigger"] == "A_RALLY_REJECTION" for t in trades
+            ),
+            "b_entries_accepted_internal_p0": sum(
+                t["trigger"] == "B_HIGH_SWEEP_DISPLACEMENT" for t in trades
+            ),
+        }
+        return trades, funnel
+
+    if variant == "SWEEP_0P10_IMMEDIATE":
+        a010 = cf24_sweep_010_a_indices(m15, features)
+        trades = cf24_immediate_union(
+            m15,
+            a010,
+            base_b,
+            cost_pips,
+            "EURJPY_M15_SHORT_24_SWEEP_0P10_IMMEDIATE",
+        )
+        funnel = {
+            "variant": variant,
+            "raw_a_signals": len(base_a),
+            "raw_a_signals_after_sweep_0p10": len(a010),
+            "raw_b_signals": len(base_b),
+            "a_pending_created": "",
+            "a_invalidated_by_original_stop_pre_entry": "",
+            "a_expired_without_confirmation": "",
+            "a_confirmations": "",
+            "a_entries_accepted_internal_p0": sum(
+                t["trigger"] == "A_RALLY_REJECTION" for t in trades
+            ),
+            "b_entries_accepted_internal_p0": sum(
+                t["trigger"] == "B_HIGH_SWEEP_DISPLACEMENT" for t in trades
+            ),
+        }
+        return trades, funnel
+
+    return cf24_build_confirmation_variant(
+        m15,
+        base_a,
+        base_b,
+        variant,
+        cost_pips=cost_pips,
+    )
+
+
+# ============================================================
+# STANDALONE REPORTING
+# ============================================================
+
+def cf24_period_defs():
+    return [
+        ("FULL", None, None),
+        (
+            "VALIDATION_2018_PLUS",
+            datetime(2018, 1, 1, tzinfo=timezone.utc),
+            None,
+        ),
+        (
+            "ERA_2020_PLUS",
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            None,
+        ),
+        ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), None),
+        ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), None),
+        ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), None),
+        ("LAST_1Y", NOW - timedelta(days=365.2425), None),
+    ]
+
+
+def cf24_period_rows(variant, trades):
+    rows = []
+    for label, start, end in cf24_period_defs():
+        rows.append({
+            "variant": variant,
+            "period": label,
+            **calc_stats(subset(trades, start, end)),
+        })
+    return rows
+
+
+def cf24_summary_rows(period_rows):
+    grouped = defaultdict(dict)
+    for r in period_rows:
+        grouped[r["variant"]][r["period"]] = r
+
+    rows = []
+    for variant in CF24_VARIANTS:
+        p = grouped[variant]
+        rows.append({
+            "variant": variant,
+            "role": (
+                "FROZEN_CONTROL"
+                if variant == "ORIGINAL_IMMEDIATE"
+                else "PRIOR_SWEEP_BENCHMARK"
+                if variant == "SWEEP_0P10_IMMEDIATE"
+                else "PREDECLARED_CONFIRMATION_TEST"
+            ),
+            "full_trades": p["FULL"]["trades"],
+            "full_pf": p["FULL"]["profit_factor"],
+            "full_r": p["FULL"]["total_r"],
+            "full_expectancy_r": p["FULL"]["expectancy_r"],
+            "full_dd_r": p["FULL"]["max_drawdown_r"],
+            "full_win_rate_pct": p["FULL"]["win_rate_pct"],
+            "validation2018_trades": p["VALIDATION_2018_PLUS"]["trades"],
+            "validation2018_pf": p["VALIDATION_2018_PLUS"]["profit_factor"],
+            "validation2018_r": p["VALIDATION_2018_PLUS"]["total_r"],
+            "era2020_pf": p["ERA_2020_PLUS"]["profit_factor"],
+            "era2020_r": p["ERA_2020_PLUS"]["total_r"],
+            "last5y_trades": p["LAST_5Y"]["trades"],
+            "last5y_pf": p["LAST_5Y"]["profit_factor"],
+            "last5y_r": p["LAST_5Y"]["total_r"],
+            "last3y_trades": p["LAST_3Y"]["trades"],
+            "last3y_pf": p["LAST_3Y"]["profit_factor"],
+            "last3y_r": p["LAST_3Y"]["total_r"],
+            "last2y_trades": p["LAST_2Y"]["trades"],
+            "last2y_pf": p["LAST_2Y"]["profit_factor"],
+            "last2y_r": p["LAST_2Y"]["total_r"],
+            "last1y_trades": p["LAST_1Y"]["trades"],
+            "last1y_pf": p["LAST_1Y"]["profit_factor"],
+            "last1y_r": p["LAST_1Y"]["total_r"],
+        })
+    return rows
+
+
+def cf24_month_floor(dt):
+    return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
+
+
+def cf24_add_months(dt, months):
+    total = dt.year * 12 + dt.month - 1 + int(months)
+    year, month0 = divmod(total, 12)
+    return datetime(year, month0 + 1, 1, tzinfo=timezone.utc)
+
+
+def cf24_rolling_rows(variant, trades):
+    first = cf24_month_floor(min(t["signal_time"] for t in trades))
+    end_complete = cf24_month_floor(NOW)
+
+    rows = []
+    for months in (12, 24, 36):
+        cur = first
+        while cf24_add_months(cur, months) <= end_complete:
+            end = cf24_add_months(cur, months)
+            s = calc_stats(subset(trades, cur, end))
+            rows.append({
+                "variant": variant,
+                "months": months,
+                "start_utc": iso(cur),
+                "end_utc": iso(end),
+                **s,
+                "positive": s["total_r"] > 0,
+            })
+            cur = cf24_add_months(cur, 1)
+    return rows
+
+
+def cf24_rolling_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(r["variant"], int(r["months"]))].append(r)
+
+    out = []
+    for (variant, months), g in grouped.items():
+        active = [x for x in g if x["trades"] > 0]
+        vals = [x["total_r"] for x in active]
+        pfs = [
+            x["profit_factor"]
+            for x in active
+            if x["profit_factor"] < 900
+        ]
+        out.append({
+            "variant": variant,
+            "months": months,
+            "windows": len(g),
+            "active_windows": len(active),
+            "positive_active_windows": sum(x["positive"] for x in active),
+            "positive_active_windows_pct": (
+                100.0 * sum(x["positive"] for x in active) / len(active)
+                if active else 0.0
+            ),
+            "median_r_active": float(np.median(vals)) if vals else 0.0,
+            "median_pf_active": float(np.median(pfs)) if pfs else 0.0,
+            "worst_r_active": min(vals) if vals else 0.0,
+            "best_r_active": max(vals) if vals else 0.0,
+        })
+    return out
+
+
+def cf24_calendar_rows(variant, trades):
+    first_year = min(t["signal_time"] for t in trades).year
+    rows = []
+
+    for year in range(first_year, NOW.year):
+        a = datetime(year, 1, 1, tzinfo=timezone.utc)
+        b = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        s = calc_stats(subset(trades, a, b))
+        rows.append({
+            "variant": variant,
+            "year": year,
+            **s,
+            "positive": s["total_r"] > 0,
+            "negative": s["total_r"] < 0,
+        })
+    return rows
+
+
+def cf24_calendar_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[r["variant"]].append(r)
+
+    out = []
+    for variant, g in grouped.items():
+        active = [x for x in g if x["trades"] > 0]
+        vals = [x["total_r"] for x in active]
+
+        out.append({
+            "variant": variant,
+            "completed_years": len(g),
+            "active_years": len(active),
+            "positive_active_years": sum(x["positive"] for x in active),
+            "negative_active_years": sum(x["negative"] for x in active),
+            "positive_active_years_pct": (
+                100.0 * sum(x["positive"] for x in active) / len(active)
+                if active else 0.0
+            ),
+            "median_year_r": float(np.median(vals)) if vals else 0.0,
+            "worst_year_r": min(vals) if vals else 0.0,
+            "best_year_r": max(vals) if vals else 0.0,
+        })
+    return out
+
+
+# ============================================================
+# PORTFOLIO REPORTING
+# ============================================================
+
+def cf24_portfolio_period_row(mode, variant, sim, trades, label, start, end):
+    j0 = bisect.bisect_left(sim["exit_times"], start) - 1
+    j1 = bisect.bisect_left(sim["exit_times"], end) - 1
+
+    sb = sim["exit_balances"][j0] if j0 >= 0 else STARTING_BALANCE
+    eb = sim["exit_balances"][j1] if j1 >= 0 else STARTING_BALANCE
+
+    ret = ((eb / sb) - 1.0) * 100.0 if sb > 0 else 0.0
+    years = max(
+        (end - start).total_seconds() / (365.2425 * 86400.0),
+        1e-9,
+    )
+    ann = (
+        ((eb / sb) ** (1.0 / years) - 1.0) * 100.0
+        if sb > 0 and eb > 0 else 0.0
+    )
+
+    return {
+        "portfolio_mode": mode,
+        "variant": variant,
+        "period": label,
+        "start_utc": iso(start),
+        "end_utc": iso(end),
+        "start_balance": sb,
+        "end_balance": eb,
+        "compounded_return_pct": ret,
+        "annualized_return_pct": ann,
+        "realized_exits": sum(
+            start <= t["exit_event_time"] < end for t in trades
+        ),
+    }
+
+
+def cf24_portfolio_rolling_rows(mode, variant, sim, trades):
+    first = cf24_month_floor(min(t["entry_time"] for t in trades))
+    end_complete = cf24_month_floor(NOW)
+    rows = []
+
+    for months in (12, 24, 36):
+        cur = first
+        while cf24_add_months(cur, months) <= end_complete:
+            end = cf24_add_months(cur, months)
+            row = cf24_portfolio_period_row(
+                mode, variant, sim, trades,
+                f"ROLLING_{months}M", cur, end,
+            )
+            row["months"] = months
+            rows.append(row)
+            cur = cf24_add_months(cur, 1)
+
+    return rows
+
+
+def cf24_portfolio_rolling_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[
+            (r["portfolio_mode"], r["variant"], int(r["months"]))
+        ].append(r)
+
+    out = []
+    for (mode, variant, months), g in grouped.items():
+        vals = [x["compounded_return_pct"] for x in g]
+        pos = [x for x in g if x["compounded_return_pct"] > 0]
+        out.append({
+            "portfolio_mode": mode,
+            "variant": variant,
+            "months": months,
+            "windows": len(g),
+            "positive_windows": len(pos),
+            "positive_windows_pct": 100.0 * len(pos) / len(g) if g else 0.0,
+            "median_return_pct": float(np.median(vals)) if vals else 0.0,
+            "worst_return_pct": min(vals) if vals else 0.0,
+            "best_return_pct": max(vals) if vals else 0.0,
+        })
+    return out
+
+
+def cf24_portfolio_calendar_rows(mode, variant, sim, trades):
+    first_year = min(t["entry_time"] for t in trades).year
+    rows = []
+
+    for year in range(first_year, NOW.year):
+        a = datetime(year, 1, 1, tzinfo=timezone.utc)
+        b = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        row = cf24_portfolio_period_row(
+            mode, variant, sim, trades, str(year), a, b,
+        )
+        row["year"] = year
+        rows.append(row)
+    return rows
+
+
+def cf24_portfolio_calendar_summary(rows):
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(r["portfolio_mode"], r["variant"])].append(r)
+
+    out = []
+    for (mode, variant), g in grouped.items():
+        active = [x for x in g if x["realized_exits"] > 0]
+        pos = [x for x in active if x["compounded_return_pct"] > 0]
+        vals = [x["compounded_return_pct"] for x in active]
+        worst = (
+            min(active, key=lambda x: x["compounded_return_pct"])
+            if active else None
+        )
+        out.append({
+            "portfolio_mode": mode,
+            "variant": variant,
+            "completed_years": len(g),
+            "active_years": len(active),
+            "positive_active_years": len(pos),
+            "positive_active_years_pct": (
+                100.0 * len(pos) / len(active) if active else 0.0
+            ),
+            "median_return_pct": float(np.median(vals)) if vals else 0.0,
+            "worst_year": worst["year"] if worst else "",
+            "worst_year_return_pct": (
+                worst["compounded_return_pct"] if worst else 0.0
+            ),
+        })
+    return out
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def run_cf24_followthrough():
+    try:
+        global EV_STATUS
+        EV_STATUS = CF24_STATUS
+
+        CF24_STATUS.update(
+            state="fetch",
+            message="Fetching EUR/JPY M15 + H1 history",
+            progress=2,
+        )
+
+        m15, _ = fetch_history(Q24_PAIR, "M15", START, NOW)
+        h1, _ = fetch_history(Q24_PAIR, "H1", PV_H1_WARMUP, NOW)
+
+        if len(m15) < 400000:
+            raise RuntimeError(f"Incomplete EUR/JPY M15 history: {len(m15)}")
+        if len(h1) < 100000:
+            raise RuntimeError(f"Incomplete EUR/JPY H1 history: {len(h1)}")
+
+        h1_atr = ev_atr14(h1)
+
+        CF24_STATUS.update(
+            state="rebuild",
+            message="Rebuilding frozen #24 and current23",
+            progress=8,
+        )
+
+        features = q24_features(m15, h1)
+        current23 = q24_rebuild_current23(m15, h1, h1_atr)
+
+        # Exact baseline parity.
+        frozen_baseline = q24_build_candidate_trades(m15, features)
+        frozen_stats = calc_stats(frozen_baseline)
+
+        parity_status = "PASS"
+        parity_notes = []
+
+        if frozen_stats["trades"] < CF24_BASELINE_REF["trades"]:
+            parity_status = "FAIL"
+            parity_notes.append("trade count below frozen reference")
+        elif frozen_stats["trades"] == CF24_BASELINE_REF["trades"]:
+            if abs(frozen_stats["profit_factor"] - CF24_BASELINE_REF["pf"]) > 0.001:
+                parity_status = "FAIL"
+                parity_notes.append("PF drift")
+            if abs(frozen_stats["total_r"] - CF24_BASELINE_REF["r"]) > 0.05:
+                parity_status = "FAIL"
+                parity_notes.append("R drift")
+            if abs(
+                frozen_stats["max_drawdown_r"]
+                - CF24_BASELINE_REF["dd_r"]
+            ) > 0.05:
+                parity_status = "FAIL"
+                parity_notes.append("DD drift")
+        else:
+            parity_status = "PASS_NEWER_TRADES"
+            parity_notes.append("additional newer frozen trades present")
+
+        write_csv(
+            CF24_OUT["baseline_parity"],
+            [{
+                "status": parity_status,
+                "notes": "|".join(parity_notes),
+                "reference_trades": CF24_BASELINE_REF["trades"],
+                "current_trades": frozen_stats["trades"],
+                "reference_pf": CF24_BASELINE_REF["pf"],
+                "current_pf": frozen_stats["profit_factor"],
+                "reference_r": CF24_BASELINE_REF["r"],
+                "current_r": frozen_stats["total_r"],
+                "reference_dd_r": CF24_BASELINE_REF["dd_r"],
+                "current_dd_r": frozen_stats["max_drawdown_r"],
+            }],
+        )
+
+        if parity_status == "FAIL":
+            raise RuntimeError(
+                f"Frozen #24 baseline parity failed: {parity_notes}"
+            )
+
+        # --------------------------------------------------------
+        # Standalone confirmation study.
+        # --------------------------------------------------------
+        CF24_STATUS.update(
+            state="standalone",
+            message="Running predeclared A follow-through variants",
+            progress=15,
+        )
+
+        variant_trades_1pip = {}
+        manifest_rows = []
+        funnel_rows = []
+        period_rows = []
+        rolling_rows = []
+        calendar_rows = []
+        cost_rows = []
+
+        descriptions = {
+            "ORIGINAL_IMMEDIATE": (
+                "Frozen A+B control; A and B enter immediately"
+            ),
+            "SWEEP_0P10_IMMEDIATE": (
+                "Prior 0.10 ATR A-sweep benchmark; immediate entry"
+            ),
+            "NEXT_BAR_LOWER_CLOSE": (
+                "Original A signals; next M15 close must be below signal close"
+            ),
+            "NEXT_BAR_CLOSE_BELOW_SIGNAL_LOW": (
+                "Original A signals; next M15 close must be below signal low"
+            ),
+            "CLOSE_BELOW_SIGNAL_LOW_WITHIN_2": (
+                "Original A signals; first close below signal low within 2 M15 bars"
+            ),
+        }
+
+        for idx, variant in enumerate(CF24_VARIANTS, 1):
+            trades, funnel = cf24_build_variant(
+                m15,
+                features,
+                variant,
+                cost_pips=1.0,
+            )
+            variant_trades_1pip[variant] = trades
+
+            manifest_rows.append({
+                "variant": variant,
+                "description": descriptions[variant],
+                "confirmation_variant": variant in CF24_CONFIRMATION_VARIANTS,
+                "uses_original_a_signal_set": (
+                    variant != "SWEEP_0P10_IMMEDIATE"
+                ),
+                "combines_sweep_0p10_with_confirmation": False,
+                "a_rr": Q24_A_RR,
+                "b_rr": Q24_B_RR,
+                "stop_buffer_ticks": Q24_STOP_TICKS,
+                "primary_cost_pips": 1.0,
+                "b_same_close_priority": True,
+                "one_pending_a_max": True,
+                "auto_select_winner": False,
+            })
+
+            funnel_rows.append(funnel)
+            period_rows.extend(cf24_period_rows(variant, trades))
+            rolling_rows.extend(cf24_rolling_rows(variant, trades))
+            calendar_rows.extend(cf24_calendar_rows(variant, trades))
+
+            for cost in CF24_COSTS:
+                stressed, _ = cf24_build_variant(
+                    m15,
+                    features,
+                    variant,
+                    cost_pips=cost,
+                )
+                for label, start, end in [
+                    ("FULL", None, None),
+                    (
+                        "VALIDATION_2018_PLUS",
+                        datetime(2018, 1, 1, tzinfo=timezone.utc),
+                        None,
+                    ),
+                    (
+                        "LAST_5Y",
+                        NOW - timedelta(days=365.2425 * 5),
+                        None,
+                    ),
+                    (
+                        "LAST_2Y",
+                        NOW - timedelta(days=365.2425 * 2),
+                        None,
+                    ),
+                ]:
+                    cost_rows.append({
+                        "variant": variant,
+                        "cost_pips": cost,
+                        "period": label,
+                        **calc_stats(subset(stressed, start, end)),
+                    })
+
+            CF24_STATUS.update(
+                state="standalone",
+                message=f"Standalone variant {idx}/{len(CF24_VARIANTS)}",
+                progress=15 + int(35 * idx / len(CF24_VARIANTS)),
+            )
+
+        standalone_summary = cf24_summary_rows(period_rows)
+        rolling_summary = cf24_rolling_summary(rolling_rows)
+        calendar_summary = cf24_calendar_summary(calendar_rows)
+
+        write_csv(CF24_OUT["variant_manifest"], manifest_rows)
+        write_csv(CF24_OUT["confirmation_funnel"], funnel_rows)
+        write_csv(CF24_OUT["standalone_summary"], standalone_summary)
+        write_csv(CF24_OUT["standalone_periods"], period_rows)
+        write_csv(CF24_OUT["cost_stress"], cost_rows)
+        write_csv(CF24_OUT["rolling"], rolling_rows)
+        write_csv(CF24_OUT["rolling_summary"], rolling_summary)
+        write_csv(CF24_OUT["calendar"], calendar_rows)
+        write_csv(CF24_OUT["calendar_summary"], calendar_summary)
+
+        # --------------------------------------------------------
+        # Exact current23 -> #24 portfolio add at full 1% for ALL
+        # predeclared variants. This is comparison, not optimisation.
+        # --------------------------------------------------------
+        CF24_STATUS.update(
+            state="portfolio",
+            message="Running exact 23→24 live-safe portfolio tests at 1%",
+            progress=55,
+        )
+
+        portfolio_summary_rows = []
+        portfolio_delta_rows = []
+        portfolio_gate_rows = []
+        portfolio_rolling_rows = []
+        portfolio_calendar_rows = []
+        portfolio_period_rows = []
+
+        for priority, mode in [
+            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+        ]:
+            current23_live = (
+                current23["live_h1_first"]
+                if priority == "H1_FIRST"
+                else current23["live_m15_first"]
+            )
+
+            risk23 = {
+                sid: 0.01
+                for sid in {t["strategy_id"] for t in current23_live}
+            }
+            sim23 = w24_simulate_equity(
+                current23_live,
+                risk23,
+                STARTING_BALANCE,
+            )
+
+            summary23 = {
+                "portfolio_mode": mode,
+                "variant": "CURRENT23_BASELINE",
+                "accepted_portfolio_trades": len(current23_live),
+                "accepted_q24_trades": 0,
+                "historical_cagr_pct": sim23["summary"]["historical_cagr_pct"],
+                "max_closed_equity_dd_pct": sim23["summary"][
+                    "max_closed_equity_dd_pct"
+                ],
+                "max_open_risk_floor_dd_pct": sim23["summary"][
+                    "max_open_risk_floor_dd_pct"
+                ],
+                "max_open_positions": sim23["summary"]["max_open_positions"],
+                "max_open_risk_pct_of_realised_equity": sim23["summary"][
+                    "max_open_risk_pct_of_realised_equity"
+                ],
+                "ending_multiple": sim23["summary"]["ending_multiple"],
+            }
+            portfolio_summary_rows.append(summary23)
+
+            all_variant_portfolios = {
+                "CURRENT23_BASELINE": (
+                    current23_live,
+                    sim23,
+                )
+            }
+
+            for variant in CF24_VARIANTS:
+                raw_candidate = variant_trades_1pip[variant]
+
+                independent = sorted(
+                    current23["independent"] + raw_candidate,
+                    key=lambda t: (t["entry_time"], t["strategy_id"]),
+                )
+
+                accepted, rejected = apply_live_safe_nonhedging_gate(
+                    independent,
+                    priority,
+                )
+
+                risk_map = {
+                    sid: 0.01
+                    for sid in {t["strategy_id"] for t in accepted}
+                }
+                sim = w24_simulate_equity(
+                    accepted,
+                    risk_map,
+                    STARTING_BALANCE,
+                )
+
+                accepted_q24 = [
+                    t for t in accepted
+                    if t["strategy_id"] == Q24_STRATEGY_ID
+                ]
+                rejected_q24 = [
+                    r for r in rejected
+                    if r["candidate_strategy_id"] == Q24_STRATEGY_ID
+                ]
+
+                portfolio_summary_rows.append({
+                    "portfolio_mode": mode,
+                    "variant": variant,
+                    "accepted_portfolio_trades": len(accepted),
+                    "accepted_q24_trades": len(accepted_q24),
+                    "raw_q24_trades": len(raw_candidate),
+                    "rejected_q24_trades": len(rejected_q24),
+                    "historical_cagr_pct": sim["summary"]["historical_cagr_pct"],
+                    "max_closed_equity_dd_pct": sim["summary"][
+                        "max_closed_equity_dd_pct"
+                    ],
+                    "max_open_risk_floor_dd_pct": sim["summary"][
+                        "max_open_risk_floor_dd_pct"
+                    ],
+                    "max_open_positions": sim["summary"]["max_open_positions"],
+                    "max_open_risk_pct_of_realised_equity": sim["summary"][
+                        "max_open_risk_pct_of_realised_equity"
+                    ],
+                    "ending_multiple": sim["summary"]["ending_multiple"],
+                })
+
+                portfolio_gate_rows.append({
+                    "portfolio_mode": mode,
+                    "variant": variant,
+                    "raw_q24_trades": len(raw_candidate),
+                    "accepted_q24_trades": len(accepted_q24),
+                    "rejected_q24_trades": len(rejected_q24),
+                    "accepted_q24_r": sum(float(t["r"]) for t in accepted_q24),
+                    "accepted_portfolio_trades": len(accepted),
+                })
+
+                all_variant_portfolios[variant] = (accepted, sim)
+
+            # Period / rolling / calendar for current23 + all variants.
+            for variant, (trades, sim) in all_variant_portfolios.items():
+                portfolio_rolling_rows.extend(
+                    cf24_portfolio_rolling_rows(
+                        mode, variant, sim, trades
+                    )
+                )
+                portfolio_calendar_rows.extend(
+                    cf24_portfolio_calendar_rows(
+                        mode, variant, sim, trades
+                    )
+                )
+
+                first_entry = min(t["entry_time"] for t in trades)
+                for label, a, b in [
+                    ("FULL", first_entry, NOW),
+                    ("LAST_5Y", NOW - timedelta(days=365.2425 * 5), NOW),
+                    ("LAST_3Y", NOW - timedelta(days=365.2425 * 3), NOW),
+                    ("LAST_2Y", NOW - timedelta(days=365.2425 * 2), NOW),
+                    ("LAST_1Y", NOW - timedelta(days=365.2425), NOW),
+                ]:
+                    portfolio_period_rows.append(
+                        cf24_portfolio_period_row(
+                            mode, variant, sim, trades, label, a, b
+                        )
+                    )
+
+        portfolio_rolling_summary = cf24_portfolio_rolling_summary(
+            portfolio_rolling_rows
+        )
+        portfolio_calendar_summary = cf24_portfolio_calendar_summary(
+            portfolio_calendar_rows
+        )
+
+        # Deltas are always against current23 and original #24, never a
+        # best-performing confirmation variant.
+        lookup = {
+            (x["portfolio_mode"], x["variant"]): x
+            for x in portfolio_summary_rows
+        }
+
+        for mode in ["LIVE_SAFE_H1_FIRST", "LIVE_SAFE_M15_FIRST"]:
+            current = lookup[(mode, "CURRENT23_BASELINE")]
+            original = lookup[(mode, "ORIGINAL_IMMEDIATE")]
+
+            for variant in [
+                "SWEEP_0P10_IMMEDIATE",
+                *CF24_CONFIRMATION_VARIANTS,
+            ]:
+                candidate = lookup[(mode, variant)]
+
+                for comparison, ref in [
+                    ("VS_CURRENT23", current),
+                    ("VS_ORIGINAL_Q24", original),
+                ]:
+                    portfolio_delta_rows.append({
+                        "portfolio_mode": mode,
+                        "variant": variant,
+                        "comparison": comparison,
+                        "reference_variant": ref["variant"],
+                        "delta_cagr_pp": (
+                            candidate["historical_cagr_pct"]
+                            - ref["historical_cagr_pct"]
+                        ),
+                        "delta_closed_dd_pp": (
+                            candidate["max_closed_equity_dd_pct"]
+                            - ref["max_closed_equity_dd_pct"]
+                        ),
+                        "delta_floor_dd_pp": (
+                            candidate["max_open_risk_floor_dd_pct"]
+                            - ref["max_open_risk_floor_dd_pct"]
+                        ),
+                        "delta_max_open_risk_pp": (
+                            candidate[
+                                "max_open_risk_pct_of_realised_equity"
+                            ]
+                            - ref[
+                                "max_open_risk_pct_of_realised_equity"
+                            ]
+                        ),
+                        "candidate_cagr_pct": candidate[
+                            "historical_cagr_pct"
+                        ],
+                        "candidate_closed_dd_pct": candidate[
+                            "max_closed_equity_dd_pct"
+                        ],
+                        "candidate_floor_dd_pct": candidate[
+                            "max_open_risk_floor_dd_pct"
+                        ],
+                        "reference_cagr_pct": ref["historical_cagr_pct"],
+                        "reference_closed_dd_pct": ref[
+                            "max_closed_equity_dd_pct"
+                        ],
+                        "reference_floor_dd_pct": ref[
+                            "max_open_risk_floor_dd_pct"
+                        ],
+                    })
+
+        write_csv(CF24_OUT["portfolio_summary"], portfolio_summary_rows)
+        write_csv(CF24_OUT["portfolio_delta"], portfolio_delta_rows)
+        write_csv(CF24_OUT["portfolio_gate_summary"], portfolio_gate_rows)
+        write_csv(CF24_OUT["portfolio_rolling"], portfolio_rolling_rows)
+        write_csv(
+            CF24_OUT["portfolio_rolling_summary"],
+            portfolio_rolling_summary,
+        )
+        write_csv(CF24_OUT["portfolio_calendar"], portfolio_calendar_rows)
+        write_csv(
+            CF24_OUT["portfolio_calendar_summary"],
+            portfolio_calendar_summary,
+        )
+        write_csv(CF24_OUT["portfolio_periods"], portfolio_period_rows)
+
+        write_csv(
+            CF24_OUT["notes"],
+            [
+                {
+                    "item": "scope",
+                    "value": (
+                        "Final structural research pass on Trigger A confirmation. "
+                        "No arbitrary threshold search and no auto-selection."
+                    ),
+                },
+                {
+                    "item": "original_a_frozen",
+                    "value": (
+                        "All confirmation variants begin from the original "
+                        "unfiltered Trigger A signal set."
+                    ),
+                },
+                {
+                    "item": "no_filter_stacking",
+                    "value": (
+                        "The previous 0.10 ATR sweep candidate is benchmark-only. "
+                        "It is never combined with a confirmation condition."
+                    ),
+                },
+                {
+                    "item": "confirmation_entry",
+                    "value": (
+                        "Entry is at the completed confirmation candle close, "
+                        "with 1-pip adverse historical short fill."
+                    ),
+                },
+                {
+                    "item": "stop_definition",
+                    "value": (
+                        "All confirmed A trades retain the ORIGINAL A signal "
+                        "high +10 ticks as stop. Any touch before entry cancels "
+                        "the pending setup."
+                    ),
+                },
+                {
+                    "item": "rr_definition",
+                    "value": (
+                        "A remains RR4.75, measured from confirmation reference "
+                        "close to the original-signal stop before adverse fill."
+                    ),
+                },
+                {
+                    "item": "pending_semantics",
+                    "value": (
+                        "One pending A maximum. Earliest pending signal has "
+                        "priority. B at the same close has priority and cancels A. "
+                        "Signals during an open #24 trade are ignored."
+                    ),
+                },
+                {
+                    "item": "portfolio_scope",
+                    "value": (
+                        "Current23, original #24, prior 0.10 sweep benchmark and "
+                        "all three confirmation variants are each tested through "
+                        "the exact live-safe non-hedging gate at full 1% risk."
+                    ),
+                },
+                {
+                    "item": "decision_rule",
+                    "value": (
+                        "Do not choose a variant from headline PF alone. A useful "
+                        "replacement must improve consistency and the 1% portfolio "
+                        "drawdown/return trade-off without collapsing trade count "
+                        "or recent/cost robustness."
+                    ),
+                },
+                {
+                    "item": "historical_not_forecast",
+                    "value": (
+                        "All performance outputs are historical backtest results, "
+                        "not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        CF24_STATUS.update(
+            state="packaging",
+            message="Packaging follow-through confirmation results",
+            progress=96,
+        )
+
+        with zipfile.ZipFile(
+            CF24_BUNDLE,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in CF24_OUT.values():
+                if os.path.exists(path):
+                    z.write(path, arcname=os.path.basename(path))
+
+        CF24_STATUS.update(
+            state="complete",
+            message=(
+                "EURJPY M15 SHORT #24 follow-through confirmation complete"
+            ),
+            progress=100,
+            results=CF24_BUNDLE,
+            confirmation_variants=CF24_CONFIRMATION_VARIANTS,
+        )
+
+    except Exception as e:
+        CF24_STATUS.update(
+            state="error",
+            message=str(e),
+        )
+        print(
+            "FOLLOW-THROUGH CONFIRMATION ERROR:",
+            repr(e),
+            flush=True,
+        )
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route("/eurjpy-m15-short-24-followthrough/status")
+def cf24_status():
+    return jsonify(CF24_STATUS)
+
+
+@app.route("/eurjpy-m15-short-24-followthrough/results")
+def cf24_results():
+    if not os.path.exists(CF24_BUNDLE):
+        return jsonify({
+            "status": "not_ready",
+            "state": CF24_STATUS.get("state"),
+            "message": CF24_STATUS.get("message"),
+        }), 404
+
+    return send_file(
+        os.path.abspath(CF24_BUNDLE),
+        as_attachment=True,
+        download_name=CF24_BUNDLE,
+    )
+
+
+@app.route("/eurjpy-m15-short-24-followthrough/info")
+def cf24_info():
+    return jsonify({
+        "service": "EURJPY M15 SHORT #24 Trigger-A follow-through confirmation",
+        "read_only": True,
+        "orders_supported": False,
+        "confirmation_variants": CF24_CONFIRMATION_VARIANTS,
+        "benchmark_variants": [
+            "ORIGINAL_IMMEDIATE",
+            "SWEEP_0P10_IMMEDIATE",
+        ],
+        "cost_stress_pips": CF24_COSTS,
+        "candidate_portfolio_risk_pct": 1.0,
+        "auto_select_winner": False,
+        "combines_sweep_filter_with_confirmation": False,
+        "routes": [
+            "/eurjpy-m15-short-24-followthrough/status",
+            "/eurjpy-m15-short-24-followthrough/results",
+            "/eurjpy-m15-short-24-followthrough/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_sd24_confirmation,
+        target=run_cf24_followthrough,
         daemon=True,
     ).start()
 
