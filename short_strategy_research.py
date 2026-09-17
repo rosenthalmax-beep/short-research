@@ -16,91 +16,81 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# AUD/USD H1 LONG — OUTSIDE REVERSAL REFINEMENT
+# AUD/USD H1 LONG — FINAL CONTROLLED CONFIRMATION
 # ============================================================
 #
 # PURPOSE
 # -------
-# Dedicated second-stage refinement after the broad AUD/USD H1 LONG
-# discovery found a family-wide OUTSIDE_REVERSAL edge.
+# Final signal-level confirmation after:
+#   1) broad AUD/USD H1 LONG discovery
+#   2) dedicated OUTSIDE_REVERSAL refinement
 #
-# This is deliberately NOT another all-family search.
+# This runner does NOT reopen broad optimisation.
 #
-# FROZEN DISCOVERY FINDINGS USED AS CONTROLS
-# ------------------------------------------
-# Control A:
-#   OUTSIDE_REVERSAL
-#   body >= 0.75 ATR14
-#   lookback = 30
-#   distance <= 0.30 ATR14
-#   close location >= 0.65
-#   RR = 3.00
-#   through 2026-09-16 20:00 UTC:
-#     323 trades
-#     PF 1.3070928182
-#     +68.4816984525R
+# PREDECLARED BRANCHES
+# --------------------
+# A) FREQUENCY / CONTROL BRANCH — geometry frozen
+#      body >= 0.75 ATR14
+#      outside candle
+#      lookback = 25
+#      distance <= 0.20 ATR14
+#      close location >= 0.75
+#      RR = 3.25
 #
-# Control B:
-#   same geometry, RR = 3.50
-#   through 2026-09-16 20:00 UTC:
-#     316 trades
-#     PF 1.2727724665
-#     +62.7376672916R
+#    Only the already-discovered Asia-Pacific session mechanism is checked:
+#      Tokyo 08:00-16:59
+#      Sydney 08:00-16:59
+#      Tokyo OR Sydney
+#      Tokyo AND Sydney
 #
-# Frozen alternative/control:
-#   ENGULF_STRUCTURE
-#   BR >= 1.00
-#   body >= 1.25 ATR14
-#   lookback = 100
-#   distance <= 0.15 ATR14
-#   RR = 4.00
-#   through 2026-09-16 20:00 UTC:
-#     47 trades
-#     PF 1.6640192322
-#     +21.9126346629R
+# B) QUALITY BRANCH — small fixed neighbourhood only
+#      body >= 1.00 ATR14
+#      outside candle
+#      lookback = 30 / 40
+#      distance <= 0.35 / 0.40 ATR14
+#      close location >= 0.85
+#      RR = 3.00 / 3.25
 #
-# PARITY GUARD
-# ------------
-# The exact three controls above are re-run ONLY through the old discovery
-# cutoff. The research aborts if their trade count/PF/R does not reproduce.
+#    Same four predeclared Asia-Pacific session definitions.
 #
-# REFINEMENT DESIGN
-# -----------------
-# Stage 1 — local geometry map, fixed RR3.25:
-#   body ATR:      0.65 / 0.75 / 0.85 / 1.00
-#   lookback:      20 / 25 / 30 / 35 / 40 / 45
-#   distance ATR:  0.20 / 0.25 / 0.30 / 0.35 / 0.40
-#   close loc:     0.60 / 0.65 / 0.70 / 0.75 / 0.80 / 0.85
-#   total = 720 raw geometries
+# Total fixed confirmation candidates = 36.
 #
-# Stage 2 — RR confirmation on a robustness-first geometry shortlist:
-#   RR 2.75 / 3.00 / 3.25 / 3.50 / 3.75 / 4.00
+# NO:
+#   - new signal families
+#   - weekday mining
+#   - HTF-filter mining
+#   - arbitrary hour-by-hour optimisation
+#   - additional geometry dimensions
+#   - extra RR search beyond 3.00 / 3.25 on the quality branch
 #
-# Stage 3 — simple SINGLE-FACTOR causal contexts only:
-#   - no context
-#   - one weekday exclusion at a time (America/New_York)
-#   - Sydney / Tokyo / London / New York daytime blocks
-#   - strictly completed H4 trend states
-#   - strictly completed daily trend states
+# PARITY GUARDS
+# -------------
+# 1) The original three discovery controls must reproduce through
+#    2026-09-16 20:00 UTC.
 #
-# No context interactions are mined in this runner.
+# 2) Five key context candidates from the refinement run must reproduce
+#    exactly through 2026-09-17 18:00 UTC.
 #
-# FINAL DIAGNOSTICS
-# -----------------
+# If parity fails, the study aborts.
+#
+# FINAL DIAGNOSTICS FOR ALL 36 FIXED CANDIDATES
+# ---------------------------------------------
+#   - full-history PF / R / DD / streak
 #   - 2002-2017 vs 2018+
 #   - pre-2010 / 2010+
 #   - four broad eras
 #   - last 5Y / last 2Y
 #   - 0.5x / 1x / 1.5x / 2x adverse-cost stress
 #   - rolling 12 / 24 / 36M
-#   - calendar years
-#   - local geometry/RR plateau
-#   - context ablation vs the same no-context geometry/RR
-#   - overlap with the frozen 47-trade engulf control
+#   - calendar-year consistency
+#   - Asia-session mechanism comparison
+#   - branch-level stability summary
+#   - full trade export
 #
 # HISTORICAL EXECUTION
 # --------------------
 # OANDA midpoint H1
+# ATR14 = Wilder/RMA, SMA seeded
 # signal timestamp = H1 candle OPEN
 # reference entry = signal CLOSE
 # baseline adverse fill = +0.5 pip for LONG
@@ -109,12 +99,13 @@ from flask import Flask, jsonify, send_file
 # realised R based on adverse fill
 # exits begin on NEXT H1 candle
 # exact exit-candle re-entry eligible
-# pyramiding = 0
+# pyramiding = 0 per candidate
 #
 # IMPORTANT
 # ---------
-# This is research only. It does NOT alter the frozen live 24-strategy
-# portfolio and can never place an order.
+# A confirmation pass is NOT an automatic live deployment.
+# A surviving signal must still pass the exact frozen 24-strategy
+# portfolio-addition test before it can become strategy #25.
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -134,7 +125,15 @@ WARMUP_START = REQUESTED_START - timedelta(days=900)
 VALIDATION_START = datetime(2018, 1, 1, tzinfo=timezone.utc)
 PRE2010_END = datetime(2010, 1, 1, tzinfo=timezone.utc)
 
-CONTROL_CUTOFF = datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc)
+DISCOVERY_CONTROL_CUTOFF = datetime(
+    2026, 9, 16, 20, 0,
+    tzinfo=timezone.utc,
+)
+
+REFINEMENT_CONTROL_CUTOFF = datetime(
+    2026, 9, 17, 18, 0,
+    tzinfo=timezone.utc,
+)
 
 TICK = 0.00001
 PIP = 0.0001
@@ -144,45 +143,44 @@ H1_PRIMARY_COST_PIPS = 0.50
 M15_PRIMARY_COST_PIPS = 1.00
 COST_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
 
-GEOMETRY_RR = 3.25
-RR_GRID = [2.75, 3.00, 3.25, 3.50, 3.75, 4.00]
+FREQUENCY_BODY_ATR = 0.75
+FREQUENCY_LOOKBACK = 25
+FREQUENCY_DISTANCE_ATR = 0.20
+FREQUENCY_CLOSE_LOCATION = 0.75
+FREQUENCY_RR = 3.25
 
-GEOMETRY_BODY_ATR = [0.65, 0.75, 0.85, 1.00]
-GEOMETRY_LOOKBACK = [20, 25, 30, 35, 40, 45]
-GEOMETRY_DISTANCE = [0.20, 0.25, 0.30, 0.35, 0.40]
-GEOMETRY_CLOSE = [0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
+QUALITY_BODY_ATR = 1.00
+QUALITY_LOOKBACKS = [30, 40]
+QUALITY_DISTANCE_ATR = [0.35, 0.40]
+QUALITY_CLOSE_LOCATION = 0.85
+QUALITY_RRS = [3.00, 3.25]
 
-GEOMETRY_SHORTLIST_SIZE = 36
-CONTEXT_BASES = 12
-FINAL_KEEP = 12
-
-NY = ZoneInfo("America/New_York")
-LONDON = ZoneInfo("Europe/London")
-TOKYO = ZoneInfo("Asia/Tokyo")
-SYDNEY = ZoneInfo("Australia/Sydney")
+FINAL_SESSION_IDS = [
+    "SESSION_TOKYO_08_17",
+    "SESSION_SYDNEY_08_17",
+    "SESSION_ASIA_UNION_08_17",
+    "SESSION_ASIA_INTERSECTION_08_17",
+]
 
 OUTS = {
-    "coverage": "audusd_h1_long_outside_refinement_coverage.csv",
-    "control_parity": "audusd_h1_long_outside_refinement_control_parity.csv",
-    "geometry": "audusd_h1_long_outside_refinement_geometry.csv",
-    "geometry_shortlist": "audusd_h1_long_outside_refinement_geometry_shortlist.csv",
-    "rr": "audusd_h1_long_outside_refinement_rr_sweep.csv",
-    "contexts": "audusd_h1_long_outside_refinement_context_scan.csv",
-    "context_ablation": "audusd_h1_long_outside_refinement_context_ablation.csv",
-    "finalists": "audusd_h1_long_outside_refinement_finalists.csv",
-    "periods": "audusd_h1_long_outside_refinement_periods.csv",
-    "cost_stress": "audusd_h1_long_outside_refinement_cost_stress.csv",
-    "rolling": "audusd_h1_long_outside_refinement_rolling.csv",
-    "rolling_summary": "audusd_h1_long_outside_refinement_rolling_summary.csv",
-    "calendar": "audusd_h1_long_outside_refinement_calendar_years.csv",
-    "calendar_summary": "audusd_h1_long_outside_refinement_calendar_summary.csv",
-    "plateau": "audusd_h1_long_outside_refinement_plateau.csv",
-    "overlap": "audusd_h1_long_outside_refinement_overlap_vs_engulf.csv",
-    "trades": "audusd_h1_long_outside_refinement_finalist_trades.csv",
-    "notes": "audusd_h1_long_outside_refinement_notes.csv",
+    "coverage": "audusd_h1_long_final_confirmation_coverage.csv",
+    "discovery_parity": "audusd_h1_long_final_confirmation_discovery_parity.csv",
+    "refinement_parity": "audusd_h1_long_final_confirmation_refinement_parity.csv",
+    "candidates": "audusd_h1_long_final_confirmation_candidates.csv",
+    "decision": "audusd_h1_long_final_confirmation_decision_matrix.csv",
+    "periods": "audusd_h1_long_final_confirmation_periods.csv",
+    "cost_stress": "audusd_h1_long_final_confirmation_cost_stress.csv",
+    "rolling": "audusd_h1_long_final_confirmation_rolling.csv",
+    "rolling_summary": "audusd_h1_long_final_confirmation_rolling_summary.csv",
+    "calendar": "audusd_h1_long_final_confirmation_calendar_years.csv",
+    "calendar_summary": "audusd_h1_long_final_confirmation_calendar_summary.csv",
+    "session_mechanism": "audusd_h1_long_final_confirmation_session_mechanism.csv",
+    "branch_summary": "audusd_h1_long_final_confirmation_branch_summary.csv",
+    "trades": "audusd_h1_long_final_confirmation_trades.csv",
+    "notes": "audusd_h1_long_final_confirmation_notes.csv",
 }
 
-BUNDLE = "AUDUSD_H1_LONG_OUTSIDE_REVERSAL_REFINEMENT_RESULTS.zip"
+BUNDLE = "AUDUSD_H1_LONG_FINAL_CONFIRMATION_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -190,6 +188,7 @@ STATUS = {
     "pair": PAIR,
     "timeframe": "H1",
     "side": "LONG",
+    "candidate_count_expected": 36,
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -2374,375 +2373,8 @@ def add_final_robustness(
 
 
 # ============================================================
-# OUTSIDE-REVERSAL REFINEMENT HELPERS
+# FINAL CONFIRMATION HELPERS
 # ============================================================
-
-def ema_array(values, length):
-    values = np.asarray(values, dtype=float)
-
-    result = np.full(
-        len(values),
-        np.nan,
-        dtype=float,
-    )
-
-    if len(values) < length:
-        return result
-
-    seed_window = values[:length]
-    if not np.all(np.isfinite(seed_window)):
-        return result
-
-    result[length - 1] = float(
-        np.mean(seed_window)
-    )
-
-    alpha = 2.0 / (length + 1.0)
-
-    for i in range(length, len(values)):
-        value = values[i]
-
-        if not math.isfinite(value):
-            result[i] = result[i - 1]
-            continue
-
-        result[i] = (
-            alpha * value
-            + (1.0 - alpha) * result[i - 1]
-        )
-
-    return result
-
-
-def slice_features(features, end_exclusive):
-    output = {}
-
-    for key, value in features.items():
-        if isinstance(value, np.ndarray):
-            output[key] = value[:end_exclusive].copy()
-
-        elif key == "times":
-            output[key] = value[:end_exclusive]
-
-        elif key in ("prev_lows", "prev_highs"):
-            output[key] = {
-                lookback: array[:end_exclusive].copy()
-                for lookback, array in value.items()
-            }
-
-        else:
-            output[key] = value
-
-    return output
-
-
-def aligned_completed_values(
-    signal_times,
-    htf_times,
-    values,
-):
-    """
-    Strictly completed higher-timeframe state.
-
-    For HTF candle i, its value becomes available only when the NEXT HTF
-    candle begins. This handles daily DST alignment safely because completion
-    is inferred from the actual next OANDA candle timestamp.
-    """
-    output = np.full(
-        len(signal_times),
-        np.nan,
-        dtype=float,
-    )
-
-    if len(htf_times) < 2:
-        return output
-
-    completion_times = htf_times[1:]
-    completed_values = np.asarray(
-        values[:-1],
-        dtype=float,
-    )
-
-    for i, signal_time in enumerate(signal_times):
-        index = (
-            bisect_right(
-                completion_times,
-                signal_time,
-            )
-            - 1
-        )
-
-        if index >= 0:
-            output[i] = completed_values[index]
-
-    return output
-
-
-def build_context_cache(
-    h1_features,
-    h4_candles,
-    daily_candles,
-):
-    signal_times = h1_features["times"]
-
-    h4_close = np.array(
-        [c["close"] for c in h4_candles],
-        dtype=float,
-    )
-    daily_close = np.array(
-        [c["close"] for c in daily_candles],
-        dtype=float,
-    )
-
-    h4_times = [
-        c["time"]
-        for c in h4_candles
-    ]
-    daily_times = [
-        c["time"]
-        for c in daily_candles
-    ]
-
-    h4_ema50 = ema_array(h4_close, 50)
-    h4_ema100 = ema_array(h4_close, 100)
-    h4_ema200 = ema_array(h4_close, 200)
-
-    d_ema50 = ema_array(daily_close, 50)
-    d_ema100 = ema_array(daily_close, 100)
-    d_ema200 = ema_array(daily_close, 200)
-
-    cache = {
-        "H4_CLOSE": aligned_completed_values(
-            signal_times,
-            h4_times,
-            h4_close,
-        ),
-        "H4_EMA50": aligned_completed_values(
-            signal_times,
-            h4_times,
-            h4_ema50,
-        ),
-        "H4_EMA100": aligned_completed_values(
-            signal_times,
-            h4_times,
-            h4_ema100,
-        ),
-        "H4_EMA200": aligned_completed_values(
-            signal_times,
-            h4_times,
-            h4_ema200,
-        ),
-        "D_CLOSE": aligned_completed_values(
-            signal_times,
-            daily_times,
-            daily_close,
-        ),
-        "D_EMA50": aligned_completed_values(
-            signal_times,
-            daily_times,
-            d_ema50,
-        ),
-        "D_EMA100": aligned_completed_values(
-            signal_times,
-            daily_times,
-            d_ema100,
-        ),
-        "D_EMA200": aligned_completed_values(
-            signal_times,
-            daily_times,
-            d_ema200,
-        ),
-    }
-
-    ny_weekday = np.empty(
-        len(signal_times),
-        dtype=int,
-    )
-
-    session_ny = np.zeros(
-        len(signal_times),
-        dtype=bool,
-    )
-    session_london = np.zeros(
-        len(signal_times),
-        dtype=bool,
-    )
-    session_tokyo = np.zeros(
-        len(signal_times),
-        dtype=bool,
-    )
-    session_sydney = np.zeros(
-        len(signal_times),
-        dtype=bool,
-    )
-
-    for i, timestamp in enumerate(signal_times):
-        ny_time = timestamp.astimezone(NY)
-        london_time = timestamp.astimezone(LONDON)
-        tokyo_time = timestamp.astimezone(TOKYO)
-        sydney_time = timestamp.astimezone(SYDNEY)
-
-        ny_weekday[i] = ny_time.weekday()
-
-        # signal timestamp is candle OPEN
-        session_ny[i] = 8 <= ny_time.hour < 17
-        session_london[i] = 7 <= london_time.hour < 16
-        session_tokyo[i] = 8 <= tokyo_time.hour < 17
-        session_sydney[i] = 8 <= sydney_time.hour < 17
-
-    cache["NY_WEEKDAY"] = ny_weekday
-    cache["SESSION_NY"] = session_ny
-    cache["SESSION_LONDON"] = session_london
-    cache["SESSION_TOKYO"] = session_tokyo
-    cache["SESSION_SYDNEY"] = session_sydney
-
-    return cache
-
-
-def context_definitions():
-    return [
-        ("NONE", "BASE", "No context filter"),
-
-        ("EXCLUDE_MON_NY", "WEEKDAY", "Exclude Monday NY"),
-        ("EXCLUDE_TUE_NY", "WEEKDAY", "Exclude Tuesday NY"),
-        ("EXCLUDE_WED_NY", "WEEKDAY", "Exclude Wednesday NY"),
-        ("EXCLUDE_THU_NY", "WEEKDAY", "Exclude Thursday NY"),
-        ("EXCLUDE_FRI_NY", "WEEKDAY", "Exclude Friday NY"),
-
-        ("SESSION_SYDNEY_08_17", "SESSION", "08:00-16:59 Australia/Sydney"),
-        ("SESSION_TOKYO_08_17", "SESSION", "08:00-16:59 Asia/Tokyo"),
-        ("SESSION_LONDON_07_16", "SESSION", "07:00-15:59 Europe/London"),
-        ("SESSION_NY_08_17", "SESSION", "08:00-16:59 America/New_York"),
-
-        ("H4_CLOSE_GT_EMA100", "H4_TREND", "Prior completed H4 close > EMA100"),
-        ("H4_CLOSE_GT_EMA200", "H4_TREND", "Prior completed H4 close > EMA200"),
-        ("H4_EMA50_GT_EMA200", "H4_TREND", "Prior completed H4 EMA50 > EMA200"),
-
-        ("D_CLOSE_GT_EMA100", "D_TREND", "Prior completed D close > EMA100"),
-        ("D_CLOSE_GT_EMA200", "D_TREND", "Prior completed D close > EMA200"),
-        ("D_EMA50_GT_EMA200", "D_TREND", "Prior completed D EMA50 > EMA200"),
-    ]
-
-
-def context_mask(context_id, cache):
-    n = len(cache["NY_WEEKDAY"])
-
-    if context_id == "NONE":
-        return np.ones(n, dtype=bool)
-
-    weekday_map = {
-        "EXCLUDE_MON_NY": 0,
-        "EXCLUDE_TUE_NY": 1,
-        "EXCLUDE_WED_NY": 2,
-        "EXCLUDE_THU_NY": 3,
-        "EXCLUDE_FRI_NY": 4,
-    }
-
-    if context_id in weekday_map:
-        return (
-            cache["NY_WEEKDAY"]
-            != weekday_map[context_id]
-        )
-
-    if context_id == "SESSION_SYDNEY_08_17":
-        return cache["SESSION_SYDNEY"].copy()
-
-    if context_id == "SESSION_TOKYO_08_17":
-        return cache["SESSION_TOKYO"].copy()
-
-    if context_id == "SESSION_LONDON_07_16":
-        return cache["SESSION_LONDON"].copy()
-
-    if context_id == "SESSION_NY_08_17":
-        return cache["SESSION_NY"].copy()
-
-    if context_id == "H4_CLOSE_GT_EMA100":
-        return (
-            np.isfinite(cache["H4_CLOSE"])
-            & np.isfinite(cache["H4_EMA100"])
-            & (
-                cache["H4_CLOSE"]
-                > cache["H4_EMA100"]
-            )
-        )
-
-    if context_id == "H4_CLOSE_GT_EMA200":
-        return (
-            np.isfinite(cache["H4_CLOSE"])
-            & np.isfinite(cache["H4_EMA200"])
-            & (
-                cache["H4_CLOSE"]
-                > cache["H4_EMA200"]
-            )
-        )
-
-    if context_id == "H4_EMA50_GT_EMA200":
-        return (
-            np.isfinite(cache["H4_EMA50"])
-            & np.isfinite(cache["H4_EMA200"])
-            & (
-                cache["H4_EMA50"]
-                > cache["H4_EMA200"]
-            )
-        )
-
-    if context_id == "D_CLOSE_GT_EMA100":
-        return (
-            np.isfinite(cache["D_CLOSE"])
-            & np.isfinite(cache["D_EMA100"])
-            & (
-                cache["D_CLOSE"]
-                > cache["D_EMA100"]
-            )
-        )
-
-    if context_id == "D_CLOSE_GT_EMA200":
-        return (
-            np.isfinite(cache["D_CLOSE"])
-            & np.isfinite(cache["D_EMA200"])
-            & (
-                cache["D_CLOSE"]
-                > cache["D_EMA200"]
-            )
-        )
-
-    if context_id == "D_EMA50_GT_EMA200":
-        return (
-            np.isfinite(cache["D_EMA50"])
-            & np.isfinite(cache["D_EMA200"])
-            & (
-                cache["D_EMA50"]
-                > cache["D_EMA200"]
-            )
-        )
-
-    raise ValueError(
-        f"Unknown context_id: {context_id}"
-    )
-
-
-def apply_context(
-    raw_indices,
-    context_id,
-    context_cache,
-):
-    raw_indices = np.asarray(
-        raw_indices,
-        dtype=int,
-    )
-
-    mask = context_mask(
-        context_id,
-        context_cache,
-    )
-
-    if not len(raw_indices):
-        return raw_indices
-
-    return raw_indices[
-        mask[raw_indices]
-    ]
-
 
 def outside_config(
     body_atr_min,
@@ -2785,7 +2417,136 @@ def engulf_control_config():
     return config
 
 
-def control_specs():
+def slice_features(features, end_exclusive):
+    output = {}
+
+    for key, value in features.items():
+        if isinstance(value, np.ndarray):
+            output[key] = value[:end_exclusive].copy()
+
+        elif key == "times":
+            output[key] = value[:end_exclusive]
+
+        elif key in ("prev_lows", "prev_highs"):
+            output[key] = {
+                lookback: array[:end_exclusive].copy()
+                for lookback, array in value.items()
+            }
+
+        else:
+            output[key] = value
+
+    return output
+
+
+def build_session_cache(signal_times):
+    n = len(signal_times)
+
+    ny_weekday = np.empty(
+        n,
+        dtype=int,
+    )
+
+    session_ny = np.zeros(
+        n,
+        dtype=bool,
+    )
+    session_london = np.zeros(
+        n,
+        dtype=bool,
+    )
+    session_tokyo = np.zeros(
+        n,
+        dtype=bool,
+    )
+    session_sydney = np.zeros(
+        n,
+        dtype=bool,
+    )
+
+    for i, timestamp in enumerate(signal_times):
+        ny_time = timestamp.astimezone(NY)
+        london_time = timestamp.astimezone(LONDON)
+        tokyo_time = timestamp.astimezone(TOKYO)
+        sydney_time = timestamp.astimezone(SYDNEY)
+
+        ny_weekday[i] = ny_time.weekday()
+
+        session_ny[i] = (
+            8 <= ny_time.hour < 17
+        )
+        session_london[i] = (
+            7 <= london_time.hour < 16
+        )
+        session_tokyo[i] = (
+            8 <= tokyo_time.hour < 17
+        )
+        session_sydney[i] = (
+            8 <= sydney_time.hour < 17
+        )
+
+    return {
+        "NY_WEEKDAY": ny_weekday,
+        "SESSION_NY": session_ny,
+        "SESSION_LONDON": session_london,
+        "SESSION_TOKYO": session_tokyo,
+        "SESSION_SYDNEY": session_sydney,
+    }
+
+
+def context_mask(context_id, cache):
+    n = len(cache["NY_WEEKDAY"])
+
+    if context_id == "NONE":
+        return np.ones(n, dtype=bool)
+
+    if context_id == "SESSION_TOKYO_08_17":
+        return cache["SESSION_TOKYO"].copy()
+
+    if context_id == "SESSION_SYDNEY_08_17":
+        return cache["SESSION_SYDNEY"].copy()
+
+    if context_id == "SESSION_ASIA_UNION_08_17":
+        return (
+            cache["SESSION_TOKYO"]
+            | cache["SESSION_SYDNEY"]
+        )
+
+    if context_id == "SESSION_ASIA_INTERSECTION_08_17":
+        return (
+            cache["SESSION_TOKYO"]
+            & cache["SESSION_SYDNEY"]
+        )
+
+    raise ValueError(
+        f"Unsupported final-confirmation context: {context_id}"
+    )
+
+
+def apply_context(
+    raw_indices,
+    context_id,
+    context_cache,
+):
+    raw_indices = np.asarray(
+        raw_indices,
+        dtype=int,
+    )
+
+    if not len(raw_indices):
+        return raw_indices
+
+    mask = context_mask(
+        context_id,
+        context_cache,
+    )
+
+    return raw_indices[
+        mask[raw_indices]
+    ]
+
+
+def discovery_control_specs():
     return [
         {
             "name": "OUTSIDE_RR3",
@@ -2815,26 +2576,121 @@ def control_specs():
     ]
 
 
-def run_control_parity(control_features):
+def refinement_control_specs():
+    return [
+        {
+            "name": "FREQUENCY_TOKYO",
+            "config": outside_config(
+                0.75,
+                25,
+                0.20,
+                0.75,
+                3.25,
+                context_id="SESSION_TOKYO_08_17",
+            ),
+            "expected_trades": 94,
+            "expected_pf": 1.8715648326425856,
+            "expected_total_r": 51.422325125912565,
+        },
+        {
+            "name": "QUALITY_LB40_D035_TOKYO",
+            "config": outside_config(
+                1.00,
+                40,
+                0.35,
+                0.85,
+                3.25,
+                context_id="SESSION_TOKYO_08_17",
+            ),
+            "expected_trades": 60,
+            "expected_pf": 2.256610520811067,
+            "expected_total_r": 43.98136822838734,
+        },
+        {
+            "name": "QUALITY_LB40_D035_SYDNEY",
+            "config": outside_config(
+                1.00,
+                40,
+                0.35,
+                0.85,
+                3.25,
+                context_id="SESSION_SYDNEY_08_17",
+            ),
+            "expected_trades": 50,
+            "expected_pf": 2.4843918557892115,
+            "expected_total_r": 41.56297196209791,
+        },
+        {
+            "name": "QUALITY_LB30_D035_TOKYO",
+            "config": outside_config(
+                1.00,
+                30,
+                0.35,
+                0.85,
+                3.25,
+                context_id="SESSION_TOKYO_08_17",
+            ),
+            "expected_trades": 69,
+            "expected_pf": 2.0304739748458496,
+            "expected_total_r": 43.27990694352567,
+        },
+        {
+            "name": "QUALITY_LB30_D035_SYDNEY",
+            "config": outside_config(
+                1.00,
+                30,
+                0.35,
+                0.85,
+                3.25,
+                context_id="SESSION_SYDNEY_08_17",
+            ),
+            "expected_trades": 58,
+            "expected_pf": 2.2312209022716543,
+            "expected_total_r": 41.86151067723624,
+        },
+    ]
+
+
+def run_parity_specs(
+    specs,
+    control_features,
+    control_session_cache,
+    cutoff,
+):
     rows = []
 
-    for spec in control_specs():
+    for spec in specs:
         config = spec["config"]
-        indices = signal_indices(
+
+        raw_indices = signal_indices(
             config,
             control_features,
         )
+
+        context_id = config.get(
+            "context_id"
+        )
+
+        if context_id:
+            raw_indices = apply_context(
+                raw_indices,
+                context_id,
+                control_session_cache,
+            )
+
         trades = backtest(
             config,
             control_features,
-            indices,
+            raw_indices,
         )
+
         result = metrics(trades)
 
         trades_ok = (
             result["trades"]
             == spec["expected_trades"]
         )
+
         pf_ok = (
             abs(
                 result["profit_factor"]
@@ -2842,6 +2698,7 @@ def run_control_parity(control_features):
             )
             <= 1e-8
         )
+
         r_ok = (
             abs(
                 result["total_r"]
@@ -2858,7 +2715,7 @@ def run_control_parity(control_features):
 
         rows.append({
             "control_name": spec["name"],
-            "control_cutoff_utc": iso(CONTROL_CUTOFF),
+            "control_cutoff_utc": iso(cutoff),
             "config_id": config["config_id"],
             "expected_trades": spec["expected_trades"],
             "actual_trades": result["trades"],
@@ -2871,453 +2728,148 @@ def run_control_parity(control_features):
 
         if not parity_pass:
             raise RuntimeError(
-                "Control parity failed for "
+                "Parity failure for "
                 f"{spec['name']}: "
-                f"trades {result['trades']} vs {spec['expected_trades']}, "
-                f"PF {result['profit_factor']} vs {spec['expected_pf']}, "
-                f"R {result['total_r']} vs {spec['expected_total_r']}"
+                f"trades={result['trades']} "
+                f"(expected {spec['expected_trades']}), "
+                f"PF={result['profit_factor']} "
+                f"(expected {spec['expected_pf']}), "
+                f"R={result['total_r']} "
+                f"(expected {spec['expected_total_r']})"
             )
 
     return rows
 
 
-def geometry_configs():
+def final_candidate_configs():
     configs = []
 
-    for body in GEOMETRY_BODY_ATR:
-        for lookback in GEOMETRY_LOOKBACK:
-            for distance in GEOMETRY_DISTANCE:
-                for close_location in GEOMETRY_CLOSE:
-                    configs.append(
-                        outside_config(
-                            body,
-                            lookback,
-                            distance,
-                            close_location,
-                            GEOMETRY_RR,
-                        )
+    # --------------------------------------------------------
+    # A) FREQUENCY / CONTROL BRANCH
+    # Geometry and RR are frozen. Only the four already-declared
+    # Asia-Pacific session definitions are compared.
+    # --------------------------------------------------------
+    for session_id in FINAL_SESSION_IDS:
+        config = outside_config(
+            FREQUENCY_BODY_ATR,
+            FREQUENCY_LOOKBACK,
+            FREQUENCY_DISTANCE_ATR,
+            FREQUENCY_CLOSE_LOCATION,
+            FREQUENCY_RR,
+            context_id=session_id,
+        )
+        config["branch_id"] = "FREQUENCY_CONTROL"
+        configs.append(config)
+
+    # --------------------------------------------------------
+    # B) QUALITY BRANCH
+    # Small fixed neighbourhood only.
+    # --------------------------------------------------------
+    for lookback in QUALITY_LOOKBACKS:
+        for distance in QUALITY_DISTANCE_ATR:
+            for rr in QUALITY_RRS:
+                for session_id in FINAL_SESSION_IDS:
+                    config = outside_config(
+                        QUALITY_BODY_ATR,
+                        lookback,
+                        distance,
+                        QUALITY_CLOSE_LOCATION,
+                        rr,
+                        context_id=session_id,
                     )
+                    config["branch_id"] = "QUALITY"
+                    configs.append(config)
+
+    if len(configs) != 36:
+        raise RuntimeError(
+            f"Final candidate contract broken: "
+            f"{len(configs)} candidates instead of 36"
+        )
 
     return configs
 
 
-def refinement_sort_key(row):
-    return (
-        1 if row["both_temporal_splits_positive"] else 0,
-        row["positive_eras"],
-        row["min_temporal_split_pf"],
-        1 if row["last5y_r"] > 0 else 0,
-        1 if row["last2y_r"] > 0 else 0,
-        row["full_pf"],
-        row["full_total_r"],
-        row["full_trades"],
-    )
+def add_branch_fields(row, config):
+    row = dict(row)
+
+    row["branch_id"] = config["branch_id"]
+    row["session_id"] = config["context_id"]
+
+    return row
 
 
-def select_geometry_shortlist(rows):
-    eligible = [
-        row
-        for row in rows
-        if (
-            row["full_trades"] >= 100
-            and row["both_temporal_splits_positive"]
-            and row["positive_eras"] >= 3
-        )
-    ]
-
-    pool = eligible if eligible else list(rows)
-
-    pool = sorted(
-        pool,
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    selected = []
-    selected_ids = set()
-
-    # First make sure each tested lookback gets representation if it has a
-    # credible candidate. This prevents the shortlist collapsing into one
-    # narrow lookback by ranking alone.
-    by_lookback = defaultdict(list)
-
-    for row in pool:
-        by_lookback[int(row["lookback"])].append(row)
-
-    for lookback in GEOMETRY_LOOKBACK:
-        group = sorted(
-            by_lookback.get(lookback, []),
-            key=refinement_sort_key,
-            reverse=True,
-        )
-
-        for row in group[:3]:
-            if row["config_id"] in selected_ids:
-                continue
-
-            selected.append(row)
-            selected_ids.add(row["config_id"])
-
-    for row in pool:
-        if len(selected) >= GEOMETRY_SHORTLIST_SIZE:
-            break
-
-        if row["config_id"] in selected_ids:
-            continue
-
-        selected.append(row)
-        selected_ids.add(row["config_id"])
-
-    selected = selected[:GEOMETRY_SHORTLIST_SIZE]
-    selected.sort(
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    return selected
-
-
-def row_to_outside_config(row, rr=None, context_id=None):
-    return outside_config(
-        row["body_atr_min"],
-        int(row["lookback"]),
-        row["distance_atr_max"],
-        row["close_location"],
-        row["rr"] if rr is None else rr,
-        context_id=context_id,
-    )
-
-
-def select_context_bases(rr_rows):
-    # One best RR per exact geometry first.
-    grouped = defaultdict(list)
-
-    for row in rr_rows:
-        geometry_key = (
-            row["body_atr_min"],
-            int(row["lookback"]),
-            row["distance_atr_max"],
-            row["close_location"],
-        )
-        grouped[geometry_key].append(row)
-
-    best_per_geometry = []
-
-    for group in grouped.values():
-        group.sort(
-            key=refinement_sort_key,
-            reverse=True,
-        )
-        best_per_geometry.append(group[0])
-
-    best_per_geometry.sort(
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    selected = best_per_geometry[:CONTEXT_BASES]
-
-    # Always preserve the two exact discovery controls as context bases so
-    # single-factor filters are also tested on the known central geometry.
-    required = [
-        outside_config(
-            0.75, 30, 0.30, 0.65, 3.00
-        ),
-        outside_config(
-            0.75, 30, 0.30, 0.65, 3.50
-        ),
-    ]
-
-    rr_map = {
-        row["config_id"]: row
-        for row in rr_rows
-    }
-
-    selected_ids = {
-        row["config_id"]
-        for row in selected
-    }
-
-    for config in required:
-        if (
-            config["config_id"] in rr_map
-            and config["config_id"] not in selected_ids
-        ):
-            selected.append(
-                rr_map[config["config_id"]]
-            )
-            selected_ids.add(
-                config["config_id"]
-            )
-
-    selected.sort(
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    return selected[: max(CONTEXT_BASES, len(required))]
-
-
-def context_ablation_rows(context_rows, rr_rows):
-    base_map = {
-        row["config_id"]: row
-        for row in rr_rows
-    }
-
-    output = []
-
-    for row in context_rows:
-        context_id = row.get("context_id", "NONE")
-
-        if context_id == "NONE":
-            continue
-
-        base_config = outside_config(
-            row["body_atr_min"],
-            int(row["lookback"]),
-            row["distance_atr_max"],
-            row["close_location"],
-            row["rr"],
-        )
-
-        base = base_map.get(
-            base_config["config_id"]
-        )
-
-        if not base:
-            continue
-
-        output.append({
-            "config_id": row["config_id"],
-            "context_id": context_id,
-            "base_config_id": base_config["config_id"],
-            "context_trades": row["full_trades"],
-            "base_trades": base["full_trades"],
-            "trade_delta": (
-                row["full_trades"]
-                - base["full_trades"]
-            ),
-            "context_pf": row["full_pf"],
-            "base_pf": base["full_pf"],
-            "pf_delta": (
-                row["full_pf"]
-                - base["full_pf"]
-            ),
-            "context_total_r": row["full_total_r"],
-            "base_total_r": base["full_total_r"],
-            "total_r_delta": (
-                row["full_total_r"]
-                - base["full_total_r"]
-            ),
-            "context_min_split_pf": row[
-                "min_temporal_split_pf"
-            ],
-            "base_min_split_pf": base[
-                "min_temporal_split_pf"
-            ],
-            "min_split_pf_delta": (
-                row["min_temporal_split_pf"]
-                - base["min_temporal_split_pf"]
-            ),
-            "context_last5y_r": row["last5y_r"],
-            "base_last5y_r": base["last5y_r"],
-            "last5y_r_delta": (
-                row["last5y_r"]
-                - base["last5y_r"]
-            ),
-        })
-
-    output.sort(
-        key=lambda row: (
-            row["min_split_pf_delta"],
-            row["pf_delta"],
-            row["total_r_delta"],
-        ),
-        reverse=True,
-    )
-
-    return output
-
-
-def select_finalist_rows(context_rows, rr_rows):
-    eligible = [
-        row
-        for row in context_rows
-        if (
-            row["full_trades"] >= 80
-            and row["both_temporal_splits_positive"]
-            and row["positive_eras"] >= 3
-            and row["last5y_r"] > 0
-        )
-    ]
-
-    pool = eligible if eligible else list(context_rows)
-
-    pool.sort(
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    selected = []
-    selected_ids = set()
-    per_base_count = defaultdict(int)
-
-    for row in pool:
-        base_key = (
-            row["body_atr_min"],
-            int(row["lookback"]),
-            row["distance_atr_max"],
-            row["close_location"],
-            row["rr"],
-        )
-
-        # Avoid a final table dominated by many filters on one exact geometry.
-        if per_base_count[base_key] >= 2:
-            continue
-
-        selected.append(row)
-        selected_ids.add(row["config_id"])
-        per_base_count[base_key] += 1
-
-        if len(selected) >= 8:
-            break
-
-    # Force useful no-context references into deep diagnostics.
-    rr_sorted = sorted(
-        rr_rows,
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    required_configs = [
-        outside_config(
-            0.75, 30, 0.30, 0.65, 3.00,
-            context_id="NONE",
-        ),
-        outside_config(
-            0.75, 30, 0.30, 0.65, 3.50,
-            context_id="NONE",
-        ),
-    ]
-
-    # Add the strongest raw/no-context candidate as well.
-    if rr_sorted:
-        strongest = row_to_outside_config(
-            rr_sorted[0],
-            context_id="NONE",
-        )
-        required_configs.append(strongest)
-
-    context_map = {
-        row["config_id"]: row
-        for row in context_rows
-    }
-
-    for config in required_configs:
-        row = context_map.get(
-            config["config_id"]
-        )
-
-        if (
-            row is not None
-            and row["config_id"] not in selected_ids
-        ):
-            selected.append(row)
-            selected_ids.add(row["config_id"])
-
-    selected.sort(
-        key=refinement_sort_key,
-        reverse=True,
-    )
-
-    return selected[:FINAL_KEEP]
-
-
-def add_refinement_screen(
-    rows,
+def add_confirmation_diagnostics(
+    candidate_rows,
     cost_rows,
     rolling_summary_rows,
     calendar_summary_rows,
-    plateau_summary_rows,
-    ablation_rows,
 ):
-    cost_map = {
+    cost_2x = {
         row["config_id"]: row
         for row in cost_rows
-        if abs(row["cost_multiplier"] - 2.0) < 1e-9
+        if abs(
+            float(row["cost_multiplier"])
+            - 2.0
+        ) <= 1e-9
     }
 
     rolling_map = defaultdict(dict)
+
     for row in rolling_summary_rows:
         rolling_map[
             row["config_id"]
-        ][row["window_months"]] = row
+        ][int(row["window_months"])] = row
 
     calendar_map = {
         row["config_id"]: row
         for row in calendar_summary_rows
     }
 
-    plateau_map = {
-        row["config_id"]: row
-        for row in plateau_summary_rows
-    }
-
-    ablation_map = {
-        row["config_id"]: row
-        for row in ablation_rows
-    }
-
     output = []
 
-    for source in rows:
+    for source in candidate_rows:
         row = dict(source)
 
-        cost2 = cost_map.get(
+        cost = cost_2x.get(
             row["config_id"],
             {},
         )
-        r24 = rolling_map[
+
+        roll24 = rolling_map[
             row["config_id"]
         ].get(24, {})
-        r36 = rolling_map[
+
+        roll36 = rolling_map[
             row["config_id"]
         ].get(36, {})
+
         cal = calendar_map.get(
-            row["config_id"],
-            {},
-        )
-        plateau = plateau_map.get(
-            row["config_id"],
-            {},
-        )
-        ablation = ablation_map.get(
             row["config_id"],
             {},
         )
 
         row.update({
-            "cost_2x_pf": cost2.get(
+            "cost_2x_pf": cost.get(
                 "profit_factor",
                 0.0,
             ),
-            "cost_2x_total_r": cost2.get(
+            "cost_2x_total_r": cost.get(
                 "total_r",
                 0.0,
             ),
-            "rolling24_positive_pct": r24.get(
+            "rolling24_positive_pct": roll24.get(
                 "positive_active_windows_pct",
                 0.0,
             ),
-            "rolling24_worst_r": r24.get(
+            "rolling24_worst_r": roll24.get(
                 "worst_r_active",
                 0.0,
             ),
-            "rolling36_positive_pct": r36.get(
+            "rolling36_positive_pct": roll36.get(
                 "positive_active_windows_pct",
                 0.0,
             ),
-            "rolling36_worst_r": r36.get(
+            "rolling36_worst_r": roll36.get(
                 "worst_r_active",
                 0.0,
             ),
@@ -3329,45 +2881,30 @@ def add_refinement_screen(
                 "worst_active_year_r",
                 0.0,
             ),
-            "plateau_positive_neighbours_pct": plateau.get(
-                "positive_neighbours_pct",
-                0.0,
-            ),
-            "plateau_split_positive_neighbours_pct": plateau.get(
-                "both_split_positive_neighbours_pct",
-                0.0,
-            ),
-            "context_pf_delta_vs_none": ablation.get(
-                "pf_delta",
-                0.0,
-            ),
-            "context_min_split_pf_delta_vs_none": ablation.get(
-                "min_split_pf_delta",
-                0.0,
-            ),
         })
 
-        row["refinement_screen_pass"] = (
-            row["full_trades"] >= 80
-            and row["full_pf"] >= 1.25
+        # Predeclared confirmation screen. This is intentionally
+        # demanding but NOT an automatic live-strategy lock.
+        row["confirmation_pass"] = (
+            row["full_trades"] >= 40
+            and row["full_pf"] >= 1.50
             and row["both_temporal_splits_positive"]
-            and row["min_temporal_split_pf"] >= 1.15
-            and row["positive_eras"] >= 3
+            and row["min_temporal_split_pf"] >= 1.35
+            and row["positive_eras"] == 4
             and row["last5y_r"] > 0
             and row["last2y_r"] > 0
-            and row["cost_2x_pf"] >= 1.15
+            and row["cost_2x_pf"] >= 1.35
             and row["cost_2x_total_r"] > 0
-            and row["rolling24_positive_pct"] >= 70.0
-            and row["rolling36_positive_pct"] >= 75.0
-            and row["positive_calendar_year_pct"] >= 65.0
-            and row["plateau_positive_neighbours_pct"] >= 80.0
+            and row["rolling24_positive_pct"] >= 75.0
+            and row["rolling36_positive_pct"] >= 85.0
+            and row["positive_calendar_year_pct"] >= 60.0
         )
 
         output.append(row)
 
     output.sort(
         key=lambda row: (
-            1 if row["refinement_screen_pass"] else 0,
+            1 if row["confirmation_pass"] else 0,
             row["min_temporal_split_pf"],
             row["cost_2x_pf"],
             row["full_pf"],
@@ -3379,68 +2916,226 @@ def add_refinement_screen(
     return output
 
 
-def overlap_with_engulf_rows(
-    finalist_trade_map,
-    engulf_trades,
-):
+def session_mechanism_rows(decision_rows):
+    grouped = defaultdict(list)
+
+    for row in decision_rows:
+        key = (
+            row["branch_id"],
+            row["body_atr_min"],
+            int(row["lookback"]),
+            row["distance_atr_max"],
+            row["close_location"],
+            row["rr"],
+        )
+        grouped[key].append(row)
+
     output = []
 
-    engulf_signals = {
-        trade["signal_index"]
-        for trade in engulf_trades
-    }
+    for key, rows in grouped.items():
+        by_session = {
+            row["session_id"]: row
+            for row in rows
+        }
 
-    engulf_intervals = [
-        (
-            trade["signal_index"],
-            trade["exit_index"],
+        tokyo = by_session.get(
+            "SESSION_TOKYO_08_17"
         )
-        for trade in engulf_trades
-    ]
+        sydney = by_session.get(
+            "SESSION_SYDNEY_08_17"
+        )
+        union = by_session.get(
+            "SESSION_ASIA_UNION_08_17"
+        )
+        intersection = by_session.get(
+            "SESSION_ASIA_INTERSECTION_08_17"
+        )
 
-    for config_id, trades in finalist_trade_map.items():
-        exact = 0
-        holding_overlap = 0
-
-        for trade in trades:
-            if trade["signal_index"] in engulf_signals:
-                exact += 1
-
-            left = trade["signal_index"]
-            right = trade["exit_index"]
-
-            overlapped = any(
-                (
-                    left < other_right
-                    and other_left < right
-                )
-                for other_left, other_right
-                in engulf_intervals
+        if not all(
+            item is not None
+            for item in (
+                tokyo,
+                sydney,
+                union,
+                intersection,
             )
-
-            if overlapped:
-                holding_overlap += 1
-
-        n = len(trades)
+        ):
+            continue
 
         output.append({
-            "config_id": config_id,
-            "candidate_trades": n,
-            "engulf_control_trades": len(
-                engulf_trades
+            "branch_id": key[0],
+            "body_atr_min": key[1],
+            "lookback": key[2],
+            "distance_atr_max": key[3],
+            "close_location": key[4],
+            "rr": key[5],
+
+            "tokyo_trades": tokyo["full_trades"],
+            "tokyo_pf": tokyo["full_pf"],
+            "tokyo_total_r": tokyo["full_total_r"],
+            "tokyo_validation_pf": tokyo[
+                "validation_2018_plus_pf"
+            ],
+            "tokyo_last2y_r": tokyo["last2y_r"],
+
+            "sydney_trades": sydney["full_trades"],
+            "sydney_pf": sydney["full_pf"],
+            "sydney_total_r": sydney["full_total_r"],
+            "sydney_validation_pf": sydney[
+                "validation_2018_plus_pf"
+            ],
+            "sydney_last2y_r": sydney["last2y_r"],
+
+            "union_trades": union["full_trades"],
+            "union_pf": union["full_pf"],
+            "union_total_r": union["full_total_r"],
+            "union_validation_pf": union[
+                "validation_2018_plus_pf"
+            ],
+            "union_last2y_r": union["last2y_r"],
+
+            "intersection_trades": intersection[
+                "full_trades"
+            ],
+            "intersection_pf": intersection[
+                "full_pf"
+            ],
+            "intersection_total_r": intersection[
+                "full_total_r"
+            ],
+            "intersection_validation_pf": intersection[
+                "validation_2018_plus_pf"
+            ],
+            "intersection_last2y_r": intersection[
+                "last2y_r"
+            ],
+
+            "all_four_full_positive": all(
+                row["full_total_r"] > 0
+                for row in rows
             ),
-            "exact_signal_overlap_count": exact,
-            "exact_signal_overlap_pct_candidate": (
-                100.0 * exact / n
-                if n else 0.0
+            "all_four_temporal_splits_positive": all(
+                row[
+                    "both_temporal_splits_positive"
+                ]
+                for row in rows
             ),
-            "holding_period_overlap_count": holding_overlap,
-            "holding_period_overlap_pct_candidate": (
-                100.0 * holding_overlap / n
-                if n else 0.0
+            "all_four_last5y_positive": all(
+                row["last5y_r"] > 0
+                for row in rows
             ),
-            "candidate_exact_signal_nonoverlap_count": (
-                n - exact
+            "all_four_last2y_positive": all(
+                row["last2y_r"] > 0
+                for row in rows
+            ),
+            "confirmation_pass_count": sum(
+                1
+                for row in rows
+                if row["confirmation_pass"]
+            ),
+        })
+
+    return output
+
+
+def branch_summary_rows(decision_rows):
+    output = []
+
+    for branch_id in [
+        "FREQUENCY_CONTROL",
+        "QUALITY",
+    ]:
+        rows = [
+            row
+            for row in decision_rows
+            if row["branch_id"] == branch_id
+        ]
+
+        if not rows:
+            continue
+
+        pfs = [
+            row["full_pf"]
+            for row in rows
+        ]
+
+        split_pfs = [
+            row["min_temporal_split_pf"]
+            for row in rows
+        ]
+
+        cost_pfs = [
+            row["cost_2x_pf"]
+            for row in rows
+        ]
+
+        rolling24 = [
+            row["rolling24_positive_pct"]
+            for row in rows
+        ]
+
+        rolling36 = [
+            row["rolling36_positive_pct"]
+            for row in rows
+        ]
+
+        output.append({
+            "branch_id": branch_id,
+            "candidates": len(rows),
+            "confirmation_passes": sum(
+                1
+                for row in rows
+                if row["confirmation_pass"]
+            ),
+            "positive_full_history": sum(
+                1
+                for row in rows
+                if row["full_total_r"] > 0
+            ),
+            "positive_both_temporal_splits": sum(
+                1
+                for row in rows
+                if row[
+                    "both_temporal_splits_positive"
+                ]
+            ),
+            "positive_all_four_eras": sum(
+                1
+                for row in rows
+                if row["positive_eras"] == 4
+            ),
+            "positive_last5y": sum(
+                1
+                for row in rows
+                if row["last5y_r"] > 0
+            ),
+            "positive_last2y": sum(
+                1
+                for row in rows
+                if row["last2y_r"] > 0
+            ),
+            "median_pf": float(
+                np.median(pfs)
+            ),
+            "min_pf": min(pfs),
+            "max_pf": max(pfs),
+            "median_min_temporal_split_pf": float(
+                np.median(split_pfs)
+            ),
+            "min_temporal_split_pf": min(
+                split_pfs
+            ),
+            "median_cost_2x_pf": float(
+                np.median(cost_pfs)
+            ),
+            "min_cost_2x_pf": min(
+                cost_pfs
+            ),
+            "median_rolling24_positive_pct": float(
+                np.median(rolling24)
+            ),
+            "median_rolling36_positive_pct": float(
+                np.median(rolling36)
             ),
         })
 
@@ -3455,7 +3150,7 @@ def run_research():
     try:
         STATUS.update({
             "state": "fetching",
-            "message": "Fetching AUD/USD H1/H4/D history",
+            "message": "Fetching full AUD/USD H1 history",
         })
 
         h1 = fetch_history(
@@ -3465,67 +3160,30 @@ def run_research():
             chunk_days=180,
         )
 
-        h4 = fetch_history(
-            "H4",
-            WARMUP_START,
-            NOW,
-            chunk_days=720,
-        )
-
-        daily = fetch_history(
-            "D",
-            WARMUP_START,
-            NOW,
-            chunk_days=3000,
-        )
-
         if len(h1) < 5000:
             raise RuntimeError(
                 f"Unexpectedly small H1 history: {len(h1)}"
             )
 
-        if len(h4) < 1000:
-            raise RuntimeError(
-                f"Unexpectedly small H4 history: {len(h4)}"
-            )
-
-        if len(daily) < 1000:
-            raise RuntimeError(
-                f"Unexpectedly small daily history: {len(daily)}"
-            )
-
-        coverage = [
-            {
+        write_csv(
+            OUTS["coverage"],
+            [{
                 "pair": PAIR,
                 "timeframe": "H1",
                 "candles": len(h1),
                 "first_utc": iso(h1[0]["time"]),
                 "last_utc": iso(h1[-1]["time"]),
-            },
-            {
-                "pair": PAIR,
-                "timeframe": "H4",
-                "candles": len(h4),
-                "first_utc": iso(h4[0]["time"]),
-                "last_utc": iso(h4[-1]["time"]),
-            },
-            {
-                "pair": PAIR,
-                "timeframe": "D",
-                "candles": len(daily),
-                "first_utc": iso(daily[0]["time"]),
-                "last_utc": iso(daily[-1]["time"]),
-            },
-        ]
-
-        write_csv(
-            OUTS["coverage"],
-            coverage,
+                "baseline_adverse_cost_pips":
+                    H1_PRIMARY_COST_PIPS,
+                "stop_buffer_ticks":
+                    STOP_BUFFER_TICKS,
+                "fixed_candidate_count": 36,
+            }],
         )
 
         STATUS.update({
             "state": "features",
-            "message": "Building features and strict completed HTF states",
+            "message": "Building H1 features and Asia-Pacific session masks",
         })
 
         features = build_features(
@@ -3533,60 +3191,94 @@ def run_research():
             "H1",
         )
 
-        context_cache = build_context_cache(
-            features,
-            h4,
-            daily,
+        session_cache = build_session_cache(
+            features["times"]
         )
 
         # ----------------------------------------------------
-        # CONTROL PARITY
+        # PARITY 1 — ORIGINAL DISCOVERY CONTROLS
         # ----------------------------------------------------
-        cutoff_index = bisect_right(
+        discovery_end = bisect_right(
             features["times"],
-            CONTROL_CUTOFF,
+            DISCOVERY_CONTROL_CUTOFF,
         )
 
-        control_features = slice_features(
+        discovery_features = slice_features(
             features,
-            cutoff_index,
+            discovery_end,
         )
 
-        parity_rows = run_control_parity(
-            control_features
+        discovery_session_cache = (
+            build_session_cache(
+                discovery_features["times"]
+            )
+        )
+
+        discovery_parity = run_parity_specs(
+            discovery_control_specs(),
+            discovery_features,
+            discovery_session_cache,
+            DISCOVERY_CONTROL_CUTOFF,
         )
 
         write_csv(
-            OUTS["control_parity"],
-            parity_rows,
-        )
-
-        # Frozen engulf control on CURRENT full history for overlap only.
-        engulf_config = engulf_control_config()
-        engulf_indices = signal_indices(
-            engulf_config,
-            features,
-        )
-        engulf_trades = backtest(
-            engulf_config,
-            features,
-            engulf_indices,
+            OUTS["discovery_parity"],
+            discovery_parity,
         )
 
         # ----------------------------------------------------
-        # STAGE 1 — OUTSIDE GEOMETRY
+        # PARITY 2 — KEY CONTEXT RESULTS FROM REFINEMENT
         # ----------------------------------------------------
-        configs = geometry_configs()
+        refinement_end = bisect_right(
+            features["times"],
+            REFINEMENT_CONTROL_CUTOFF,
+        )
 
-        geometry_rows = []
-        raw_index_cache = {}
+        refinement_features = slice_features(
+            features,
+            refinement_end,
+        )
+
+        refinement_session_cache = (
+            build_session_cache(
+                refinement_features["times"]
+            )
+        )
+
+        refinement_parity = run_parity_specs(
+            refinement_control_specs(),
+            refinement_features,
+            refinement_session_cache,
+            REFINEMENT_CONTROL_CUTOFF,
+        )
+
+        write_csv(
+            OUTS["refinement_parity"],
+            refinement_parity,
+        )
+
+        # ----------------------------------------------------
+        # FIXED 36-CANDIDATE CONFIRMATION
+        # ----------------------------------------------------
+        configs = final_candidate_configs()
+
+        candidate_rows = []
+        config_map = {}
+        signal_map = {}
+        trade_map = {}
+
+        periods = []
+        cost_rows = []
+        rolling = []
+        calendar = []
+        exported_trades = []
 
         for number, config in enumerate(
             configs,
             1,
         ):
             STATUS.update({
-                "state": "geometry",
+                "state": "confirmation",
                 "message": (
                     f"{number}/{len(configs)} "
                     f"{config['config_id']}"
@@ -3598,295 +3290,31 @@ def run_research():
                 features,
             )
 
-            raw_index_cache[
-                config["config_id"]
-            ] = raw_indices
-
-            row, _ = evaluate_candidate(
-                config,
-                features,
+            filtered_indices = apply_context(
                 raw_indices,
+                config["context_id"],
+                session_cache,
             )
 
-            geometry_rows.append(row)
-
-        geometry_rows.sort(
-            key=refinement_sort_key,
-            reverse=True,
-        )
-
-        write_csv(
-            OUTS["geometry"],
-            geometry_rows,
-        )
-
-        geometry_shortlist = (
-            select_geometry_shortlist(
-                geometry_rows
-            )
-        )
-
-        write_csv(
-            OUTS["geometry_shortlist"],
-            geometry_shortlist,
-        )
-
-        # ----------------------------------------------------
-        # STAGE 2 — RR SWEEP
-        # ----------------------------------------------------
-        rr_rows = []
-        rr_config_map = {}
-        rr_signal_cache = {}
-
-        total_rr = (
-            len(geometry_shortlist)
-            * len(RR_GRID)
-        )
-        rr_done = 0
-
-        for base_row in geometry_shortlist:
-            geometry_config = row_to_outside_config(
-                base_row,
-                rr=GEOMETRY_RR,
-            )
-
-            geometry_indices = raw_index_cache.get(
-                geometry_config["config_id"]
-            )
-
-            if geometry_indices is None:
-                geometry_indices = signal_indices(
-                    geometry_config,
-                    features,
-                )
-
-            for rr in RR_GRID:
-                rr_done += 1
-
-                config = row_to_outside_config(
-                    base_row,
-                    rr=rr,
-                )
-
-                STATUS.update({
-                    "state": "rr_sweep",
-                    "message": (
-                        f"{rr_done}/{total_rr} "
-                        f"{config['config_id']}"
-                    ),
-                })
-
-                row, _ = evaluate_candidate(
-                    config,
-                    features,
-                    geometry_indices,
-                )
-
-                rr_rows.append(row)
-                rr_config_map[
-                    config["config_id"]
-                ] = config
-                rr_signal_cache[
-                    config["config_id"]
-                ] = geometry_indices
-
-        # Guarantee exact central discovery controls are available in RR table
-        # even if that geometry did not make the top refinement shortlist.
-        for config in [
-            outside_config(
-                0.75, 30, 0.30, 0.65, 3.00
-            ),
-            outside_config(
-                0.75, 30, 0.30, 0.65, 3.50
-            ),
-        ]:
-            if config["config_id"] in rr_config_map:
-                continue
-
-            raw_indices = signal_indices(
+            row, trades = evaluate_candidate(
                 config,
                 features,
+                filtered_indices,
             )
 
-            row, _ = evaluate_candidate(
+            row = add_branch_fields(
+                row,
                 config,
-                features,
-                raw_indices,
             )
 
-            rr_rows.append(row)
-            rr_config_map[
+            candidate_rows.append(row)
+            config_map[
                 config["config_id"]
             ] = config
-            rr_signal_cache[
+            signal_map[
                 config["config_id"]
-            ] = raw_indices
-
-        rr_rows.sort(
-            key=refinement_sort_key,
-            reverse=True,
-        )
-
-        write_csv(
-            OUTS["rr"],
-            rr_rows,
-        )
-
-        # ----------------------------------------------------
-        # STAGE 3 — SINGLE-FACTOR CONTEXTS
-        # ----------------------------------------------------
-        context_bases = select_context_bases(
-            rr_rows
-        )
-
-        contexts = context_definitions()
-        context_rows = []
-        context_config_map = {}
-        context_signal_cache = {}
-
-        total_contexts = (
-            len(context_bases)
-            * len(contexts)
-        )
-        context_done = 0
-
-        for base_row in context_bases:
-            base_config = row_to_outside_config(
-                base_row
-            )
-
-            base_indices = rr_signal_cache.get(
-                base_config["config_id"]
-            )
-
-            if base_indices is None:
-                base_indices = signal_indices(
-                    base_config,
-                    features,
-                )
-
-            for (
-                context_id,
-                context_group,
-                context_description,
-            ) in contexts:
-                context_done += 1
-
-                config = row_to_outside_config(
-                    base_row,
-                    context_id=context_id,
-                )
-
-                STATUS.update({
-                    "state": "context_scan",
-                    "message": (
-                        f"{context_done}/{total_contexts} "
-                        f"{config['config_id']}"
-                    ),
-                })
-
-                filtered_indices = apply_context(
-                    base_indices,
-                    context_id,
-                    context_cache,
-                )
-
-                row, _ = evaluate_candidate(
-                    config,
-                    features,
-                    filtered_indices,
-                )
-
-                row["context_group"] = context_group
-                row["context_description"] = (
-                    context_description
-                )
-                row["raw_geometry_signals"] = len(
-                    base_indices
-                )
-                row["context_signals"] = len(
-                    filtered_indices
-                )
-                row["context_signal_retention_pct"] = (
-                    100.0
-                    * len(filtered_indices)
-                    / len(base_indices)
-                    if len(base_indices)
-                    else 0.0
-                )
-
-                context_rows.append(row)
-                context_config_map[
-                    config["config_id"]
-                ] = config
-                context_signal_cache[
-                    config["config_id"]
-                ] = filtered_indices
-
-        context_rows.sort(
-            key=refinement_sort_key,
-            reverse=True,
-        )
-
-        write_csv(
-            OUTS["contexts"],
-            context_rows,
-        )
-
-        ablation_rows = context_ablation_rows(
-            context_rows,
-            rr_rows,
-        )
-
-        write_csv(
-            OUTS["context_ablation"],
-            ablation_rows,
-        )
-
-        # ----------------------------------------------------
-        # DEEP FINALISTS
-        # ----------------------------------------------------
-        finalist_seed_rows = select_finalist_rows(
-            context_rows,
-            rr_rows,
-        )
-
-        periods = []
-        costs = []
-        rolling = []
-        calendar = []
-        all_trades = []
-        finalist_trade_map = {}
-        finalist_configs = []
-
-        for number, seed in enumerate(
-            finalist_seed_rows,
-            1,
-        ):
-            config = context_config_map[
-                seed["config_id"]
-            ]
-            raw_indices = context_signal_cache[
-                seed["config_id"]
-            ]
-
-            finalist_configs.append(config)
-
-            STATUS.update({
-                "state": "deep_validation",
-                "message": (
-                    f"{number}/{len(finalist_seed_rows)} "
-                    f"{config['config_id']}"
-                ),
-            })
-
-            trades = backtest(
-                config,
-                features,
-                raw_indices,
-            )
-
-            finalist_trade_map[
+            ] = filtered_indices
+            trade_map[
                 config["config_id"]
             ] = trades
 
@@ -3897,11 +3325,11 @@ def run_research():
                 )
             )
 
-            costs.extend(
+            cost_rows.extend(
                 cost_stress_rows(
                     config,
                     features,
-                    raw_indices,
+                    filtered_indices,
                 )
             )
 
@@ -3927,147 +3355,189 @@ def run_research():
                 output["exit_time"] = iso(
                     output["exit_time"]
                 )
-                output["context_id"] = config.get(
-                    "context_id",
-                    "NONE",
+                output["config_id"] = config[
+                    "config_id"
+                ]
+                output["branch_id"] = config[
+                    "branch_id"
+                ]
+                output["session_id"] = config[
+                    "context_id"
+                ]
+                output["body_atr_min"] = config[
+                    "body_atr_min"
+                ]
+                output["lookback"] = config[
+                    "lookback"
+                ]
+                output["distance_atr_max"] = config[
+                    "distance_atr_max"
+                ]
+                output["close_location"] = config[
+                    "close_location"
+                ]
+                output["rr"] = config[
+                    "rr"
+                ]
+
+                exported_trades.append(
+                    output
                 )
-                all_trades.append(output)
 
         rolling_summaries = rolling_summary(
             rolling
         )
+
         calendar_summaries = calendar_summary(
             calendar
         )
 
-        plateau_summaries = plateau_rows(
-            finalist_seed_rows,
-            rr_rows,
-        )
-
-        final_rows = add_refinement_screen(
-            finalist_seed_rows,
-            costs,
+        decision_rows = add_confirmation_diagnostics(
+            candidate_rows,
+            cost_rows,
             rolling_summaries,
             calendar_summaries,
-            plateau_summaries,
-            ablation_rows,
         )
 
-        overlap_rows = overlap_with_engulf_rows(
-            finalist_trade_map,
-            engulf_trades,
+        # Keep the raw candidate table in deterministic contract order.
+        write_csv(
+            OUTS["candidates"],
+            candidate_rows,
         )
 
         write_csv(
-            OUTS["finalists"],
-            final_rows,
+            OUTS["decision"],
+            decision_rows,
         )
+
         write_csv(
             OUTS["periods"],
             periods,
         )
+
         write_csv(
             OUTS["cost_stress"],
-            costs,
+            cost_rows,
         )
+
         write_csv(
             OUTS["rolling"],
             rolling,
         )
+
         write_csv(
             OUTS["rolling_summary"],
             rolling_summaries,
         )
+
         write_csv(
             OUTS["calendar"],
             calendar,
         )
+
         write_csv(
             OUTS["calendar_summary"],
             calendar_summaries,
         )
-        write_csv(
-            OUTS["plateau"],
-            plateau_summaries,
-        )
-        write_csv(
-            OUTS["overlap"],
-            overlap_rows,
-        )
-        write_csv(
-            OUTS["trades"],
-            all_trades,
+
+        mechanism_rows = session_mechanism_rows(
+            decision_rows
         )
 
-        screen_passes = [
+        write_csv(
+            OUTS["session_mechanism"],
+            mechanism_rows,
+        )
+
+        branch_rows = branch_summary_rows(
+            decision_rows
+        )
+
+        write_csv(
+            OUTS["branch_summary"],
+            branch_rows,
+        )
+
+        write_csv(
+            OUTS["trades"],
+            exported_trades,
+        )
+
+        passes = [
             row
-            for row in final_rows
-            if row["refinement_screen_pass"]
+            for row in decision_rows
+            if row["confirmation_pass"]
         ]
 
         notes = [
             {
-                "topic": "research_scope",
+                "topic": "scope",
                 "note": (
-                    "Second-stage AUD/USD H1 LONG refinement. "
-                    "Only OUTSIDE_REVERSAL is optimised. "
-                    "The 47-trade ENGULF_STRUCTURE setup is frozen as a "
-                    "comparison/overlap control."
+                    "Final controlled confirmation only. "
+                    "Exactly 36 predeclared OUTSIDE_REVERSAL candidates."
+                ),
+            },
+            {
+                "topic": "frequency_branch",
+                "note": (
+                    "Frequency/control geometry and RR are frozen at "
+                    "body0.75/LB25/dist0.20/close0.75/RR3.25. "
+                    "Only Tokyo, Sydney, their union and their intersection "
+                    "are compared."
+                ),
+            },
+            {
+                "topic": "quality_branch",
+                "note": (
+                    "Quality branch is restricted to body1.00/close0.85, "
+                    "LB30 or 40, distance0.35 or 0.40, RR3.00 or 3.25, "
+                    "and the same four Asia-Pacific session definitions."
+                ),
+            },
+            {
+                "topic": "session_union",
+                "note": (
+                    "SESSION_ASIA_UNION_08_17 means the H1 signal-open is "
+                    "inside Tokyo 08:00-16:59 OR Sydney 08:00-16:59, with "
+                    "ZoneInfo DST handling."
+                ),
+            },
+            {
+                "topic": "session_intersection",
+                "note": (
+                    "SESSION_ASIA_INTERSECTION_08_17 means the H1 signal-open "
+                    "is simultaneously inside both local session blocks."
                 ),
             },
             {
                 "topic": "parity",
                 "note": (
-                    "Three exact discovery controls are reproduced through "
-                    "2026-09-16 20:00 UTC before any new optimisation runs."
+                    "The run aborts unless all 3 original discovery controls "
+                    "and all 5 key refinement controls reproduce exactly at "
+                    "their frozen cutoffs."
                 ),
             },
             {
-                "topic": "geometry",
+                "topic": "screen",
                 "note": (
-                    "720 local OUTSIDE_REVERSAL geometries are tested at "
-                    "fixed RR3.25. The grid deliberately surrounds the broad "
-                    "0.30 ATR structure-distance area rather than expanding "
-                    "into unrelated parameter space."
+                    "confirmation_pass is a predeclared diagnostic screen, "
+                    "not an automatic winner-selection rule or live lock."
                 ),
             },
             {
-                "topic": "contexts",
+                "topic": "next_step",
                 "note": (
-                    "Only single-factor weekday/session/H4/daily contexts are "
-                    "tested. No context interactions are mined in this run."
+                    "If one or more candidates survive broadly, stop signal "
+                    "research and run exact portfolio-addition testing against "
+                    "the frozen live 24-strategy portfolio before any #25 "
+                    "deployment decision."
                 ),
             },
             {
-                "topic": "htf_no_lookahead",
+                "topic": "passes",
                 "note": (
-                    "H4 and daily states use only a candle whose NEXT HTF "
-                    "candle has already begun by the H1 signal-open time."
-                ),
-            },
-            {
-                "topic": "costs",
-                "note": (
-                    "Baseline H1 cost remains 0.5 pip adverse; final candidates "
-                    "are stressed at 0.25/0.5/0.75/1.0 pip via 0.5x/1x/1.5x/2x."
-                ),
-            },
-            {
-                "topic": "portfolio",
-                "note": (
-                    "This runner does not alter or simulate the current live "
-                    "24-strategy portfolio. Any surviving AUD/USD candidate "
-                    "must next pass a separate exact portfolio-addition test "
-                    "before it can become strategy #25."
-                ),
-            },
-            {
-                "topic": "screen_result",
-                "note": (
-                    f"{len(screen_passes)} of {len(final_rows)} deep finalists "
-                    "passed the predeclared refinement screen. A pass is not "
-                    "an automatic live lock."
+                    f"{len(passes)} of {len(decision_rows)} fixed candidates "
+                    "passed the confirmation screen."
                 ),
             },
         ]
@@ -4079,7 +3549,7 @@ def run_research():
 
         STATUS.update({
             "state": "packaging",
-            "message": "Building refinement ZIP",
+            "message": "Building final confirmation ZIP",
         })
 
         pack()
@@ -4087,20 +3557,24 @@ def run_research():
         STATUS.update({
             "state": "complete",
             "message": (
-                "AUD/USD H1 LONG outside-reversal refinement complete"
+                "AUD/USD H1 LONG final controlled confirmation complete"
             ),
             "h1_candles": len(h1),
-            "h4_candles": len(h4),
-            "daily_candles": len(daily),
-            "control_parity_passes": len(parity_rows),
-            "geometry_configs": len(geometry_rows),
-            "geometry_shortlist": len(geometry_shortlist),
-            "rr_rows": len(rr_rows),
-            "context_bases": len(context_bases),
-            "context_rows": len(context_rows),
-            "deep_finalists": len(final_rows),
-            "refinement_screen_passes": len(screen_passes),
-            "engulf_control_current_trades": len(engulf_trades),
+            "discovery_parity_passes": len(
+                discovery_parity
+            ),
+            "refinement_parity_passes": len(
+                refinement_parity
+            ),
+            "fixed_candidates": len(
+                candidate_rows
+            ),
+            "confirmation_passes": len(
+                passes
+            ),
+            "session_mechanism_groups": len(
+                mechanism_rows
+            ),
             "bundle": BUNDLE,
         })
 
@@ -4111,7 +3585,7 @@ def run_research():
         })
 
         print(
-            "AUDUSD H1 LONG OUTSIDE REFINEMENT ERROR:",
+            "AUDUSD H1 LONG FINAL CONFIRMATION ERROR:",
             repr(error),
             flush=True,
         )
@@ -4124,42 +3598,49 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service": "AUD/USD H1 LONG Outside-Reversal Refinement",
+        "service": "AUD/USD H1 LONG Final Controlled Confirmation",
         "status": STATUS["state"],
         "instrument": PAIR,
         "timeframe": "H1",
         "side": "LONG",
         "family": "OUTSIDE_REVERSAL",
-        "frozen_alternative_control": "ENGULF_STRUCTURE",
-        "geometry_rr": GEOMETRY_RR,
-        "rr_grid": RR_GRID,
-        "geometry_configs_expected": (
-            len(GEOMETRY_BODY_ATR)
-            * len(GEOMETRY_LOOKBACK)
-            * len(GEOMETRY_DISTANCE)
-            * len(GEOMETRY_CLOSE)
+        "fixed_candidates": 36,
+        "frequency_branch": {
+            "body_atr_min": FREQUENCY_BODY_ATR,
+            "lookback": FREQUENCY_LOOKBACK,
+            "distance_atr_max": FREQUENCY_DISTANCE_ATR,
+            "close_location": FREQUENCY_CLOSE_LOCATION,
+            "rr": FREQUENCY_RR,
+        },
+        "quality_branch": {
+            "body_atr_min": QUALITY_BODY_ATR,
+            "lookbacks": QUALITY_LOOKBACKS,
+            "distance_atr_max": QUALITY_DISTANCE_ATR,
+            "close_location": QUALITY_CLOSE_LOCATION,
+            "rrs": QUALITY_RRS,
+        },
+        "sessions": FINAL_SESSION_IDS,
+        "discovery_control_cutoff_utc": iso(
+            DISCOVERY_CONTROL_CUTOFF
         ),
-        "context_count": len(
-            context_definitions()
-        ),
-        "control_cutoff_utc": iso(
-            CONTROL_CUTOFF
+        "refinement_control_cutoff_utc": iso(
+            REFINEMENT_CONTROL_CUTOFF
         ),
         "orders_supported": False,
         "trading_enabled": False,
         "routes": [
-            "/audusd-h1-long-outside-refinement/status",
-            "/audusd-h1-long-outside-refinement/results",
+            "/audusd-h1-long-final/status",
+            "/audusd-h1-long-final/results",
         ],
     })
 
 
-@app.route("/audusd-h1-long-outside-refinement/status")
+@app.route("/audusd-h1-long-final/status")
 def status():
     return jsonify(STATUS)
 
 
-@app.route("/audusd-h1-long-outside-refinement/results")
+@app.route("/audusd-h1-long-final/results")
 def results():
     return download(BUNDLE)
 
