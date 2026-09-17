@@ -4,97 +4,117 @@ import math
 import time
 import zipfile
 import threading
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections import deque, defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# AUD/USD H1 LONG — NEW-PAIR BROAD DISCOVERY
+# AUD/USD H1 LONG — OUTSIDE REVERSAL REFINEMENT
 # ============================================================
 #
 # PURPOSE
 # -------
-# First-pass LONG discovery on AUD/USD H1.
+# Dedicated second-stage refinement after the broad AUD/USD H1 LONG
+# discovery found a family-wide OUTSIDE_REVERSAL edge.
 #
-# This deliberately starts from scratch. It does NOT import parameters
-# from the existing live portfolio and does NOT assume the winning family
-# in advance.
+# This is deliberately NOT another all-family search.
 #
-# BROAD FAMILIES
-# --------------
-#   1) ENGULF_STRUCTURE
-#   2) SWEEP_DISPLACEMENT
-#   3) FAILED_BREAK_RECLAIM
-#   4) OUTSIDE_REVERSAL
-#   5) COMPRESSION_BREAKOUT
+# FROZEN DISCOVERY FINDINGS USED AS CONTROLS
+# ------------------------------------------
+# Control A:
+#   OUTSIDE_REVERSAL
+#   body >= 0.75 ATR14
+#   lookback = 30
+#   distance <= 0.30 ATR14
+#   close location >= 0.65
+#   RR = 3.00
+#   through 2026-09-16 20:00 UTC:
+#     323 trades
+#     PF 1.3070928182
+#     +68.4816984525R
 #
-# STAGED PROCESS
-# --------------
-# Stage 1:
-#   broad raw H1-long geometry at fixed 3.5R
-#   NO session filter
-#   NO weekday filter
-#   NO H1/H4/D regime filter
+# Control B:
+#   same geometry, RR = 3.50
+#   through 2026-09-16 20:00 UTC:
+#     316 trades
+#     PF 1.2727724665
+#     +62.7376672916R
 #
-# Stage 2:
-#   only the strongest Stage-1 geometries receive an RR sweep
-#   RR = 2.5 / 3.0 / 3.5 / 4.0 / 4.5 / 5.0
+# Frozen alternative/control:
+#   ENGULF_STRUCTURE
+#   BR >= 1.00
+#   body >= 1.25 ATR14
+#   lookback = 100
+#   distance <= 0.15 ATR14
+#   RR = 4.00
+#   through 2026-09-16 20:00 UTC:
+#     47 trades
+#     PF 1.6640192322
+#     +21.9126346629R
 #
-# Final:
-#   full-history metrics
-#   2002-2017 / 2018+ temporal split
-#   pre-2010 / 2010+
-#   four broad eras
-#   last 5Y / last 2Y
-#   0.5x / 1x / 1.5x / 2x adverse-cost stress
-#   calendar years
-#   rolling 12 / 24 / 36M
-#   parameter-neighbourhood / plateau summary
+# PARITY GUARD
+# ------------
+# The exact three controls above are re-run ONLY through the old discovery
+# cutoff. The research aborts if their trade count/PF/R does not reproduce.
 #
-# HISTORICAL CONVENTIONS
-# ----------------------
-# OANDA midpoint candles
-# ATR14 = Wilder/RMA, SMA seeded
+# REFINEMENT DESIGN
+# -----------------
+# Stage 1 — local geometry map, fixed RR3.25:
+#   body ATR:      0.65 / 0.75 / 0.85 / 1.00
+#   lookback:      20 / 25 / 30 / 35 / 40 / 45
+#   distance ATR:  0.20 / 0.25 / 0.30 / 0.35 / 0.40
+#   close loc:     0.60 / 0.65 / 0.70 / 0.75 / 0.80 / 0.85
+#   total = 720 raw geometries
+#
+# Stage 2 — RR confirmation on a robustness-first geometry shortlist:
+#   RR 2.75 / 3.00 / 3.25 / 3.50 / 3.75 / 4.00
+#
+# Stage 3 — simple SINGLE-FACTOR causal contexts only:
+#   - no context
+#   - one weekday exclusion at a time (America/New_York)
+#   - Sydney / Tokyo / London / New York daytime blocks
+#   - strictly completed H4 trend states
+#   - strictly completed daily trend states
+#
+# No context interactions are mined in this runner.
+#
+# FINAL DIAGNOSTICS
+# -----------------
+#   - 2002-2017 vs 2018+
+#   - pre-2010 / 2010+
+#   - four broad eras
+#   - last 5Y / last 2Y
+#   - 0.5x / 1x / 1.5x / 2x adverse-cost stress
+#   - rolling 12 / 24 / 36M
+#   - calendar years
+#   - local geometry/RR plateau
+#   - context ablation vs the same no-context geometry/RR
+#   - overlap with the frozen 47-trade engulf control
+#
+# HISTORICAL EXECUTION
+# --------------------
+# OANDA midpoint H1
 # signal timestamp = H1 candle OPEN
 # reference entry = signal CLOSE
-#
-# H1 baseline adverse fill:
-#   0.5 pip = 5 AUD/USD ticks
-#
-# Stop:
-#   signal low - 10 ticks
-#
-# Target:
-#   based on REFERENCE signal-close risk
-#
-# Actual realised R:
-#   based on adverse fill
-#
-# Exit testing:
-#   begins on the NEXT H1 candle
-#
-# Exact exit-candle signal:
-#   eligible
-#
-# Pyramiding:
-#   0 PER CANDIDATE STRATEGY
-#
-# Same-bar tie:
-#   if high is closer to candle open => TARGET first
-#   otherwise STOP first
+# baseline adverse fill = +0.5 pip for LONG
+# stop = signal low - 10 ticks
+# target based on REFERENCE signal-close risk
+# realised R based on adverse fill
+# exits begin on NEXT H1 candle
+# exact exit-candle re-entry eligible
+# pyramiding = 0
 #
 # IMPORTANT
 # ---------
-# This is a DISCOVERY runner, not a live strategy.
-# A good candidate must still survive controlled refinement, local/boundary
-# confirmation, exact portfolio integration against the frozen 24-strategy
-# live portfolio, and a separate implementation review before deployment.
+# This is research only. It does NOT alter the frozen live 24-strategy
+# portfolio and can never place an order.
 #
 # READ ONLY. NEVER SENDS ORDERS.
 # ============================================================
@@ -109,9 +129,12 @@ PAIR_LABEL = "AUD/USD"
 
 REQUESTED_START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
 NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+WARMUP_START = REQUESTED_START - timedelta(days=900)
 
 VALIDATION_START = datetime(2018, 1, 1, tzinfo=timezone.utc)
 PRE2010_END = datetime(2010, 1, 1, tzinfo=timezone.utc)
+
+CONTROL_CUTOFF = datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc)
 
 TICK = 0.00001
 PIP = 0.0001
@@ -121,36 +144,52 @@ H1_PRIMARY_COST_PIPS = 0.50
 M15_PRIMARY_COST_PIPS = 1.00
 COST_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
 
-STAGE1_RR = 3.50
-RR_GRID = [2.50, 3.00, 3.50, 4.00, 4.50, 5.00]
+GEOMETRY_RR = 3.25
+RR_GRID = [2.75, 3.00, 3.25, 3.50, 3.75, 4.00]
 
-STAGE1_KEEP_PER_FAMILY = 5
-FINAL_KEEP_PER_STREAM = 8
+GEOMETRY_BODY_ATR = [0.65, 0.75, 0.85, 1.00]
+GEOMETRY_LOOKBACK = [20, 25, 30, 35, 40, 45]
+GEOMETRY_DISTANCE = [0.20, 0.25, 0.30, 0.35, 0.40]
+GEOMETRY_CLOSE = [0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
+
+GEOMETRY_SHORTLIST_SIZE = 36
+CONTEXT_BASES = 12
+FINAL_KEEP = 12
+
+NY = ZoneInfo("America/New_York")
+LONDON = ZoneInfo("Europe/London")
+TOKYO = ZoneInfo("Asia/Tokyo")
+SYDNEY = ZoneInfo("Australia/Sydney")
 
 OUTS = {
-    "coverage": "audusd_h1_long_discovery_coverage.csv",
-    "stage1": "audusd_h1_long_discovery_stage1.csv",
-    "stage1_shortlist": "audusd_h1_long_discovery_stage1_shortlist.csv",
-    "stage2_rr": "audusd_h1_long_discovery_stage2_rr.csv",
-    "finalists": "audusd_h1_long_discovery_finalists.csv",
-    "family_summary": "audusd_h1_long_discovery_family_summary.csv",
-    "periods": "audusd_h1_long_discovery_periods.csv",
-    "cost_stress": "audusd_h1_long_discovery_cost_stress.csv",
-    "calendar": "audusd_h1_long_discovery_calendar_years.csv",
-    "calendar_summary": "audusd_h1_long_discovery_calendar_summary.csv",
-    "rolling": "audusd_h1_long_discovery_rolling.csv",
-    "rolling_summary": "audusd_h1_long_discovery_rolling_summary.csv",
-    "plateau": "audusd_h1_long_discovery_plateau.csv",
-    "trades": "audusd_h1_long_discovery_finalist_trades.csv",
-    "notes": "audusd_h1_long_discovery_notes.csv",
+    "coverage": "audusd_h1_long_outside_refinement_coverage.csv",
+    "control_parity": "audusd_h1_long_outside_refinement_control_parity.csv",
+    "geometry": "audusd_h1_long_outside_refinement_geometry.csv",
+    "geometry_shortlist": "audusd_h1_long_outside_refinement_geometry_shortlist.csv",
+    "rr": "audusd_h1_long_outside_refinement_rr_sweep.csv",
+    "contexts": "audusd_h1_long_outside_refinement_context_scan.csv",
+    "context_ablation": "audusd_h1_long_outside_refinement_context_ablation.csv",
+    "finalists": "audusd_h1_long_outside_refinement_finalists.csv",
+    "periods": "audusd_h1_long_outside_refinement_periods.csv",
+    "cost_stress": "audusd_h1_long_outside_refinement_cost_stress.csv",
+    "rolling": "audusd_h1_long_outside_refinement_rolling.csv",
+    "rolling_summary": "audusd_h1_long_outside_refinement_rolling_summary.csv",
+    "calendar": "audusd_h1_long_outside_refinement_calendar_years.csv",
+    "calendar_summary": "audusd_h1_long_outside_refinement_calendar_summary.csv",
+    "plateau": "audusd_h1_long_outside_refinement_plateau.csv",
+    "overlap": "audusd_h1_long_outside_refinement_overlap_vs_engulf.csv",
+    "trades": "audusd_h1_long_outside_refinement_finalist_trades.csv",
+    "notes": "audusd_h1_long_outside_refinement_notes.csv",
 }
 
-BUNDLE = "AUDUSD_H1_LONG_DISCOVERY_RESULTS.zip"
+BUNDLE = "AUDUSD_H1_LONG_OUTSIDE_REVERSAL_REFINEMENT_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
     "message": "Not started",
     "pair": PAIR,
+    "timeframe": "H1",
+    "side": "LONG",
     "orders_supported": False,
     "trading_enabled": False,
 }
@@ -619,7 +658,7 @@ def build_features(candles, timeframe):
     else:
         structure_lbs = [15, 30, 60, 100]
         sweep_lbs = [15, 30, 60]
-        outside_lbs = [15, 30, 60]
+        outside_lbs = [15, 20, 25, 30, 35, 40, 45, 60]
         breakout_lbs = [5, 10, 20]
 
     needed_lbs = sorted(
@@ -698,6 +737,7 @@ def config_id(config):
         "wick_body_min",
         "compression_max",
         "breakout_lookback",
+        "context_id",
         "rr",
     ]
 
@@ -1467,6 +1507,7 @@ def evaluate_candidate(config, features, raw_indices):
         "timeframe": config["timeframe"],
         "side": config["side"],
         "family": config["family"],
+        "context_id": config.get("context_id", "NONE"),
         "rr": config["rr"],
         "br_min": config.get("br_min"),
         "body_atr_min": config.get("body_atr_min"),
@@ -2333,6 +2374,1080 @@ def add_final_robustness(
 
 
 # ============================================================
+# OUTSIDE-REVERSAL REFINEMENT HELPERS
+# ============================================================
+
+def ema_array(values, length):
+    values = np.asarray(values, dtype=float)
+
+    result = np.full(
+        len(values),
+        np.nan,
+        dtype=float,
+    )
+
+    if len(values) < length:
+        return result
+
+    seed_window = values[:length]
+    if not np.all(np.isfinite(seed_window)):
+        return result
+
+    result[length - 1] = float(
+        np.mean(seed_window)
+    )
+
+    alpha = 2.0 / (length + 1.0)
+
+    for i in range(length, len(values)):
+        value = values[i]
+
+        if not math.isfinite(value):
+            result[i] = result[i - 1]
+            continue
+
+        result[i] = (
+            alpha * value
+            + (1.0 - alpha) * result[i - 1]
+        )
+
+    return result
+
+
+def slice_features(features, end_exclusive):
+    output = {}
+
+    for key, value in features.items():
+        if isinstance(value, np.ndarray):
+            output[key] = value[:end_exclusive].copy()
+
+        elif key == "times":
+            output[key] = value[:end_exclusive]
+
+        elif key in ("prev_lows", "prev_highs"):
+            output[key] = {
+                lookback: array[:end_exclusive].copy()
+                for lookback, array in value.items()
+            }
+
+        else:
+            output[key] = value
+
+    return output
+
+
+def aligned_completed_values(
+    signal_times,
+    htf_times,
+    values,
+):
+    """
+    Strictly completed higher-timeframe state.
+
+    For HTF candle i, its value becomes available only when the NEXT HTF
+    candle begins. This handles daily DST alignment safely because completion
+    is inferred from the actual next OANDA candle timestamp.
+    """
+    output = np.full(
+        len(signal_times),
+        np.nan,
+        dtype=float,
+    )
+
+    if len(htf_times) < 2:
+        return output
+
+    completion_times = htf_times[1:]
+    completed_values = np.asarray(
+        values[:-1],
+        dtype=float,
+    )
+
+    for i, signal_time in enumerate(signal_times):
+        index = (
+            bisect_right(
+                completion_times,
+                signal_time,
+            )
+            - 1
+        )
+
+        if index >= 0:
+            output[i] = completed_values[index]
+
+    return output
+
+
+def build_context_cache(
+    h1_features,
+    h4_candles,
+    daily_candles,
+):
+    signal_times = h1_features["times"]
+
+    h4_close = np.array(
+        [c["close"] for c in h4_candles],
+        dtype=float,
+    )
+    daily_close = np.array(
+        [c["close"] for c in daily_candles],
+        dtype=float,
+    )
+
+    h4_times = [
+        c["time"]
+        for c in h4_candles
+    ]
+    daily_times = [
+        c["time"]
+        for c in daily_candles
+    ]
+
+    h4_ema50 = ema_array(h4_close, 50)
+    h4_ema100 = ema_array(h4_close, 100)
+    h4_ema200 = ema_array(h4_close, 200)
+
+    d_ema50 = ema_array(daily_close, 50)
+    d_ema100 = ema_array(daily_close, 100)
+    d_ema200 = ema_array(daily_close, 200)
+
+    cache = {
+        "H4_CLOSE": aligned_completed_values(
+            signal_times,
+            h4_times,
+            h4_close,
+        ),
+        "H4_EMA50": aligned_completed_values(
+            signal_times,
+            h4_times,
+            h4_ema50,
+        ),
+        "H4_EMA100": aligned_completed_values(
+            signal_times,
+            h4_times,
+            h4_ema100,
+        ),
+        "H4_EMA200": aligned_completed_values(
+            signal_times,
+            h4_times,
+            h4_ema200,
+        ),
+        "D_CLOSE": aligned_completed_values(
+            signal_times,
+            daily_times,
+            daily_close,
+        ),
+        "D_EMA50": aligned_completed_values(
+            signal_times,
+            daily_times,
+            d_ema50,
+        ),
+        "D_EMA100": aligned_completed_values(
+            signal_times,
+            daily_times,
+            d_ema100,
+        ),
+        "D_EMA200": aligned_completed_values(
+            signal_times,
+            daily_times,
+            d_ema200,
+        ),
+    }
+
+    ny_weekday = np.empty(
+        len(signal_times),
+        dtype=int,
+    )
+
+    session_ny = np.zeros(
+        len(signal_times),
+        dtype=bool,
+    )
+    session_london = np.zeros(
+        len(signal_times),
+        dtype=bool,
+    )
+    session_tokyo = np.zeros(
+        len(signal_times),
+        dtype=bool,
+    )
+    session_sydney = np.zeros(
+        len(signal_times),
+        dtype=bool,
+    )
+
+    for i, timestamp in enumerate(signal_times):
+        ny_time = timestamp.astimezone(NY)
+        london_time = timestamp.astimezone(LONDON)
+        tokyo_time = timestamp.astimezone(TOKYO)
+        sydney_time = timestamp.astimezone(SYDNEY)
+
+        ny_weekday[i] = ny_time.weekday()
+
+        # signal timestamp is candle OPEN
+        session_ny[i] = 8 <= ny_time.hour < 17
+        session_london[i] = 7 <= london_time.hour < 16
+        session_tokyo[i] = 8 <= tokyo_time.hour < 17
+        session_sydney[i] = 8 <= sydney_time.hour < 17
+
+    cache["NY_WEEKDAY"] = ny_weekday
+    cache["SESSION_NY"] = session_ny
+    cache["SESSION_LONDON"] = session_london
+    cache["SESSION_TOKYO"] = session_tokyo
+    cache["SESSION_SYDNEY"] = session_sydney
+
+    return cache
+
+
+def context_definitions():
+    return [
+        ("NONE", "BASE", "No context filter"),
+
+        ("EXCLUDE_MON_NY", "WEEKDAY", "Exclude Monday NY"),
+        ("EXCLUDE_TUE_NY", "WEEKDAY", "Exclude Tuesday NY"),
+        ("EXCLUDE_WED_NY", "WEEKDAY", "Exclude Wednesday NY"),
+        ("EXCLUDE_THU_NY", "WEEKDAY", "Exclude Thursday NY"),
+        ("EXCLUDE_FRI_NY", "WEEKDAY", "Exclude Friday NY"),
+
+        ("SESSION_SYDNEY_08_17", "SESSION", "08:00-16:59 Australia/Sydney"),
+        ("SESSION_TOKYO_08_17", "SESSION", "08:00-16:59 Asia/Tokyo"),
+        ("SESSION_LONDON_07_16", "SESSION", "07:00-15:59 Europe/London"),
+        ("SESSION_NY_08_17", "SESSION", "08:00-16:59 America/New_York"),
+
+        ("H4_CLOSE_GT_EMA100", "H4_TREND", "Prior completed H4 close > EMA100"),
+        ("H4_CLOSE_GT_EMA200", "H4_TREND", "Prior completed H4 close > EMA200"),
+        ("H4_EMA50_GT_EMA200", "H4_TREND", "Prior completed H4 EMA50 > EMA200"),
+
+        ("D_CLOSE_GT_EMA100", "D_TREND", "Prior completed D close > EMA100"),
+        ("D_CLOSE_GT_EMA200", "D_TREND", "Prior completed D close > EMA200"),
+        ("D_EMA50_GT_EMA200", "D_TREND", "Prior completed D EMA50 > EMA200"),
+    ]
+
+
+def context_mask(context_id, cache):
+    n = len(cache["NY_WEEKDAY"])
+
+    if context_id == "NONE":
+        return np.ones(n, dtype=bool)
+
+    weekday_map = {
+        "EXCLUDE_MON_NY": 0,
+        "EXCLUDE_TUE_NY": 1,
+        "EXCLUDE_WED_NY": 2,
+        "EXCLUDE_THU_NY": 3,
+        "EXCLUDE_FRI_NY": 4,
+    }
+
+    if context_id in weekday_map:
+        return (
+            cache["NY_WEEKDAY"]
+            != weekday_map[context_id]
+        )
+
+    if context_id == "SESSION_SYDNEY_08_17":
+        return cache["SESSION_SYDNEY"].copy()
+
+    if context_id == "SESSION_TOKYO_08_17":
+        return cache["SESSION_TOKYO"].copy()
+
+    if context_id == "SESSION_LONDON_07_16":
+        return cache["SESSION_LONDON"].copy()
+
+    if context_id == "SESSION_NY_08_17":
+        return cache["SESSION_NY"].copy()
+
+    if context_id == "H4_CLOSE_GT_EMA100":
+        return (
+            np.isfinite(cache["H4_CLOSE"])
+            & np.isfinite(cache["H4_EMA100"])
+            & (
+                cache["H4_CLOSE"]
+                > cache["H4_EMA100"]
+            )
+        )
+
+    if context_id == "H4_CLOSE_GT_EMA200":
+        return (
+            np.isfinite(cache["H4_CLOSE"])
+            & np.isfinite(cache["H4_EMA200"])
+            & (
+                cache["H4_CLOSE"]
+                > cache["H4_EMA200"]
+            )
+        )
+
+    if context_id == "H4_EMA50_GT_EMA200":
+        return (
+            np.isfinite(cache["H4_EMA50"])
+            & np.isfinite(cache["H4_EMA200"])
+            & (
+                cache["H4_EMA50"]
+                > cache["H4_EMA200"]
+            )
+        )
+
+    if context_id == "D_CLOSE_GT_EMA100":
+        return (
+            np.isfinite(cache["D_CLOSE"])
+            & np.isfinite(cache["D_EMA100"])
+            & (
+                cache["D_CLOSE"]
+                > cache["D_EMA100"]
+            )
+        )
+
+    if context_id == "D_CLOSE_GT_EMA200":
+        return (
+            np.isfinite(cache["D_CLOSE"])
+            & np.isfinite(cache["D_EMA200"])
+            & (
+                cache["D_CLOSE"]
+                > cache["D_EMA200"]
+            )
+        )
+
+    if context_id == "D_EMA50_GT_EMA200":
+        return (
+            np.isfinite(cache["D_EMA50"])
+            & np.isfinite(cache["D_EMA200"])
+            & (
+                cache["D_EMA50"]
+                > cache["D_EMA200"]
+            )
+        )
+
+    raise ValueError(
+        f"Unknown context_id: {context_id}"
+    )
+
+
+def apply_context(
+    raw_indices,
+    context_id,
+    context_cache,
+):
+    raw_indices = np.asarray(
+        raw_indices,
+        dtype=int,
+    )
+
+    mask = context_mask(
+        context_id,
+        context_cache,
+    )
+
+    if not len(raw_indices):
+        return raw_indices
+
+    return raw_indices[
+        mask[raw_indices]
+    ]
+
+
+def outside_config(
+    body_atr_min,
+    lookback,
+    distance_atr_max,
+    close_location,
+    rr,
+    context_id=None,
+):
+    config = {
+        "timeframe": "H1",
+        "side": "LONG",
+        "family": "OUTSIDE_REVERSAL",
+        "body_atr_min": float(body_atr_min),
+        "lookback": int(lookback),
+        "distance_atr_max": float(distance_atr_max),
+        "close_location": float(close_location),
+        "rr": float(rr),
+    }
+
+    if context_id is not None:
+        config["context_id"] = context_id
+
+    config["config_id"] = config_id(config)
+    return config
+
+
+def engulf_control_config():
+    config = {
+        "timeframe": "H1",
+        "side": "LONG",
+        "family": "ENGULF_STRUCTURE",
+        "br_min": 1.00,
+        "body_atr_min": 1.25,
+        "lookback": 100,
+        "distance_atr_max": 0.15,
+        "rr": 4.00,
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+def control_specs():
+    return [
+        {
+            "name": "OUTSIDE_RR3",
+            "config": outside_config(
+                0.75, 30, 0.30, 0.65, 3.00
+            ),
+            "expected_trades": 323,
+            "expected_pf": 1.3070928181727706,
+            "expected_total_r": 68.48169845252784,
+        },
+        {
+            "name": "OUTSIDE_RR3_5",
+            "config": outside_config(
+                0.75, 30, 0.30, 0.65, 3.50
+            ),
+            "expected_trades": 316,
+            "expected_pf": 1.2727724664850295,
+            "expected_total_r": 62.73766729155682,
+        },
+        {
+            "name": "ENGULF_RR4",
+            "config": engulf_control_config(),
+            "expected_trades": 47,
+            "expected_pf": 1.6640192322077896,
+            "expected_total_r": 21.91263466285706,
+        },
+    ]
+
+
+def run_control_parity(control_features):
+    rows = []
+
+    for spec in control_specs():
+        config = spec["config"]
+        indices = signal_indices(
+            config,
+            control_features,
+        )
+        trades = backtest(
+            config,
+            control_features,
+            indices,
+        )
+        result = metrics(trades)
+
+        trades_ok = (
+            result["trades"]
+            == spec["expected_trades"]
+        )
+        pf_ok = (
+            abs(
+                result["profit_factor"]
+                - spec["expected_pf"]
+            )
+            <= 1e-8
+        )
+        r_ok = (
+            abs(
+                result["total_r"]
+                - spec["expected_total_r"]
+            )
+            <= 1e-8
+        )
+
+        parity_pass = (
+            trades_ok
+            and pf_ok
+            and r_ok
+        )
+
+        rows.append({
+            "control_name": spec["name"],
+            "control_cutoff_utc": iso(CONTROL_CUTOFF),
+            "config_id": config["config_id"],
+            "expected_trades": spec["expected_trades"],
+            "actual_trades": result["trades"],
+            "expected_pf": spec["expected_pf"],
+            "actual_pf": result["profit_factor"],
+            "expected_total_r": spec["expected_total_r"],
+            "actual_total_r": result["total_r"],
+            "parity_pass": parity_pass,
+        })
+
+        if not parity_pass:
+            raise RuntimeError(
+                "Control parity failed for "
+                f"{spec['name']}: "
+                f"trades {result['trades']} vs {spec['expected_trades']}, "
+                f"PF {result['profit_factor']} vs {spec['expected_pf']}, "
+                f"R {result['total_r']} vs {spec['expected_total_r']}"
+            )
+
+    return rows
+
+
+def geometry_configs():
+    configs = []
+
+    for body in GEOMETRY_BODY_ATR:
+        for lookback in GEOMETRY_LOOKBACK:
+            for distance in GEOMETRY_DISTANCE:
+                for close_location in GEOMETRY_CLOSE:
+                    configs.append(
+                        outside_config(
+                            body,
+                            lookback,
+                            distance,
+                            close_location,
+                            GEOMETRY_RR,
+                        )
+                    )
+
+    return configs
+
+
+def refinement_sort_key(row):
+    return (
+        1 if row["both_temporal_splits_positive"] else 0,
+        row["positive_eras"],
+        row["min_temporal_split_pf"],
+        1 if row["last5y_r"] > 0 else 0,
+        1 if row["last2y_r"] > 0 else 0,
+        row["full_pf"],
+        row["full_total_r"],
+        row["full_trades"],
+    )
+
+
+def select_geometry_shortlist(rows):
+    eligible = [
+        row
+        for row in rows
+        if (
+            row["full_trades"] >= 100
+            and row["both_temporal_splits_positive"]
+            and row["positive_eras"] >= 3
+        )
+    ]
+
+    pool = eligible if eligible else list(rows)
+
+    pool = sorted(
+        pool,
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = []
+    selected_ids = set()
+
+    # First make sure each tested lookback gets representation if it has a
+    # credible candidate. This prevents the shortlist collapsing into one
+    # narrow lookback by ranking alone.
+    by_lookback = defaultdict(list)
+
+    for row in pool:
+        by_lookback[int(row["lookback"])].append(row)
+
+    for lookback in GEOMETRY_LOOKBACK:
+        group = sorted(
+            by_lookback.get(lookback, []),
+            key=refinement_sort_key,
+            reverse=True,
+        )
+
+        for row in group[:3]:
+            if row["config_id"] in selected_ids:
+                continue
+
+            selected.append(row)
+            selected_ids.add(row["config_id"])
+
+    for row in pool:
+        if len(selected) >= GEOMETRY_SHORTLIST_SIZE:
+            break
+
+        if row["config_id"] in selected_ids:
+            continue
+
+        selected.append(row)
+        selected_ids.add(row["config_id"])
+
+    selected = selected[:GEOMETRY_SHORTLIST_SIZE]
+    selected.sort(
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    return selected
+
+
+def row_to_outside_config(row, rr=None, context_id=None):
+    return outside_config(
+        row["body_atr_min"],
+        int(row["lookback"]),
+        row["distance_atr_max"],
+        row["close_location"],
+        row["rr"] if rr is None else rr,
+        context_id=context_id,
+    )
+
+
+def select_context_bases(rr_rows):
+    # One best RR per exact geometry first.
+    grouped = defaultdict(list)
+
+    for row in rr_rows:
+        geometry_key = (
+            row["body_atr_min"],
+            int(row["lookback"]),
+            row["distance_atr_max"],
+            row["close_location"],
+        )
+        grouped[geometry_key].append(row)
+
+    best_per_geometry = []
+
+    for group in grouped.values():
+        group.sort(
+            key=refinement_sort_key,
+            reverse=True,
+        )
+        best_per_geometry.append(group[0])
+
+    best_per_geometry.sort(
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = best_per_geometry[:CONTEXT_BASES]
+
+    # Always preserve the two exact discovery controls as context bases so
+    # single-factor filters are also tested on the known central geometry.
+    required = [
+        outside_config(
+            0.75, 30, 0.30, 0.65, 3.00
+        ),
+        outside_config(
+            0.75, 30, 0.30, 0.65, 3.50
+        ),
+    ]
+
+    rr_map = {
+        row["config_id"]: row
+        for row in rr_rows
+    }
+
+    selected_ids = {
+        row["config_id"]
+        for row in selected
+    }
+
+    for config in required:
+        if (
+            config["config_id"] in rr_map
+            and config["config_id"] not in selected_ids
+        ):
+            selected.append(
+                rr_map[config["config_id"]]
+            )
+            selected_ids.add(
+                config["config_id"]
+            )
+
+    selected.sort(
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    return selected[: max(CONTEXT_BASES, len(required))]
+
+
+def context_ablation_rows(context_rows, rr_rows):
+    base_map = {
+        row["config_id"]: row
+        for row in rr_rows
+    }
+
+    output = []
+
+    for row in context_rows:
+        context_id = row.get("context_id", "NONE")
+
+        if context_id == "NONE":
+            continue
+
+        base_config = outside_config(
+            row["body_atr_min"],
+            int(row["lookback"]),
+            row["distance_atr_max"],
+            row["close_location"],
+            row["rr"],
+        )
+
+        base = base_map.get(
+            base_config["config_id"]
+        )
+
+        if not base:
+            continue
+
+        output.append({
+            "config_id": row["config_id"],
+            "context_id": context_id,
+            "base_config_id": base_config["config_id"],
+            "context_trades": row["full_trades"],
+            "base_trades": base["full_trades"],
+            "trade_delta": (
+                row["full_trades"]
+                - base["full_trades"]
+            ),
+            "context_pf": row["full_pf"],
+            "base_pf": base["full_pf"],
+            "pf_delta": (
+                row["full_pf"]
+                - base["full_pf"]
+            ),
+            "context_total_r": row["full_total_r"],
+            "base_total_r": base["full_total_r"],
+            "total_r_delta": (
+                row["full_total_r"]
+                - base["full_total_r"]
+            ),
+            "context_min_split_pf": row[
+                "min_temporal_split_pf"
+            ],
+            "base_min_split_pf": base[
+                "min_temporal_split_pf"
+            ],
+            "min_split_pf_delta": (
+                row["min_temporal_split_pf"]
+                - base["min_temporal_split_pf"]
+            ),
+            "context_last5y_r": row["last5y_r"],
+            "base_last5y_r": base["last5y_r"],
+            "last5y_r_delta": (
+                row["last5y_r"]
+                - base["last5y_r"]
+            ),
+        })
+
+    output.sort(
+        key=lambda row: (
+            row["min_split_pf_delta"],
+            row["pf_delta"],
+            row["total_r_delta"],
+        ),
+        reverse=True,
+    )
+
+    return output
+
+
+def select_finalist_rows(context_rows, rr_rows):
+    eligible = [
+        row
+        for row in context_rows
+        if (
+            row["full_trades"] >= 80
+            and row["both_temporal_splits_positive"]
+            and row["positive_eras"] >= 3
+            and row["last5y_r"] > 0
+        )
+    ]
+
+    pool = eligible if eligible else list(context_rows)
+
+    pool.sort(
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = []
+    selected_ids = set()
+    per_base_count = defaultdict(int)
+
+    for row in pool:
+        base_key = (
+            row["body_atr_min"],
+            int(row["lookback"]),
+            row["distance_atr_max"],
+            row["close_location"],
+            row["rr"],
+        )
+
+        # Avoid a final table dominated by many filters on one exact geometry.
+        if per_base_count[base_key] >= 2:
+            continue
+
+        selected.append(row)
+        selected_ids.add(row["config_id"])
+        per_base_count[base_key] += 1
+
+        if len(selected) >= 8:
+            break
+
+    # Force useful no-context references into deep diagnostics.
+    rr_sorted = sorted(
+        rr_rows,
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    required_configs = [
+        outside_config(
+            0.75, 30, 0.30, 0.65, 3.00,
+            context_id="NONE",
+        ),
+        outside_config(
+            0.75, 30, 0.30, 0.65, 3.50,
+            context_id="NONE",
+        ),
+    ]
+
+    # Add the strongest raw/no-context candidate as well.
+    if rr_sorted:
+        strongest = row_to_outside_config(
+            rr_sorted[0],
+            context_id="NONE",
+        )
+        required_configs.append(strongest)
+
+    context_map = {
+        row["config_id"]: row
+        for row in context_rows
+    }
+
+    for config in required_configs:
+        row = context_map.get(
+            config["config_id"]
+        )
+
+        if (
+            row is not None
+            and row["config_id"] not in selected_ids
+        ):
+            selected.append(row)
+            selected_ids.add(row["config_id"])
+
+    selected.sort(
+        key=refinement_sort_key,
+        reverse=True,
+    )
+
+    return selected[:FINAL_KEEP]
+
+
+def add_refinement_screen(
+    rows,
+    cost_rows,
+    rolling_summary_rows,
+    calendar_summary_rows,
+    plateau_summary_rows,
+    ablation_rows,
+):
+    cost_map = {
+        row["config_id"]: row
+        for row in cost_rows
+        if abs(row["cost_multiplier"] - 2.0) < 1e-9
+    }
+
+    rolling_map = defaultdict(dict)
+    for row in rolling_summary_rows:
+        rolling_map[
+            row["config_id"]
+        ][row["window_months"]] = row
+
+    calendar_map = {
+        row["config_id"]: row
+        for row in calendar_summary_rows
+    }
+
+    plateau_map = {
+        row["config_id"]: row
+        for row in plateau_summary_rows
+    }
+
+    ablation_map = {
+        row["config_id"]: row
+        for row in ablation_rows
+    }
+
+    output = []
+
+    for source in rows:
+        row = dict(source)
+
+        cost2 = cost_map.get(
+            row["config_id"],
+            {},
+        )
+        r24 = rolling_map[
+            row["config_id"]
+        ].get(24, {})
+        r36 = rolling_map[
+            row["config_id"]
+        ].get(36, {})
+        cal = calendar_map.get(
+            row["config_id"],
+            {},
+        )
+        plateau = plateau_map.get(
+            row["config_id"],
+            {},
+        )
+        ablation = ablation_map.get(
+            row["config_id"],
+            {},
+        )
+
+        row.update({
+            "cost_2x_pf": cost2.get(
+                "profit_factor",
+                0.0,
+            ),
+            "cost_2x_total_r": cost2.get(
+                "total_r",
+                0.0,
+            ),
+            "rolling24_positive_pct": r24.get(
+                "positive_active_windows_pct",
+                0.0,
+            ),
+            "rolling24_worst_r": r24.get(
+                "worst_r_active",
+                0.0,
+            ),
+            "rolling36_positive_pct": r36.get(
+                "positive_active_windows_pct",
+                0.0,
+            ),
+            "rolling36_worst_r": r36.get(
+                "worst_r_active",
+                0.0,
+            ),
+            "positive_calendar_year_pct": cal.get(
+                "positive_active_years_pct",
+                0.0,
+            ),
+            "worst_calendar_year_r": cal.get(
+                "worst_active_year_r",
+                0.0,
+            ),
+            "plateau_positive_neighbours_pct": plateau.get(
+                "positive_neighbours_pct",
+                0.0,
+            ),
+            "plateau_split_positive_neighbours_pct": plateau.get(
+                "both_split_positive_neighbours_pct",
+                0.0,
+            ),
+            "context_pf_delta_vs_none": ablation.get(
+                "pf_delta",
+                0.0,
+            ),
+            "context_min_split_pf_delta_vs_none": ablation.get(
+                "min_split_pf_delta",
+                0.0,
+            ),
+        })
+
+        row["refinement_screen_pass"] = (
+            row["full_trades"] >= 80
+            and row["full_pf"] >= 1.25
+            and row["both_temporal_splits_positive"]
+            and row["min_temporal_split_pf"] >= 1.15
+            and row["positive_eras"] >= 3
+            and row["last5y_r"] > 0
+            and row["last2y_r"] > 0
+            and row["cost_2x_pf"] >= 1.15
+            and row["cost_2x_total_r"] > 0
+            and row["rolling24_positive_pct"] >= 70.0
+            and row["rolling36_positive_pct"] >= 75.0
+            and row["positive_calendar_year_pct"] >= 65.0
+            and row["plateau_positive_neighbours_pct"] >= 80.0
+        )
+
+        output.append(row)
+
+    output.sort(
+        key=lambda row: (
+            1 if row["refinement_screen_pass"] else 0,
+            row["min_temporal_split_pf"],
+            row["cost_2x_pf"],
+            row["full_pf"],
+            row["full_total_r"],
+        ),
+        reverse=True,
+    )
+
+    return output
+
+
+def overlap_with_engulf_rows(
+    finalist_trade_map,
+    engulf_trades,
+):
+    output = []
+
+    engulf_signals = {
+        trade["signal_index"]
+        for trade in engulf_trades
+    }
+
+    engulf_intervals = [
+        (
+            trade["signal_index"],
+            trade["exit_index"],
+        )
+        for trade in engulf_trades
+    ]
+
+    for config_id, trades in finalist_trade_map.items():
+        exact = 0
+        holding_overlap = 0
+
+        for trade in trades:
+            if trade["signal_index"] in engulf_signals:
+                exact += 1
+
+            left = trade["signal_index"]
+            right = trade["exit_index"]
+
+            overlapped = any(
+                (
+                    left < other_right
+                    and other_left < right
+                )
+                for other_left, other_right
+                in engulf_intervals
+            )
+
+            if overlapped:
+                holding_overlap += 1
+
+        n = len(trades)
+
+        output.append({
+            "config_id": config_id,
+            "candidate_trades": n,
+            "engulf_control_trades": len(
+                engulf_trades
+            ),
+            "exact_signal_overlap_count": exact,
+            "exact_signal_overlap_pct_candidate": (
+                100.0 * exact / n
+                if n else 0.0
+            ),
+            "holding_period_overlap_count": holding_overlap,
+            "holding_period_overlap_pct_candidate": (
+                100.0 * holding_overlap / n
+                if n else 0.0
+            ),
+            "candidate_exact_signal_nonoverlap_count": (
+                n - exact
+            ),
+        })
+
+    return output
+
+
+# ============================================================
 # MAIN RESEARCH
 # ============================================================
 
@@ -2340,7 +3455,7 @@ def run_research():
     try:
         STATUS.update({
             "state": "fetching",
-            "message": "Fetching full AUD/USD H1 history",
+            "message": "Fetching AUD/USD H1/H4/D history",
         })
 
         h1 = fetch_history(
@@ -2350,144 +3465,213 @@ def run_research():
             chunk_days=180,
         )
 
+        h4 = fetch_history(
+            "H4",
+            WARMUP_START,
+            NOW,
+            chunk_days=720,
+        )
+
+        daily = fetch_history(
+            "D",
+            WARMUP_START,
+            NOW,
+            chunk_days=3000,
+        )
+
         if len(h1) < 5000:
             raise RuntimeError(
-                f"Unexpectedly small H1 history: {len(h1)} candles"
+                f"Unexpectedly small H1 history: {len(h1)}"
             )
 
-        coverage_rows = [
+        if len(h4) < 1000:
+            raise RuntimeError(
+                f"Unexpectedly small H4 history: {len(h4)}"
+            )
+
+        if len(daily) < 1000:
+            raise RuntimeError(
+                f"Unexpectedly small daily history: {len(daily)}"
+            )
+
+        coverage = [
             {
                 "pair": PAIR,
                 "timeframe": "H1",
-                "side": "LONG",
                 "candles": len(h1),
-                "first_candle_utc": iso(h1[0]["time"]),
-                "last_candle_utc": iso(h1[-1]["time"]),
-                "primary_adverse_cost_pips": H1_PRIMARY_COST_PIPS,
-                "stop_buffer_ticks": STOP_BUFFER_TICKS,
+                "first_utc": iso(h1[0]["time"]),
+                "last_utc": iso(h1[-1]["time"]),
+            },
+            {
+                "pair": PAIR,
+                "timeframe": "H4",
+                "candles": len(h4),
+                "first_utc": iso(h4[0]["time"]),
+                "last_utc": iso(h4[-1]["time"]),
+            },
+            {
+                "pair": PAIR,
+                "timeframe": "D",
+                "candles": len(daily),
+                "first_utc": iso(daily[0]["time"]),
+                "last_utc": iso(daily[-1]["time"]),
             },
         ]
-        write_csv(OUTS["coverage"], coverage_rows)
+
+        write_csv(
+            OUTS["coverage"],
+            coverage,
+        )
 
         STATUS.update({
             "state": "features",
-            "message": "Building AUD/USD H1 feature cache",
+            "message": "Building features and strict completed HTF states",
         })
 
-        h1_features = build_features(h1, "H1")
+        features = build_features(
+            h1,
+            "H1",
+        )
 
-        feature_map = {
-            "H1": h1_features,
-        }
+        context_cache = build_context_cache(
+            features,
+            h4,
+            daily,
+        )
 
         # ----------------------------------------------------
-        # STAGE 1 — BROAD RAW GEOMETRY, H1 LONG ONLY
+        # CONTROL PARITY
         # ----------------------------------------------------
-        stage1_rows = []
-        config_map = {}
-        signal_cache = {}
+        cutoff_index = bisect_right(
+            features["times"],
+            CONTROL_CUTOFF,
+        )
 
-        streams = [
-            ("H1", "LONG"),
-        ]
+        control_features = slice_features(
+            features,
+            cutoff_index,
+        )
 
-        total_configs = 0
-        stream_configs = {}
+        parity_rows = run_control_parity(
+            control_features
+        )
 
-        for timeframe, side in streams:
-            configs = stage1_configs(
-                timeframe,
-                side,
-                feature_map[timeframe],
+        write_csv(
+            OUTS["control_parity"],
+            parity_rows,
+        )
+
+        # Frozen engulf control on CURRENT full history for overlap only.
+        engulf_config = engulf_control_config()
+        engulf_indices = signal_indices(
+            engulf_config,
+            features,
+        )
+        engulf_trades = backtest(
+            engulf_config,
+            features,
+            engulf_indices,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 1 — OUTSIDE GEOMETRY
+        # ----------------------------------------------------
+        configs = geometry_configs()
+
+        geometry_rows = []
+        raw_index_cache = {}
+
+        for number, config in enumerate(
+            configs,
+            1,
+        ):
+            STATUS.update({
+                "state": "geometry",
+                "message": (
+                    f"{number}/{len(configs)} "
+                    f"{config['config_id']}"
+                ),
+            })
+
+            raw_indices = signal_indices(
+                config,
+                features,
             )
-            stream_configs[(timeframe, side)] = configs
-            total_configs += len(configs)
 
-        completed = 0
+            raw_index_cache[
+                config["config_id"]
+            ] = raw_indices
 
-        for timeframe, side in streams:
-            features = feature_map[timeframe]
+            row, _ = evaluate_candidate(
+                config,
+                features,
+                raw_indices,
+            )
 
-            for config in stream_configs[(timeframe, side)]:
-                completed += 1
+            geometry_rows.append(row)
 
-                STATUS.update({
-                    "state": "stage1",
-                    "message": (
-                        f"{completed}/{total_configs} "
-                        f"{config['config_id']}"
-                    ),
-                })
+        geometry_rows.sort(
+            key=refinement_sort_key,
+            reverse=True,
+        )
 
-                raw_indices = signal_indices(
-                    config,
-                    features,
-                )
+        write_csv(
+            OUTS["geometry"],
+            geometry_rows,
+        )
 
-                signal_cache[
-                    config["config_id"]
-                ] = raw_indices
-
-                row, _ = evaluate_candidate(
-                    config,
-                    features,
-                    raw_indices,
-                )
-
-                stage1_rows.append(row)
-                config_map[config["config_id"]] = config
-
-        stage1_rows.sort(
-            key=lambda row: (
-                row["family"],
-                -row["full_pf"],
+        geometry_shortlist = (
+            select_geometry_shortlist(
+                geometry_rows
             )
         )
 
         write_csv(
-            OUTS["stage1"],
-            stage1_rows,
-        )
-
-        stage1_shortlist = shortlist_stage1(
-            stage1_rows
-        )
-
-        write_csv(
-            OUTS["stage1_shortlist"],
-            stage1_shortlist,
+            OUTS["geometry_shortlist"],
+            geometry_shortlist,
         )
 
         # ----------------------------------------------------
-        # STAGE 2 — RR SWEEP ONLY
+        # STAGE 2 — RR SWEEP
         # ----------------------------------------------------
-        stage2_rows = []
-        stage2_config_map = {}
-        stage2_signal_cache = {}
+        rr_rows = []
+        rr_config_map = {}
+        rr_signal_cache = {}
 
-        total_stage2 = len(stage1_shortlist) * len(RR_GRID)
-        stage2_completed = 0
+        total_rr = (
+            len(geometry_shortlist)
+            * len(RR_GRID)
+        )
+        rr_done = 0
 
-        for base_row in stage1_shortlist:
-            base_config = config_map[
-                base_row["config_id"]
-            ]
-            raw_indices = signal_cache[
-                base_row["config_id"]
-            ]
-            features = h1_features
+        for base_row in geometry_shortlist:
+            geometry_config = row_to_outside_config(
+                base_row,
+                rr=GEOMETRY_RR,
+            )
+
+            geometry_indices = raw_index_cache.get(
+                geometry_config["config_id"]
+            )
+
+            if geometry_indices is None:
+                geometry_indices = signal_indices(
+                    geometry_config,
+                    features,
+                )
 
             for rr in RR_GRID:
-                stage2_completed += 1
+                rr_done += 1
 
-                config = dict(base_config)
-                config["rr"] = rr
-                config["config_id"] = config_id(config)
+                config = row_to_outside_config(
+                    base_row,
+                    rr=rr,
+                )
 
                 STATUS.update({
-                    "state": "stage2_rr",
+                    "state": "rr_sweep",
                     "message": (
-                        f"{stage2_completed}/{total_stage2} "
+                        f"{rr_done}/{total_rr} "
                         f"{config['config_id']}"
                     ),
                 })
@@ -2495,68 +3679,216 @@ def run_research():
                 row, _ = evaluate_candidate(
                     config,
                     features,
-                    raw_indices,
+                    geometry_indices,
                 )
 
-                stage2_rows.append(row)
-                stage2_config_map[
+                rr_rows.append(row)
+                rr_config_map[
                     config["config_id"]
                 ] = config
-                stage2_signal_cache[
+                rr_signal_cache[
                     config["config_id"]
-                ] = raw_indices
+                ] = geometry_indices
 
-        stage2_rows.sort(
-            key=lambda row: (
-                row["family"],
-                -row["full_pf"],
+        # Guarantee exact central discovery controls are available in RR table
+        # even if that geometry did not make the top refinement shortlist.
+        for config in [
+            outside_config(
+                0.75, 30, 0.30, 0.65, 3.00
+            ),
+            outside_config(
+                0.75, 30, 0.30, 0.65, 3.50
+            ),
+        ]:
+            if config["config_id"] in rr_config_map:
+                continue
+
+            raw_indices = signal_indices(
+                config,
+                features,
             )
+
+            row, _ = evaluate_candidate(
+                config,
+                features,
+                raw_indices,
+            )
+
+            rr_rows.append(row)
+            rr_config_map[
+                config["config_id"]
+            ] = config
+            rr_signal_cache[
+                config["config_id"]
+            ] = raw_indices
+
+        rr_rows.sort(
+            key=refinement_sort_key,
+            reverse=True,
         )
 
         write_csv(
-            OUTS["stage2_rr"],
-            stage2_rows,
+            OUTS["rr"],
+            rr_rows,
         )
 
         # ----------------------------------------------------
-        # FINALIST SELECTION + DEEP DIAGNOSTICS
+        # STAGE 3 — SINGLE-FACTOR CONTEXTS
         # ----------------------------------------------------
-        finalist_seed_rows = select_finalists(
-            stage2_rows
+        context_bases = select_context_bases(
+            rr_rows
+        )
+
+        contexts = context_definitions()
+        context_rows = []
+        context_config_map = {}
+        context_signal_cache = {}
+
+        total_contexts = (
+            len(context_bases)
+            * len(contexts)
+        )
+        context_done = 0
+
+        for base_row in context_bases:
+            base_config = row_to_outside_config(
+                base_row
+            )
+
+            base_indices = rr_signal_cache.get(
+                base_config["config_id"]
+            )
+
+            if base_indices is None:
+                base_indices = signal_indices(
+                    base_config,
+                    features,
+                )
+
+            for (
+                context_id,
+                context_group,
+                context_description,
+            ) in contexts:
+                context_done += 1
+
+                config = row_to_outside_config(
+                    base_row,
+                    context_id=context_id,
+                )
+
+                STATUS.update({
+                    "state": "context_scan",
+                    "message": (
+                        f"{context_done}/{total_contexts} "
+                        f"{config['config_id']}"
+                    ),
+                })
+
+                filtered_indices = apply_context(
+                    base_indices,
+                    context_id,
+                    context_cache,
+                )
+
+                row, _ = evaluate_candidate(
+                    config,
+                    features,
+                    filtered_indices,
+                )
+
+                row["context_group"] = context_group
+                row["context_description"] = (
+                    context_description
+                )
+                row["raw_geometry_signals"] = len(
+                    base_indices
+                )
+                row["context_signals"] = len(
+                    filtered_indices
+                )
+                row["context_signal_retention_pct"] = (
+                    100.0
+                    * len(filtered_indices)
+                    / len(base_indices)
+                    if len(base_indices)
+                    else 0.0
+                )
+
+                context_rows.append(row)
+                context_config_map[
+                    config["config_id"]
+                ] = config
+                context_signal_cache[
+                    config["config_id"]
+                ] = filtered_indices
+
+        context_rows.sort(
+            key=refinement_sort_key,
+            reverse=True,
+        )
+
+        write_csv(
+            OUTS["contexts"],
+            context_rows,
+        )
+
+        ablation_rows = context_ablation_rows(
+            context_rows,
+            rr_rows,
+        )
+
+        write_csv(
+            OUTS["context_ablation"],
+            ablation_rows,
+        )
+
+        # ----------------------------------------------------
+        # DEEP FINALISTS
+        # ----------------------------------------------------
+        finalist_seed_rows = select_finalist_rows(
+            context_rows,
+            rr_rows,
         )
 
         periods = []
         costs = []
-        calendar = []
         rolling = []
+        calendar = []
         all_trades = []
+        finalist_trade_map = {}
+        finalist_configs = []
 
-        for number, row in enumerate(
+        for number, seed in enumerate(
             finalist_seed_rows,
             1,
         ):
-            config = stage2_config_map[
-                row["config_id"]
+            config = context_config_map[
+                seed["config_id"]
             ]
-            raw_indices = stage2_signal_cache[
-                row["config_id"]
+            raw_indices = context_signal_cache[
+                seed["config_id"]
             ]
 
+            finalist_configs.append(config)
+
             STATUS.update({
-                "state": "final_analysis",
+                "state": "deep_validation",
                 "message": (
                     f"{number}/{len(finalist_seed_rows)} "
-                    f"{row['config_id']}"
+                    f"{config['config_id']}"
                 ),
             })
 
             trades = backtest(
                 config,
-                h1_features,
+                features,
                 raw_indices,
-                rr=config["rr"],
-                cost_multiplier=1.0,
             )
+
+            finalist_trade_map[
+                config["config_id"]
+            ] = trades
 
             periods.extend(
                 detailed_period_rows(
@@ -2568,39 +3900,37 @@ def run_research():
             costs.extend(
                 cost_stress_rows(
                     config,
-                    h1_features,
+                    features,
                     raw_indices,
                 )
             )
 
-            cal_rows = calendar_rows(
-                config,
-                trades,
+            rolling.extend(
+                rolling_rows(
+                    config,
+                    trades,
+                )
             )
-            calendar.extend(cal_rows)
 
-            roll_rows = rolling_rows(
-                config,
-                trades,
+            calendar.extend(
+                calendar_rows(
+                    config,
+                    trades,
+                )
             )
-            rolling.extend(roll_rows)
 
             for trade in trades:
                 output = dict(trade)
-
-                for key in [
-                    "signal_time",
-                    "exit_time",
-                ]:
-                    output[key] = iso(output[key])
-
-                output.update({
-                    "pair": PAIR,
-                    "candidate_timeframe": "H1",
-                    "candidate_side": "LONG",
-                    "candidate_family": config["family"],
-                })
-
+                output["signal_time"] = iso(
+                    output["signal_time"]
+                )
+                output["exit_time"] = iso(
+                    output["exit_time"]
+                )
+                output["context_id"] = config.get(
+                    "context_id",
+                    "NONE",
+                )
                 all_trades.append(output)
 
         rolling_summaries = rolling_summary(
@@ -2609,26 +3939,29 @@ def run_research():
         calendar_summaries = calendar_summary(
             calendar
         )
+
         plateau_summaries = plateau_rows(
             finalist_seed_rows,
-            stage2_rows,
+            rr_rows,
         )
 
-        final_rows = add_final_robustness(
+        final_rows = add_refinement_screen(
             finalist_seed_rows,
             costs,
             rolling_summaries,
             calendar_summaries,
             plateau_summaries,
+            ablation_rows,
+        )
+
+        overlap_rows = overlap_with_engulf_rows(
+            finalist_trade_map,
+            engulf_trades,
         )
 
         write_csv(
             OUTS["finalists"],
             final_rows,
-        )
-        write_csv(
-            OUTS["family_summary"],
-            family_summary(stage2_rows),
         )
         write_csv(
             OUTS["periods"],
@@ -2639,14 +3972,6 @@ def run_research():
             costs,
         )
         write_csv(
-            OUTS["calendar"],
-            calendar,
-        )
-        write_csv(
-            OUTS["calendar_summary"],
-            calendar_summaries,
-        )
-        write_csv(
             OUTS["rolling"],
             rolling,
         )
@@ -2655,80 +3980,94 @@ def run_research():
             rolling_summaries,
         )
         write_csv(
+            OUTS["calendar"],
+            calendar,
+        )
+        write_csv(
+            OUTS["calendar_summary"],
+            calendar_summaries,
+        )
+        write_csv(
             OUTS["plateau"],
             plateau_summaries,
+        )
+        write_csv(
+            OUTS["overlap"],
+            overlap_rows,
         )
         write_csv(
             OUTS["trades"],
             all_trades,
         )
 
-        robust = [
-            row for row in final_rows
-            if row["robust_pass"]
+        screen_passes = [
+            row
+            for row in final_rows
+            if row["refinement_screen_pass"]
         ]
 
         notes = [
             {
-                "topic": "purpose",
+                "topic": "research_scope",
                 "note": (
-                    "Broad first-pass AUD/USD H1 LONG discovery. "
-                    "No candidate is automatically live-worthy."
+                    "Second-stage AUD/USD H1 LONG refinement. "
+                    "Only OUTSIDE_REVERSAL is optimised. "
+                    "The 47-trade ENGULF_STRUCTURE setup is frozen as a "
+                    "comparison/overlap control."
                 ),
             },
             {
-                "topic": "stage1",
+                "topic": "parity",
                 "note": (
-                    "Stage 1 uses five raw price/volatility families only, "
-                    "with RR fixed at 3.5. No session, weekday or HTF trend "
-                    "filters are allowed in this first pass."
+                    "Three exact discovery controls are reproduced through "
+                    "2026-09-16 20:00 UTC before any new optimisation runs."
                 ),
             },
             {
-                "topic": "stage2",
+                "topic": "geometry",
                 "note": (
-                    "Only shortlisted Stage-1 geometries receive the RR sweep "
-                    "2.5/3.0/3.5/4.0/4.5/5.0."
+                    "720 local OUTSIDE_REVERSAL geometries are tested at "
+                    "fixed RR3.25. The grid deliberately surrounds the broad "
+                    "0.30 ATR structure-distance area rather than expanding "
+                    "into unrelated parameter space."
                 ),
             },
             {
-                "topic": "temporal_split",
+                "topic": "contexts",
                 "note": (
-                    "2002-2017 and 2018+ are used as temporal robustness "
-                    "splits. Because the whole history is visible during "
-                    "discovery, 2018+ is not claimed to be pristine OOS."
+                    "Only single-factor weekday/session/H4/daily contexts are "
+                    "tested. No context interactions are mined in this run."
+                ),
+            },
+            {
+                "topic": "htf_no_lookahead",
+                "note": (
+                    "H4 and daily states use only a candle whose NEXT HTF "
+                    "candle has already begun by the H1 signal-open time."
                 ),
             },
             {
                 "topic": "costs",
                 "note": (
-                    "H1 native adverse cost = 0.5 pip (5 AUD/USD ticks). "
-                    "Cost stress reaches 2x baseline."
+                    "Baseline H1 cost remains 0.5 pip adverse; final candidates "
+                    "are stressed at 0.25/0.5/0.75/1.0 pip via 0.5x/1x/1.5x/2x."
                 ),
             },
             {
                 "topic": "portfolio",
                 "note": (
-                    "The current live 24-strategy portfolio remains frozen. "
-                    "Any AUD/USD finalist must later be tested as a prospective "
-                    "#25 for marginal portfolio benefit under the exact live "
-                    "overlap/non-hedging rules."
+                    "This runner does not alter or simulate the current live "
+                    "24-strategy portfolio. Any surviving AUD/USD candidate "
+                    "must next pass a separate exact portfolio-addition test "
+                    "before it can become strategy #25."
                 ),
             },
             {
-                "topic": "next_step",
+                "topic": "screen_result",
                 "note": (
-                    "If a broad family survives, refine only that family: "
-                    "expand boundary dimensions, test simple causal regime/"
-                    "session/weekday contexts, run local plateau/ablation, "
-                    "then perform exact portfolio integration."
-                ),
-            },
-            {
-                "topic": "robust_finalists",
-                "note": (
-                    f"{len(robust)} of {len(final_rows)} detailed finalists "
-                    "met the predeclared robust_pass screen."
+                    f"{len(screen_passes)} of {len(final_rows)} deep finalists "
+                    "passed the predeclared refinement screen. A pass is not "
+                    "an automatic live lock."
                 ),
             },
         ]
@@ -2740,23 +4079,28 @@ def run_research():
 
         STATUS.update({
             "state": "packaging",
-            "message": "Building results ZIP",
+            "message": "Building refinement ZIP",
         })
 
         pack()
 
         STATUS.update({
             "state": "complete",
-            "message": "AUD/USD H1 LONG discovery complete",
-            "pair": PAIR,
-            "timeframe": "H1",
-            "side": "LONG",
+            "message": (
+                "AUD/USD H1 LONG outside-reversal refinement complete"
+            ),
             "h1_candles": len(h1),
-            "stage1_configs": len(stage1_rows),
-            "stage1_shortlist": len(stage1_shortlist),
-            "stage2_rr_configs": len(stage2_rows),
-            "detailed_finalists": len(final_rows),
-            "robust_finalists": len(robust),
+            "h4_candles": len(h4),
+            "daily_candles": len(daily),
+            "control_parity_passes": len(parity_rows),
+            "geometry_configs": len(geometry_rows),
+            "geometry_shortlist": len(geometry_shortlist),
+            "rr_rows": len(rr_rows),
+            "context_bases": len(context_bases),
+            "context_rows": len(context_rows),
+            "deep_finalists": len(final_rows),
+            "refinement_screen_passes": len(screen_passes),
+            "engulf_control_current_trades": len(engulf_trades),
             "bundle": BUNDLE,
         })
 
@@ -2765,8 +4109,9 @@ def run_research():
             "state": "error",
             "message": str(error),
         })
+
         print(
-            "AUDUSD H1 LONG DISCOVERY ERROR:",
+            "AUDUSD H1 LONG OUTSIDE REFINEMENT ERROR:",
             repr(error),
             flush=True,
         )
@@ -2779,41 +4124,42 @@ def run_research():
 @app.route("/")
 def root():
     return jsonify({
-        "service": "AUD/USD H1 LONG Discovery",
+        "service": "AUD/USD H1 LONG Outside-Reversal Refinement",
         "status": STATUS["state"],
         "instrument": PAIR,
-        "timeframes": ["H1"],
-        "sides": ["LONG"],
-        "families": [
-            "ENGULF_STRUCTURE",
-            "SWEEP_DISPLACEMENT",
-            "FAILED_BREAK_RECLAIM",
-            "OUTSIDE_REVERSAL",
-            "COMPRESSION_BREAKOUT",
-        ],
-        "requested_start_utc": iso(REQUESTED_START),
-        "validation_start_utc": iso(VALIDATION_START),
-        "h1_primary_cost_pips": H1_PRIMARY_COST_PIPS,
-        "tick_size": TICK,
-        "pip_size": PIP,
-        "stop_buffer_ticks": STOP_BUFFER_TICKS,
-        "stage1_rr": STAGE1_RR,
+        "timeframe": "H1",
+        "side": "LONG",
+        "family": "OUTSIDE_REVERSAL",
+        "frozen_alternative_control": "ENGULF_STRUCTURE",
+        "geometry_rr": GEOMETRY_RR,
         "rr_grid": RR_GRID,
+        "geometry_configs_expected": (
+            len(GEOMETRY_BODY_ATR)
+            * len(GEOMETRY_LOOKBACK)
+            * len(GEOMETRY_DISTANCE)
+            * len(GEOMETRY_CLOSE)
+        ),
+        "context_count": len(
+            context_definitions()
+        ),
+        "control_cutoff_utc": iso(
+            CONTROL_CUTOFF
+        ),
         "orders_supported": False,
         "trading_enabled": False,
         "routes": [
-            "/audusd-h1-long-discovery/status",
-            "/audusd-h1-long-discovery/results",
+            "/audusd-h1-long-outside-refinement/status",
+            "/audusd-h1-long-outside-refinement/results",
         ],
     })
 
 
-@app.route("/audusd-h1-long-discovery/status")
+@app.route("/audusd-h1-long-outside-refinement/status")
 def status():
     return jsonify(STATUS)
 
 
-@app.route("/audusd-h1-long-discovery/results")
+@app.route("/audusd-h1-long-outside-refinement/results")
 def results():
     return download(BUNDLE)
 
