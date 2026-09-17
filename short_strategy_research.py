@@ -143,6 +143,19 @@ H1_PRIMARY_COST_PIPS = 0.50
 M15_PRIMARY_COST_PIPS = 1.00
 COST_MULTIPLIERS = [0.5, 1.0, 1.5, 2.0]
 
+# Time-zone objects used by the Asia-Pacific session confirmation masks.
+NY = ZoneInfo("America/New_York")
+LONDON = ZoneInfo("Europe/London")
+TOKYO = ZoneInfo("Asia/Tokyo")
+SYDNEY = ZoneInfo("Australia/Sydney")
+
+# Legacy discovery helper constants retained because the shared research
+# framework still contains generic helper functions that reference them.
+# They are NOT used to expand the fixed 36-candidate confirmation study.
+STAGE1_RR = 3.50
+STAGE1_KEEP_PER_FAMILY = 5
+FINAL_KEEP_PER_STREAM = 8
+
 FREQUENCY_BODY_ATR = 0.75
 FREQUENCY_LOOKBACK = 25
 FREQUENCY_DISTANCE_ATR = 0.20
