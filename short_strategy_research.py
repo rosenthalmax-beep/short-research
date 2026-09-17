@@ -16839,7 +16839,7 @@ def aud25_summary_row(
         ),
         "unscaled_portfolio_pf": stats["profit_factor"],
         "unscaled_portfolio_total_r": stats["total_r"],
-        "unscaled_portfolio_win_rate_pct": stats["win_rate"],
+        "unscaled_portfolio_win_rate_pct": stats["win_rate_pct"],
     })
 
     return row
