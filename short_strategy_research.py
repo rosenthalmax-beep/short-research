@@ -17998,14 +17998,2150 @@ def audusd25_portfolio_info():
     })
 
 
+
+# ============================================================
+# CURRENT 25 — BREAK-EVEN STOP OVERLAY RESEARCH
+# ============================================================
+#
+# PURPOSE
+# -------
+# Test whether ONE SIMPLE UNIVERSAL break-even rule improves the exact
+# current 25-strategy portfolio without changing any signal definition,
+# original stop, original target, strategy risk, or cross-strategy gate.
+#
+# CURRENT LIVE ALLOCATION
+# -----------------------
+#   #1-#23 = 1.00% risk
+#   #24 EUR_JPY_M15_SHORT = 0.75% risk
+#   #25 AUD_USD_H1_LONG = 1.00% risk
+#
+# PRIMARY QUESTION
+# ----------------
+# Once price reaches X% of the fixed target distance, should the stop move
+# to the ACTUAL historical fill (true price break-even)?
+#
+# PREDECLARED TARGET-FRACTION CURVE
+# ---------------------------------
+#   25% of target -> BE
+#   50% of target -> BE
+#   75% of target -> BE
+#
+# PREDECLARED FIXED-R CURVE
+# -------------------------
+#   +1.00R -> BE
+#   +1.50R -> BE
+#   +2.00R -> BE
+#
+# PRIMARY HISTORICAL CAUSALITY
+# ----------------------------
+# NEXT_BAR:
+#   The activation level must be touched during a completed H1/M15 bar.
+#   The BE stop becomes active from the NEXT bar.
+#
+# This deliberately avoids pretending we know the exact tick path inside
+# an historical candle. It is conservative versus a true live intrabar
+# stop modification.
+#
+# SAME_BAR_HEURISTIC sensitivity
+# ------------------------------
+# The same six thresholds are also tested with same-bar eligibility.
+# If activation and BE are both inside the same candle, the existing
+# portfolio high-vs-low distance-to-open heuristic is used to estimate
+# which side was reached first. This is a sensitivity check only.
+#
+# BREAK-EVEN PRICE
+# ----------------
+# Primary = historical_fill:
+#   true 0R before financing when stopped at BE.
+#
+# One additional sensitivity:
+#   50% target / NEXT_BAR / reference_entry BE.
+# This shows the small effect of moving to the signal reference close
+# instead of the actual fill.
+#
+# IMPORTANT CONTROLLED-STUDY LIMITATION
+# -------------------------------------
+# The accepted per-strategy signal set is FROZEN to the current locked
+# p0 stream. If an early BE exit would have made a later SAME-STRATEGY
+# signal newly eligible in live trading, this Stage-1 study does NOT add
+# that signal.
+#
+# Cross-strategy live-safe gating IS re-run after every exit overlay, so
+# earlier exits CAN recover previously blocked opposite-direction entries
+# from the already-frozen independent strategy streams.
+#
+# If a BE rule is genuinely promising here, the next confirmation stage
+# should rebuild dynamic per-strategy p0 under that one frozen BE rule.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+BE25_STATUS = {
+    "state": "not_started",
+    "message": "Portfolio25 break-even overlay research not started",
+    "progress": 0,
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+BE25_BUNDLE = "PORTFOLIO25_BREAK_EVEN_OVERLAY_RESULTS.zip"
+
+BE25_OUT = {
+    "scenario_definitions": "be25_scenario_definitions.csv",
+    "control_parity": "be25_control25_parity.csv",
+    "portfolio_summary": "be25_portfolio_summary.csv",
+    "delta_vs_control": "be25_delta_vs_control.csv",
+    "mechanics": "be25_overlay_mechanics.csv",
+    "by_strategy": "be25_by_strategy.csv",
+    "gate_summary": "be25_gate_summary.csv",
+    "periods": "be25_periods.csv",
+    "rolling": "be25_rolling.csv",
+    "rolling_summary": "be25_rolling_summary.csv",
+    "calendar": "be25_calendar.csv",
+    "calendar_summary": "be25_calendar_summary.csv",
+    "drawdown_events": "be25_drawdown_events.csv",
+    "decision_matrix": "be25_decision_matrix.csv",
+    "trades": "be25_all_frozen_entry_trades.csv",
+    "notes": "be25_notes.csv",
+}
+
+BE25_CURRENT_STRATEGY_ID = "AUD_USD_H1_LONG"
+
+# Exact last confirmed current25 reference from the completed 24->25 study.
+# Newer history may increase the trade count, but must not reduce it.
+BE25_CONTROL_REFERENCE = {
+    "trades": 2768,
+    "cagr_pct": 106.738088,
+    "closed_dd_pct": -15.583546,
+    "floor_dd_pct": -16.799136,
+    "max_positions": 6,
+    "max_open_risk_pct": 5.886207,
+}
+
+BE25_TIMEFRAME_DELTA = {
+    "H1": timedelta(hours=1),
+    "M15": timedelta(minutes=15),
+}
+
+
+def be25_build_scenarios():
+    scenarios = [{
+        "scenario_id": "CONTROL",
+        "family": "CONTROL",
+        "threshold_type": None,
+        "threshold_value": None,
+        "activation_mode": None,
+        "be_price_mode": None,
+        "description": "Original locked stop/target exits only",
+    }]
+
+    for fraction in (0.25, 0.50, 0.75):
+        label = str(fraction).replace(".", "P")
+        for activation in ("NEXT_BAR", "SAME_BAR_HEURISTIC"):
+            scenarios.append({
+                "scenario_id": (
+                    f"TARGET_{label}_TO_BE_FILL_{activation}"
+                ),
+                "family": "TARGET_FRACTION",
+                "threshold_type": "TARGET_FRACTION",
+                "threshold_value": float(fraction),
+                "activation_mode": activation,
+                "be_price_mode": "HISTORICAL_FILL",
+                "description": (
+                    f"At {fraction:.0%} of fill-to-target distance, "
+                    f"move stop to historical fill; {activation}"
+                ),
+            })
+
+    for fixed_r in (1.00, 1.50, 2.00):
+        label = str(fixed_r).replace(".", "P")
+        for activation in ("NEXT_BAR", "SAME_BAR_HEURISTIC"):
+            scenarios.append({
+                "scenario_id": (
+                    f"FIXED_{label}R_TO_BE_FILL_{activation}"
+                ),
+                "family": "FIXED_R",
+                "threshold_type": "FIXED_R",
+                "threshold_value": float(fixed_r),
+                "activation_mode": activation,
+                "be_price_mode": "HISTORICAL_FILL",
+                "description": (
+                    f"At +{fixed_r:.2f}R from actual fill, "
+                    f"move stop to historical fill; {activation}"
+                ),
+            })
+
+    # One explicit BE-price sensitivity around the user's main 50%-target idea.
+    scenarios.append({
+        "scenario_id": "TARGET_0P50_TO_BE_REFERENCE_NEXT_BAR",
+        "family": "TARGET_FRACTION",
+        "threshold_type": "TARGET_FRACTION",
+        "threshold_value": 0.50,
+        "activation_mode": "NEXT_BAR",
+        "be_price_mode": "REFERENCE_ENTRY",
+        "description": (
+            "50% of fill-to-target distance; stop moves to original "
+            "signal reference close rather than actual fill"
+        ),
+    })
+
+    return scenarios
+
+
+BE25_SCENARIOS = be25_build_scenarios()
+BE25_SCENARIO_MAP = {
+    x["scenario_id"]: x
+    for x in BE25_SCENARIOS
+}
+
+
+def be25_risk_map(trades):
+    strategy_ids = sorted({
+        t["strategy_id"]
+        for t in trades
+    })
+
+    risk_map = {
+        sid: 0.0100
+        for sid in strategy_ids
+    }
+
+    if Q24_STRATEGY_ID not in risk_map:
+        raise RuntimeError(
+            f"Missing locked #24 strategy: {Q24_STRATEGY_ID}"
+        )
+
+    risk_map[Q24_STRATEGY_ID] = 0.0075
+
+    if BE25_CURRENT_STRATEGY_ID not in risk_map:
+        raise RuntimeError(
+            "Missing live AUD/USD #25 strategy identity"
+        )
+
+    return risk_map
+
+
+def be25_current25_independent():
+    """
+    Rebuild the exact current 24, append the frozen FREQUENCY AUD/USD
+    candidate, then rename it to the actual live strategy identity.
+    """
+    BE25_STATUS.update(
+        state="rebuild_current25",
+        message="Rebuilding exact frozen current25 independent streams",
+        progress=3,
+    )
+
+    eurjpy_m15, _ = fetch_history(
+        Q24_PAIR,
+        "M15",
+        START,
+        NOW,
+    )
+    eurjpy_h1, _ = fetch_history(
+        Q24_PAIR,
+        "H1",
+        PV_H1_WARMUP,
+        NOW,
+    )
+    audusd_h1, _ = fetch_history(
+        AUD25_PAIR,
+        "H1",
+        START,
+        NOW,
+    )
+
+    if len(eurjpy_m15) < 400000:
+        raise RuntimeError(
+            f"Incomplete EUR/JPY M15 history: {len(eurjpy_m15)}"
+        )
+
+    if len(eurjpy_h1) < 100000:
+        raise RuntimeError(
+            f"Incomplete EUR/JPY H1 history: {len(eurjpy_h1)}"
+        )
+
+    if len(audusd_h1) < 100000:
+        raise RuntimeError(
+            f"Incomplete AUD/USD H1 history: {len(audusd_h1)}"
+        )
+
+    eurjpy_h1_atr = ev_atr14(
+        eurjpy_h1
+    )
+
+    current23 = q24_rebuild_current23(
+        eurjpy_m15,
+        eurjpy_h1,
+        eurjpy_h1_atr,
+    )
+
+    q24_feat = q24_features(
+        eurjpy_m15,
+        eurjpy_h1,
+    )
+
+    raw_q24 = q24_build_candidate_trades(
+        eurjpy_m15,
+        q24_feat,
+    )
+
+    q24_stats = calc_stats(
+        raw_q24
+    )
+
+    if q24_stats["trades"] < Q24_REFERENCE["trades"]:
+        raise RuntimeError(
+            "#24 fell below frozen standalone reference"
+        )
+
+    current24_independent = sorted(
+        current23["independent"] + raw_q24,
+        key=lambda t: (
+            t["entry_time"],
+            t["strategy_id"],
+        ),
+    )
+
+    frequency_spec = aud25_candidate_specs()[
+        "FREQUENCY"
+    ]
+
+    audusd_trades = aud25_build_trades(
+        audusd_h1,
+        frequency_spec,
+    )
+
+    audusd_stats = calc_stats(
+        audusd_trades
+    )
+
+    reference = AUD25_REFERENCE[
+        AUD25_FREQUENCY_ID
+    ]
+
+    if audusd_stats["trades"] < reference["trades"]:
+        raise RuntimeError(
+            "AUD/USD #25 fell below frozen confirmation reference: "
+            f"{audusd_stats['trades']} < {reference['trades']}"
+        )
+
+    live_audusd = []
+
+    for trade in audusd_trades:
+        t = dict(trade)
+        t["strategy_id"] = BE25_CURRENT_STRATEGY_ID
+        t["candidate_id"] = (
+            "AUDUSD_H1_LONG_LIVE25_FREQUENCY_LOCK"
+        )
+        live_audusd.append(t)
+
+    independent = []
+
+    for trade in current24_independent + live_audusd:
+        t = dict(trade)
+
+        if (
+            t["strategy_id"]
+            == "EUR_JPY_H1_SHORT_B_EX_NY19_LB2_RR7_25"
+        ):
+            t["strategy_id"] = "EUR_JPY_H1_SHORT"
+
+        independent.append(t)
+
+    independent.sort(
+        key=lambda t: (
+            t["entry_time"],
+            t["strategy_id"],
+        )
+    )
+
+    return {
+        "independent": independent,
+        "audusd_trades": live_audusd,
+        "q24_trades": raw_q24,
+    }
+
+
+def be25_trigger_price(trade, scenario):
+    side = trade["side"]
+    fill = float(
+        trade["historical_fill"]
+    )
+    target = float(
+        trade["target"]
+    )
+    stop = float(
+        trade["stop"]
+    )
+
+    if scenario["threshold_type"] == "TARGET_FRACTION":
+        fraction = float(
+            scenario["threshold_value"]
+        )
+
+        if side == "BUY":
+            return (
+                fill
+                + fraction * (target - fill)
+            )
+
+        return (
+            fill
+            - fraction * (fill - target)
+        )
+
+    if scenario["threshold_type"] == "FIXED_R":
+        multiple = float(
+            scenario["threshold_value"]
+        )
+
+        if side == "BUY":
+            actual_risk = fill - stop
+            if actual_risk <= 0:
+                raise RuntimeError(
+                    "Invalid BUY actual risk"
+                )
+            return fill + multiple * actual_risk
+
+        actual_risk = stop - fill
+        if actual_risk <= 0:
+            raise RuntimeError(
+                "Invalid SELL actual risk"
+            )
+        return fill - multiple * actual_risk
+
+    raise RuntimeError(
+        f"Unknown threshold type: "
+        f"{scenario['threshold_type']}"
+    )
+
+
+def be25_stop_price(trade, scenario):
+    if scenario["be_price_mode"] == "HISTORICAL_FILL":
+        return float(
+            trade["historical_fill"]
+        )
+
+    if scenario["be_price_mode"] == "REFERENCE_ENTRY":
+        return float(
+            trade["reference_entry"]
+        )
+
+    raise RuntimeError(
+        f"Unknown BE price mode: "
+        f"{scenario['be_price_mode']}"
+    )
+
+
+def be25_exit_r(trade, exit_price):
+    side = trade["side"]
+    fill = float(
+        trade["historical_fill"]
+    )
+    stop = float(
+        trade["stop"]
+    )
+
+    if side == "BUY":
+        risk = fill - stop
+        if risk <= 0:
+            raise RuntimeError(
+                "Invalid BUY risk"
+            )
+        return (
+            float(exit_price) - fill
+        ) / risk
+
+    risk = stop - fill
+    if risk <= 0:
+        raise RuntimeError(
+            "Invalid SELL risk"
+        )
+    return (
+        fill - float(exit_price)
+    ) / risk
+
+
+def be25_target_vs_be_first(
+    trade,
+    candle,
+    be_price,
+):
+    """
+    Existing portfolio-style distance-to-open heuristic,
+    but between TARGET and BE.
+
+    Returns "TARGET" or "BREAK_EVEN".
+    """
+    side = trade["side"]
+    open_price = float(
+        candle["open"]
+    )
+    target = float(
+        trade["target"]
+    )
+
+    if side == "BUY":
+        target_distance = abs(
+            target - open_price
+        )
+        be_distance = abs(
+            open_price - be_price
+        )
+
+    else:
+        target_distance = abs(
+            open_price - target
+        )
+        be_distance = abs(
+            be_price - open_price
+        )
+
+    return (
+        "TARGET"
+        if target_distance < be_distance
+        else "BREAK_EVEN"
+    )
+
+
+def be25_activation_vs_be_first(
+    trade,
+    candle,
+    trigger_price,
+    be_price,
+):
+    """
+    SAME_BAR_HEURISTIC only.
+
+    BUY:
+      activation is on the HIGH side; BE is on the LOW side.
+    SELL:
+      activation is on the LOW side; BE is on the HIGH side.
+
+    Returns True if activation is heuristically assumed to occur first.
+    """
+    side = trade["side"]
+    open_price = float(
+        candle["open"]
+    )
+
+    trigger_distance = abs(
+        trigger_price - open_price
+    )
+    be_distance = abs(
+        be_price - open_price
+    )
+
+    return (
+        trigger_distance < be_distance
+    )
+
+
+def be25_apply_overlay_to_trade(
+    trade,
+    scenario,
+    candles,
+    time_to_index,
+):
+    if scenario["scenario_id"] == "CONTROL":
+        out = dict(trade)
+        out.update({
+            "be_scenario_id": "CONTROL",
+            "be_armed": False,
+            "be_trigger_time": None,
+            "be_exit": False,
+            "be_exit_price": None,
+            "original_result": trade["result"],
+            "original_r": float(trade["r"]),
+            "r_delta_vs_original": 0.0,
+        })
+        return out
+
+    entry_time = trade["entry_time"]
+    original_exit_bar_time = trade["exit_time"]
+
+    if entry_time not in time_to_index:
+        raise RuntimeError(
+            f"Missing entry candle for "
+            f"{trade['strategy_id']} {entry_time}"
+        )
+
+    if original_exit_bar_time not in time_to_index:
+        raise RuntimeError(
+            f"Missing original exit candle for "
+            f"{trade['strategy_id']} {original_exit_bar_time}"
+        )
+
+    start_index = time_to_index[
+        entry_time
+    ]
+    original_exit_index = time_to_index[
+        original_exit_bar_time
+    ]
+
+    if original_exit_index < start_index:
+        raise RuntimeError(
+            "Exit precedes entry in overlay replay"
+        )
+
+    trigger_price = be25_trigger_price(
+        trade,
+        scenario,
+    )
+    be_price = be25_stop_price(
+        trade,
+        scenario,
+    )
+
+    side = trade["side"]
+    target = float(
+        trade["target"]
+    )
+
+    armed = False
+    trigger_time = None
+
+    bar_delta = BE25_TIMEFRAME_DELTA[
+        trade["timeframe"]
+    ]
+
+    for index in range(
+        start_index,
+        original_exit_index + 1,
+    ):
+        candle = candles[index]
+
+        # If BE was already armed before this candle, it is a live stop
+        # throughout the whole candle.
+        if armed:
+            if side == "BUY":
+                hit_be = (
+                    float(candle["low"])
+                    <= be_price
+                )
+                hit_target = (
+                    float(candle["high"])
+                    >= target
+                )
+            else:
+                hit_be = (
+                    float(candle["high"])
+                    >= be_price
+                )
+                hit_target = (
+                    float(candle["low"])
+                    <= target
+                )
+
+            if hit_be or hit_target:
+                if hit_be and hit_target:
+                    reason = be25_target_vs_be_first(
+                        trade,
+                        candle,
+                        be_price,
+                    )
+                elif hit_target:
+                    reason = "TARGET"
+                else:
+                    reason = "BREAK_EVEN"
+
+                exit_price = (
+                    target
+                    if reason == "TARGET"
+                    else be_price
+                )
+
+                out = dict(trade)
+                out.update({
+                    "exit_time":
+                        candle["time"],
+                    "exit_event_time":
+                        candle["time"] + bar_delta,
+                    "exit_price":
+                        float(exit_price),
+                    "result":
+                        reason,
+                    "r":
+                        float(
+                            be25_exit_r(
+                                trade,
+                                exit_price,
+                            )
+                        ),
+                    "bars_held":
+                        index - start_index + 1,
+                    "hold_hours":
+                        (
+                            index - start_index + 1
+                        )
+                        * (
+                            1.0
+                            if trade["timeframe"] == "H1"
+                            else 0.25
+                        ),
+                    "early_exit":
+                        reason == "BREAK_EVEN",
+                    "be_scenario_id":
+                        scenario["scenario_id"],
+                    "be_armed":
+                        True,
+                    "be_trigger_time":
+                        trigger_time,
+                    "be_exit":
+                        reason == "BREAK_EVEN",
+                    "be_exit_price":
+                        (
+                            float(be_price)
+                            if reason == "BREAK_EVEN"
+                            else None
+                        ),
+                    "original_result":
+                        trade["result"],
+                    "original_r":
+                        float(trade["r"]),
+                })
+                out["r_delta_vs_original"] = (
+                    float(out["r"])
+                    - float(trade["r"])
+                )
+                return out
+
+        # If this is the original exit bar and BE was not armed before it,
+        # preserve the original locked stop/target outcome. We never pretend
+        # an activation later inside the same stop/target candle happened first.
+        if index == original_exit_index:
+            break
+
+        if armed:
+            continue
+
+        if side == "BUY":
+            touched_trigger = (
+                float(candle["high"])
+                >= trigger_price
+            )
+        else:
+            touched_trigger = (
+                float(candle["low"])
+                <= trigger_price
+            )
+
+        if not touched_trigger:
+            continue
+
+        trigger_time = (
+            candle["time"]
+            + bar_delta
+        )
+
+        if (
+            scenario["activation_mode"]
+            == "SAME_BAR_HEURISTIC"
+        ):
+            if side == "BUY":
+                touched_be_same_bar = (
+                    float(candle["low"])
+                    <= be_price
+                )
+            else:
+                touched_be_same_bar = (
+                    float(candle["high"])
+                    >= be_price
+                )
+
+            if (
+                touched_be_same_bar
+                and be25_activation_vs_be_first(
+                    trade,
+                    candle,
+                    trigger_price,
+                    be_price,
+                )
+            ):
+                out = dict(trade)
+                out.update({
+                    "exit_time":
+                        candle["time"],
+                    "exit_event_time":
+                        candle["time"] + bar_delta,
+                    "exit_price":
+                        float(be_price),
+                    "result":
+                        "BREAK_EVEN",
+                    "r":
+                        float(
+                            be25_exit_r(
+                                trade,
+                                be_price,
+                            )
+                        ),
+                    "bars_held":
+                        index - start_index + 1,
+                    "hold_hours":
+                        (
+                            index - start_index + 1
+                        )
+                        * (
+                            1.0
+                            if trade["timeframe"] == "H1"
+                            else 0.25
+                        ),
+                    "early_exit":
+                        True,
+                    "be_scenario_id":
+                        scenario["scenario_id"],
+                    "be_armed":
+                        True,
+                    "be_trigger_time":
+                        trigger_time,
+                    "be_exit":
+                        True,
+                    "be_exit_price":
+                        float(be_price),
+                    "original_result":
+                        trade["result"],
+                    "original_r":
+                        float(trade["r"]),
+                })
+                out["r_delta_vs_original"] = (
+                    float(out["r"])
+                    - float(trade["r"])
+                )
+                return out
+
+        # NEXT_BAR and non-exiting SAME_BAR both become armed for next bar.
+        armed = True
+
+    # No BE exit before original locked stop/target.
+    out = dict(trade)
+    out.update({
+        "be_scenario_id":
+            scenario["scenario_id"],
+        "be_armed":
+            bool(armed),
+        "be_trigger_time":
+            trigger_time,
+        "be_exit":
+            False,
+        "be_exit_price":
+            None,
+        "original_result":
+            trade["result"],
+        "original_r":
+            float(trade["r"]),
+        "r_delta_vs_original":
+            0.0,
+    })
+    return out
+
+
+def be25_replay_all_scenarios(independent):
+    """
+    Memory-controlled replay:
+    fetch one pair/timeframe history at a time, replay all scenarios,
+    then release that candle block.
+    """
+    scenario_trades = {
+        s["scenario_id"]: []
+        for s in BE25_SCENARIOS
+    }
+
+    grouped = defaultdict(list)
+
+    for trade in independent:
+        grouped[
+            (
+                trade["pair"],
+                trade["timeframe"],
+            )
+        ].append(trade)
+
+    groups = sorted(
+        grouped.items()
+    )
+
+    for group_index, (
+        (pair, timeframe),
+        trades,
+    ) in enumerate(groups):
+        BE25_STATUS.update(
+            state="overlay_replay",
+            message=(
+                f"Replaying BE overlays: "
+                f"{pair} {timeframe}"
+            ),
+            progress=25 + int(
+                35
+                * group_index
+                / max(1, len(groups))
+            ),
+        )
+
+        candles, _ = fetch_history(
+            pair,
+            timeframe,
+            START,
+            NOW,
+        )
+
+        if not candles:
+            raise RuntimeError(
+                f"No {pair} {timeframe} candles"
+            )
+
+        time_to_index = {
+            c["time"]: i
+            for i, c in enumerate(candles)
+        }
+
+        for trade in trades:
+            for scenario in BE25_SCENARIOS:
+                scenario_trades[
+                    scenario["scenario_id"]
+                ].append(
+                    be25_apply_overlay_to_trade(
+                        trade,
+                        scenario,
+                        candles,
+                        time_to_index,
+                    )
+                )
+
+        del candles
+        del time_to_index
+        gc.collect()
+
+    for sid in scenario_trades:
+        scenario_trades[sid].sort(
+            key=lambda t: (
+                t["entry_time"],
+                t["strategy_id"],
+            )
+        )
+
+    return scenario_trades
+
+
+def be25_mechanics_row(
+    scenario,
+    trades,
+):
+    if scenario["scenario_id"] == "CONTROL":
+        return {
+            "scenario_id": "CONTROL",
+            "trades": len(trades),
+            "armed_trades": 0,
+            "armed_pct": 0.0,
+            "be_exits": 0,
+            "be_exit_pct": 0.0,
+            "original_losses_saved_to_be": 0,
+            "original_targets_killed_at_be": 0,
+            "original_targets_still_target": sum(
+                t["result"] == "TARGET"
+                for t in trades
+            ),
+            "original_stops_unchanged": sum(
+                t["result"] == "STOP"
+                for t in trades
+            ),
+            "total_r_delta_vs_original": 0.0,
+            "average_r_delta_per_trade": 0.0,
+        }
+
+    armed = [
+        t for t in trades
+        if t.get("be_armed")
+    ]
+    be_exits = [
+        t for t in trades
+        if t.get("be_exit")
+    ]
+
+    saved_losses = [
+        t for t in be_exits
+        if t.get("original_result") == "STOP"
+    ]
+
+    killed_targets = [
+        t for t in be_exits
+        if t.get("original_result") == "TARGET"
+    ]
+
+    targets_still = [
+        t for t in trades
+        if (
+            t.get("original_result") == "TARGET"
+            and t.get("result") == "TARGET"
+        )
+    ]
+
+    stops_unchanged = [
+        t for t in trades
+        if (
+            t.get("original_result") == "STOP"
+            and t.get("result") == "STOP"
+        )
+    ]
+
+    delta = sum(
+        float(
+            t.get(
+                "r_delta_vs_original",
+                0.0,
+            )
+        )
+        for t in trades
+    )
+
+    return {
+        "scenario_id":
+            scenario["scenario_id"],
+        "trades":
+            len(trades),
+        "armed_trades":
+            len(armed),
+        "armed_pct":
+            pct(
+                len(armed),
+                len(trades),
+            ),
+        "be_exits":
+            len(be_exits),
+        "be_exit_pct":
+            pct(
+                len(be_exits),
+                len(trades),
+            ),
+        "original_losses_saved_to_be":
+            len(saved_losses),
+        "original_targets_killed_at_be":
+            len(killed_targets),
+        "saved_minus_killed":
+            (
+                len(saved_losses)
+                - len(killed_targets)
+            ),
+        "original_targets_still_target":
+            len(targets_still),
+        "original_stops_unchanged":
+            len(stops_unchanged),
+        "total_r_delta_vs_original":
+            delta,
+        "average_r_delta_per_trade":
+            (
+                delta / len(trades)
+                if trades
+                else 0.0
+            ),
+    }
+
+
+def be25_by_strategy_rows(
+    scenario_id,
+    control_trades,
+    overlay_trades,
+):
+    control_group = defaultdict(list)
+    overlay_group = defaultdict(list)
+
+    for t in control_trades:
+        control_group[
+            t["strategy_id"]
+        ].append(t)
+
+    for t in overlay_trades:
+        overlay_group[
+            t["strategy_id"]
+        ].append(t)
+
+    rows = []
+
+    for strategy_id in sorted(
+        set(control_group)
+        | set(overlay_group)
+    ):
+        control = control_group[
+            strategy_id
+        ]
+        overlay = overlay_group[
+            strategy_id
+        ]
+
+        cs = calc_stats(
+            control
+        )
+        os_ = calc_stats(
+            overlay
+        )
+
+        be_exits = sum(
+            t.get("be_exit", False)
+            for t in overlay
+        )
+        saved = sum(
+            (
+                t.get("be_exit", False)
+                and t.get("original_result") == "STOP"
+            )
+            for t in overlay
+        )
+        killed = sum(
+            (
+                t.get("be_exit", False)
+                and t.get("original_result") == "TARGET"
+            )
+            for t in overlay
+        )
+
+        rows.append({
+            "scenario_id":
+                scenario_id,
+            "strategy_id":
+                strategy_id,
+            "timeframe":
+                (
+                    overlay[0]["timeframe"]
+                    if overlay
+                    else control[0]["timeframe"]
+                ),
+            "pair":
+                (
+                    overlay[0]["pair"]
+                    if overlay
+                    else control[0]["pair"]
+                ),
+            "side":
+                (
+                    overlay[0]["side"]
+                    if overlay
+                    else control[0]["side"]
+                ),
+            "trades":
+                os_["trades"],
+            "control_pf":
+                cs["profit_factor"],
+            "overlay_pf":
+                os_["profit_factor"],
+            "delta_pf":
+                (
+                    os_["profit_factor"]
+                    - cs["profit_factor"]
+                ),
+            "control_total_r":
+                cs["total_r"],
+            "overlay_total_r":
+                os_["total_r"],
+            "delta_total_r":
+                (
+                    os_["total_r"]
+                    - cs["total_r"]
+                ),
+            "control_expectancy_r":
+                cs["expectancy_r"],
+            "overlay_expectancy_r":
+                os_["expectancy_r"],
+            "delta_expectancy_r":
+                (
+                    os_["expectancy_r"]
+                    - cs["expectancy_r"]
+                ),
+            "be_exits":
+                be_exits,
+            "losses_saved":
+                saved,
+            "targets_killed":
+                killed,
+        })
+
+    return rows
+
+
+def be25_variant_def(
+    scenario_id,
+    risk_map,
+):
+    return {
+        "variant": scenario_id,
+        "track": "BE_OVERLAY",
+        "level_pct": "",
+        "risk_map": risk_map,
+    }
+
+
+def be25_summary_row(
+    scenario,
+    mode,
+    accepted,
+    sim,
+):
+    stats = calc_stats(
+        accepted
+    )
+    s = sim["summary"]
+
+    be_exits = sum(
+        t.get("be_exit", False)
+        for t in accepted
+    )
+
+    return {
+        "scenario_id":
+            scenario["scenario_id"],
+        "family":
+            scenario["family"],
+        "portfolio_mode":
+            mode,
+        "strategies":
+            len({
+                t["strategy_id"]
+                for t in accepted
+            }),
+        "trades":
+            len(accepted),
+        "profit_factor":
+            stats["profit_factor"],
+        "total_r":
+            stats["total_r"],
+        "expectancy_r":
+            stats["expectancy_r"],
+        "win_rate_pct":
+            stats["win_rate_pct"],
+        "be_exits":
+            be_exits,
+        "ending_balance_from_100":
+            s["ending_balance"],
+        "ending_multiple":
+            s["ending_multiple"],
+        "total_return_pct":
+            s["total_return_pct"],
+        "historical_cagr_pct":
+            s["historical_cagr_pct"],
+        "weighted_r_equivalent_at_1pct":
+            s["weighted_r_equivalent_at_1pct"],
+        "max_closed_equity_dd_pct":
+            s["max_closed_equity_dd_pct"],
+        "max_open_risk_floor_dd_pct":
+            s["max_open_risk_floor_dd_pct"],
+        "max_open_positions":
+            s["max_open_positions"],
+        "max_open_risk_pct_of_realised_equity":
+            s["max_open_risk_pct_of_realised_equity"],
+    }
+
+
+def be25_delta_row(
+    control,
+    candidate,
+):
+    fields = [
+        "trades",
+        "profit_factor",
+        "total_r",
+        "expectancy_r",
+        "historical_cagr_pct",
+        "max_closed_equity_dd_pct",
+        "max_open_risk_floor_dd_pct",
+        "max_open_positions",
+        "max_open_risk_pct_of_realised_equity",
+    ]
+
+    row = {
+        "scenario_id":
+            candidate["scenario_id"],
+        "portfolio_mode":
+            candidate["portfolio_mode"],
+    }
+
+    for field in fields:
+        row[
+            f"control_{field}"
+        ] = control[field]
+
+        row[
+            f"candidate_{field}"
+        ] = candidate[field]
+
+        row[
+            f"delta_{field}"
+        ] = (
+            candidate[field]
+            - control[field]
+        )
+
+    return row
+
+
+def be25_decision_rows(
+    summary_rows,
+    delta_rows,
+    mechanics_rows,
+    rolling_summary_rows,
+    calendar_summary_rows,
+):
+    summary_lookup = {
+        (
+            r["scenario_id"],
+            r["portfolio_mode"],
+        ): r
+        for r in summary_rows
+    }
+
+    delta_lookup = {
+        (
+            r["scenario_id"],
+            r["portfolio_mode"],
+        ): r
+        for r in delta_rows
+    }
+
+    mechanics_lookup = {
+        r["scenario_id"]: r
+        for r in mechanics_rows
+    }
+
+    rolling_lookup = defaultdict(dict)
+
+    for r in rolling_summary_rows:
+        rolling_lookup[
+            (
+                r["variant"],
+                r["portfolio_mode"],
+            )
+        ][int(r["months"])] = r
+
+    calendar_lookup = {
+        (
+            r["variant"],
+            r["portfolio_mode"],
+        ): r
+        for r in calendar_summary_rows
+    }
+
+    rows = []
+
+    for scenario in BE25_SCENARIOS:
+        sid = scenario["scenario_id"]
+
+        if sid == "CONTROL":
+            continue
+
+        for mode in (
+            "LIVE_SAFE_H1_FIRST",
+            "LIVE_SAFE_M15_FIRST",
+        ):
+            s = summary_lookup[
+                (sid, mode)
+            ]
+            d = delta_lookup[
+                (sid, mode)
+            ]
+            m = mechanics_lookup[
+                sid
+            ]
+            rolls = rolling_lookup[
+                (sid, mode)
+            ]
+            cal = calendar_lookup.get(
+                (sid, mode),
+                {},
+            )
+
+            rows.append({
+                "scenario_id":
+                    sid,
+                "family":
+                    scenario["family"],
+                "threshold_type":
+                    scenario["threshold_type"],
+                "threshold_value":
+                    scenario["threshold_value"],
+                "activation_mode":
+                    scenario["activation_mode"],
+                "be_price_mode":
+                    scenario["be_price_mode"],
+                "portfolio_mode":
+                    mode,
+                "trades":
+                    s["trades"],
+                "be_exits":
+                    s["be_exits"],
+                "independent_armed_pct":
+                    m["armed_pct"],
+                "independent_be_exit_pct":
+                    m["be_exit_pct"],
+                "independent_losses_saved":
+                    m["original_losses_saved_to_be"],
+                "independent_targets_killed":
+                    m["original_targets_killed_at_be"],
+                "independent_saved_minus_killed":
+                    m.get(
+                        "saved_minus_killed",
+                        0,
+                    ),
+                "delta_total_r":
+                    d["delta_total_r"],
+                "delta_expectancy_r":
+                    d["delta_expectancy_r"],
+                "delta_cagr_pct_points":
+                    d["delta_historical_cagr_pct"],
+                "delta_closed_dd_pct_points":
+                    d["delta_max_closed_equity_dd_pct"],
+                "delta_floor_dd_pct_points":
+                    d["delta_max_open_risk_floor_dd_pct"],
+                "delta_max_positions":
+                    d["delta_max_open_positions"],
+                "delta_max_open_risk_pct_points":
+                    d[
+                        "delta_max_open_risk_pct_of_realised_equity"
+                    ],
+                "rolling12_positive_pct":
+                    rolls.get(
+                        12,
+                        {},
+                    ).get(
+                        "positive_active_windows_pct",
+                        0.0,
+                    ),
+                "rolling12_worst_pct":
+                    rolls.get(
+                        12,
+                        {},
+                    ).get(
+                        "worst_compounded_return_pct_active",
+                        0.0,
+                    ),
+                "rolling24_positive_pct":
+                    rolls.get(
+                        24,
+                        {},
+                    ).get(
+                        "positive_active_windows_pct",
+                        0.0,
+                    ),
+                "rolling24_worst_pct":
+                    rolls.get(
+                        24,
+                        {},
+                    ).get(
+                        "worst_compounded_return_pct_active",
+                        0.0,
+                    ),
+                "rolling36_positive_pct":
+                    rolls.get(
+                        36,
+                        {},
+                    ).get(
+                        "positive_active_windows_pct",
+                        0.0,
+                    ),
+                "rolling36_worst_pct":
+                    rolls.get(
+                        36,
+                        {},
+                    ).get(
+                        "worst_compounded_return_pct_active",
+                        0.0,
+                    ),
+                "completed_year_positive_pct":
+                    cal.get(
+                        "positive_active_completed_years_pct",
+                        0.0,
+                    ),
+                "worst_calendar_year":
+                    cal.get(
+                        "worst_year",
+                        "",
+                    ),
+                "worst_calendar_return_pct":
+                    cal.get(
+                        "worst_year_return_pct",
+                        0.0,
+                    ),
+            })
+
+    rows.sort(
+        key=lambda r: (
+            r["portfolio_mode"],
+            -r["delta_cagr_pct_points"],
+        )
+    )
+
+    return rows
+
+
+def run_be25_research():
+    try:
+        global EV_STATUS
+        EV_STATUS = BE25_STATUS
+
+        current = be25_current25_independent()
+        independent = current["independent"]
+
+        BE25_STATUS.update(
+            state="control_parity",
+            message="Checking exact current25 live-safe control",
+            progress=20,
+        )
+
+        baseline_by_mode = {}
+        control_parity_rows = []
+
+        for priority, mode in [
+            ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+            ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+        ]:
+            accepted, rejected = (
+                apply_live_safe_nonhedging_gate(
+                    independent,
+                    priority,
+                )
+            )
+
+            if len(accepted) < BE25_CONTROL_REFERENCE["trades"]:
+                raise RuntimeError(
+                    "Current25 control fell below confirmed reference: "
+                    f"{len(accepted)} < "
+                    f"{BE25_CONTROL_REFERENCE['trades']}"
+                )
+
+            risk_map = be25_risk_map(
+                accepted
+            )
+
+            sim = w24_simulate_equity(
+                accepted,
+                risk_map,
+                STARTING_BALANCE,
+            )
+
+            ss = sim["summary"]
+
+            parity = (
+                "PASS_NEWER_TRADES"
+            )
+
+            if (
+                len(accepted)
+                == BE25_CONTROL_REFERENCE["trades"]
+            ):
+                checks = {
+                    "cagr": abs(
+                        ss["historical_cagr_pct"]
+                        - BE25_CONTROL_REFERENCE[
+                            "cagr_pct"
+                        ]
+                    ) <= 0.03,
+                    "closed_dd": abs(
+                        ss["max_closed_equity_dd_pct"]
+                        - BE25_CONTROL_REFERENCE[
+                            "closed_dd_pct"
+                        ]
+                    ) <= 0.03,
+                    "floor_dd": abs(
+                        ss["max_open_risk_floor_dd_pct"]
+                        - BE25_CONTROL_REFERENCE[
+                            "floor_dd_pct"
+                        ]
+                    ) <= 0.03,
+                    "max_positions": (
+                        ss["max_open_positions"]
+                        == BE25_CONTROL_REFERENCE[
+                            "max_positions"
+                        ]
+                    ),
+                }
+
+                if not all(
+                    checks.values()
+                ):
+                    raise RuntimeError(
+                        "Current25 exact-count metric parity drift: "
+                        + json.dumps(
+                            {
+                                "summary": ss,
+                                "checks": checks,
+                            },
+                            default=str,
+                        )
+                    )
+
+                parity = "PASS_EQUAL"
+
+            control_parity_rows.append({
+                "portfolio_mode":
+                    mode,
+                "reference_trades":
+                    BE25_CONTROL_REFERENCE[
+                        "trades"
+                    ],
+                "current_trades":
+                    len(accepted),
+                "reference_cagr_pct":
+                    BE25_CONTROL_REFERENCE[
+                        "cagr_pct"
+                    ],
+                "current_cagr_pct":
+                    ss[
+                        "historical_cagr_pct"
+                    ],
+                "reference_closed_dd_pct":
+                    BE25_CONTROL_REFERENCE[
+                        "closed_dd_pct"
+                    ],
+                "current_closed_dd_pct":
+                    ss[
+                        "max_closed_equity_dd_pct"
+                    ],
+                "reference_floor_dd_pct":
+                    BE25_CONTROL_REFERENCE[
+                        "floor_dd_pct"
+                    ],
+                "current_floor_dd_pct":
+                    ss[
+                        "max_open_risk_floor_dd_pct"
+                    ],
+                "status":
+                    parity,
+            })
+
+            baseline_by_mode[
+                mode
+            ] = {
+                "accepted": accepted,
+                "rejected": rejected,
+                "risk_map": risk_map,
+                "sim": sim,
+            }
+
+        write_csv(
+            BE25_OUT["control_parity"],
+            control_parity_rows,
+        )
+
+        BE25_STATUS.update(
+            state="overlay_replay",
+            message="Replaying frozen-entry BE scenarios",
+            progress=25,
+        )
+
+        scenario_independent = (
+            be25_replay_all_scenarios(
+                independent
+            )
+        )
+
+        mechanics_rows = []
+        by_strategy_rows = []
+        all_trade_rows = []
+
+        control_independent = (
+            scenario_independent[
+                "CONTROL"
+            ]
+        )
+
+        for scenario in BE25_SCENARIOS:
+            sid = scenario["scenario_id"]
+            trades = scenario_independent[
+                sid
+            ]
+
+            mechanics_rows.append(
+                be25_mechanics_row(
+                    scenario,
+                    trades,
+                )
+            )
+
+            by_strategy_rows.extend(
+                be25_by_strategy_rows(
+                    sid,
+                    control_independent,
+                    trades,
+                )
+            )
+
+            for trade in trades:
+                row = serialise_trade(
+                    trade
+                )
+                row["scenario_id"] = sid
+                all_trade_rows.append(
+                    row
+                )
+
+        write_csv(
+            BE25_OUT["mechanics"],
+            mechanics_rows,
+        )
+        write_csv(
+            BE25_OUT["by_strategy"],
+            by_strategy_rows,
+        )
+        write_csv(
+            BE25_OUT["trades"],
+            all_trade_rows,
+        )
+
+        BE25_STATUS.update(
+            state="portfolio",
+            message="Re-running live-safe gates and compounded portfolio metrics",
+            progress=63,
+        )
+
+        summary_rows = []
+        delta_rows = []
+        gate_rows = []
+        rolling_rows = []
+        calendar_rows = []
+        period_rows = []
+        drawdown_rows = []
+
+        summary_lookup = {}
+
+        for scenario in BE25_SCENARIOS:
+            sid = scenario["scenario_id"]
+            trades = scenario_independent[
+                sid
+            ]
+
+            for priority, mode in [
+                ("H1_FIRST", "LIVE_SAFE_H1_FIRST"),
+                ("M15_FIRST", "LIVE_SAFE_M15_FIRST"),
+            ]:
+                accepted, rejected = (
+                    apply_live_safe_nonhedging_gate(
+                        trades,
+                        priority,
+                    )
+                )
+
+                risk_map = be25_risk_map(
+                    accepted
+                )
+
+                sim = w24_simulate_equity(
+                    accepted,
+                    risk_map,
+                    STARTING_BALANCE,
+                )
+
+                summary = be25_summary_row(
+                    scenario,
+                    mode,
+                    accepted,
+                    sim,
+                )
+
+                summary_rows.append(
+                    summary
+                )
+
+                summary_lookup[
+                    (sid, mode)
+                ] = summary
+
+                gate_rows.append({
+                    "scenario_id":
+                        sid,
+                    "portfolio_mode":
+                        mode,
+                    "independent_trades":
+                        len(trades),
+                    "accepted_trades":
+                        len(accepted),
+                    "rejected_cross_strategy_entries":
+                        len(rejected),
+                    "accepted_delta_vs_control":
+                        (
+                            len(accepted)
+                            - len(
+                                baseline_by_mode[
+                                    mode
+                                ]["accepted"]
+                            )
+                        ),
+                })
+
+                variant_def = (
+                    be25_variant_def(
+                        sid,
+                        risk_map,
+                    )
+                )
+
+                rolling_rows.extend(
+                    gs24_rolling_rows(
+                        variant_def,
+                        mode,
+                        sim,
+                        accepted,
+                    )
+                )
+
+                calendar_rows.extend(
+                    gs24_calendar_rows(
+                        variant_def,
+                        mode,
+                        sim,
+                        accepted,
+                    )
+                )
+
+                drawdown_rows.extend(
+                    gs24_drawdown_rows(
+                        variant_def,
+                        mode,
+                        sim,
+                    )
+                )
+
+                first_entry = min(
+                    t["entry_time"]
+                    for t in accepted
+                )
+
+                for label, years in [
+                    ("FULL", None),
+                    ("LAST_1Y", 1),
+                    ("LAST_2Y", 2),
+                    ("LAST_3Y", 3),
+                    ("LAST_5Y", 5),
+                ]:
+                    start = (
+                        first_entry
+                        if years is None
+                        else NOW - timedelta(
+                            days=365.2425 * years
+                        )
+                    )
+
+                    period_rows.append(
+                        gs24_period_row(
+                            variant_def,
+                            mode,
+                            sim,
+                            accepted,
+                            label,
+                            start,
+                            NOW,
+                        )
+                    )
+
+        for scenario in BE25_SCENARIOS:
+            sid = scenario["scenario_id"]
+
+            if sid == "CONTROL":
+                continue
+
+            for mode in (
+                "LIVE_SAFE_H1_FIRST",
+                "LIVE_SAFE_M15_FIRST",
+            ):
+                delta_rows.append(
+                    be25_delta_row(
+                        summary_lookup[
+                            ("CONTROL", mode)
+                        ],
+                        summary_lookup[
+                            (sid, mode)
+                        ],
+                    )
+                )
+
+        rolling_summary_rows = (
+            gs24_rolling_summary(
+                rolling_rows
+            )
+        )
+
+        calendar_summary_rows = (
+            gs24_calendar_summary(
+                calendar_rows
+            )
+        )
+
+        decision_rows = (
+            be25_decision_rows(
+                summary_rows,
+                delta_rows,
+                mechanics_rows,
+                rolling_summary_rows,
+                calendar_summary_rows,
+            )
+        )
+
+        write_csv(
+            BE25_OUT["portfolio_summary"],
+            summary_rows,
+        )
+        write_csv(
+            BE25_OUT["delta_vs_control"],
+            delta_rows,
+        )
+        write_csv(
+            BE25_OUT["gate_summary"],
+            gate_rows,
+        )
+        write_csv(
+            BE25_OUT["periods"],
+            period_rows,
+        )
+        write_csv(
+            BE25_OUT["rolling"],
+            rolling_rows,
+        )
+        write_csv(
+            BE25_OUT["rolling_summary"],
+            rolling_summary_rows,
+        )
+        write_csv(
+            BE25_OUT["calendar"],
+            calendar_rows,
+        )
+        write_csv(
+            BE25_OUT["calendar_summary"],
+            calendar_summary_rows,
+        )
+        write_csv(
+            BE25_OUT["drawdown_events"],
+            drawdown_rows,
+        )
+        write_csv(
+            BE25_OUT["decision_matrix"],
+            decision_rows,
+        )
+
+        write_csv(
+            BE25_OUT["scenario_definitions"],
+            BE25_SCENARIOS,
+        )
+
+        write_csv(
+            BE25_OUT["notes"],
+            [
+                {
+                    "item": "scope",
+                    "value": (
+                        "Stage-1 controlled break-even exit overlay on the "
+                        "exact current25 frozen per-strategy signal streams."
+                    ),
+                },
+                {
+                    "item": "current25",
+                    "value": (
+                        "#1-23 at 1.00%, #24 EUR_JPY_M15_SHORT at 0.75%, "
+                        "#25 AUD_USD_H1_LONG at 1.00%."
+                    ),
+                },
+                {
+                    "item": "primary_rule_family",
+                    "value": (
+                        "Move stop to ACTUAL historical fill after price "
+                        "touches 25%, 50% or 75% of fill-to-target distance."
+                    ),
+                },
+                {
+                    "item": "fixed_r_family",
+                    "value": (
+                        "Move stop to actual historical fill after +1R, "
+                        "+1.5R or +2R using actual fill-to-original-stop risk."
+                    ),
+                },
+                {
+                    "item": "primary_causality",
+                    "value": (
+                        "NEXT_BAR is primary: activation touched on one "
+                        "completed bar, BE stop active from the next bar. "
+                        "This avoids invented intrabar sequencing."
+                    ),
+                },
+                {
+                    "item": "same_bar_sensitivity",
+                    "value": (
+                        "SAME_BAR_HEURISTIC is sensitivity only; when "
+                        "activation and BE are both inside one candle it uses "
+                        "distance to candle open to estimate which side came first."
+                    ),
+                },
+                {
+                    "item": "be_price",
+                    "value": (
+                        "Primary BE price is historical fill, producing true "
+                        "0R before financing. One 50%-target reference-entry "
+                        "sensitivity is also exported."
+                    ),
+                },
+                {
+                    "item": "frozen_entry_limitation",
+                    "value": (
+                        "Same-strategy p0 signal sets remain frozen. Earlier "
+                        "BE exits do not create new same-strategy signals in "
+                        "this Stage-1 study. Cross-strategy live-safe gating "
+                        "IS rerun with the changed exits."
+                    ),
+                },
+                {
+                    "item": "next_stage_if_promising",
+                    "value": (
+                        "Freeze one BE rule only, then rebuild every strategy "
+                        "with dynamic p0 under that exit rule before any live deployment."
+                    ),
+                },
+                {
+                    "item": "selection_warning",
+                    "value": (
+                        "Do not select a rule on CAGR alone. Compare saved "
+                        "losses versus killed targets, expectancy, DD, rolling "
+                        "windows, calendar years and both gate priority modes."
+                    ),
+                },
+                {
+                    "item": "historical_not_forecast",
+                    "value": (
+                        "All reported performance is historical backtest "
+                        "performance, not a forecast."
+                    ),
+                },
+            ],
+        )
+
+        BE25_STATUS.update(
+            state="packaging",
+            message="Packaging break-even overlay results",
+            progress=97,
+        )
+
+        with zipfile.ZipFile(
+            BE25_BUNDLE,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as z:
+            for path in BE25_OUT.values():
+                if os.path.exists(path):
+                    z.write(
+                        path,
+                        arcname=os.path.basename(path),
+                    )
+
+        BE25_STATUS.update(
+            state="complete",
+            message="Portfolio25 break-even overlay research complete",
+            progress=100,
+            results=BE25_BUNDLE,
+            scenarios=len(BE25_SCENARIOS),
+            frozen_independent_trades=len(independent),
+            control_h1_first_trades=len(
+                baseline_by_mode[
+                    "LIVE_SAFE_H1_FIRST"
+                ]["accepted"]
+            ),
+            control_m15_first_trades=len(
+                baseline_by_mode[
+                    "LIVE_SAFE_M15_FIRST"
+                ]["accepted"]
+            ),
+        )
+
+    except Exception as error:
+        import traceback
+
+        BE25_STATUS.update(
+            state="error",
+            message=str(error),
+            error_type=type(error).__name__,
+            traceback=traceback.format_exc(),
+        )
+
+        print(
+            "PORTFOLIO25 BREAK-EVEN RESEARCH ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+@app.route(
+    "/portfolio25-break-even/status"
+)
+def be25_status():
+    return jsonify(
+        BE25_STATUS
+    )
+
+
+@app.route(
+    "/portfolio25-break-even/results"
+)
+def be25_results():
+    if not os.path.exists(
+        BE25_BUNDLE
+    ):
+        return jsonify({
+            "status": "not_ready",
+            "state": BE25_STATUS.get(
+                "state"
+            ),
+            "message": BE25_STATUS.get(
+                "message"
+            ),
+        }), 404
+
+    return send_file(
+        os.path.abspath(
+            BE25_BUNDLE
+        ),
+        as_attachment=True,
+        download_name=BE25_BUNDLE,
+    )
+
+
+@app.route(
+    "/portfolio25-break-even/info"
+)
+def be25_info():
+    return jsonify({
+        "service": (
+            "Current25 universal break-even stop overlay research"
+        ),
+        "read_only": True,
+        "orders_supported": False,
+        "entry_signal_set": (
+            "frozen current25 per-strategy p0 streams"
+        ),
+        "cross_strategy_gate": (
+            "rerun under each changed exit path"
+        ),
+        "current_risk": {
+            "strategies_1_to_23_pct": 1.00,
+            "eur_jpy_m15_short_24_pct": 0.75,
+            "aud_usd_h1_long_25_pct": 1.00,
+        },
+        "scenarios": [
+            s["scenario_id"]
+            for s in BE25_SCENARIOS
+        ],
+        "routes": [
+            "/portfolio25-break-even/status",
+            "/portfolio25-break-even/results",
+            "/portfolio25-break-even/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_audusd25_portfolio_test,
+        target=run_be25_research,
         daemon=True,
     ).start()
 
     app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
+        port=int(
+            os.getenv(
+                "PORT",
+                "5000",
+            )
+        ),
         debug=False,
     )
