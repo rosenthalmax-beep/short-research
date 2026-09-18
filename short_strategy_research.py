@@ -4311,7 +4311,7 @@ def rf_screen_rows(
         roll_lookup[
             row["config_id"]
         ][int(
-            row["months"]
+            row["window_months"]
         )] = row
 
     cal_lookup = {
@@ -4403,32 +4403,32 @@ def rf_screen_rows(
                 ),
             "rolling24_positive_pct":
                 r24.get(
-                    "positive_windows_pct",
+                    "positive_active_windows_pct",
                     0.0,
                 ),
             "rolling24_worst_r":
                 r24.get(
-                    "worst_window_r",
+                    "worst_r_active",
                     0.0,
                 ),
             "rolling36_positive_pct":
                 r36.get(
-                    "positive_windows_pct",
+                    "positive_active_windows_pct",
                     0.0,
                 ),
             "rolling36_worst_r":
                 r36.get(
-                    "worst_window_r",
+                    "worst_r_active",
                     0.0,
                 ),
             "positive_calendar_year_pct":
                 cal.get(
-                    "positive_year_pct",
+                    "positive_active_years_pct",
                     0.0,
                 ),
             "worst_calendar_year_r":
                 cal.get(
-                    "worst_year_r",
+                    "worst_active_year_r",
                     0.0,
                 ),
             "context_delta_pf":
