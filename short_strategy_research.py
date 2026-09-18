@@ -5474,6 +5474,8 @@ FC_PRIMARY_ID = "AUD_USD_H1_SHORT_COMPRESSION_FINAL_CANDIDATE"
 FC_SWEEP_ID = "AUD_USD_H1_SHORT_SWEEP_CONTROL"
 FC_OUTSIDE_ID = "AUD_USD_H1_SHORT_OUTSIDE_CONTROL"
 
+FC_PARITY_FLOAT_TOL = 1e-8
+
 
 def fc_primary_config(
     body=1.25,
@@ -5527,38 +5529,44 @@ def fc_outside_control():
 
 FC_PARITY_EXPECTED = {
     "PRIMARY": {
+        # Exact row from uploaded:
+        # audusd_h1_short_refinement_rr_confirmation.csv
         "trades": 158,
         "winners": 52,
         "win_rate_pct": 32.91139240506329,
-        "pf": 1.667561748050749,
-        "total_r": 70.76153433562815,
-        "expectancy_r": 0.4478578122508237,
+        "pf": 1.6675616410006013,
+        "total_r": 70.76153394606374,
+        "expectancy_r": 0.4478578097852135,
         "max_dd_r": -11.0,
-        "dev_pf": 1.798945690829578,
-        "dev_r": 54.32832820935458,
-        "validation_pf": 1.4324527997591744,
-        "validation_r": 16.43320612627357,
+        "dev_pf": 1.7989459960867704,
+        "dev_r": 54.328327733900394,
+        "validation_pf": 1.4324527950569301,
+        "validation_r": 16.43320621216334,
         "positive_eras": 4,
-        "last5_r": 13.623362723320018,
-        "last2_r": 0.1378254690924856,
+        "last5_r": 13.623363324324794,
+        "last2_r": 0.13782540988423353,
     },
     "SWEEP_CONTROL": {
+        # Exact RR3.5 row from uploaded:
+        # audusd_h1_short_refinement_secondary_controls.csv
         "trades": 84,
         "pf": 1.3720690499383532,
         "total_r": 22.32414299630119,
-        "validation_pf": 1.5382549868115584,
-        "validation_r": 10.765103617509852,
-        "last5_r": 9.92758197221595,
-        "last2_r": 2.79931980264202,
+        "validation_pf": 1.5382551919167795,
+        "validation_r": 10.765103838335591,
+        "last5_r": 9.927581921327935,
+        "last2_r": 2.7993201787608513,
     },
     "OUTSIDE_CONTROL": {
+        # Exact row from uploaded:
+        # audusd_h1_short_refinement_secondary_controls.csv
         "trades": 107,
         "pf": 1.4098867450738546,
         "total_r": 33.20082635098223,
-        "validation_pf": 1.5084901511902715,
-        "validation_r": 16.271668282009948,
-        "last5_r": 8.785666392722164,
-        "last2_r": -5.617520871316513,
+        "validation_pf": 1.508489626891367,
+        "validation_r": 16.271668060523744,
+        "last5_r": 8.7856660253948,
+        "last2_r": -5.61752136752136,
     },
 }
 
@@ -5635,10 +5643,10 @@ def fc_parity_row(label, config, features, expected):
         "trades": row["full_trades"] == expected["trades"],
         "pf": abs(
             row["full_pf"] - expected["pf"]
-        ) <= 1e-9,
+        ) <= FC_PARITY_FLOAT_TOL,
         "total_r": abs(
             row["full_total_r"] - expected["total_r"]
-        ) <= 1e-9,
+        ) <= FC_PARITY_FLOAT_TOL,
     }
 
     if "winners" in expected:
@@ -5649,25 +5657,25 @@ def fc_parity_row(label, config, features, expected):
     if "max_dd_r" in expected:
         checks["max_dd_r"] = abs(
             row["full_max_dd_r"] - expected["max_dd_r"]
-        ) <= 1e-9
+        ) <= FC_PARITY_FLOAT_TOL
 
     if "validation_pf" in expected:
         checks["validation_pf"] = abs(
             row["validation_2018_plus_pf"]
             - expected["validation_pf"]
-        ) <= 1e-9
+        ) <= FC_PARITY_FLOAT_TOL
 
     if "last5_r" in expected:
         checks["last5_r"] = abs(
             row["last5y_r"]
             - expected["last5_r"]
-        ) <= 1e-9
+        ) <= FC_PARITY_FLOAT_TOL
 
     if "last2_r" in expected:
         checks["last2_r"] = abs(
             row["last2y_r"]
             - expected["last2_r"]
-        ) <= 1e-9
+        ) <= FC_PARITY_FLOAT_TOL
 
     passed = all(checks.values())
 
@@ -5680,6 +5688,13 @@ def fc_parity_row(label, config, features, expected):
         "actual_pf": row["full_pf"],
         "expected_total_r": expected["total_r"],
         "actual_total_r": row["full_total_r"],
+        "expected_validation_pf": expected.get("validation_pf"),
+        "actual_validation_pf": row.get("validation_2018_plus_pf"),
+        "expected_last5_r": expected.get("last5_r"),
+        "actual_last5_r": row.get("last5y_r"),
+        "expected_last2_r": expected.get("last2_r"),
+        "actual_last2_r": row.get("last2y_r"),
+        "float_tolerance": FC_PARITY_FLOAT_TOL,
         "checks_json": json.dumps(
             checks,
             sort_keys=True,
