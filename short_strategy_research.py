@@ -6688,9 +6688,2970 @@ def fc_info():
     })
 
 
+
+# ============================================================
+# AUD/USD H1 SHORT — COMPLEMENTARY SWEEP RESEARCH
+# ============================================================
+#
+# PURPOSE
+# -------
+# Improve the RETURN SHAPE of the frozen AUD/USD H1 SHORT compression
+# strategy without changing that core.
+#
+# The primary objective is NOT headline PF optimisation. It is to test
+# whether a structurally different high-sweep displacement trigger can:
+#   - add useful frequency,
+#   - repair weak calendar/rolling periods,
+#   - materially improve 12/24/36M consistency,
+#   - reduce worst rolling troughs,
+# while preserving long-history / validation robustness.
+#
+# ============================================================
+# FROZEN CORE — NEVER OPTIMISED IN THIS RUN
+# ============================================================
+#
+# COMPRESSION_BREAKOUT
+# bearish H1 candle
+# body >= 1.25 ATR14
+# range >= 1.50 ATR14
+# previous H1 ATR14 / previous20 ATR mean <= 0.85
+# close below previous 15-H1 low, current excluded
+# RR 3.50
+# stop = signal high + 10 ticks
+# H1 historical adverse fill = 0.5 pip
+# no weekday/session/HTF filter
+#
+# Exact uploaded parity anchor through 2026-09-18 14:00 UTC:
+#   158 trades
+#   52 winners
+#   PF 1.6675616410006013
+#   +70.76153394606374R
+#
+# ============================================================
+# COMPLEMENT FAMILY
+# ============================================================
+#
+# SWEEP_DISPLACEMENT SHORT:
+#   bearish H1 candle
+#   high > previous N-bar high, current excluded
+#   close < previous H1 candle low
+#   upper wick/body >= threshold
+#   body >= threshold * ATR14
+#   stop = signal high + 10 ticks
+#
+# Stage 1 geometry, fixed RR3.50:
+#   body >= 1.00 / 1.25 / 1.50 ATR
+#   sweep LB = 10 / 15 / 20 / 30
+#   upper wick/body >= 0.10 / 0.25 / 0.40
+#   36 geometries
+#
+# Stage 2 RR confirmation on the strongest 12 geometries:
+#   RR 3.00 / 3.50 / 4.00 / 4.50
+#
+# Stage 3 SINGLE-FACTOR context confirmation on the strongest 8:
+#   NONE
+#   prior ~4H rally momentum >= 0.50 / 1.00 / 1.50 ATR
+#   prior strictly completed H4 close < EMA100 / EMA200
+#   prior strictly completed D close < EMA100 / EMA200
+#   London 07:00-15:59
+#   New York 08:00-16:59
+#
+# NO context interactions are mined.
+#
+# ============================================================
+# UNION EXECUTION
+# ============================================================
+#
+# Core + complement share exact strategy-level pyramiding=0.
+# Core has same-candle priority.
+# Half-open overlap logic:
+#   accepted trade blocks signals while
+#       signal_index < exit_index
+#   but a signal ON exit_index is eligible.
+#
+# This is an exact raw-signal union rerun; it does NOT merge the already-
+# accepted standalone ledgers.
+#
+# ============================================================
+# SELECTION EMPHASIS
+# ============================================================
+#
+# Baseline core rolling targets from the uploaded final confirmation:
+#   12M positive active windows ~66.8%
+#   24M ~75.7%
+#   36M ~86.5%
+#   worst 24M ~-7.22R
+#   worst 36M ~-7.80R
+#
+# A serious combined finalist should approximately:
+#   combined trades >= 180
+#   marginal complement accepted trades >= 25
+#   combined total R > frozen core
+#   complement marginal accepted R > 0
+#   12M positive >= 70%
+#   24M positive >= 85%
+#   36M positive >= 92%
+#   worst 24M >= -6.5R
+#   worst 36M >= -6.5R
+#   both temporal splits positive
+#   2018+ PF >= 1.30
+#   last 5Y positive
+#   2x-cost combined PF >= 1.30
+#
+# Those are confirmation gates, not optimisation objectives.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+CR_STATUS = {
+    "state": "not_started",
+    "message": "AUD/USD H1 SHORT complementary sweep research not started",
+    "pair": PAIR,
+    "timeframe": "H1",
+    "side": "SHORT",
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+CR_BUNDLE = "AUDUSD_H1_SHORT_COMPLEMENT_SWEEP_RESULTS.zip"
+
+CR_OUT = {
+    "coverage": "audusd_h1_short_complement_coverage.csv",
+    "parity": "audusd_h1_short_complement_parity.csv",
+    "core_baseline": "audusd_h1_short_complement_core_baseline.csv",
+    "stage1": "audusd_h1_short_complement_stage1_geometry.csv",
+    "stage1_shortlist": "audusd_h1_short_complement_stage1_shortlist.csv",
+    "stage2": "audusd_h1_short_complement_stage2_rr.csv",
+    "stage2_shortlist": "audusd_h1_short_complement_stage2_shortlist.csv",
+    "stage3": "audusd_h1_short_complement_stage3_context.csv",
+    "finalists": "audusd_h1_short_complement_finalists.csv",
+    "decision": "audusd_h1_short_complement_decision.csv",
+    "periods": "audusd_h1_short_complement_periods.csv",
+    "cost_stress": "audusd_h1_short_complement_cost_stress.csv",
+    "rolling": "audusd_h1_short_complement_rolling.csv",
+    "rolling_summary": "audusd_h1_short_complement_rolling_summary.csv",
+    "calendar": "audusd_h1_short_complement_calendar.csv",
+    "calendar_summary": "audusd_h1_short_complement_calendar_summary.csv",
+    "trades": "audusd_h1_short_complement_finalist_trades.csv",
+    "overlaps": "audusd_h1_short_complement_overlap_summary.csv",
+    "notes": "audusd_h1_short_complement_notes.csv",
+}
+
+CR_PARITY_CUTOFF = datetime(
+    2026, 9, 18, 14, 0,
+    tzinfo=timezone.utc,
+)
+
+CR_STAGE1_RR = 3.50
+CR_BODY_GRID = [1.00, 1.25, 1.50]
+CR_LB_GRID = [10, 15, 20, 30]
+CR_WICK_GRID = [0.10, 0.25, 0.40]
+CR_RR_GRID = [3.00, 3.50, 4.00, 4.50]
+
+CR_STAGE1_KEEP = 12
+CR_STAGE2_KEEP = 8
+CR_FINAL_KEEP = 12
+
+CR_HTF_WARMUP = datetime(
+    1999, 1, 1,
+    tzinfo=timezone.utc,
+)
+
+CR_CONTEXTS = [
+    "NONE",
+    "PRIOR4H_MOM_GE_050",
+    "PRIOR4H_MOM_GE_100",
+    "PRIOR4H_MOM_GE_150",
+    "H4_CLOSE_LT_EMA100",
+    "H4_CLOSE_LT_EMA200",
+    "D_CLOSE_LT_EMA100",
+    "D_CLOSE_LT_EMA200",
+    "SESSION_LONDON_07_16",
+    "SESSION_NY_08_17",
+]
+
+
+def cr_pack():
+    with zipfile.ZipFile(
+        CR_BUNDLE,
+        "w",
+        zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in CR_OUT.values():
+            if os.path.exists(path):
+                archive.write(
+                    path,
+                    arcname=os.path.basename(path),
+                )
+
+
+def cr_core_config():
+    return fc_primary_config(
+        body=1.25,
+        range_atr=1.50,
+        compression=0.85,
+        breakout_lb=15,
+        rr=3.50,
+    )
+
+
+def cr_sweep_config(
+    body,
+    lookback,
+    wick,
+    rr,
+    context_id="NONE",
+):
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "SWEEP_DISPLACEMENT",
+        "body_atr_min": float(body),
+        "lookback": int(lookback),
+        "wick_body_min": float(wick),
+        "rr": float(rr),
+        "context_id": context_id,
+    }
+
+    base_for_id = dict(config)
+    base_for_id.pop(
+        "context_id",
+        None,
+    )
+    config["base_config_id"] = config_id(
+        base_for_id
+    )
+    config["config_id"] = (
+        config["base_config_id"]
+        + f"|context={context_id}"
+    )
+    return config
+
+
+def cr_union_config(candidate):
+    return {
+        "config_id": (
+            "AUD_USD_H1_SHORT_CORE_PLUS_SWEEP|"
+            + candidate["config_id"]
+        ),
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "COMPRESSION_PLUS_SWEEP",
+    }
+
+
+def cr_ensure_lookbacks(features):
+    needed = set(
+        CR_LB_GRID
+        + [15]
+    )
+
+    for lookback in sorted(needed):
+        if lookback not in features["prev_lows"]:
+            features["prev_lows"][lookback] = (
+                rolling_previous_extreme(
+                    features["low"],
+                    lookback,
+                    want_max=False,
+                )
+            )
+
+        if lookback not in features["prev_highs"]:
+            features["prev_highs"][lookback] = (
+                rolling_previous_extreme(
+                    features["high"],
+                    lookback,
+                    want_max=True,
+                )
+            )
+
+
+def cr_base_signal_config(candidate):
+    result = dict(candidate)
+    result.pop(
+        "context_id",
+        None,
+    )
+    result.pop(
+        "base_config_id",
+        None,
+    )
+    result["config_id"] = config_id(
+        result
+    )
+    return result
+
+
+def cr_prior4h_momentum(features):
+    close = features["close"]
+    atr = features["atr"]
+
+    output = np.full(
+        len(close),
+        np.nan,
+        dtype=float,
+    )
+
+    # Signal is evaluated on current H1 candle. Use only completed candles:
+    # approximately prior 4H = previous close minus close four H1 bars earlier.
+    for i in range(
+        5,
+        len(close),
+    ):
+        if (
+            np.isfinite(atr[i])
+            and atr[i] > 0
+        ):
+            output[i] = (
+                close[i - 1]
+                - close[i - 5]
+            ) / atr[i]
+
+    return output
+
+
+def cr_context_mask(
+    context_id,
+    features,
+    htf_cache,
+    prior4h_momentum,
+):
+    n = len(
+        features["times"]
+    )
+
+    if context_id == "NONE":
+        return np.ones(
+            n,
+            dtype=bool,
+        )
+
+    if context_id == "PRIOR4H_MOM_GE_050":
+        return (
+            np.isfinite(
+                prior4h_momentum
+            )
+            & (
+                prior4h_momentum
+                >= 0.50
+            )
+        )
+
+    if context_id == "PRIOR4H_MOM_GE_100":
+        return (
+            np.isfinite(
+                prior4h_momentum
+            )
+            & (
+                prior4h_momentum
+                >= 1.00
+            )
+        )
+
+    if context_id == "PRIOR4H_MOM_GE_150":
+        return (
+            np.isfinite(
+                prior4h_momentum
+            )
+            & (
+                prior4h_momentum
+                >= 1.50
+            )
+        )
+
+    aliases = {
+        "H4_CLOSE_LT_EMA100":
+            "H4_CLOSE_LT_EMA100",
+        "H4_CLOSE_LT_EMA200":
+            "H4_CLOSE_LT_EMA200",
+        "D_CLOSE_LT_EMA100":
+            "D_CLOSE_LT_EMA100",
+        "D_CLOSE_LT_EMA200":
+            "D_CLOSE_LT_EMA200",
+        "SESSION_LONDON_07_16":
+            "SESSION_LONDON_07_16",
+        "SESSION_NY_08_17":
+            "SESSION_NY_08_17",
+    }
+
+    if context_id in aliases:
+        return rf_context_mask(
+            aliases[context_id],
+            htf_cache,
+        )
+
+    raise ValueError(
+        f"Unknown complement context: {context_id}"
+    )
+
+
+def cr_filter_indices(
+    raw_indices,
+    context_id,
+    features,
+    htf_cache,
+    prior4h_momentum,
+):
+    raw_indices = np.asarray(
+        raw_indices,
+        dtype=int,
+    )
+
+    if not len(raw_indices):
+        return raw_indices
+
+    mask = cr_context_mask(
+        context_id,
+        features,
+        htf_cache,
+        prior4h_momentum,
+    )
+
+    return raw_indices[
+        mask[raw_indices]
+    ]
+
+
+def cr_trade_from_signal(
+    trigger_name,
+    config,
+    features,
+    signal_index,
+    cost_multiplier=1.0,
+):
+    side = "SHORT"
+    rr = float(
+        config["rr"]
+    )
+
+    cost_pips = cost_pips_for(
+        "H1",
+        multiplier=cost_multiplier,
+    )
+    adverse_cost = (
+        cost_pips
+        * PIP
+    )
+
+    high = features["high"]
+    close = features["close"]
+    times = features["times"]
+
+    reference_entry = float(
+        close[signal_index]
+    )
+    stop = (
+        float(
+            high[signal_index]
+        )
+        + STOP_BUFFER_TICKS
+        * TICK
+    )
+    reference_risk = (
+        stop
+        - reference_entry
+    )
+    fill = (
+        reference_entry
+        - adverse_cost
+    )
+    actual_risk = (
+        stop
+        - fill
+    )
+
+    if (
+        reference_risk <= 0
+        or actual_risk <= 0
+    ):
+        return None
+
+    target = (
+        reference_entry
+        - rr
+        * reference_risk
+    )
+
+    exit_index = find_exit_index(
+        features,
+        signal_index,
+        stop,
+        target,
+        side,
+    )
+
+    if exit_index is None:
+        return None
+
+    reason = determine_exit_reason(
+        features,
+        exit_index,
+        stop,
+        target,
+        side,
+    )
+
+    if reason is None:
+        raise RuntimeError(
+            "Combined union exit reason was None"
+        )
+
+    exit_price = (
+        target
+        if reason == "TARGET"
+        else stop
+    )
+
+    realised_r = (
+        fill
+        - exit_price
+    ) / actual_risk
+
+    return {
+        "signal_index":
+            int(signal_index),
+        "exit_index":
+            int(exit_index),
+        "signal_time":
+            times[signal_index],
+        "exit_time":
+            times[exit_index],
+        "side": "SHORT",
+        "timeframe": "H1",
+        "family":
+            config["family"],
+        "trigger_id":
+            trigger_name,
+        "trigger_config_id":
+            config["config_id"],
+        "rr": rr,
+        "cost_pips":
+            cost_pips,
+        "reference_entry":
+            reference_entry,
+        "historical_fill":
+            fill,
+        "stop": stop,
+        "target": target,
+        "exit_reason":
+            reason,
+        "result_r":
+            realised_r,
+        "duration_bars":
+            exit_index
+            - signal_index,
+    }
+
+
+def cr_union_backtest(
+    core_config,
+    candidate_config,
+    features,
+    core_raw_indices,
+    candidate_raw_indices,
+    cost_multiplier=1.0,
+):
+    """
+    Exact raw-signal union:
+      - CORE priority on same candle.
+      - strategy-level pyramiding=0.
+      - half-open [signal_index, exit_index) blocking.
+      - signal on exit_index is eligible.
+    """
+    core_raw_indices = np.asarray(
+        core_raw_indices,
+        dtype=int,
+    )
+    candidate_raw_indices = np.asarray(
+        candidate_raw_indices,
+        dtype=int,
+    )
+
+    events = []
+
+    for index in core_raw_indices:
+        events.append(
+            (
+                int(index),
+                0,
+                "CORE_COMPRESSION",
+                core_config,
+            )
+        )
+
+    for index in candidate_raw_indices:
+        events.append(
+            (
+                int(index),
+                1,
+                "SWEEP_COMPLEMENT",
+                candidate_config,
+            )
+        )
+
+    events.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        )
+    )
+
+    event_indices = [
+        item[0]
+        for item in events
+    ]
+
+    trades = []
+    rejected = []
+
+    accepted_core = 0
+    accepted_candidate = 0
+    rejected_core_overlap = 0
+    rejected_candidate_overlap = 0
+    same_candle_candidate_rejected = 0
+
+    pointer = 0
+
+    while pointer < len(events):
+        (
+            signal_index,
+            _priority,
+            trigger_name,
+            config,
+        ) = events[pointer]
+
+        trade = cr_trade_from_signal(
+            trigger_name,
+            config,
+            features,
+            signal_index,
+            cost_multiplier=cost_multiplier,
+        )
+
+        if trade is None:
+            # If the signal is so late that it remains open at end of data,
+            # no later event can complete either.
+            break
+
+        if trigger_name == "CORE_COMPRESSION":
+            accepted_core += 1
+        else:
+            accepted_candidate += 1
+
+        trades.append(
+            trade
+        )
+
+        next_pointer = bisect_left(
+            event_indices,
+            trade["exit_index"],
+            lo=pointer + 1,
+        )
+
+        skipped = events[
+            pointer + 1:
+            next_pointer
+        ]
+
+        for (
+            skipped_index,
+            _skipped_priority,
+            skipped_trigger,
+            skipped_config,
+        ) in skipped:
+            same_candle = (
+                skipped_index
+                == signal_index
+            )
+
+            if skipped_trigger == "CORE_COMPRESSION":
+                rejected_core_overlap += 1
+            else:
+                rejected_candidate_overlap += 1
+
+            if (
+                same_candle
+                and trigger_name
+                == "CORE_COMPRESSION"
+                and skipped_trigger
+                == "SWEEP_COMPLEMENT"
+            ):
+                same_candle_candidate_rejected += 1
+
+            rejected.append({
+                "accepted_trigger":
+                    trigger_name,
+                "accepted_signal_index":
+                    signal_index,
+                "accepted_signal_time":
+                    features["times"][
+                        signal_index
+                    ],
+                "accepted_exit_index":
+                    trade["exit_index"],
+                "accepted_exit_time":
+                    trade["exit_time"],
+                "rejected_trigger":
+                    skipped_trigger,
+                "rejected_config_id":
+                    skipped_config["config_id"],
+                "rejected_signal_index":
+                    skipped_index,
+                "rejected_signal_time":
+                    features["times"][
+                        skipped_index
+                    ],
+                "same_candle":
+                    same_candle,
+            })
+
+        pointer = (
+            next_pointer
+        )
+
+    audit = {
+        "core_raw_signals":
+            len(core_raw_indices),
+        "candidate_raw_signals":
+            len(candidate_raw_indices),
+        "accepted_core":
+            accepted_core,
+        "accepted_candidate":
+            accepted_candidate,
+        "accepted_total":
+            len(trades),
+        "rejected_core_overlap":
+            rejected_core_overlap,
+        "rejected_candidate_overlap":
+            rejected_candidate_overlap,
+        "same_candle_candidate_rejected":
+            same_candle_candidate_rejected,
+    }
+
+    return (
+        trades,
+        rejected,
+        audit,
+    )
+
+
+def cr_era_metrics(trades):
+    eras = [
+        (
+            "2002_2007",
+            datetime(
+                2002, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2008, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "2008_2013",
+            datetime(
+                2008, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "2014_2019",
+            datetime(
+                2014, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            datetime(
+                2020, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+        ),
+        (
+            "2020_NOW",
+            datetime(
+                2020, 1, 1,
+                tzinfo=timezone.utc,
+            ),
+            None,
+        ),
+    ]
+
+    output = {}
+    positive = 0
+
+    for name, start, end in eras:
+        result = period_metrics(
+            trades,
+            start,
+            end,
+        )
+        output[
+            f"era_{name}_trades"
+        ] = result["trades"]
+        output[
+            f"era_{name}_pf"
+        ] = result[
+            "profit_factor"
+        ]
+        output[
+            f"era_{name}_r"
+        ] = result["total_r"]
+
+        if (
+            result["trades"] > 0
+            and result["total_r"] > 0
+        ):
+            positive += 1
+
+    output["positive_eras"] = (
+        positive
+    )
+    return output
+
+
+def cr_rolling_summary_for(
+    combined_config,
+    trades,
+):
+    rows = rolling_rows(
+        combined_config,
+        trades,
+    )
+    summary = rolling_summary(
+        rows
+    )
+
+    by_months = {
+        int(row["window_months"]):
+            row
+        for row in summary
+    }
+
+    result = {}
+
+    for months in (
+        12, 24, 36
+    ):
+        row = by_months.get(
+            months,
+            {},
+        )
+        result[
+            f"rolling{months}_positive_pct"
+        ] = row.get(
+            "positive_active_windows_pct",
+            0.0,
+        )
+        result[
+            f"rolling{months}_worst_r"
+        ] = row.get(
+            "worst_r_active",
+            0.0,
+        )
+        result[
+            f"rolling{months}_median_r"
+        ] = row.get(
+            "median_r_active",
+            0.0,
+        )
+
+    return result
+
+
+def cr_calendar_summary_for(
+    combined_config,
+    trades,
+):
+    rows = calendar_rows(
+        combined_config,
+        trades,
+    )
+    summary = calendar_summary(
+        rows
+    )
+
+    if not summary:
+        return {
+            "positive_calendar_year_pct":
+                0.0,
+            "positive_calendar_years":
+                0,
+            "active_calendar_years":
+                0,
+            "worst_calendar_year_r":
+                0.0,
+        }
+
+    row = summary[0]
+
+    return {
+        "positive_calendar_year_pct":
+            row[
+                "positive_active_years_pct"
+            ],
+        "positive_calendar_years":
+            row[
+                "positive_active_years"
+            ],
+        "active_calendar_years":
+            row[
+                "active_completed_years"
+            ],
+        "worst_calendar_year_r":
+            row[
+                "worst_active_year_r"
+            ],
+    }
+
+
+def cr_summary(
+    core_config,
+    candidate_config,
+    features,
+    core_raw,
+    candidate_raw,
+    core_standalone_trades,
+    core_baseline,
+    cost_multiplier=1.0,
+):
+    combined_config = (
+        cr_union_config(
+            candidate_config
+        )
+    )
+
+    (
+        combined_trades,
+        rejected,
+        audit,
+    ) = cr_union_backtest(
+        core_config,
+        candidate_config,
+        features,
+        core_raw,
+        candidate_raw,
+        cost_multiplier=cost_multiplier,
+    )
+
+    combined = metrics(
+        combined_trades
+    )
+
+    complement_trades = [
+        trade
+        for trade in combined_trades
+        if trade["trigger_id"]
+        == "SWEEP_COMPLEMENT"
+    ]
+
+    union_core_trades = [
+        trade
+        for trade in combined_trades
+        if trade["trigger_id"]
+        == "CORE_COMPRESSION"
+    ]
+
+    complement_metrics = metrics(
+        complement_trades
+    )
+
+    dev = period_metrics(
+        combined_trades,
+        None,
+        VALIDATION_START,
+    )
+    validation = period_metrics(
+        combined_trades,
+        VALIDATION_START,
+        None,
+    )
+
+    last5 = period_metrics(
+        combined_trades,
+        NOW
+        - timedelta(
+            days=365.25 * 5
+        ),
+        None,
+    )
+    last2 = period_metrics(
+        combined_trades,
+        NOW
+        - timedelta(
+            days=365.25 * 2
+        ),
+        None,
+    )
+
+    rolling_values = (
+        cr_rolling_summary_for(
+            combined_config,
+            combined_trades,
+        )
+    )
+    calendar_values = (
+        cr_calendar_summary_for(
+            combined_config,
+            combined_trades,
+        )
+    )
+
+    core_standalone_signals = {
+        trade["signal_index"]:
+            trade
+        for trade
+        in core_standalone_trades
+    }
+
+    union_core_signals = {
+        trade["signal_index"]:
+            trade
+        for trade
+        in union_core_trades
+    }
+
+    displaced = (
+        set(
+            core_standalone_signals
+        )
+        - set(
+            union_core_signals
+        )
+    )
+
+    newly_eligible = (
+        set(
+            union_core_signals
+        )
+        - set(
+            core_standalone_signals
+        )
+    )
+
+    displaced_r = sum(
+        core_standalone_signals[
+            index
+        ]["result_r"]
+        for index in displaced
+    )
+
+    newly_eligible_r = sum(
+        union_core_signals[
+            index
+        ]["result_r"]
+        for index in newly_eligible
+    )
+
+    row = {
+        "candidate_config_id":
+            candidate_config[
+                "config_id"
+            ],
+        "base_config_id":
+            candidate_config[
+                "base_config_id"
+            ],
+        "context_id":
+            candidate_config[
+                "context_id"
+            ],
+        "body_atr_min":
+            candidate_config[
+                "body_atr_min"
+            ],
+        "lookback":
+            candidate_config[
+                "lookback"
+            ],
+        "wick_body_min":
+            candidate_config[
+                "wick_body_min"
+            ],
+        "rr":
+            candidate_config["rr"],
+        "cost_multiplier":
+            cost_multiplier,
+
+        **audit,
+
+        "combined_trades":
+            combined["trades"],
+        "combined_winners":
+            combined["winners"],
+        "combined_win_rate_pct":
+            combined[
+                "win_rate_pct"
+            ],
+        "combined_pf":
+            combined[
+                "profit_factor"
+            ],
+        "combined_total_r":
+            combined["total_r"],
+        "combined_expectancy_r":
+            combined[
+                "expectancy_r"
+            ],
+        "combined_max_dd_r":
+            combined[
+                "max_drawdown_r"
+            ],
+        "combined_longest_loss_streak":
+            combined[
+                "longest_losing_streak"
+            ],
+
+        "marginal_accepted_trades":
+            complement_metrics[
+                "trades"
+            ],
+        "marginal_winners":
+            complement_metrics[
+                "winners"
+            ],
+        "marginal_pf":
+            complement_metrics[
+                "profit_factor"
+            ],
+        "marginal_total_r":
+            complement_metrics[
+                "total_r"
+            ],
+        "marginal_expectancy_r":
+            complement_metrics[
+                "expectancy_r"
+            ],
+        "marginal_max_dd_r":
+            complement_metrics[
+                "max_drawdown_r"
+            ],
+
+        "core_standalone_accepted":
+            len(
+                core_standalone_trades
+            ),
+        "core_union_accepted":
+            len(
+                union_core_trades
+            ),
+        "core_displaced_count":
+            len(displaced),
+        "core_displaced_r":
+            displaced_r,
+        "core_newly_eligible_count":
+            len(newly_eligible),
+        "core_newly_eligible_r":
+            newly_eligible_r,
+
+        "delta_total_r_vs_core":
+            combined["total_r"]
+            - core_baseline[
+                "full_total_r"
+            ],
+        "delta_pf_vs_core":
+            combined[
+                "profit_factor"
+            ]
+            - core_baseline[
+                "full_pf"
+            ],
+        "delta_max_dd_r_vs_core":
+            combined[
+                "max_drawdown_r"
+            ]
+            - core_baseline[
+                "full_max_dd_r"
+            ],
+
+        "dev_trades":
+            dev["trades"],
+        "dev_pf":
+            dev["profit_factor"],
+        "dev_r":
+            dev["total_r"],
+        "validation_trades":
+            validation["trades"],
+        "validation_pf":
+            validation[
+                "profit_factor"
+            ],
+        "validation_r":
+            validation["total_r"],
+        "both_temporal_splits_positive":
+            bool(
+                dev["trades"] > 0
+                and validation[
+                    "trades"
+                ] > 0
+                and dev["total_r"] > 0
+                and validation[
+                    "total_r"
+                ] > 0
+            ),
+
+        "last5y_trades":
+            last5["trades"],
+        "last5y_pf":
+            last5[
+                "profit_factor"
+            ],
+        "last5y_r":
+            last5["total_r"],
+        "last2y_trades":
+            last2["trades"],
+        "last2y_pf":
+            last2[
+                "profit_factor"
+            ],
+        "last2y_r":
+            last2["total_r"],
+
+        **cr_era_metrics(
+            combined_trades
+        ),
+        **rolling_values,
+        **calendar_values,
+    }
+
+    for months in (
+        12, 24, 36
+    ):
+        row[
+            f"delta_rolling{months}_positive_pct"
+        ] = (
+            row[
+                f"rolling{months}_positive_pct"
+            ]
+            - core_baseline[
+                f"rolling{months}_positive_pct"
+            ]
+        )
+        row[
+            f"delta_rolling{months}_worst_r"
+        ] = (
+            row[
+                f"rolling{months}_worst_r"
+            ]
+            - core_baseline[
+                f"rolling{months}_worst_r"
+            ]
+        )
+
+    return (
+        row,
+        combined_trades,
+        rejected,
+    )
+
+
+def cr_rank_key(row):
+    """
+    Rolling consistency first, then robustness / marginal contribution.
+    """
+    return (
+        1 if row[
+            "both_temporal_splits_positive"
+        ] else 0,
+        1 if row[
+            "marginal_total_r"
+        ] > 0 else 0,
+        row[
+            "rolling36_positive_pct"
+        ],
+        row[
+            "rolling24_positive_pct"
+        ],
+        row[
+            "rolling12_positive_pct"
+        ],
+        row[
+            "rolling36_worst_r"
+        ],
+        row[
+            "rolling24_worst_r"
+        ],
+        row[
+            "validation_pf"
+        ],
+        row[
+            "delta_total_r_vs_core"
+        ],
+        row[
+            "marginal_accepted_trades"
+        ],
+    )
+
+
+def cr_stage1_configs():
+    configs = []
+
+    for body in CR_BODY_GRID:
+        for lookback in CR_LB_GRID:
+            for wick in CR_WICK_GRID:
+                configs.append(
+                    cr_sweep_config(
+                        body,
+                        lookback,
+                        wick,
+                        CR_STAGE1_RR,
+                        "NONE",
+                    )
+                )
+
+    return configs
+
+
+def cr_select_stage1(rows):
+    eligible = [
+        row for row in rows
+        if (
+            row[
+                "marginal_accepted_trades"
+            ] >= 20
+            and row[
+                "marginal_total_r"
+            ] > 0
+            and row[
+                "both_temporal_splits_positive"
+            ]
+            and row[
+                "positive_eras"
+            ] >= 3
+            and row[
+                "last5y_r"
+            ] > 0
+        )
+    ]
+
+    pool = (
+        eligible
+        if eligible
+        else rows
+    )
+
+    selected = sorted(
+        pool,
+        key=cr_rank_key,
+        reverse=True,
+    )[
+        :CR_STAGE1_KEEP
+    ]
+
+    # Force the known sweep control geometry.
+    anchor_key = (
+        1.25,
+        15,
+        0.25,
+        3.50,
+        "NONE",
+    )
+
+    if not any(
+        (
+            row["body_atr_min"],
+            int(row["lookback"]),
+            row["wick_body_min"],
+            row["rr"],
+            row["context_id"],
+        ) == anchor_key
+        for row in selected
+    ):
+        anchor = next(
+            (
+                row
+                for row in rows
+                if (
+                    row["body_atr_min"],
+                    int(row["lookback"]),
+                    row["wick_body_min"],
+                    row["rr"],
+                    row["context_id"],
+                ) == anchor_key
+            ),
+            None,
+        )
+
+        if anchor is not None:
+            if len(
+                selected
+            ) >= CR_STAGE1_KEEP:
+                selected[-1] = anchor
+            else:
+                selected.append(
+                    anchor
+                )
+
+    return selected
+
+
+def cr_select_stage2(rows):
+    eligible = [
+        row for row in rows
+        if (
+            row[
+                "marginal_accepted_trades"
+            ] >= 20
+            and row[
+                "marginal_total_r"
+            ] > 0
+            and row[
+                "both_temporal_splits_positive"
+            ]
+            and row[
+                "positive_eras"
+            ] >= 3
+            and row[
+                "last5y_r"
+            ] > 0
+        )
+    ]
+
+    pool = (
+        eligible
+        if eligible
+        else rows
+    )
+
+    return sorted(
+        pool,
+        key=cr_rank_key,
+        reverse=True,
+    )[
+        :CR_STAGE2_KEEP
+    ]
+
+
+def cr_deep_gate(
+    row,
+    cost2_row,
+):
+    checks = {
+        "combined_trades_ge_180":
+            row[
+                "combined_trades"
+            ] >= 180,
+
+        "marginal_accepted_ge_25":
+            row[
+                "marginal_accepted_trades"
+            ] >= 25,
+
+        "combined_total_r_beats_core":
+            row[
+                "delta_total_r_vs_core"
+            ] > 0,
+
+        "marginal_total_r_positive":
+            row[
+                "marginal_total_r"
+            ] > 0,
+
+        "marginal_pf_ge_1_10":
+            row[
+                "marginal_pf"
+            ] >= 1.10,
+
+        "both_temporal_splits_positive":
+            bool(
+                row[
+                    "both_temporal_splits_positive"
+                ]
+            ),
+
+        "validation_pf_ge_1_30":
+            row[
+                "validation_pf"
+            ] >= 1.30,
+
+        "positive_eras_ge_3":
+            row[
+                "positive_eras"
+            ] >= 3,
+
+        "last5_positive":
+            row[
+                "last5y_r"
+            ] > 0,
+
+        "rolling12_ge_70":
+            row[
+                "rolling12_positive_pct"
+            ] >= 70.0,
+
+        "rolling24_ge_85":
+            row[
+                "rolling24_positive_pct"
+            ] >= 85.0,
+
+        "rolling36_ge_92":
+            row[
+                "rolling36_positive_pct"
+            ] >= 92.0,
+
+        "worst24_ge_minus_6_5":
+            row[
+                "rolling24_worst_r"
+            ] >= -6.5,
+
+        "worst36_ge_minus_6_5":
+            row[
+                "rolling36_worst_r"
+            ] >= -6.5,
+
+        "calendar_positive_pct_ge_60":
+            row[
+                "positive_calendar_year_pct"
+            ] >= 60.0,
+
+        "core_displaced_le_20":
+            row[
+                "core_displaced_count"
+            ] <= 20,
+
+        "cost2_pf_ge_1_30":
+            cost2_row[
+                "combined_pf"
+            ] >= 1.30,
+
+        "cost2_total_r_positive":
+            cost2_row[
+                "combined_total_r"
+            ] > 0,
+    }
+
+    return {
+        "deep_pass":
+            all(
+                checks.values()
+            ),
+        "checks_passed":
+            sum(
+                checks.values()
+            ),
+        "checks_total":
+            len(checks),
+        "checks_json":
+            json.dumps(
+                checks,
+                sort_keys=True,
+            ),
+    }
+
+
+def cr_serialise_trade(
+    trade,
+    finalist_rank,
+    candidate_config_id,
+):
+    row = dict(
+        trade
+    )
+    row[
+        "finalist_rank"
+    ] = finalist_rank
+    row[
+        "candidate_config_id"
+    ] = candidate_config_id
+    row[
+        "signal_time"
+    ] = iso(
+        row["signal_time"]
+    )
+    row[
+        "exit_time"
+    ] = iso(
+        row["exit_time"]
+    )
+    return row
+
+
+def cr_serialise_rejection(
+    row,
+    finalist_rank,
+    candidate_config_id,
+):
+    output = dict(
+        row
+    )
+    output[
+        "finalist_rank"
+    ] = finalist_rank
+    output[
+        "candidate_config_id"
+    ] = candidate_config_id
+    output[
+        "accepted_signal_time"
+    ] = iso(
+        output[
+            "accepted_signal_time"
+        ]
+    )
+    output[
+        "accepted_exit_time"
+    ] = iso(
+        output[
+            "accepted_exit_time"
+        ]
+    )
+    output[
+        "rejected_signal_time"
+    ] = iso(
+        output[
+            "rejected_signal_time"
+        ]
+    )
+    return output
+
+
+def cr_period_rows(
+    combined_config,
+    trades,
+):
+    rows = detailed_period_rows(
+        combined_config,
+        trades,
+    )
+
+    for (
+        name,
+        start,
+        end,
+    ) in [
+        (
+            "LAST_1Y",
+            NOW
+            - timedelta(
+                days=365.25
+            ),
+            None,
+        ),
+        (
+            "LAST_3Y",
+            NOW
+            - timedelta(
+                days=365.25
+                * 3
+            ),
+            None,
+        ),
+    ]:
+        result = period_metrics(
+            trades,
+            start,
+            end,
+        )
+        rows.append({
+            "config_id":
+                combined_config[
+                    "config_id"
+                ],
+            "timeframe": "H1",
+            "side": "SHORT",
+            "family":
+                "COMPRESSION_PLUS_SWEEP",
+            "period": name,
+            **result,
+        })
+
+    return rows
+
+
+def run_cr_research():
+    try:
+        global STATUS
+        STATUS = CR_STATUS
+
+        CR_STATUS.update({
+            "state": "fetching",
+            "message": "Fetching AUD/USD H1/H4/D history",
+        })
+
+        h1 = fetch_history(
+            "H1",
+            REQUESTED_START,
+            NOW,
+            chunk_days=180,
+        )
+
+        h4 = fetch_history(
+            "H4",
+            CR_HTF_WARMUP,
+            NOW,
+            chunk_days=700,
+        )
+
+        daily = fetch_history(
+            "D",
+            CR_HTF_WARMUP,
+            NOW,
+            chunk_days=3000,
+        )
+
+        if len(h1) < 100000:
+            raise RuntimeError(
+                f"Incomplete H1 history: {len(h1)}"
+            )
+
+        if len(h4) < 10000:
+            raise RuntimeError(
+                f"Incomplete H4 history: {len(h4)}"
+            )
+
+        if len(daily) < 5000:
+            raise RuntimeError(
+                f"Incomplete Daily history: {len(daily)}"
+            )
+
+        write_csv(
+            CR_OUT["coverage"],
+            [
+                {
+                    "timeframe": "H1",
+                    "candles": len(h1),
+                    "first":
+                        iso(
+                            h1[0]["time"]
+                        ),
+                    "last":
+                        iso(
+                            h1[-1]["time"]
+                        ),
+                },
+                {
+                    "timeframe": "H4",
+                    "candles": len(h4),
+                    "first":
+                        iso(
+                            h4[0]["time"]
+                        ),
+                    "last":
+                        iso(
+                            h4[-1]["time"]
+                        ),
+                },
+                {
+                    "timeframe": "D",
+                    "candles":
+                        len(daily),
+                    "first":
+                        iso(
+                            daily[0]["time"]
+                        ),
+                    "last":
+                        iso(
+                            daily[-1]["time"]
+                        ),
+                },
+            ],
+        )
+
+        CR_STATUS.update({
+            "state": "features",
+            "message": "Building frozen core and complement features",
+        })
+
+        features = build_features(
+            h1,
+            "H1",
+        )
+        cr_ensure_lookbacks(
+            features
+        )
+
+        htf_cache = rf_context_cache(
+            features,
+            h4,
+            daily,
+        )
+        prior4h_momentum = (
+            cr_prior4h_momentum(
+                features
+            )
+        )
+
+        core_config = (
+            cr_core_config()
+        )
+
+        # ----------------------------------------------------
+        # PARITY — EXACT FROZEN CORE + KNOWN SWEEP CONTROL
+        # ----------------------------------------------------
+        CR_STATUS.update({
+            "state": "parity",
+            "message": "Reproducing frozen core and sweep-control anchors",
+        })
+
+        parity_features = (
+            fc_slice_features(
+                features,
+                CR_PARITY_CUTOFF,
+            )
+        )
+
+        parity_rows = [
+            fc_parity_row(
+                "FROZEN_CORE",
+                core_config,
+                parity_features,
+                FC_PARITY_EXPECTED[
+                    "PRIMARY"
+                ],
+            ),
+            fc_parity_row(
+                "KNOWN_SWEEP_CONTROL",
+                fc_sweep_control(),
+                parity_features,
+                FC_PARITY_EXPECTED[
+                    "SWEEP_CONTROL"
+                ],
+            ),
+        ]
+
+        write_csv(
+            CR_OUT["parity"],
+            parity_rows,
+        )
+
+        # ----------------------------------------------------
+        # CURRENT-HISTORY FROZEN CORE BASELINE
+        # ----------------------------------------------------
+        core_raw = signal_indices(
+            core_config,
+            features,
+        )
+
+        core_standalone_trades = (
+            backtest(
+                core_config,
+                features,
+                core_raw,
+                rr=core_config[
+                    "rr"
+                ],
+                cost_multiplier=1.0,
+            )
+        )
+
+        core_eval, _ = (
+            evaluate_candidate(
+                core_config,
+                features,
+                core_raw,
+            )
+        )
+
+        core_combined_config = {
+            "config_id":
+                "FROZEN_CORE_ONLY",
+            "timeframe": "H1",
+            "side": "SHORT",
+            "family":
+                "COMPRESSION_BREAKOUT",
+        }
+
+        core_roll = (
+            cr_rolling_summary_for(
+                core_combined_config,
+                core_standalone_trades,
+            )
+        )
+        core_cal = (
+            cr_calendar_summary_for(
+                core_combined_config,
+                core_standalone_trades,
+            )
+        )
+
+        core_baseline = {
+            **core_eval,
+            **core_roll,
+            **core_cal,
+        }
+
+        write_csv(
+            CR_OUT["core_baseline"],
+            [
+                core_baseline
+            ],
+        )
+
+        # ----------------------------------------------------
+        # STAGE 1 — LOCAL SWEEP GEOMETRY, RR3.50
+        # ----------------------------------------------------
+        stage1_rows = []
+        stage1_raw = {}
+
+        stage1_configs = (
+            cr_stage1_configs()
+        )
+
+        for number, candidate in enumerate(
+            stage1_configs,
+            1,
+        ):
+            CR_STATUS.update({
+                "state":
+                    "stage1_geometry",
+                "message": (
+                    f"{number}/"
+                    f"{len(stage1_configs)} "
+                    f"{candidate['config_id']}"
+                ),
+            })
+
+            base_signal_config = (
+                cr_base_signal_config(
+                    candidate
+                )
+            )
+
+            raw = signal_indices(
+                base_signal_config,
+                features,
+            )
+
+            stage1_raw[
+                candidate[
+                    "base_config_id"
+                ]
+            ] = raw
+
+            row, _, _ = cr_summary(
+                core_config,
+                candidate,
+                features,
+                core_raw,
+                raw,
+                core_standalone_trades,
+                core_baseline,
+                cost_multiplier=1.0,
+            )
+
+            stage1_rows.append(
+                row
+            )
+
+        stage1_rows.sort(
+            key=cr_rank_key,
+            reverse=True,
+        )
+
+        write_csv(
+            CR_OUT["stage1"],
+            stage1_rows,
+        )
+
+        stage1_shortlist = (
+            cr_select_stage1(
+                stage1_rows
+            )
+        )
+
+        write_csv(
+            CR_OUT[
+                "stage1_shortlist"
+            ],
+            stage1_shortlist,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 2 — RR CONFIRMATION
+        # ----------------------------------------------------
+        stage2_rows = []
+        stage2_raw = {}
+
+        total_stage2 = (
+            len(
+                stage1_shortlist
+            )
+            * len(
+                CR_RR_GRID
+            )
+        )
+        done = 0
+
+        for base_row in stage1_shortlist:
+            raw = stage1_raw[
+                base_row[
+                    "base_config_id"
+                ]
+            ]
+
+            for rr in CR_RR_GRID:
+                done += 1
+
+                candidate = (
+                    cr_sweep_config(
+                        base_row[
+                            "body_atr_min"
+                        ],
+                        int(
+                            base_row[
+                                "lookback"
+                            ]
+                        ),
+                        base_row[
+                            "wick_body_min"
+                        ],
+                        rr,
+                        "NONE",
+                    )
+                )
+
+                CR_STATUS.update({
+                    "state":
+                        "stage2_rr",
+                    "message": (
+                        f"{done}/"
+                        f"{total_stage2} "
+                        f"{candidate['config_id']}"
+                    ),
+                })
+
+                row, _, _ = (
+                    cr_summary(
+                        core_config,
+                        candidate,
+                        features,
+                        core_raw,
+                        raw,
+                        core_standalone_trades,
+                        core_baseline,
+                        cost_multiplier=1.0,
+                    )
+                )
+
+                stage2_rows.append(
+                    row
+                )
+                stage2_raw[
+                    candidate[
+                        "config_id"
+                    ]
+                ] = raw
+
+        stage2_rows.sort(
+            key=cr_rank_key,
+            reverse=True,
+        )
+
+        write_csv(
+            CR_OUT["stage2"],
+            stage2_rows,
+        )
+
+        stage2_shortlist = (
+            cr_select_stage2(
+                stage2_rows
+            )
+        )
+
+        write_csv(
+            CR_OUT[
+                "stage2_shortlist"
+            ],
+            stage2_shortlist,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 3 — SINGLE-FACTOR CONTEXT CONFIRMATION
+        # ----------------------------------------------------
+        stage3_rows = []
+        stage3_indices = {}
+
+        total_stage3 = (
+            len(
+                stage2_shortlist
+            )
+            * len(
+                CR_CONTEXTS
+            )
+        )
+        done = 0
+
+        for base_row in stage2_shortlist:
+            raw = stage2_raw[
+                base_row[
+                    "candidate_config_id"
+                ]
+            ]
+
+            for context_id in CR_CONTEXTS:
+                done += 1
+
+                candidate = (
+                    cr_sweep_config(
+                        base_row[
+                            "body_atr_min"
+                        ],
+                        int(
+                            base_row[
+                                "lookback"
+                            ]
+                        ),
+                        base_row[
+                            "wick_body_min"
+                        ],
+                        base_row["rr"],
+                        context_id,
+                    )
+                )
+
+                filtered = (
+                    cr_filter_indices(
+                        raw,
+                        context_id,
+                        features,
+                        htf_cache,
+                        prior4h_momentum,
+                    )
+                )
+
+                CR_STATUS.update({
+                    "state":
+                        "stage3_context",
+                    "message": (
+                        f"{done}/"
+                        f"{total_stage3} "
+                        f"{candidate['config_id']}"
+                    ),
+                })
+
+                row, _, _ = (
+                    cr_summary(
+                        core_config,
+                        candidate,
+                        features,
+                        core_raw,
+                        filtered,
+                        core_standalone_trades,
+                        core_baseline,
+                        cost_multiplier=1.0,
+                    )
+                )
+
+                row[
+                    "candidate_signals_before_context"
+                ] = len(raw)
+                row[
+                    "candidate_signals_after_context"
+                ] = len(
+                    filtered
+                )
+                row[
+                    "context_signal_retention_pct"
+                ] = pct(
+                    len(filtered),
+                    len(raw),
+                )
+
+                stage3_rows.append(
+                    row
+                )
+                stage3_indices[
+                    candidate[
+                        "config_id"
+                    ]
+                ] = filtered
+
+        stage3_rows.sort(
+            key=cr_rank_key,
+            reverse=True,
+        )
+
+        write_csv(
+            CR_OUT["stage3"],
+            stage3_rows,
+        )
+
+        # ----------------------------------------------------
+        # FINALIST POOL
+        # ----------------------------------------------------
+        pool = (
+            list(
+                stage3_rows
+            )
+            + list(
+                stage2_rows
+            )
+        )
+
+        # Dedupe by exact candidate config ID.
+        deduped = {}
+        for row in pool:
+            cid = row[
+                "candidate_config_id"
+            ]
+
+            existing = (
+                deduped.get(
+                    cid
+                )
+            )
+
+            if (
+                existing is None
+                or cr_rank_key(
+                    row
+                )
+                > cr_rank_key(
+                    existing
+                )
+            ):
+                deduped[
+                    cid
+                ] = row
+
+        candidate_pool = list(
+            deduped.values()
+        )
+
+        candidate_pool.sort(
+            key=cr_rank_key,
+            reverse=True,
+        )
+
+        finalist_rows = (
+            candidate_pool[
+                :CR_FINAL_KEEP
+            ]
+        )
+
+        # Force the plain known control:
+        # body1.25 / LB15 / wick0.25 / RR3.5 / NONE.
+        control_candidate = (
+            cr_sweep_config(
+                1.25,
+                15,
+                0.25,
+                3.50,
+                "NONE",
+            )
+        )
+
+        if not any(
+            row[
+                "candidate_config_id"
+            ]
+            == control_candidate[
+                "config_id"
+            ]
+            for row in finalist_rows
+        ):
+            control_row = next(
+                (
+                    row
+                    for row
+                    in candidate_pool
+                    if row[
+                        "candidate_config_id"
+                    ]
+                    == control_candidate[
+                        "config_id"
+                    ]
+                ),
+                None,
+            )
+
+            if control_row is not None:
+                if len(
+                    finalist_rows
+                ) >= CR_FINAL_KEEP:
+                    finalist_rows[
+                        -1
+                    ] = control_row
+                else:
+                    finalist_rows.append(
+                        control_row
+                    )
+
+        finalist_rows.sort(
+            key=cr_rank_key,
+            reverse=True,
+        )
+
+        # ----------------------------------------------------
+        # DEEP FINALISTS
+        # ----------------------------------------------------
+        deep_rows = []
+        decision_rows = []
+        cost_rows = []
+        period_rows = []
+        rolling_rows_out = []
+        calendar_rows_out = []
+        trade_rows = []
+        overlap_rows = []
+        overlap_summaries = []
+
+        for rank, seed in enumerate(
+            finalist_rows,
+            1,
+        ):
+            candidate = (
+                cr_sweep_config(
+                    seed[
+                        "body_atr_min"
+                    ],
+                    int(
+                        seed["lookback"]
+                    ),
+                    seed[
+                        "wick_body_min"
+                    ],
+                    seed["rr"],
+                    seed[
+                        "context_id"
+                    ],
+                )
+            )
+
+            if (
+                candidate[
+                    "context_id"
+                ] == "NONE"
+            ):
+                raw = stage2_raw.get(
+                    candidate[
+                        "config_id"
+                    ]
+                )
+
+                if raw is None:
+                    base_signal_config = (
+                        cr_base_signal_config(
+                            candidate
+                        )
+                    )
+                    raw = signal_indices(
+                        base_signal_config,
+                        features,
+                    )
+            else:
+                raw = stage3_indices[
+                    candidate[
+                        "config_id"
+                    ]
+                ]
+
+            CR_STATUS.update({
+                "state":
+                    "deep_finalists",
+                "message": (
+                    f"{rank}/"
+                    f"{len(finalist_rows)} "
+                    f"{candidate['config_id']}"
+                ),
+            })
+
+            (
+                base_row,
+                combined_trades,
+                rejected,
+            ) = cr_summary(
+                core_config,
+                candidate,
+                features,
+                core_raw,
+                raw,
+                core_standalone_trades,
+                core_baseline,
+                cost_multiplier=1.0,
+            )
+
+            combined_config = (
+                cr_union_config(
+                    candidate
+                )
+            )
+
+            finalist_cost_rows = []
+
+            for multiplier in (
+                0.5,
+                1.0,
+                1.5,
+                2.0,
+            ):
+                (
+                    stress_row,
+                    _stress_trades,
+                    _stress_rejected,
+                ) = cr_summary(
+                    core_config,
+                    candidate,
+                    features,
+                    core_raw,
+                    raw,
+                    core_standalone_trades,
+                    core_baseline,
+                    cost_multiplier=multiplier,
+                )
+
+                stress_row[
+                    "finalist_rank"
+                ] = rank
+
+                cost_rows.append(
+                    stress_row
+                )
+                finalist_cost_rows.append(
+                    stress_row
+                )
+
+            cost2 = next(
+                row
+                for row
+                in finalist_cost_rows
+                if abs(
+                    row[
+                        "cost_multiplier"
+                    ]
+                    - 2.0
+                ) < 1e-12
+            )
+
+            gate = cr_deep_gate(
+                base_row,
+                cost2,
+            )
+
+            deep_row = {
+                "finalist_rank":
+                    rank,
+                **base_row,
+                **gate,
+                "cost2_combined_pf":
+                    cost2[
+                        "combined_pf"
+                    ],
+                "cost2_combined_total_r":
+                    cost2[
+                        "combined_total_r"
+                    ],
+                "cost2_marginal_total_r":
+                    cost2[
+                        "marginal_total_r"
+                    ],
+            }
+
+            deep_rows.append(
+                deep_row
+            )
+
+            decision_rows.append({
+                "finalist_rank":
+                    rank,
+                "candidate_config_id":
+                    candidate[
+                        "config_id"
+                    ],
+                **gate,
+                "combined_trades":
+                    base_row[
+                        "combined_trades"
+                    ],
+                "marginal_accepted_trades":
+                    base_row[
+                        "marginal_accepted_trades"
+                    ],
+                "combined_pf":
+                    base_row[
+                        "combined_pf"
+                    ],
+                "combined_total_r":
+                    base_row[
+                        "combined_total_r"
+                    ],
+                "delta_total_r_vs_core":
+                    base_row[
+                        "delta_total_r_vs_core"
+                    ],
+                "marginal_pf":
+                    base_row[
+                        "marginal_pf"
+                    ],
+                "marginal_total_r":
+                    base_row[
+                        "marginal_total_r"
+                    ],
+                "rolling12_positive_pct":
+                    base_row[
+                        "rolling12_positive_pct"
+                    ],
+                "rolling24_positive_pct":
+                    base_row[
+                        "rolling24_positive_pct"
+                    ],
+                "rolling36_positive_pct":
+                    base_row[
+                        "rolling36_positive_pct"
+                    ],
+                "rolling24_worst_r":
+                    base_row[
+                        "rolling24_worst_r"
+                    ],
+                "rolling36_worst_r":
+                    base_row[
+                        "rolling36_worst_r"
+                    ],
+                "validation_pf":
+                    base_row[
+                        "validation_pf"
+                    ],
+                "last5y_r":
+                    base_row[
+                        "last5y_r"
+                    ],
+                "last2y_r":
+                    base_row[
+                        "last2y_r"
+                    ],
+                "cost2_combined_pf":
+                    cost2[
+                        "combined_pf"
+                    ],
+                "cost2_combined_total_r":
+                    cost2[
+                        "combined_total_r"
+                    ],
+                "core_displaced_count":
+                    base_row[
+                        "core_displaced_count"
+                    ],
+            })
+
+            period_rows.extend(
+                cr_period_rows(
+                    combined_config,
+                    combined_trades,
+                )
+            )
+
+            roll_rows = rolling_rows(
+                combined_config,
+                combined_trades,
+            )
+            cal_rows = calendar_rows(
+                combined_config,
+                combined_trades,
+            )
+
+            rolling_rows_out.extend(
+                roll_rows
+            )
+            calendar_rows_out.extend(
+                cal_rows
+            )
+
+            for trade in combined_trades:
+                trade_rows.append(
+                    cr_serialise_trade(
+                        trade,
+                        rank,
+                        candidate[
+                            "config_id"
+                        ],
+                    )
+                )
+
+            for rejection in rejected:
+                overlap_rows.append(
+                    cr_serialise_rejection(
+                        rejection,
+                        rank,
+                        candidate[
+                            "config_id"
+                        ],
+                    )
+                )
+
+            overlap_summaries.append({
+                "finalist_rank":
+                    rank,
+                "candidate_config_id":
+                    candidate[
+                        "config_id"
+                    ],
+                "core_raw_signals":
+                    base_row[
+                        "core_raw_signals"
+                    ],
+                "candidate_raw_signals":
+                    base_row[
+                        "candidate_raw_signals"
+                    ],
+                "accepted_core":
+                    base_row[
+                        "accepted_core"
+                    ],
+                "accepted_candidate":
+                    base_row[
+                        "accepted_candidate"
+                    ],
+                "rejected_core_overlap":
+                    base_row[
+                        "rejected_core_overlap"
+                    ],
+                "rejected_candidate_overlap":
+                    base_row[
+                        "rejected_candidate_overlap"
+                    ],
+                "same_candle_candidate_rejected":
+                    base_row[
+                        "same_candle_candidate_rejected"
+                    ],
+                "core_displaced_count":
+                    base_row[
+                        "core_displaced_count"
+                    ],
+                "core_newly_eligible_count":
+                    base_row[
+                        "core_newly_eligible_count"
+                    ],
+            })
+
+        deep_rows.sort(
+            key=lambda row: (
+                1
+                if row[
+                    "deep_pass"
+                ]
+                else 0,
+                cr_rank_key(
+                    row
+                ),
+            ),
+            reverse=True,
+        )
+
+        write_csv(
+            CR_OUT["finalists"],
+            deep_rows,
+        )
+        write_csv(
+            CR_OUT["decision"],
+            decision_rows,
+        )
+        write_csv(
+            CR_OUT["cost_stress"],
+            cost_rows,
+        )
+        write_csv(
+            CR_OUT["periods"],
+            period_rows,
+        )
+        write_csv(
+            CR_OUT["rolling"],
+            rolling_rows_out,
+        )
+        write_csv(
+            CR_OUT[
+                "rolling_summary"
+            ],
+            rolling_summary(
+                rolling_rows_out
+            ),
+        )
+        write_csv(
+            CR_OUT["calendar"],
+            calendar_rows_out,
+        )
+        write_csv(
+            CR_OUT[
+                "calendar_summary"
+            ],
+            calendar_summary(
+                calendar_rows_out
+            ),
+        )
+        write_csv(
+            CR_OUT["trades"],
+            trade_rows,
+        )
+        write_csv(
+            CR_OUT["overlaps"],
+            overlap_summaries,
+        )
+
+        write_csv(
+            CR_OUT["notes"],
+            [
+                {
+                    "topic":
+                        "frozen_core",
+                    "note": (
+                        "Compression core is completely frozen: body1.25, "
+                        "range1.50, compression<=0.85, close below prior15 low, "
+                        "RR3.50, no context filter."
+                    ),
+                },
+                {
+                    "topic":
+                        "objective",
+                    "note": (
+                        "Complement search ranks return-shape improvement first: "
+                        "12/24/36M positive-window consistency, worst rolling "
+                        "troughs, validation strength and marginal accepted R."
+                    ),
+                },
+                {
+                    "topic":
+                        "union_execution",
+                    "note": (
+                        "Exact raw-signal union with core same-candle priority, "
+                        "strategy-level pyramiding0, half-open overlap blocking "
+                        "[signal_index, exit_index), exit-candle re-entry eligible."
+                    ),
+                },
+                {
+                    "topic":
+                        "contexts",
+                    "note": (
+                        "Only single-factor contexts are tested; no context "
+                        "interactions or combinations are mined."
+                    ),
+                },
+                {
+                    "topic":
+                        "portfolio",
+                    "note": (
+                        "This remains standalone AUD/USD SHORT research. "
+                        "No live25 -> 26 portfolio-add decision is made here."
+                    ),
+                },
+                {
+                    "topic":
+                        "historical_not_forecast",
+                    "note": (
+                        "All results are historical backtests, not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        CR_STATUS.update({
+            "state": "packaging",
+            "message": "Packaging complementary sweep research",
+        })
+
+        cr_pack()
+
+        passes = [
+            row
+            for row
+            in deep_rows
+            if row[
+                "deep_pass"
+            ]
+        ]
+
+        best = (
+            deep_rows[0]
+            if deep_rows
+            else None
+        )
+
+        CR_STATUS.update({
+            "state": "complete",
+            "message": "AUD/USD H1 SHORT complementary sweep research complete",
+            "core_current_trades":
+                core_baseline[
+                    "full_trades"
+                ],
+            "core_current_pf":
+                core_baseline[
+                    "full_pf"
+                ],
+            "core_current_total_r":
+                core_baseline[
+                    "full_total_r"
+                ],
+            "stage1_configs":
+                len(stage1_rows),
+            "stage2_rows":
+                len(stage2_rows),
+            "stage3_rows":
+                len(stage3_rows),
+            "deep_finalists":
+                len(deep_rows),
+            "deep_passes":
+                len(passes),
+            "best_candidate":
+                (
+                    best[
+                        "candidate_config_id"
+                    ]
+                    if best
+                    else None
+                ),
+            "best_combined_trades":
+                (
+                    best[
+                        "combined_trades"
+                    ]
+                    if best
+                    else None
+                ),
+            "best_combined_total_r":
+                (
+                    best[
+                        "combined_total_r"
+                    ]
+                    if best
+                    else None
+                ),
+            "best_rolling24_positive_pct":
+                (
+                    best[
+                        "rolling24_positive_pct"
+                    ]
+                    if best
+                    else None
+                ),
+            "best_rolling36_positive_pct":
+                (
+                    best[
+                        "rolling36_positive_pct"
+                    ]
+                    if best
+                    else None
+                ),
+            "bundle":
+                CR_BUNDLE,
+            "orders_supported":
+                False,
+            "trading_enabled":
+                False,
+        })
+
+    except Exception as error:
+        import traceback
+
+        CR_STATUS.update({
+            "state": "error",
+            "message":
+                str(error),
+            "error_type":
+                type(error).__name__,
+            "traceback":
+                traceback.format_exc(),
+            "orders_supported":
+                False,
+            "trading_enabled":
+                False,
+        })
+
+        print(
+            "AUDUSD H1 SHORT COMPLEMENT RESEARCH ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+@app.route(
+    "/audusd-h1-short-complement/status"
+)
+def cr_status():
+    return jsonify(
+        CR_STATUS
+    )
+
+
+@app.route(
+    "/audusd-h1-short-complement/results"
+)
+def cr_results():
+    if not os.path.exists(
+        CR_BUNDLE
+    ):
+        return jsonify({
+            "status":
+                "not_ready",
+            "state":
+                CR_STATUS[
+                    "state"
+                ],
+            "message":
+                CR_STATUS[
+                    "message"
+                ],
+        }), 404
+
+    return send_file(
+        os.path.abspath(
+            CR_BUNDLE
+        ),
+        as_attachment=True,
+        download_name=
+            CR_BUNDLE,
+    )
+
+
+@app.route(
+    "/audusd-h1-short-complement/info"
+)
+def cr_info():
+    return jsonify({
+        "service": (
+            "AUD/USD H1 SHORT Complementary Sweep Research"
+        ),
+        "read_only":
+            True,
+        "orders_supported":
+            False,
+        "frozen_core": {
+            "family":
+                "COMPRESSION_BREAKOUT",
+            "body_atr_min":
+                1.25,
+            "range_atr_min":
+                1.50,
+            "compression_max":
+                0.85,
+            "breakout_lookback":
+                15,
+            "rr":
+                3.50,
+        },
+        "complement_family":
+            "SWEEP_DISPLACEMENT",
+        "stage1_geometry_configs":
+            len(
+                CR_BODY_GRID
+            )
+            * len(
+                CR_LB_GRID
+            )
+            * len(
+                CR_WICK_GRID
+            ),
+        "rr_grid":
+            CR_RR_GRID,
+        "contexts":
+            CR_CONTEXTS,
+        "execution": (
+            "core priority, exact union p0, "
+            "exit-candle re-entry eligible"
+        ),
+        "next_step_if_robust": (
+            "Freeze two-trigger AUD/USD H1 SHORT then run exact "
+            "current25 -> prospective26 portfolio-add test"
+        ),
+        "routes": [
+            "/audusd-h1-short-complement/status",
+            "/audusd-h1-short-complement/results",
+            "/audusd-h1-short-complement/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_fc_research,
+        target=run_cr_research,
         daemon=True,
     ).start()
 
