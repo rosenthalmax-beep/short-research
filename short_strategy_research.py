@@ -5341,9 +5341,1332 @@ def rf_info():
     })
 
 
+
+# ============================================================
+# AUD/USD H1 SHORT — FINAL STANDALONE CONFIRMATION
+# ============================================================
+#
+# PURPOSE
+# -------
+# Freeze and deeply validate ONE exact AUD/USD H1 SHORT candidate before
+# any prospective #26 portfolio-add test.
+#
+# FROZEN PRIMARY CANDIDATE
+# ------------------------
+# Family: COMPRESSION_BREAKOUT
+# Side: SHORT
+# Timeframe: H1
+#
+# Signal candle:
+#   bearish
+#   body >= 1.25 ATR14
+#   range >= 1.50 ATR14
+#   prior-H1 ATR14 / prior20-H1 ATR14 mean <= 0.85
+#   close < previous 15-bar low, current excluded
+#
+# Execution:
+#   reference entry = signal close
+#   historical adverse fill = reference entry - 0.5 pip
+#   stop = signal high + 10 ticks
+#   target = reference entry - 3.50 * reference risk
+#   pyramiding = 0 exact strategy stream
+#   exit-candle re-entry eligible
+#
+# No weekday filter
+# No session filter
+# No H4/D regime filter
+#
+# EXACT REFINEMENT ANCHOR THROUGH 2026-09-18 14:00 UTC
+# ------------------------------------------------------
+# 158 trades
+# 52 winners
+# PF 1.667562...
+# +70.761534R
+# max DD -11R
+# dev 2002-2017 PF 1.798946...
+# validation 2018+ PF 1.432453...
+# last 5Y +13.623363R
+# last 2Y +0.137825R
+#
+# FROZEN SECONDARY CONTROLS
+# -------------------------
+# A) SWEEP_DISPLACEMENT
+#    body >= 1.25 ATR
+#    sweep prior15 high
+#    upper wick/body >= 0.25
+#    close < previous H1 low
+#    RR3.50
+#
+# B) OUTSIDE_REVERSAL
+#    body >= 1.00 ATR
+#    prior60 high distance <= 0.30 ATR
+#    close location <= 0.15
+#    RR4.50
+#
+# PARAMETER ROBUSTNESS
+# --------------------
+# One-at-a-time neighbours only. We do NOT optimise a new grid:
+#   body:        1.00 / [1.25] / 1.50 ATR
+#   range:       1.25 / [1.50] / 1.75 ATR
+#   compression: 0.80 / [0.85] / 0.90
+#   breakout LB: 10 / [15] / 20
+#   RR:          3.00 / [3.50] / 4.00
+#
+# Deep diagnostics:
+#   exact parity
+#   full/dev/validation/eras/recent periods
+#   0.5x / 1x / 1.5x / 2x cost stress
+#   rolling 12/24/36 month windows
+#   calendar years
+#   exact trade ledger
+#   frozen-control comparison
+#
+# This runner does NOT test portfolio contribution and does NOT send orders.
+# If the primary candidate survives, the next step is the exact current25 ->
+# prospective26 portfolio-add test, including AUD/USD LONG-vs-SHORT conflicts.
+# ============================================================
+
+FC_STATUS = {
+    "state": "not_started",
+    "message": "AUD/USD H1 SHORT final standalone confirmation not started",
+    "pair": PAIR,
+    "timeframe": "H1",
+    "side": "SHORT",
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+FC_BUNDLE = "AUDUSD_H1_SHORT_FINAL_CONFIRMATION_RESULTS.zip"
+
+FC_OUT = {
+    "coverage": "audusd_h1_short_final_confirmation_coverage.csv",
+    "parity": "audusd_h1_short_final_confirmation_parity.csv",
+    "headline": "audusd_h1_short_final_confirmation_headline.csv",
+    "periods": "audusd_h1_short_final_confirmation_periods.csv",
+    "cost_stress": "audusd_h1_short_final_confirmation_cost_stress.csv",
+    "rolling": "audusd_h1_short_final_confirmation_rolling.csv",
+    "rolling_summary": "audusd_h1_short_final_confirmation_rolling_summary.csv",
+    "calendar": "audusd_h1_short_final_confirmation_calendar.csv",
+    "calendar_summary": "audusd_h1_short_final_confirmation_calendar_summary.csv",
+    "parameter_neighbours": "audusd_h1_short_final_confirmation_parameter_neighbours.csv",
+    "neighbour_summary": "audusd_h1_short_final_confirmation_neighbour_summary.csv",
+    "candidate_trades": "audusd_h1_short_final_confirmation_candidate_trades.csv",
+    "control_trades": "audusd_h1_short_final_confirmation_control_trades.csv",
+    "decision": "audusd_h1_short_final_confirmation_decision.csv",
+    "notes": "audusd_h1_short_final_confirmation_notes.csv",
+}
+
+FC_PARITY_CUTOFF = datetime(
+    2026, 9, 18, 14, 0,
+    tzinfo=timezone.utc,
+)
+
+FC_PRIMARY_ID = "AUD_USD_H1_SHORT_COMPRESSION_FINAL_CANDIDATE"
+FC_SWEEP_ID = "AUD_USD_H1_SHORT_SWEEP_CONTROL"
+FC_OUTSIDE_ID = "AUD_USD_H1_SHORT_OUTSIDE_CONTROL"
+
+
+def fc_primary_config(
+    body=1.25,
+    range_atr=1.50,
+    compression=0.85,
+    breakout_lb=15,
+    rr=3.50,
+):
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "COMPRESSION_BREAKOUT",
+        "body_atr_min": float(body),
+        "range_atr_min": float(range_atr),
+        "compression_max": float(compression),
+        "breakout_lookback": int(breakout_lb),
+        "rr": float(rr),
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+def fc_sweep_control():
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "SWEEP_DISPLACEMENT",
+        "body_atr_min": 1.25,
+        "lookback": 15,
+        "wick_body_min": 0.25,
+        "rr": 3.50,
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+def fc_outside_control():
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "OUTSIDE_REVERSAL",
+        "body_atr_min": 1.00,
+        "lookback": 60,
+        "distance_atr_max": 0.30,
+        "close_location": 0.15,
+        "rr": 4.50,
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+FC_PARITY_EXPECTED = {
+    "PRIMARY": {
+        "trades": 158,
+        "winners": 52,
+        "win_rate_pct": 32.91139240506329,
+        "pf": 1.667561748050749,
+        "total_r": 70.76153433562815,
+        "expectancy_r": 0.4478578122508237,
+        "max_dd_r": -11.0,
+        "dev_pf": 1.798945690829578,
+        "dev_r": 54.32832820935458,
+        "validation_pf": 1.4324527997591744,
+        "validation_r": 16.43320612627357,
+        "positive_eras": 4,
+        "last5_r": 13.623362723320018,
+        "last2_r": 0.1378254690924856,
+    },
+    "SWEEP_CONTROL": {
+        "trades": 84,
+        "pf": 1.3720690499383532,
+        "total_r": 22.32414299630119,
+        "validation_pf": 1.5382549868115584,
+        "validation_r": 10.765103617509852,
+        "last5_r": 9.92758197221595,
+        "last2_r": 2.79931980264202,
+    },
+    "OUTSIDE_CONTROL": {
+        "trades": 107,
+        "pf": 1.4098867450738546,
+        "total_r": 33.20082635098223,
+        "validation_pf": 1.5084901511902715,
+        "validation_r": 16.271668282009948,
+        "last5_r": 8.785666392722164,
+        "last2_r": -5.617520871316513,
+    },
+}
+
+
+def fc_pack():
+    with zipfile.ZipFile(
+        FC_BUNDLE,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in FC_OUT.values():
+            if os.path.exists(path):
+                archive.write(
+                    path,
+                    arcname=os.path.basename(path),
+                )
+
+
+def fc_ensure_lb15(features):
+    if 15 in features["prev_lows"]:
+        return
+
+    features["prev_lows"][15] = rolling_previous_extreme(
+        features["low"],
+        15,
+        want_max=False,
+    )
+    features["prev_highs"][15] = rolling_previous_extreme(
+        features["high"],
+        15,
+        want_max=True,
+    )
+
+
+def fc_slice_features(features, cutoff):
+    stop = bisect_right(
+        features["times"],
+        cutoff,
+    )
+
+    sliced = {}
+
+    for key, value in features.items():
+        if isinstance(value, np.ndarray):
+            sliced[key] = value[:stop].copy()
+
+        elif key == "times":
+            sliced[key] = value[:stop]
+
+        elif key in ("prev_lows", "prev_highs"):
+            sliced[key] = {
+                lb: arr[:stop].copy()
+                for lb, arr in value.items()
+            }
+
+        else:
+            sliced[key] = value
+
+    return sliced
+
+
+def fc_parity_row(label, config, features, expected):
+    indices = signal_indices(
+        config,
+        features,
+    )
+    row, _ = evaluate_candidate(
+        config,
+        features,
+        indices,
+    )
+
+    checks = {
+        "trades": row["full_trades"] == expected["trades"],
+        "pf": abs(
+            row["full_pf"] - expected["pf"]
+        ) <= 1e-9,
+        "total_r": abs(
+            row["full_total_r"] - expected["total_r"]
+        ) <= 1e-9,
+    }
+
+    if "winners" in expected:
+        checks["winners"] = (
+            row["full_winners"] == expected["winners"]
+        )
+
+    if "max_dd_r" in expected:
+        checks["max_dd_r"] = abs(
+            row["full_max_dd_r"] - expected["max_dd_r"]
+        ) <= 1e-9
+
+    if "validation_pf" in expected:
+        checks["validation_pf"] = abs(
+            row["validation_2018_plus_pf"]
+            - expected["validation_pf"]
+        ) <= 1e-9
+
+    if "last5_r" in expected:
+        checks["last5_r"] = abs(
+            row["last5y_r"]
+            - expected["last5_r"]
+        ) <= 1e-9
+
+    if "last2_r" in expected:
+        checks["last2_r"] = abs(
+            row["last2y_r"]
+            - expected["last2_r"]
+        ) <= 1e-9
+
+    passed = all(checks.values())
+
+    output = {
+        "label": label,
+        "config_id": config["config_id"],
+        "expected_trades": expected["trades"],
+        "actual_trades": row["full_trades"],
+        "expected_pf": expected["pf"],
+        "actual_pf": row["full_pf"],
+        "expected_total_r": expected["total_r"],
+        "actual_total_r": row["full_total_r"],
+        "checks_json": json.dumps(
+            checks,
+            sort_keys=True,
+        ),
+        "pass": passed,
+    }
+
+    if not passed:
+        raise RuntimeError(
+            f"Final-confirmation parity failed for {label}: "
+            f"{json.dumps(output, default=str)}"
+        )
+
+    return output
+
+
+def fc_extended_period_rows(config, trades):
+    rows = detailed_period_rows(
+        config,
+        trades,
+    )
+
+    extra = [
+        (
+            "LAST_1Y",
+            NOW - timedelta(days=365.25),
+            None,
+        ),
+        (
+            "LAST_3Y",
+            NOW - timedelta(days=365.25 * 3),
+            None,
+        ),
+    ]
+
+    for name, start, end in extra:
+        result = period_metrics(
+            trades,
+            start,
+            end,
+        )
+        rows.append({
+            "config_id": config["config_id"],
+            "timeframe": config["timeframe"],
+            "side": config["side"],
+            "family": config["family"],
+            "period": name,
+            **result,
+        })
+
+    return rows
+
+
+def fc_serialise_trades(
+    label,
+    config,
+    trades,
+):
+    output = []
+
+    for trade in trades:
+        row = dict(trade)
+        row["strategy_label"] = label
+        row["config_id"] = config["config_id"]
+        row["signal_time"] = iso(
+            row["signal_time"]
+        )
+        row["exit_time"] = iso(
+            row["exit_time"]
+        )
+        output.append(row)
+
+    return output
+
+
+def fc_one_at_a_time_neighbours():
+    """
+    Predeclared one-factor-at-a-time robustness set around the frozen
+    candidate. The primary appears once only.
+    """
+    specs = [
+        (
+            "PRIMARY",
+            1.25, 1.50, 0.85, 15, 3.50,
+            "Frozen primary candidate",
+        ),
+
+        (
+            "BODY_DOWN",
+            1.00, 1.50, 0.85, 15, 3.50,
+            "Only body threshold relaxed",
+        ),
+        (
+            "BODY_UP",
+            1.50, 1.50, 0.85, 15, 3.50,
+            "Only body threshold tightened",
+        ),
+
+        (
+            "RANGE_DOWN",
+            1.25, 1.25, 0.85, 15, 3.50,
+            "Only range threshold relaxed",
+        ),
+        (
+            "RANGE_UP",
+            1.25, 1.75, 0.85, 15, 3.50,
+            "Only range threshold tightened",
+        ),
+
+        (
+            "COMPRESSION_TIGHTER",
+            1.25, 1.50, 0.80, 15, 3.50,
+            "Only compression threshold tightened",
+        ),
+        (
+            "COMPRESSION_LOOSER",
+            1.25, 1.50, 0.90, 15, 3.50,
+            "Only compression threshold loosened",
+        ),
+
+        (
+            "LB_DOWN",
+            1.25, 1.50, 0.85, 10, 3.50,
+            "Only breakout lookback shortened",
+        ),
+        (
+            "LB_UP",
+            1.25, 1.50, 0.85, 20, 3.50,
+            "Only breakout lookback lengthened",
+        ),
+
+        (
+            "RR_DOWN",
+            1.25, 1.50, 0.85, 15, 3.00,
+            "Only reward:risk reduced",
+        ),
+        (
+            "RR_UP",
+            1.25, 1.50, 0.85, 15, 4.00,
+            "Only reward:risk increased",
+        ),
+    ]
+
+    rows = []
+
+    for (
+        label,
+        body,
+        rng,
+        compression,
+        lb,
+        rr,
+        note,
+    ) in specs:
+        config = fc_primary_config(
+            body=body,
+            range_atr=rng,
+            compression=compression,
+            breakout_lb=lb,
+            rr=rr,
+        )
+        rows.append({
+            "neighbour_label": label,
+            "note": note,
+            "config": config,
+        })
+
+    return rows
+
+
+def fc_neighbour_summary(rows):
+    neighbours = [
+        row for row in rows
+        if row["neighbour_label"] != "PRIMARY"
+    ]
+
+    positive = [
+        row for row in neighbours
+        if row["full_total_r"] > 0
+    ]
+    split_positive = [
+        row for row in neighbours
+        if row["both_temporal_splits_positive"]
+    ]
+    validation_positive = [
+        row for row in neighbours
+        if row["validation_2018_plus_r"] > 0
+    ]
+    last5_positive = [
+        row for row in neighbours
+        if row["last5y_r"] > 0
+    ]
+    last2_positive = [
+        row for row in neighbours
+        if row["last2y_r"] > 0
+    ]
+
+    pfs = [
+        row["full_pf"]
+        for row in neighbours
+    ]
+    split_pfs = [
+        row["min_temporal_split_pf"]
+        for row in neighbours
+    ]
+
+    return [{
+        "neighbours_excluding_primary":
+            len(neighbours),
+        "positive_full":
+            len(positive),
+        "positive_full_pct":
+            pct(
+                len(positive),
+                len(neighbours),
+            ),
+        "both_temporal_splits_positive":
+            len(split_positive),
+        "both_temporal_splits_positive_pct":
+            pct(
+                len(split_positive),
+                len(neighbours),
+            ),
+        "validation_positive":
+            len(validation_positive),
+        "validation_positive_pct":
+            pct(
+                len(validation_positive),
+                len(neighbours),
+            ),
+        "last5_positive":
+            len(last5_positive),
+        "last5_positive_pct":
+            pct(
+                len(last5_positive),
+                len(neighbours),
+            ),
+        "last2_positive":
+            len(last2_positive),
+        "last2_positive_pct":
+            pct(
+                len(last2_positive),
+                len(neighbours),
+            ),
+        "median_full_pf":
+            med(pfs),
+        "minimum_full_pf":
+            min(pfs),
+        "median_min_temporal_split_pf":
+            med(split_pfs),
+        "minimum_min_temporal_split_pf":
+            min(split_pfs),
+    }]
+
+
+def fc_summary_lookup(rows, config_id):
+    for row in rows:
+        if row["config_id"] == config_id:
+            return row
+    raise RuntimeError(
+        f"Missing summary row for {config_id}"
+    )
+
+
+def fc_decision_row(
+    primary_row,
+    cost_rows,
+    rolling_summary_rows,
+    calendar_summary_rows,
+    neighbour_summary_rows,
+):
+    cost2 = next(
+        row for row in cost_rows
+        if (
+            row["config_id"]
+            == primary_row["config_id"]
+            and abs(
+                row["cost_multiplier"] - 2.0
+            ) < 1e-12
+        )
+    )
+
+    rolling = {
+        int(row["window_months"]): row
+        for row in rolling_summary_rows
+        if row["config_id"]
+        == primary_row["config_id"]
+    }
+
+    calendar = fc_summary_lookup(
+        calendar_summary_rows,
+        primary_row["config_id"],
+    )
+
+    neighbours = neighbour_summary_rows[0]
+
+    checks = {
+        "sample_ge_100":
+            primary_row["full_trades"] >= 100,
+
+        "pf_ge_1_35":
+            primary_row["full_pf"] >= 1.35,
+
+        "both_temporal_splits_positive":
+            bool(
+                primary_row[
+                    "both_temporal_splits_positive"
+                ]
+            ),
+
+        "validation_pf_ge_1_25":
+            primary_row[
+                "validation_2018_plus_pf"
+            ] >= 1.25,
+
+        "four_of_four_eras_positive":
+            primary_row["positive_eras"] == 4,
+
+        "last5_positive":
+            primary_row["last5y_r"] > 0,
+
+        # Recent sample is marginal by design; require non-negative rather
+        # than manufacturing a filter around 2024-2026.
+        "last2_non_negative":
+            primary_row["last2y_r"] >= 0,
+
+        "cost_2x_pf_ge_1_20":
+            cost2["profit_factor"] >= 1.20,
+
+        "cost_2x_total_r_positive":
+            cost2["total_r"] > 0,
+
+        "rolling24_positive_pct_ge_70":
+            rolling.get(
+                24, {}
+            ).get(
+                "positive_active_windows_pct",
+                0.0,
+            ) >= 70.0,
+
+        "rolling36_positive_pct_ge_75":
+            rolling.get(
+                36, {}
+            ).get(
+                "positive_active_windows_pct",
+                0.0,
+            ) >= 75.0,
+
+        "calendar_positive_pct_ge_55":
+            calendar[
+                "positive_active_years_pct"
+            ] >= 55.0,
+
+        "all_one_factor_neighbours_profitable":
+            neighbours[
+                "positive_full_pct"
+            ] >= 100.0,
+
+        "neighbour_split_positive_pct_ge_80":
+            neighbours[
+                "both_temporal_splits_positive_pct"
+            ] >= 80.0,
+    }
+
+    return {
+        "candidate_id":
+            FC_PRIMARY_ID,
+        "config_id":
+            primary_row["config_id"],
+        "standalone_confirmation_pass":
+            all(checks.values()),
+        "checks_passed":
+            sum(checks.values()),
+        "checks_total":
+            len(checks),
+        "checks_json":
+            json.dumps(
+                checks,
+                sort_keys=True,
+            ),
+        "full_trades":
+            primary_row["full_trades"],
+        "full_pf":
+            primary_row["full_pf"],
+        "full_total_r":
+            primary_row["full_total_r"],
+        "full_expectancy_r":
+            primary_row[
+                "full_expectancy_r"
+            ],
+        "full_max_dd_r":
+            primary_row[
+                "full_max_dd_r"
+            ],
+        "validation_2018_plus_pf":
+            primary_row[
+                "validation_2018_plus_pf"
+            ],
+        "validation_2018_plus_r":
+            primary_row[
+                "validation_2018_plus_r"
+            ],
+        "last5y_r":
+            primary_row["last5y_r"],
+        "last2y_r":
+            primary_row["last2y_r"],
+        "cost_2x_pf":
+            cost2["profit_factor"],
+        "cost_2x_total_r":
+            cost2["total_r"],
+        "rolling12_positive_pct":
+            rolling.get(
+                12, {}
+            ).get(
+                "positive_active_windows_pct",
+                0.0,
+            ),
+        "rolling12_worst_r":
+            rolling.get(
+                12, {}
+            ).get(
+                "worst_r_active",
+                0.0,
+            ),
+        "rolling24_positive_pct":
+            rolling.get(
+                24, {}
+            ).get(
+                "positive_active_windows_pct",
+                0.0,
+            ),
+        "rolling24_worst_r":
+            rolling.get(
+                24, {}
+            ).get(
+                "worst_r_active",
+                0.0,
+            ),
+        "rolling36_positive_pct":
+            rolling.get(
+                36, {}
+            ).get(
+                "positive_active_windows_pct",
+                0.0,
+            ),
+        "rolling36_worst_r":
+            rolling.get(
+                36, {}
+            ).get(
+                "worst_r_active",
+                0.0,
+            ),
+        "positive_calendar_year_pct":
+            calendar[
+                "positive_active_years_pct"
+            ],
+        "worst_calendar_year_r":
+            calendar[
+                "worst_active_year_r"
+            ],
+        "neighbour_positive_pct":
+            neighbours[
+                "positive_full_pct"
+            ],
+        "neighbour_split_positive_pct":
+            neighbours[
+                "both_temporal_splits_positive_pct"
+            ],
+        "next_step_if_pass":
+            (
+                "Exact current25 -> prospective26 portfolio-add test "
+                "with AUD/USD LONG-vs-SHORT non-hedging conflicts"
+            ),
+    }
+
+
+def run_fc_research():
+    try:
+        global STATUS
+        STATUS = FC_STATUS
+
+        FC_STATUS.update({
+            "state": "fetching",
+            "message": "Fetching AUD/USD H1 history",
+        })
+
+        h1 = fetch_history(
+            "H1",
+            REQUESTED_START,
+            NOW,
+            chunk_days=180,
+        )
+
+        if len(h1) < 100000:
+            raise RuntimeError(
+                f"Unexpectedly small H1 history: {len(h1)}"
+            )
+
+        write_csv(
+            FC_OUT["coverage"],
+            [{
+                "pair": PAIR,
+                "timeframe": "H1",
+                "candles": len(h1),
+                "first_candle_utc":
+                    iso(h1[0]["time"]),
+                "last_candle_utc":
+                    iso(h1[-1]["time"]),
+                "parity_cutoff_utc":
+                    iso(FC_PARITY_CUTOFF),
+            }],
+        )
+
+        FC_STATUS.update({
+            "state": "features",
+            "message": "Building frozen H1 feature set",
+        })
+
+        features = build_features(
+            h1,
+            "H1",
+        )
+        fc_ensure_lb15(
+            features
+        )
+
+        primary = fc_primary_config()
+        sweep = fc_sweep_control()
+        outside = fc_outside_control()
+
+        # ----------------------------------------------------
+        # EXACT PARITY TO THE UPLOADED REFINEMENT
+        # ----------------------------------------------------
+        FC_STATUS.update({
+            "state": "parity",
+            "message": "Reproducing uploaded refinement anchors exactly",
+        })
+
+        parity_features = fc_slice_features(
+            features,
+            FC_PARITY_CUTOFF,
+        )
+
+        parity_rows = [
+            fc_parity_row(
+                "PRIMARY",
+                primary,
+                parity_features,
+                FC_PARITY_EXPECTED["PRIMARY"],
+            ),
+            fc_parity_row(
+                "SWEEP_CONTROL",
+                sweep,
+                parity_features,
+                FC_PARITY_EXPECTED[
+                    "SWEEP_CONTROL"
+                ],
+            ),
+            fc_parity_row(
+                "OUTSIDE_CONTROL",
+                outside,
+                parity_features,
+                FC_PARITY_EXPECTED[
+                    "OUTSIDE_CONTROL"
+                ],
+            ),
+        ]
+
+        write_csv(
+            FC_OUT["parity"],
+            parity_rows,
+        )
+
+        # ----------------------------------------------------
+        # FULL CURRENT-HISTORY HEADLINE + DEEP DIAGNOSTICS
+        # ----------------------------------------------------
+        FC_STATUS.update({
+            "state": "deep_confirmation",
+            "message": "Running exact candidate and frozen controls",
+        })
+
+        named_configs = [
+            (
+                FC_PRIMARY_ID,
+                "PRIMARY_CANDIDATE",
+                primary,
+            ),
+            (
+                FC_SWEEP_ID,
+                "SECONDARY_CONTROL",
+                sweep,
+            ),
+            (
+                FC_OUTSIDE_ID,
+                "ROBUSTNESS_CONTROL",
+                outside,
+            ),
+        ]
+
+        headline_rows = []
+        all_period_rows = []
+        all_cost_rows = []
+        all_rolling_rows = []
+        all_calendar_rows = []
+        candidate_trade_rows = []
+        control_trade_rows = []
+
+        for (
+            strategy_id,
+            role,
+            config,
+        ) in named_configs:
+            indices = signal_indices(
+                config,
+                features,
+            )
+
+            row, trades = evaluate_candidate(
+                config,
+                features,
+                indices,
+            )
+
+            row["strategy_id"] = (
+                strategy_id
+            )
+            row["confirmation_role"] = role
+            headline_rows.append(row)
+
+            all_period_rows.extend(
+                fc_extended_period_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            all_cost_rows.extend(
+                cost_stress_rows(
+                    config,
+                    features,
+                    indices,
+                )
+            )
+
+            all_rolling_rows.extend(
+                rolling_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            all_calendar_rows.extend(
+                calendar_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            serialised = (
+                fc_serialise_trades(
+                    strategy_id,
+                    config,
+                    trades,
+                )
+            )
+
+            if role == "PRIMARY_CANDIDATE":
+                candidate_trade_rows.extend(
+                    serialised
+                )
+            else:
+                control_trade_rows.extend(
+                    serialised
+                )
+
+        write_csv(
+            FC_OUT["headline"],
+            headline_rows,
+        )
+        write_csv(
+            FC_OUT["periods"],
+            all_period_rows,
+        )
+        write_csv(
+            FC_OUT["cost_stress"],
+            all_cost_rows,
+        )
+        write_csv(
+            FC_OUT["rolling"],
+            all_rolling_rows,
+        )
+        write_csv(
+            FC_OUT["calendar"],
+            all_calendar_rows,
+        )
+        write_csv(
+            FC_OUT["candidate_trades"],
+            candidate_trade_rows,
+        )
+        write_csv(
+            FC_OUT["control_trades"],
+            control_trade_rows,
+        )
+
+        rolling_summary_rows = (
+            rolling_summary(
+                all_rolling_rows
+            )
+        )
+        calendar_summary_rows = (
+            calendar_summary(
+                all_calendar_rows
+            )
+        )
+
+        write_csv(
+            FC_OUT["rolling_summary"],
+            rolling_summary_rows,
+        )
+        write_csv(
+            FC_OUT["calendar_summary"],
+            calendar_summary_rows,
+        )
+
+        # ----------------------------------------------------
+        # ONE-FACTOR-AT-A-TIME PARAMETER ROBUSTNESS
+        # ----------------------------------------------------
+        FC_STATUS.update({
+            "state": "parameter_neighbours",
+            "message": "Running predeclared one-factor parameter neighbours",
+        })
+
+        neighbour_rows = []
+
+        for item in fc_one_at_a_time_neighbours():
+            config = item["config"]
+            indices = signal_indices(
+                config,
+                features,
+            )
+
+            row, _ = evaluate_candidate(
+                config,
+                features,
+                indices,
+            )
+
+            row["neighbour_label"] = (
+                item["neighbour_label"]
+            )
+            row["neighbour_note"] = (
+                item["note"]
+            )
+            neighbour_rows.append(
+                row
+            )
+
+        write_csv(
+            FC_OUT["parameter_neighbours"],
+            neighbour_rows,
+        )
+
+        neighbour_summary_rows = (
+            fc_neighbour_summary(
+                neighbour_rows
+            )
+        )
+
+        write_csv(
+            FC_OUT["neighbour_summary"],
+            neighbour_summary_rows,
+        )
+
+        # ----------------------------------------------------
+        # PREDECLARED FINAL STANDALONE SCREEN
+        # ----------------------------------------------------
+        primary_row = next(
+            row for row in headline_rows
+            if row["strategy_id"]
+            == FC_PRIMARY_ID
+        )
+
+        decision_row = fc_decision_row(
+            primary_row,
+            all_cost_rows,
+            rolling_summary_rows,
+            calendar_summary_rows,
+            neighbour_summary_rows,
+        )
+
+        write_csv(
+            FC_OUT["decision"],
+            [decision_row],
+        )
+
+        write_csv(
+            FC_OUT["notes"],
+            [
+                {
+                    "topic": "frozen_candidate",
+                    "note": (
+                        "AUD/USD H1 SHORT COMPRESSION_BREAKOUT: bearish; "
+                        "body>=1.25 ATR14; range>=1.50 ATR14; prior-H1 ATR14/"
+                        "prior20 mean<=0.85; close below previous15 low; RR3.50; "
+                        "no weekday/session/HTF regime."
+                    ),
+                },
+                {
+                    "topic": "execution",
+                    "note": (
+                        "Historical fill = signal close -0.5 pip adverse; "
+                        "stop = signal high +10 ticks; target uses reference "
+                        "entry risk; pyramiding0; exit-candle re-entry eligible."
+                    ),
+                },
+                {
+                    "topic": "parity",
+                    "note": (
+                        "Primary plus frozen sweep/outside controls must reproduce "
+                        "the uploaded refinement exactly through "
+                        "2026-09-18 14:00 UTC before current-history confirmation."
+                    ),
+                },
+                {
+                    "topic": "neighbours",
+                    "note": (
+                        "Parameter robustness is one-factor-at-a-time only; "
+                        "this is confirmation, not another optimisation grid."
+                    ),
+                },
+                {
+                    "topic": "recent_sample",
+                    "note": (
+                        "The candidate's uploaded last-2Y edge was approximately "
+                        "flat (+0.138R). The confirmation deliberately requires "
+                        "only non-negative last-2Y R; no context filter is added "
+                        "to manufacture recent performance."
+                    ),
+                },
+                {
+                    "topic": "portfolio",
+                    "note": (
+                        "No current25 portfolio contribution is tested here. "
+                        "A standalone pass only authorises the next research step: "
+                        "exact current25 -> prospective26 portfolio-add testing "
+                        "with same-pair opposite-direction non-hedging conflicts."
+                    ),
+                },
+                {
+                    "topic": "historical_not_forecast",
+                    "note": (
+                        "All outputs are historical backtest results, not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        FC_STATUS.update({
+            "state": "packaging",
+            "message": "Packaging final standalone confirmation",
+        })
+
+        fc_pack()
+
+        FC_STATUS.update({
+            "state": "complete",
+            "message": "AUD/USD H1 SHORT final standalone confirmation complete",
+            "h1_candles": len(h1),
+            "parity_passes": sum(
+                row["pass"]
+                for row in parity_rows
+            ),
+            "parity_total": len(
+                parity_rows
+            ),
+            "primary_trades":
+                primary_row["full_trades"],
+            "primary_pf":
+                primary_row["full_pf"],
+            "primary_total_r":
+                primary_row["full_total_r"],
+            "standalone_confirmation_pass":
+                decision_row[
+                    "standalone_confirmation_pass"
+                ],
+            "checks_passed":
+                decision_row["checks_passed"],
+            "checks_total":
+                decision_row["checks_total"],
+            "bundle": FC_BUNDLE,
+            "orders_supported": False,
+            "trading_enabled": False,
+        })
+
+    except Exception as error:
+        import traceback
+
+        FC_STATUS.update({
+            "state": "error",
+            "message": str(error),
+            "error_type":
+                type(error).__name__,
+            "traceback":
+                traceback.format_exc(),
+            "orders_supported": False,
+            "trading_enabled": False,
+        })
+
+        print(
+            "AUDUSD H1 SHORT FINAL CONFIRMATION ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+@app.route(
+    "/audusd-h1-short-final-confirmation/status"
+)
+def fc_status():
+    return jsonify(
+        FC_STATUS
+    )
+
+
+@app.route(
+    "/audusd-h1-short-final-confirmation/results"
+)
+def fc_results():
+    if not os.path.exists(
+        FC_BUNDLE
+    ):
+        return jsonify({
+            "status": "not_ready",
+            "state":
+                FC_STATUS["state"],
+            "message":
+                FC_STATUS["message"],
+        }), 404
+
+    return send_file(
+        os.path.abspath(
+            FC_BUNDLE
+        ),
+        as_attachment=True,
+        download_name=FC_BUNDLE,
+    )
+
+
+@app.route(
+    "/audusd-h1-short-final-confirmation/info"
+)
+def fc_info():
+    return jsonify({
+        "service": (
+            "AUD/USD H1 SHORT Final Standalone Confirmation"
+        ),
+        "read_only": True,
+        "orders_supported": False,
+        "candidate": {
+            "family":
+                "COMPRESSION_BREAKOUT",
+            "body_atr_min": 1.25,
+            "range_atr_min": 1.50,
+            "compression_max": 0.85,
+            "breakout_lookback": 15,
+            "rr": 3.50,
+            "weekday_filter": None,
+            "session_filter": None,
+            "htf_filter": None,
+        },
+        "parameter_confirmation":
+            "one-factor-at-a-time only",
+        "controls": [
+            (
+                "SWEEP_DISPLACEMENT body1.25 "
+                "LB15 wick0.25 RR3.50"
+            ),
+            (
+                "OUTSIDE_REVERSAL body1.00 "
+                "LB60 distance0.30 close0.15 RR4.50"
+            ),
+        ],
+        "next_step_if_pass": (
+            "current25 -> prospective26 exact portfolio-add test"
+        ),
+        "routes": [
+            "/audusd-h1-short-final-confirmation/status",
+            "/audusd-h1-short-final-confirmation/results",
+            "/audusd-h1-short-final-confirmation/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_rf_research,
+        target=run_fc_research,
         daemon=True,
     ).start()
 
