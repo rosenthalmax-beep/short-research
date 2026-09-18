@@ -18561,28 +18561,48 @@ def be25_apply_overlay_to_trade(
     entry_time = trade["entry_time"]
     original_exit_bar_time = trade["exit_time"]
 
-    if entry_time not in time_to_index:
-        raise RuntimeError(
-            f"Missing entry candle for "
-            f"{trade['strategy_id']} {entry_time}"
+    candle_times = [
+        c["time"]
+        for c in candles
+    ]
+
+    # entry_time is the signal-candle CLOSE / historical entry time.
+    # Around weekend/session gaps there may be no candle whose OPEN
+    # timestamp equals that exact time (for example Friday 21:00 UTC).
+    # In that case the correct first bar to inspect is the first tradable
+    # candle after the entry timestamp.
+    if entry_time in time_to_index:
+        start_index = time_to_index[
+            entry_time
+        ]
+    else:
+        start_index = bisect.bisect_left(
+            candle_times,
+            entry_time,
         )
 
+        if start_index >= len(candles):
+            raise RuntimeError(
+                f"No tradable candle at/after entry for "
+                f"{trade['strategy_id']} {entry_time}"
+            )
+
+    # Historical exit_time is the OPEN timestamp of the candle on which
+    # the frozen stop/target outcome was resolved. Keep this exact rather
+    # than silently shifting the original exit.
     if original_exit_bar_time not in time_to_index:
         raise RuntimeError(
             f"Missing original exit candle for "
             f"{trade['strategy_id']} {original_exit_bar_time}"
         )
 
-    start_index = time_to_index[
-        entry_time
-    ]
     original_exit_index = time_to_index[
         original_exit_bar_time
     ]
 
     if original_exit_index < start_index:
         raise RuntimeError(
-            "Exit precedes entry in overlay replay"
+            "Exit precedes first tradable post-entry candle in overlay replay"
         )
 
     trigger_price = be25_trigger_price(
