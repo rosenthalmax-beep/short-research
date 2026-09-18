@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import math
 import time
 import zipfile
@@ -229,6 +230,14 @@ def safe_pf(gross_profit, gross_loss):
 def med(values):
     values = list(values)
     return median(values) if values else 0.0
+
+
+def pct(numerator, denominator):
+    return (
+        100.0 * numerator / denominator
+        if denominator
+        else 0.0
+    )
 
 
 def add_months(dt, months):
