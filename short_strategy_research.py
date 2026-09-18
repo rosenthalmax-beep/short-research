@@ -9649,9 +9649,1801 @@ def cr_info():
     })
 
 
+
+# ============================================================
+# AUD/USD H1 SHORT — SWEEP BOUNDARY / PLATEAU CONFIRMATION
+# ============================================================
+#
+# PURPOSE
+# -------
+# Resolve the ONLY remaining optimisation-boundary question from the
+# successful complementary-sweep study.
+#
+# Everything except sweep lookback and prior-4H rally momentum is frozen.
+#
+# FROZEN COMPRESSION CORE
+# -----------------------
+# COMPRESSION_BREAKOUT
+# bearish H1 candle
+# body >= 1.25 ATR14
+# range >= 1.50 ATR14
+# previous H1 ATR14 / previous20 ATR mean <= 0.85
+# close below previous 15-H1 low
+# RR3.50
+# stop = signal high +10 ticks
+# historical H1 adverse fill = 0.5 pip
+# no weekday/session/HTF filter
+#
+# FROZEN SWEEP COMPLEMENT GEOMETRY
+# --------------------------------
+# bearish H1 candle
+# body >= 1.25 ATR14
+# high > previous N-bar high
+# close < previous H1 low
+# upper wick/body >= 0.25
+# RR3.50
+# stop = signal high +10 ticks
+#
+# ONLY VARIABLES TESTED
+# ---------------------
+# sweep lookback:
+#   15 / 20 / 25 / 30 / 40 / 50
+#
+# prior ~4H rally momentum:
+#   >= 0.25 / 0.50 / 0.75 / 1.00 ATR14
+#
+# Total = 24 predeclared combinations.
+#
+# UNION EXECUTION
+# ---------------
+# Exact raw-signal core + complement union.
+# Core same-candle priority.
+# Exact strategy pyramiding0.
+# Half-open blocking [signal_index, exit_index).
+# Exit-candle signal remains eligible.
+#
+# PRIMARY QUESTION
+# ----------------
+# Does the strong LB30 / momentum0.50 result sit inside a robust local
+# plateau, especially across LB25/30/40 and momentum0.25/0.50/0.75?
+#
+# This runner therefore reports:
+#   - all 24 exact union results
+#   - 0.5x/1x/1.5x/2x cost stress
+#   - 12/24/36M rolling consistency
+#   - yearly / era / validation / recent periods
+#   - marginal sweep contribution
+#   - exact overlap/displacement audit
+#   - lookback and momentum summaries
+#   - central 3x3 plateau summary
+#
+# No new sessions, weekdays, EMAs, trigger families, body, wick or RR.
+# No live orders.
+# ============================================================
+
+BC_STATUS = {
+    "state": "not_started",
+    "message": "AUD/USD H1 SHORT sweep boundary confirmation not started",
+    "pair": PAIR,
+    "timeframe": "H1",
+    "side": "SHORT",
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+BC_BUNDLE = "AUDUSD_H1_SHORT_SWEEP_BOUNDARY_CONFIRMATION_RESULTS.zip"
+
+BC_OUT = {
+    "coverage": "audusd_h1_short_sweep_boundary_coverage.csv",
+    "parity": "audusd_h1_short_sweep_boundary_parity.csv",
+    "core_baseline": "audusd_h1_short_sweep_boundary_core_baseline.csv",
+    "matrix": "audusd_h1_short_sweep_boundary_matrix.csv",
+    "cost_stress": "audusd_h1_short_sweep_boundary_cost_stress.csv",
+    "lookback_summary": "audusd_h1_short_sweep_boundary_lookback_summary.csv",
+    "momentum_summary": "audusd_h1_short_sweep_boundary_momentum_summary.csv",
+    "plateau": "audusd_h1_short_sweep_boundary_plateau.csv",
+    "periods": "audusd_h1_short_sweep_boundary_periods.csv",
+    "rolling": "audusd_h1_short_sweep_boundary_rolling.csv",
+    "rolling_summary": "audusd_h1_short_sweep_boundary_rolling_summary.csv",
+    "calendar": "audusd_h1_short_sweep_boundary_calendar.csv",
+    "calendar_summary": "audusd_h1_short_sweep_boundary_calendar_summary.csv",
+    "top_trades": "audusd_h1_short_sweep_boundary_top_trades.csv",
+    "overlaps": "audusd_h1_short_sweep_boundary_overlaps.csv",
+    "decision": "audusd_h1_short_sweep_boundary_decision.csv",
+    "notes": "audusd_h1_short_sweep_boundary_notes.csv",
+}
+
+BC_PARITY_CUTOFF = datetime(
+    2026, 9, 18, 17, 0,
+    tzinfo=timezone.utc,
+)
+
+BC_LOOKBACKS = [15, 20, 25, 30, 40, 50]
+BC_MOMENTUMS = [0.25, 0.50, 0.75, 1.00]
+
+BC_BODY = 1.25
+BC_WICK = 0.25
+BC_RR = 3.50
+
+BC_CENTRAL_LOOKBACKS = {25, 30, 40}
+BC_CENTRAL_MOMENTUMS = {0.25, 0.50, 0.75}
+
+BC_PARITY_EXPECTED = {
+    # Exact row from uploaded complementary-sweep finalist output.
+    "combined_trades": 196,
+    "combined_winners": 65,
+    "combined_pf": 1.6891864676018515,
+    "combined_total_r": 90.28342725584255,
+    "combined_max_dd_r": -9.556818181818162,
+    "marginal_accepted_trades": 40,
+    "marginal_winners": 13,
+    "marginal_pf": 1.6489071205687165,
+    "marginal_total_r": 17.520492255355343,
+    "core_displaced_count": 3,
+    "validation_pf": 1.703665833436535,
+    "validation_r": 32.368628338080626,
+    "last5y_r": 25.721263533234417,
+    "last2y_r": 0.5594281973406892,
+    "rolling12_positive_pct": 77.7327935222672,
+    "rolling24_positive_pct": 91.91489361702128,
+    "rolling36_positive_pct": 99.10313901345292,
+    "rolling24_worst_r": -5.556818181818162,
+    "rolling36_worst_r": -2.4821135712452,
+}
+
+BC_FLOAT_TOL = 1e-8
+
+
+def bc_pack():
+    with zipfile.ZipFile(
+        BC_BUNDLE,
+        "w",
+        zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in BC_OUT.values():
+            if os.path.exists(path):
+                archive.write(
+                    path,
+                    arcname=os.path.basename(path),
+                )
+
+
+def bc_ensure_lookbacks(features):
+    for lookback in BC_LOOKBACKS:
+        if lookback not in features["prev_lows"]:
+            features["prev_lows"][lookback] = (
+                rolling_previous_extreme(
+                    features["low"],
+                    lookback,
+                    want_max=False,
+                )
+            )
+
+        if lookback not in features["prev_highs"]:
+            features["prev_highs"][lookback] = (
+                rolling_previous_extreme(
+                    features["high"],
+                    lookback,
+                    want_max=True,
+                )
+            )
+
+
+def bc_candidate_config(
+    lookback,
+    momentum_threshold,
+):
+    context_id = (
+        "PRIOR4H_MOM_GE_"
+        + f"{int(round(momentum_threshold * 100)):03d}"
+    )
+
+    return cr_sweep_config(
+        BC_BODY,
+        int(lookback),
+        BC_WICK,
+        BC_RR,
+        context_id,
+    )
+
+
+def bc_momentum_mask(
+    prior4h_momentum,
+    threshold,
+):
+    return (
+        np.isfinite(
+            prior4h_momentum
+        )
+        & (
+            prior4h_momentum
+            >= float(threshold)
+        )
+    )
+
+
+def bc_filtered_sweep_indices(
+    lookback,
+    momentum_threshold,
+    features,
+    prior4h_momentum,
+):
+    candidate = (
+        bc_candidate_config(
+            lookback,
+            momentum_threshold,
+        )
+    )
+
+    base_config = (
+        cr_base_signal_config(
+            candidate
+        )
+    )
+
+    raw = signal_indices(
+        base_config,
+        features,
+    )
+
+    mask = bc_momentum_mask(
+        prior4h_momentum,
+        momentum_threshold,
+    )
+
+    filtered = raw[
+        mask[raw]
+    ]
+
+    return (
+        candidate,
+        raw,
+        filtered,
+    )
+
+
+def bc_core_baseline(
+    core_config,
+    features,
+):
+    core_raw = signal_indices(
+        core_config,
+        features,
+    )
+
+    core_trades = backtest(
+        core_config,
+        features,
+        core_raw,
+        rr=core_config["rr"],
+        cost_multiplier=1.0,
+    )
+
+    core_eval, _ = (
+        evaluate_candidate(
+            core_config,
+            features,
+            core_raw,
+        )
+    )
+
+    synthetic = {
+        "config_id":
+            "FROZEN_CORE_ONLY",
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family":
+            "COMPRESSION_BREAKOUT",
+    }
+
+    roll = cr_rolling_summary_for(
+        synthetic,
+        core_trades,
+    )
+    cal = cr_calendar_summary_for(
+        synthetic,
+        core_trades,
+    )
+
+    baseline = {
+        **core_eval,
+        **roll,
+        **cal,
+    }
+
+    return (
+        core_raw,
+        core_trades,
+        baseline,
+    )
+
+
+def bc_parity_check(
+    features,
+):
+    parity_features = (
+        fc_slice_features(
+            features,
+            BC_PARITY_CUTOFF,
+        )
+    )
+
+    bc_ensure_lookbacks(
+        parity_features
+    )
+
+    core = cr_core_config()
+    prior4h = cr_prior4h_momentum(
+        parity_features
+    )
+
+    (
+        core_raw,
+        core_trades,
+        core_baseline,
+    ) = bc_core_baseline(
+        core,
+        parity_features,
+    )
+
+    (
+        candidate,
+        _raw,
+        filtered,
+    ) = bc_filtered_sweep_indices(
+        30,
+        0.50,
+        parity_features,
+        prior4h,
+    )
+
+    (
+        row,
+        _trades,
+        _rejected,
+    ) = cr_summary(
+        core,
+        candidate,
+        parity_features,
+        core_raw,
+        filtered,
+        core_trades,
+        core_baseline,
+        cost_multiplier=1.0,
+    )
+
+    checks = {}
+
+    integer_fields = [
+        "combined_trades",
+        "combined_winners",
+        "marginal_accepted_trades",
+        "marginal_winners",
+        "core_displaced_count",
+    ]
+
+    float_fields = [
+        "combined_pf",
+        "combined_total_r",
+        "combined_max_dd_r",
+        "marginal_pf",
+        "marginal_total_r",
+        "validation_pf",
+        "validation_r",
+        "last5y_r",
+        "last2y_r",
+        "rolling12_positive_pct",
+        "rolling24_positive_pct",
+        "rolling36_positive_pct",
+        "rolling24_worst_r",
+        "rolling36_worst_r",
+    ]
+
+    for field in integer_fields:
+        checks[field] = (
+            int(row[field])
+            == int(
+                BC_PARITY_EXPECTED[
+                    field
+                ]
+            )
+        )
+
+    for field in float_fields:
+        checks[field] = (
+            abs(
+                float(row[field])
+                - float(
+                    BC_PARITY_EXPECTED[
+                        field
+                    ]
+                )
+            )
+            <= BC_FLOAT_TOL
+        )
+
+    output = {
+        "candidate_config_id":
+            candidate[
+                "config_id"
+            ],
+        "cutoff_utc":
+            iso(
+                BC_PARITY_CUTOFF
+            ),
+        "pass":
+            all(
+                checks.values()
+            ),
+        "checks_json":
+            json.dumps(
+                checks,
+                sort_keys=True,
+            ),
+    }
+
+    for field in (
+        integer_fields
+        + float_fields
+    ):
+        output[
+            f"expected_{field}"
+        ] = (
+            BC_PARITY_EXPECTED[
+                field
+            ]
+        )
+        output[
+            f"actual_{field}"
+        ] = row[field]
+
+    if not output["pass"]:
+        raise RuntimeError(
+            "Boundary-confirmation parity failed: "
+            + json.dumps(
+                output,
+                default=str,
+            )
+        )
+
+    return output
+
+
+def bc_pass_checks(
+    row,
+    cost2_row,
+):
+    checks = {
+        "combined_trades_ge_180":
+            row[
+                "combined_trades"
+            ] >= 180,
+
+        "marginal_accepted_ge_25":
+            row[
+                "marginal_accepted_trades"
+            ] >= 25,
+
+        "marginal_r_positive":
+            row[
+                "marginal_total_r"
+            ] > 0,
+
+        "combined_r_beats_core":
+            row[
+                "delta_total_r_vs_core"
+            ] > 0,
+
+        "both_splits_positive":
+            bool(
+                row[
+                    "both_temporal_splits_positive"
+                ]
+            ),
+
+        "validation_pf_ge_1_30":
+            row[
+                "validation_pf"
+            ] >= 1.30,
+
+        "positive_eras_ge_3":
+            row[
+                "positive_eras"
+            ] >= 3,
+
+        "last5_positive":
+            row[
+                "last5y_r"
+            ] > 0,
+
+        "rolling12_ge_70":
+            row[
+                "rolling12_positive_pct"
+            ] >= 70.0,
+
+        "rolling24_ge_85":
+            row[
+                "rolling24_positive_pct"
+            ] >= 85.0,
+
+        "rolling36_ge_92":
+            row[
+                "rolling36_positive_pct"
+            ] >= 92.0,
+
+        "worst24_ge_minus_6_5":
+            row[
+                "rolling24_worst_r"
+            ] >= -6.5,
+
+        "worst36_ge_minus_6_5":
+            row[
+                "rolling36_worst_r"
+            ] >= -6.5,
+
+        "calendar_positive_ge_60":
+            row[
+                "positive_calendar_year_pct"
+            ] >= 60.0,
+
+        "cost2_pf_ge_1_30":
+            cost2_row[
+                "combined_pf"
+            ] >= 1.30,
+
+        "cost2_r_positive":
+            cost2_row[
+                "combined_total_r"
+            ] > 0,
+    }
+
+    return {
+        "boundary_pass":
+            all(
+                checks.values()
+            ),
+        "checks_passed":
+            sum(
+                checks.values()
+            ),
+        "checks_total":
+            len(checks),
+        "checks_json":
+            json.dumps(
+                checks,
+                sort_keys=True,
+            ),
+    }
+
+
+def bc_rank_key(row):
+    return (
+        1
+        if row[
+            "boundary_pass"
+        ]
+        else 0,
+        row[
+            "rolling36_positive_pct"
+        ],
+        row[
+            "rolling24_positive_pct"
+        ],
+        row[
+            "rolling12_positive_pct"
+        ],
+        row[
+            "rolling36_worst_r"
+        ],
+        row[
+            "rolling24_worst_r"
+        ],
+        row[
+            "validation_pf"
+        ],
+        row[
+            "marginal_total_r"
+        ],
+        row[
+            "combined_total_r"
+        ],
+    )
+
+
+def bc_dimension_summary(
+    rows,
+    field,
+    values,
+):
+    output = []
+
+    for value in values:
+        subset = [
+            row
+            for row in rows
+            if abs(
+                float(
+                    row[field]
+                )
+                - float(value)
+            )
+            < 1e-12
+        ]
+
+        if not subset:
+            continue
+
+        output.append({
+            field:
+                value,
+            "configs":
+                len(subset),
+            "passes":
+                sum(
+                    bool(
+                        row[
+                            "boundary_pass"
+                        ]
+                    )
+                    for row
+                    in subset
+                ),
+            "pass_pct":
+                pct(
+                    sum(
+                        bool(
+                            row[
+                                "boundary_pass"
+                            ]
+                        )
+                        for row
+                        in subset
+                    ),
+                    len(subset),
+                ),
+            "positive_marginal_r_configs":
+                sum(
+                    row[
+                        "marginal_total_r"
+                    ] > 0
+                    for row
+                    in subset
+                ),
+            "median_combined_pf":
+                med(
+                    row[
+                        "combined_pf"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_combined_total_r":
+                med(
+                    row[
+                        "combined_total_r"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_marginal_total_r":
+                med(
+                    row[
+                        "marginal_total_r"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_rolling12_positive_pct":
+                med(
+                    row[
+                        "rolling12_positive_pct"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_rolling24_positive_pct":
+                med(
+                    row[
+                        "rolling24_positive_pct"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_rolling36_positive_pct":
+                med(
+                    row[
+                        "rolling36_positive_pct"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_validation_pf":
+                med(
+                    row[
+                        "validation_pf"
+                    ]
+                    for row
+                    in subset
+                ),
+            "median_cost2_pf":
+                med(
+                    row[
+                        "cost2_combined_pf"
+                    ]
+                    for row
+                    in subset
+                ),
+        })
+
+    return output
+
+
+def bc_plateau_summary(rows):
+    central = [
+        row
+        for row in rows
+        if (
+            int(
+                row[
+                    "lookback"
+                ]
+            )
+            in BC_CENTRAL_LOOKBACKS
+            and round(
+                float(
+                    row[
+                        "momentum_threshold"
+                    ]
+                ),
+                2,
+            )
+            in BC_CENTRAL_MOMENTUMS
+        )
+    ]
+
+    if len(central) != 9:
+        raise RuntimeError(
+            f"Expected 9 central plateau cells, got {len(central)}"
+        )
+
+    passed = [
+        row
+        for row in central
+        if row[
+            "boundary_pass"
+        ]
+    ]
+
+    return [{
+        "central_lookbacks":
+            "25,30,40",
+        "central_momentums":
+            "0.25,0.50,0.75",
+        "cells":
+            len(central),
+        "passes":
+            len(passed),
+        "pass_pct":
+            pct(
+                len(passed),
+                len(central),
+            ),
+        "all_marginal_r_positive":
+            all(
+                row[
+                    "marginal_total_r"
+                ] > 0
+                for row
+                in central
+            ),
+        "all_combined_r_above_core":
+            all(
+                row[
+                    "delta_total_r_vs_core"
+                ] > 0
+                for row
+                in central
+            ),
+        "minimum_validation_pf":
+            min(
+                row[
+                    "validation_pf"
+                ]
+                for row
+                in central
+            ),
+        "minimum_rolling24_positive_pct":
+            min(
+                row[
+                    "rolling24_positive_pct"
+                ]
+                for row
+                in central
+            ),
+        "minimum_rolling36_positive_pct":
+            min(
+                row[
+                    "rolling36_positive_pct"
+                ]
+                for row
+                in central
+            ),
+        "worst_rolling24_r":
+            min(
+                row[
+                    "rolling24_worst_r"
+                ]
+                for row
+                in central
+            ),
+        "worst_rolling36_r":
+            min(
+                row[
+                    "rolling36_worst_r"
+                ]
+                for row
+                in central
+            ),
+        "minimum_cost2_pf":
+            min(
+                row[
+                    "cost2_combined_pf"
+                ]
+                for row
+                in central
+            ),
+        "plateau_confirmed":
+            (
+                len(passed) >= 7
+                and all(
+                    row[
+                        "marginal_total_r"
+                    ] > 0
+                    for row
+                    in central
+                )
+                and all(
+                    row[
+                        "delta_total_r_vs_core"
+                    ] > 0
+                    for row
+                    in central
+                )
+            ),
+    }]
+
+
+def bc_serialise_trade(
+    trade,
+    rank,
+    candidate_config_id,
+):
+    row = dict(
+        trade
+    )
+    row["rank"] = rank
+    row[
+        "candidate_config_id"
+    ] = candidate_config_id
+    row[
+        "signal_time"
+    ] = iso(
+        row[
+            "signal_time"
+        ]
+    )
+    row[
+        "exit_time"
+    ] = iso(
+        row[
+            "exit_time"
+        ]
+    )
+    return row
+
+
+def run_bc_research():
+    try:
+        global STATUS
+        STATUS = BC_STATUS
+
+        BC_STATUS.update({
+            "state": "fetching",
+            "message": "Fetching AUD/USD H1 history",
+        })
+
+        h1 = fetch_history(
+            "H1",
+            REQUESTED_START,
+            NOW,
+            chunk_days=180,
+        )
+
+        if len(h1) < 100000:
+            raise RuntimeError(
+                f"Incomplete H1 history: {len(h1)}"
+            )
+
+        write_csv(
+            BC_OUT["coverage"],
+            [{
+                "pair":
+                    PAIR,
+                "timeframe":
+                    "H1",
+                "candles":
+                    len(h1),
+                "first_candle_utc":
+                    iso(
+                        h1[0][
+                            "time"
+                        ]
+                    ),
+                "last_candle_utc":
+                    iso(
+                        h1[-1][
+                            "time"
+                        ]
+                    ),
+                "parity_cutoff_utc":
+                    iso(
+                        BC_PARITY_CUTOFF
+                    ),
+            }],
+        )
+
+        BC_STATUS.update({
+            "state": "features",
+            "message": "Building frozen core and sweep features",
+        })
+
+        features = build_features(
+            h1,
+            "H1",
+        )
+
+        bc_ensure_lookbacks(
+            features
+        )
+
+        prior4h = (
+            cr_prior4h_momentum(
+                features
+            )
+        )
+
+        # ----------------------------------------------
+        # HARD PARITY TO UPLOADED LB30/MOM0.50 WINNER
+        # ----------------------------------------------
+        BC_STATUS.update({
+            "state": "parity",
+            "message": "Reproducing uploaded LB30 / momentum0.50 winner",
+        })
+
+        parity_row = (
+            bc_parity_check(
+                features
+            )
+        )
+
+        write_csv(
+            BC_OUT["parity"],
+            [parity_row],
+        )
+
+        # ----------------------------------------------
+        # CURRENT CORE BASELINE
+        # ----------------------------------------------
+        core_config = (
+            cr_core_config()
+        )
+
+        (
+            core_raw,
+            core_trades,
+            core_baseline,
+        ) = bc_core_baseline(
+            core_config,
+            features,
+        )
+
+        write_csv(
+            BC_OUT[
+                "core_baseline"
+            ],
+            [
+                core_baseline
+            ],
+        )
+
+        # ----------------------------------------------
+        # EXACT 24-CELL MATRIX + COST STRESS
+        # ----------------------------------------------
+        matrix_rows = []
+        cost_rows = []
+        combined_cache = {}
+        rejected_cache = {}
+        candidate_indices = {}
+
+        total = (
+            len(
+                BC_LOOKBACKS
+            )
+            * len(
+                BC_MOMENTUMS
+            )
+        )
+
+        done = 0
+
+        for lookback in BC_LOOKBACKS:
+            for momentum in BC_MOMENTUMS:
+                done += 1
+
+                (
+                    candidate,
+                    raw,
+                    filtered,
+                ) = (
+                    bc_filtered_sweep_indices(
+                        lookback,
+                        momentum,
+                        features,
+                        prior4h,
+                    )
+                )
+
+                BC_STATUS.update({
+                    "state":
+                        "matrix",
+                    "message": (
+                        f"{done}/{total} "
+                        f"LB{lookback} "
+                        f"MOM>={momentum:.2f}"
+                    ),
+                })
+
+                (
+                    base_row,
+                    combined_trades,
+                    rejected,
+                ) = cr_summary(
+                    core_config,
+                    candidate,
+                    features,
+                    core_raw,
+                    filtered,
+                    core_trades,
+                    core_baseline,
+                    cost_multiplier=1.0,
+                )
+
+                base_row[
+                    "momentum_threshold"
+                ] = momentum
+                base_row[
+                    "sweep_signals_before_momentum"
+                ] = len(
+                    raw
+                )
+                base_row[
+                    "sweep_signals_after_momentum"
+                ] = len(
+                    filtered
+                )
+                base_row[
+                    "momentum_retention_pct"
+                ] = pct(
+                    len(
+                        filtered
+                    ),
+                    len(
+                        raw
+                    ),
+                )
+
+                stress_by_mult = {}
+
+                for multiplier in (
+                    0.5,
+                    1.0,
+                    1.5,
+                    2.0,
+                ):
+                    (
+                        stress_row,
+                        _stress_trades,
+                        _stress_rejected,
+                    ) = cr_summary(
+                        core_config,
+                        candidate,
+                        features,
+                        core_raw,
+                        filtered,
+                        core_trades,
+                        core_baseline,
+                        cost_multiplier=
+                            multiplier,
+                    )
+
+                    stress_row[
+                        "momentum_threshold"
+                    ] = momentum
+
+                    cost_rows.append(
+                        stress_row
+                    )
+                    stress_by_mult[
+                        multiplier
+                    ] = stress_row
+
+                cost2 = (
+                    stress_by_mult[
+                        2.0
+                    ]
+                )
+
+                gate = bc_pass_checks(
+                    base_row,
+                    cost2,
+                )
+
+                row = {
+                    **base_row,
+                    "momentum_threshold":
+                        momentum,
+                    "sweep_signals_before_momentum":
+                        len(raw),
+                    "sweep_signals_after_momentum":
+                        len(filtered),
+                    "momentum_retention_pct":
+                        pct(
+                            len(filtered),
+                            len(raw),
+                        ),
+                    "cost2_combined_pf":
+                        cost2[
+                            "combined_pf"
+                        ],
+                    "cost2_combined_total_r":
+                        cost2[
+                            "combined_total_r"
+                        ],
+                    "cost2_marginal_total_r":
+                        cost2[
+                            "marginal_total_r"
+                        ],
+                    **gate,
+                }
+
+                matrix_rows.append(
+                    row
+                )
+
+                combined_cache[
+                    candidate[
+                        "config_id"
+                    ]
+                ] = combined_trades
+                rejected_cache[
+                    candidate[
+                        "config_id"
+                    ]
+                ] = rejected
+                candidate_indices[
+                    candidate[
+                        "config_id"
+                    ]
+                ] = filtered
+
+        matrix_rows.sort(
+            key=bc_rank_key,
+            reverse=True,
+        )
+
+        write_csv(
+            BC_OUT["matrix"],
+            matrix_rows,
+        )
+        write_csv(
+            BC_OUT[
+                "cost_stress"
+            ],
+            cost_rows,
+        )
+
+        lookback_summary = (
+            bc_dimension_summary(
+                matrix_rows,
+                "lookback",
+                BC_LOOKBACKS,
+            )
+        )
+
+        momentum_summary = (
+            bc_dimension_summary(
+                matrix_rows,
+                "momentum_threshold",
+                BC_MOMENTUMS,
+            )
+        )
+
+        plateau = (
+            bc_plateau_summary(
+                matrix_rows
+            )
+        )
+
+        write_csv(
+            BC_OUT[
+                "lookback_summary"
+            ],
+            lookback_summary,
+        )
+        write_csv(
+            BC_OUT[
+                "momentum_summary"
+            ],
+            momentum_summary,
+        )
+        write_csv(
+            BC_OUT["plateau"],
+            plateau,
+        )
+
+        # ----------------------------------------------
+        # DEEP OUTPUTS FOR TOP 6 + EXACT OLD WINNER
+        # ----------------------------------------------
+        deep_rows = list(
+            matrix_rows[:6]
+        )
+
+        old_winner_id = (
+            bc_candidate_config(
+                30,
+                0.50,
+            )[
+                "config_id"
+            ]
+        )
+
+        if not any(
+            row[
+                "candidate_config_id"
+            ] == old_winner_id
+            for row in deep_rows
+        ):
+            old_row = next(
+                row
+                for row
+                in matrix_rows
+                if row[
+                    "candidate_config_id"
+                ] == old_winner_id
+            )
+            deep_rows.append(
+                old_row
+            )
+
+        period_rows = []
+        rolling_rows_out = []
+        calendar_rows_out = []
+        top_trade_rows = []
+        overlap_rows = []
+
+        for rank, row in enumerate(
+            deep_rows,
+            1,
+        ):
+            cid = row[
+                "candidate_config_id"
+            ]
+            trades = combined_cache[
+                cid
+            ]
+            rejected = rejected_cache[
+                cid
+            ]
+
+            combined_config = {
+                "config_id": (
+                    "AUD_USD_H1_SHORT_BOUNDARY|"
+                    + cid
+                ),
+                "timeframe":
+                    "H1",
+                "side":
+                    "SHORT",
+                "family":
+                    "COMPRESSION_PLUS_SWEEP",
+            }
+
+            period_rows.extend(
+                cr_period_rows(
+                    combined_config,
+                    trades,
+                )
+            )
+
+            rolling_rows_out.extend(
+                rolling_rows(
+                    combined_config,
+                    trades,
+                )
+            )
+
+            calendar_rows_out.extend(
+                calendar_rows(
+                    combined_config,
+                    trades,
+                )
+            )
+
+            for trade in trades:
+                top_trade_rows.append(
+                    bc_serialise_trade(
+                        trade,
+                        rank,
+                        cid,
+                    )
+                )
+
+            overlap_rows.append({
+                "rank":
+                    rank,
+                "candidate_config_id":
+                    cid,
+                "lookback":
+                    row[
+                        "lookback"
+                    ],
+                "momentum_threshold":
+                    row[
+                        "momentum_threshold"
+                    ],
+                "core_raw_signals":
+                    row[
+                        "core_raw_signals"
+                    ],
+                "candidate_raw_signals":
+                    row[
+                        "candidate_raw_signals"
+                    ],
+                "accepted_core":
+                    row[
+                        "accepted_core"
+                    ],
+                "accepted_candidate":
+                    row[
+                        "accepted_candidate"
+                    ],
+                "rejected_core_overlap":
+                    row[
+                        "rejected_core_overlap"
+                    ],
+                "rejected_candidate_overlap":
+                    row[
+                        "rejected_candidate_overlap"
+                    ],
+                "same_candle_candidate_rejected":
+                    row[
+                        "same_candle_candidate_rejected"
+                    ],
+                "core_displaced_count":
+                    row[
+                        "core_displaced_count"
+                    ],
+                "core_newly_eligible_count":
+                    row[
+                        "core_newly_eligible_count"
+                    ],
+                "rejection_records":
+                    len(
+                        rejected
+                    ),
+            })
+
+        write_csv(
+            BC_OUT["periods"],
+            period_rows,
+        )
+        write_csv(
+            BC_OUT["rolling"],
+            rolling_rows_out,
+        )
+        write_csv(
+            BC_OUT[
+                "rolling_summary"
+            ],
+            rolling_summary(
+                rolling_rows_out
+            ),
+        )
+        write_csv(
+            BC_OUT["calendar"],
+            calendar_rows_out,
+        )
+        write_csv(
+            BC_OUT[
+                "calendar_summary"
+            ],
+            calendar_summary(
+                calendar_rows_out
+            ),
+        )
+        write_csv(
+            BC_OUT["top_trades"],
+            top_trade_rows,
+        )
+        write_csv(
+            BC_OUT["overlaps"],
+            overlap_rows,
+        )
+
+        # ----------------------------------------------
+        # DECISION SUMMARY
+        # ----------------------------------------------
+        best = matrix_rows[0]
+        central = plateau[0]
+
+        decision = [{
+            "best_candidate_config_id":
+                best[
+                    "candidate_config_id"
+                ],
+            "best_lookback":
+                best[
+                    "lookback"
+                ],
+            "best_momentum_threshold":
+                best[
+                    "momentum_threshold"
+                ],
+            "best_boundary_pass":
+                best[
+                    "boundary_pass"
+                ],
+            "best_checks_passed":
+                best[
+                    "checks_passed"
+                ],
+            "best_checks_total":
+                best[
+                    "checks_total"
+                ],
+            "best_combined_trades":
+                best[
+                    "combined_trades"
+                ],
+            "best_combined_pf":
+                best[
+                    "combined_pf"
+                ],
+            "best_combined_total_r":
+                best[
+                    "combined_total_r"
+                ],
+            "best_marginal_accepted_trades":
+                best[
+                    "marginal_accepted_trades"
+                ],
+            "best_marginal_pf":
+                best[
+                    "marginal_pf"
+                ],
+            "best_marginal_total_r":
+                best[
+                    "marginal_total_r"
+                ],
+            "best_validation_pf":
+                best[
+                    "validation_pf"
+                ],
+            "best_last5y_r":
+                best[
+                    "last5y_r"
+                ],
+            "best_last2y_r":
+                best[
+                    "last2y_r"
+                ],
+            "best_rolling12_positive_pct":
+                best[
+                    "rolling12_positive_pct"
+                ],
+            "best_rolling24_positive_pct":
+                best[
+                    "rolling24_positive_pct"
+                ],
+            "best_rolling36_positive_pct":
+                best[
+                    "rolling36_positive_pct"
+                ],
+            "best_rolling24_worst_r":
+                best[
+                    "rolling24_worst_r"
+                ],
+            "best_rolling36_worst_r":
+                best[
+                    "rolling36_worst_r"
+                ],
+            "best_cost2_pf":
+                best[
+                    "cost2_combined_pf"
+                ],
+            "central_plateau_passes":
+                central[
+                    "passes"
+                ],
+            "central_plateau_cells":
+                central[
+                    "cells"
+                ],
+            "central_plateau_pass_pct":
+                central[
+                    "pass_pct"
+                ],
+            "central_plateau_confirmed":
+                central[
+                    "plateau_confirmed"
+                ],
+            "next_step_if_plateau_confirmed": (
+                "Freeze the two-trigger AUD/USD H1 SHORT and run exact "
+                "current25 -> prospective26 portfolio-add test including "
+                "AUD/USD LONG-vs-SHORT non-hedging conflicts."
+            ),
+        }]
+
+        write_csv(
+            BC_OUT["decision"],
+            decision,
+        )
+
+        write_csv(
+            BC_OUT["notes"],
+            [
+                {
+                    "topic":
+                        "scope",
+                    "note": (
+                        "Only sweep lookback and prior-4H rally momentum are "
+                        "tested. Core, sweep body, wick, RR, costs and union "
+                        "execution remain frozen."
+                    ),
+                },
+                {
+                    "topic":
+                        "matrix",
+                    "note": (
+                        "Exactly 24 predeclared cells: LB15/20/25/30/40/50 x "
+                        "momentum0.25/0.50/0.75/1.00."
+                    ),
+                },
+                {
+                    "topic":
+                        "plateau",
+                    "note": (
+                        "Primary robustness question is the central 3x3 region: "
+                        "LB25/30/40 x momentum0.25/0.50/0.75."
+                    ),
+                },
+                {
+                    "topic":
+                        "ranking",
+                    "note": (
+                        "Ranking prioritises boundary-pass status, then 36M, "
+                        "24M and 12M positive-window consistency, rolling troughs, "
+                        "validation PF and marginal contribution."
+                    ),
+                },
+                {
+                    "topic":
+                        "no_further_filters",
+                    "note": (
+                        "No sessions, weekdays, EMA regimes, additional trigger "
+                        "families, body thresholds, wick thresholds or RR values "
+                        "are introduced."
+                    ),
+                },
+                {
+                    "topic":
+                        "historical_not_forecast",
+                    "note": (
+                        "All outputs are historical backtests, not forecasts."
+                    ),
+                },
+            ],
+        )
+
+        BC_STATUS.update({
+            "state":
+                "packaging",
+            "message":
+                "Packaging sweep boundary confirmation",
+        })
+
+        bc_pack()
+
+        BC_STATUS.update({
+            "state":
+                "complete",
+            "message": (
+                "AUD/USD H1 SHORT sweep boundary confirmation complete"
+            ),
+            "matrix_cells":
+                len(
+                    matrix_rows
+                ),
+            "boundary_passes":
+                sum(
+                    bool(
+                        row[
+                            "boundary_pass"
+                        ]
+                    )
+                    for row
+                    in matrix_rows
+                ),
+            "central_plateau_confirmed":
+                plateau[0][
+                    "plateau_confirmed"
+                ],
+            "central_plateau_passes":
+                plateau[0][
+                    "passes"
+                ],
+            "best_candidate":
+                best[
+                    "candidate_config_id"
+                ],
+            "best_combined_trades":
+                best[
+                    "combined_trades"
+                ],
+            "best_combined_total_r":
+                best[
+                    "combined_total_r"
+                ],
+            "best_rolling24_positive_pct":
+                best[
+                    "rolling24_positive_pct"
+                ],
+            "best_rolling36_positive_pct":
+                best[
+                    "rolling36_positive_pct"
+                ],
+            "bundle":
+                BC_BUNDLE,
+            "orders_supported":
+                False,
+            "trading_enabled":
+                False,
+        })
+
+    except Exception as error:
+        import traceback
+
+        BC_STATUS.update({
+            "state":
+                "error",
+            "message":
+                str(error),
+            "error_type":
+                type(error).__name__,
+            "traceback":
+                traceback.format_exc(),
+            "orders_supported":
+                False,
+            "trading_enabled":
+                False,
+        })
+
+        print(
+            "AUDUSD H1 SHORT BOUNDARY CONFIRMATION ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+@app.route(
+    "/audusd-h1-short-boundary/status"
+)
+def bc_status():
+    return jsonify(
+        BC_STATUS
+    )
+
+
+@app.route(
+    "/audusd-h1-short-boundary/results"
+)
+def bc_results():
+    if not os.path.exists(
+        BC_BUNDLE
+    ):
+        return jsonify({
+            "status":
+                "not_ready",
+            "state":
+                BC_STATUS[
+                    "state"
+                ],
+            "message":
+                BC_STATUS[
+                    "message"
+                ],
+        }), 404
+
+    return send_file(
+        os.path.abspath(
+            BC_BUNDLE
+        ),
+        as_attachment=True,
+        download_name=
+            BC_BUNDLE,
+    )
+
+
+@app.route(
+    "/audusd-h1-short-boundary/info"
+)
+def bc_info():
+    return jsonify({
+        "service": (
+            "AUD/USD H1 SHORT Sweep Boundary Confirmation"
+        ),
+        "read_only":
+            True,
+        "orders_supported":
+            False,
+        "frozen_core": {
+            "body_atr_min":
+                1.25,
+            "range_atr_min":
+                1.50,
+            "compression_max":
+                0.85,
+            "breakout_lookback":
+                15,
+            "rr":
+                3.50,
+        },
+        "frozen_sweep": {
+            "body_atr_min":
+                BC_BODY,
+            "wick_body_min":
+                BC_WICK,
+            "rr":
+                BC_RR,
+        },
+        "lookbacks":
+            BC_LOOKBACKS,
+        "momentum_thresholds":
+            BC_MOMENTUMS,
+        "matrix_cells":
+            len(
+                BC_LOOKBACKS
+            )
+            * len(
+                BC_MOMENTUMS
+            ),
+        "central_plateau": {
+            "lookbacks":
+                [25, 30, 40],
+            "momentum_thresholds":
+                [0.25, 0.50, 0.75],
+        },
+        "routes": [
+            "/audusd-h1-short-boundary/status",
+            "/audusd-h1-short-boundary/results",
+            "/audusd-h1-short-boundary/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_cr_research,
+        target=run_bc_research,
         daemon=True,
     ).start()
 
