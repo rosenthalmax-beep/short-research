@@ -2823,14 +2823,2537 @@ def results():
     return download(BUNDLE)
 
 
+
+# ============================================================
+# AUD/USD H1 SHORT — CONTROLLED REFINEMENT
+# ============================================================
+#
+# PRIMARY BRANCH
+# --------------
+# COMPRESSION_BREAKOUT only.
+#
+# The broad discovery showed the strongest FAMILY-WIDE evidence around
+# compression_max ~= 0.80. This runner refines only the local neighbourhood:
+#
+#   compression_max: 0.75 / 0.80 / 0.85
+#   body >= ATR:     0.75 / 1.00 / 1.25
+#   range >= ATR:    1.00 / 1.25 / 1.50
+#   breakout LB:     5 / 10 / 15 / 20
+#
+# Stage 1 geometry RR is fixed at 4.00.
+# Total local geometries = 108.
+#
+# Stage 2 RR confirmation:
+#   3.00 / 3.50 / 4.00 / 4.50 / 5.00
+#
+# Stage 3:
+# single-factor causal contexts ONLY on a small predeclared compression
+# shortlist:
+#   - weekday exclusions
+#   - Sydney / Tokyo / London / New York daytime
+#   - strictly completed H4 bearish trend states
+#   - strictly completed Daily bearish trend states
+#   - strictly completed H4 / Daily ATR regime states
+#
+# NO context interactions are mined.
+#
+# SECONDARY FROZEN CONTROLS
+# -------------------------
+# SWEEP_DISPLACEMENT:
+#   body >= 1.25 ATR
+#   prior-high LB15
+#   upper wick/body >= 0.25
+#   RR 3.00 / 3.50 / 4.00
+#
+# OUTSIDE_REVERSAL benchmark:
+#   body >= 1.00 ATR
+#   prior-high LB60
+#   distance <= 0.30 ATR
+#   close location <= 0.15
+#   RR 4.50
+#
+# The secondary controls are NOT further geometry-optimised here.
+#
+# PARITY
+# ------
+# Before refinement, exact broad-discovery controls are reproduced through
+# 2026-09-18 14:00 UTC.
+#
+# READ ONLY. NEVER SENDS ORDERS.
+# ============================================================
+
+from bisect import bisect_right
+from zoneinfo import ZoneInfo
+
+RF_STATUS = {
+    "state": "not_started",
+    "message": "AUD/USD H1 SHORT controlled refinement not started",
+    "pair": PAIR,
+    "timeframe": "H1",
+    "side": "SHORT",
+    "orders_supported": False,
+    "trading_enabled": False,
+}
+
+RF_BUNDLE = "AUDUSD_H1_SHORT_COMPRESSION_REFINEMENT_RESULTS.zip"
+
+RF_OUT = {
+    "coverage": "audusd_h1_short_refinement_coverage.csv",
+    "control_parity": "audusd_h1_short_refinement_control_parity.csv",
+    "geometry": "audusd_h1_short_refinement_compression_geometry.csv",
+    "geometry_summary": "audusd_h1_short_refinement_geometry_summary.csv",
+    "geometry_shortlist": "audusd_h1_short_refinement_geometry_shortlist.csv",
+    "rr": "audusd_h1_short_refinement_rr_confirmation.csv",
+    "context_bases": "audusd_h1_short_refinement_context_bases.csv",
+    "contexts": "audusd_h1_short_refinement_context_scan.csv",
+    "context_ablation": "audusd_h1_short_refinement_context_ablation.csv",
+    "secondary_controls": "audusd_h1_short_refinement_secondary_controls.csv",
+    "finalists": "audusd_h1_short_refinement_finalists.csv",
+    "periods": "audusd_h1_short_refinement_periods.csv",
+    "cost_stress": "audusd_h1_short_refinement_cost_stress.csv",
+    "rolling": "audusd_h1_short_refinement_rolling.csv",
+    "rolling_summary": "audusd_h1_short_refinement_rolling_summary.csv",
+    "calendar": "audusd_h1_short_refinement_calendar.csv",
+    "calendar_summary": "audusd_h1_short_refinement_calendar_summary.csv",
+    "trades": "audusd_h1_short_refinement_finalist_trades.csv",
+    "notes": "audusd_h1_short_refinement_notes.csv",
+}
+
+RF_DISCOVERY_CUTOFF = datetime(
+    2026, 9, 18, 14, 0,
+    tzinfo=timezone.utc,
+)
+
+RF_WARMUP_START = datetime(
+    1999, 1, 1,
+    tzinfo=timezone.utc,
+)
+
+RF_GEOMETRY_RR = 4.00
+RF_RR_GRID = [3.00, 3.50, 4.00, 4.50, 5.00]
+
+RF_COMPRESSION_GRID = [0.75, 0.80, 0.85]
+RF_BODY_GRID = [0.75, 1.00, 1.25]
+RF_RANGE_GRID = [1.00, 1.25, 1.50]
+RF_BREAKOUT_GRID = [5, 10, 15, 20]
+
+RF_GEOMETRY_SHORTLIST = 24
+RF_CONTEXT_BASES = 12
+RF_CONTEXT_FINAL_KEEP = 8
+
+RF_NY = ZoneInfo("America/New_York")
+RF_LONDON = ZoneInfo("Europe/London")
+RF_TOKYO = ZoneInfo("Asia/Tokyo")
+RF_SYDNEY = ZoneInfo("Australia/Sydney")
+
+
+# Exact broad-discovery controls through RF_DISCOVERY_CUTOFF.
+RF_PARITY_EXPECTED = {
+    "COMPRESSION_CENTRAL_RR4": {
+        "trades": 73,
+        "pf": 1.4601802837294595,
+        "total_r": 24.38955503766136,
+    },
+    "COMPRESSION_FREQUENCY_RR4": {
+        "trades": 110,
+        "pf": 1.3780651808779074,
+        "total_r": 30.623279651110504,
+    },
+    "SWEEP_LB15_RR3P5": {
+        "trades": 84,
+        "pf": 1.3720690499383532,
+        "total_r": 22.32414299630119,
+    },
+    "OUTSIDE_LB60_D030_RR4P5": {
+        "trades": 107,
+        "pf": 1.4098867450738546,
+        "total_r": 33.20082635098223,
+    },
+}
+
+
+def rf_pack():
+    with zipfile.ZipFile(
+        RF_BUNDLE,
+        "w",
+        zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in RF_OUT.values():
+            if os.path.exists(path):
+                archive.write(
+                    path,
+                    arcname=os.path.basename(path),
+                )
+
+
+def rf_config_with_context(config, context_id="NONE"):
+    result = dict(config)
+    result["context_id"] = context_id
+    result["config_id"] = (
+        config_id(result)
+        + f"|context={context_id}"
+    )
+    return result
+
+
+def rf_compression_config(
+    body_atr_min,
+    range_atr_min,
+    compression_max,
+    breakout_lookback,
+    rr,
+    context_id=None,
+):
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "COMPRESSION_BREAKOUT",
+        "body_atr_min": float(body_atr_min),
+        "range_atr_min": float(range_atr_min),
+        "compression_max": float(compression_max),
+        "breakout_lookback": int(breakout_lookback),
+        "rr": float(rr),
+    }
+    config["config_id"] = config_id(config)
+
+    if context_id is not None:
+        config = rf_config_with_context(
+            config,
+            context_id,
+        )
+
+    return config
+
+
+def rf_sweep_config(rr):
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "SWEEP_DISPLACEMENT",
+        "body_atr_min": 1.25,
+        "lookback": 15,
+        "wick_body_min": 0.25,
+        "rr": float(rr),
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+def rf_outside_benchmark():
+    config = {
+        "timeframe": "H1",
+        "side": "SHORT",
+        "family": "OUTSIDE_REVERSAL",
+        "body_atr_min": 1.00,
+        "lookback": 60,
+        "distance_atr_max": 0.30,
+        "close_location": 0.15,
+        "rr": 4.50,
+    }
+    config["config_id"] = config_id(config)
+    return config
+
+
+def rf_geometry_configs():
+    configs = []
+
+    for compression_max in RF_COMPRESSION_GRID:
+        for body_atr_min in RF_BODY_GRID:
+            for range_atr_min in RF_RANGE_GRID:
+                for breakout_lookback in RF_BREAKOUT_GRID:
+                    configs.append(
+                        rf_compression_config(
+                            body_atr_min,
+                            range_atr_min,
+                            compression_max,
+                            breakout_lookback,
+                            RF_GEOMETRY_RR,
+                        )
+                    )
+
+    return configs
+
+
+def rf_refinement_sort_key(row):
+    # Robustness first, not highest headline PF.
+    return (
+        1 if row["both_temporal_splits_positive"] else 0,
+        row["positive_eras"],
+        1 if row["last5y_r"] > 0 else 0,
+        row["min_temporal_split_pf"],
+        row["full_pf"],
+        row["full_total_r"],
+        row["full_trades"],
+    )
+
+
+def rf_select_geometry_shortlist(rows):
+    eligible = [
+        row for row in rows
+        if (
+            row["full_trades"] >= 40
+            and row["full_pf"] >= 1.15
+            and row["both_temporal_splits_positive"]
+            and row["positive_eras"] >= 3
+        )
+    ]
+
+    pool = eligible if eligible else list(rows)
+    pool = sorted(
+        pool,
+        key=rf_refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = []
+    seen = set()
+
+    # Force the two exact discovery compression controls.
+    forced = [
+        (1.00, 1.50, 0.80, 10),
+        (1.00, 1.00, 0.80, 5),
+    ]
+
+    for body, rng, comp, lb in forced:
+        for row in rows:
+            if (
+                row["body_atr_min"] == body
+                and row["range_atr_min"] == rng
+                and row["compression_max"] == comp
+                and int(row["breakout_lookback"]) == lb
+            ):
+                selected.append(row)
+                seen.add(row["config_id"])
+                break
+
+    for row in pool:
+        if len(selected) >= RF_GEOMETRY_SHORTLIST:
+            break
+        if row["config_id"] in seen:
+            continue
+        selected.append(row)
+        seen.add(row["config_id"])
+
+    return selected
+
+
+def rf_geometry_summary(rows):
+    output = []
+
+    dimensions = [
+        ("compression_max", RF_COMPRESSION_GRID),
+        ("body_atr_min", RF_BODY_GRID),
+        ("range_atr_min", RF_RANGE_GRID),
+        ("breakout_lookback", RF_BREAKOUT_GRID),
+    ]
+
+    for field, values in dimensions:
+        for value in values:
+            subset_rows = [
+                r for r in rows
+                if r[field] == value
+            ]
+
+            if not subset_rows:
+                continue
+
+            pfs = [
+                r["full_pf"]
+                for r in subset_rows
+            ]
+
+            output.append({
+                "dimension": field,
+                "value": value,
+                "configs": len(subset_rows),
+                "positive_full_configs": sum(
+                    r["full_total_r"] > 0
+                    for r in subset_rows
+                ),
+                "positive_full_pct": 100.0 * sum(
+                    r["full_total_r"] > 0
+                    for r in subset_rows
+                ) / len(subset_rows),
+                "both_split_positive_configs": sum(
+                    r["both_temporal_splits_positive"]
+                    for r in subset_rows
+                ),
+                "both_split_positive_pct": 100.0 * sum(
+                    r["both_temporal_splits_positive"]
+                    for r in subset_rows
+                ) / len(subset_rows),
+                "last5_positive_configs": sum(
+                    r["last5y_r"] > 0
+                    for r in subset_rows
+                ),
+                "last2_positive_configs": sum(
+                    r["last2y_r"] > 0
+                    for r in subset_rows
+                ),
+                "median_pf": float(
+                    median(pfs)
+                ),
+                "best_pf": max(pfs),
+            })
+
+    return output
+
+
+def rf_ema(values, length):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    result = np.full(
+        len(values),
+        np.nan,
+        dtype=float,
+    )
+
+    if len(values) < length:
+        return result
+
+    seed = values[:length]
+
+    if not np.all(
+        np.isfinite(seed)
+    ):
+        return result
+
+    result[length - 1] = float(
+        np.mean(seed)
+    )
+
+    alpha = 2.0 / (
+        length + 1.0
+    )
+
+    for i in range(
+        length,
+        len(values),
+    ):
+        result[i] = (
+            alpha * values[i]
+            + (
+                1.0 - alpha
+            ) * result[i - 1]
+        )
+
+    return result
+
+
+def rf_prev_mean(values, length):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+    result = np.full(
+        len(values),
+        np.nan,
+        dtype=float,
+    )
+
+    for i in range(
+        length,
+        len(values),
+    ):
+        window = values[
+            i - length:i
+        ]
+        if np.all(
+            np.isfinite(window)
+        ):
+            result[i] = float(
+                np.mean(window)
+            )
+
+    return result
+
+
+def rf_completed_values(
+    signal_times,
+    higher_times,
+    values,
+):
+    """
+    Strictly completed HTF values.
+
+    Higher-timeframe candle i becomes usable only once candle i+1 has begun.
+    """
+    output = np.full(
+        len(signal_times),
+        np.nan,
+        dtype=float,
+    )
+
+    if len(higher_times) < 2:
+        return output
+
+    completion_times = higher_times[1:]
+    completed_values = np.asarray(
+        values[:-1],
+        dtype=float,
+    )
+
+    for i, signal_time in enumerate(
+        signal_times
+    ):
+        index = (
+            bisect_right(
+                completion_times,
+                signal_time,
+            )
+            - 1
+        )
+
+        if index >= 0:
+            output[i] = completed_values[
+                index
+            ]
+
+    return output
+
+
+def rf_context_cache(
+    h1_features,
+    h4_candles,
+    daily_candles,
+):
+    signal_times = h1_features[
+        "times"
+    ]
+
+    h4_times = [
+        c["time"]
+        for c in h4_candles
+    ]
+    d_times = [
+        c["time"]
+        for c in daily_candles
+    ]
+
+    h4_close = np.array(
+        [c["close"] for c in h4_candles],
+        dtype=float,
+    )
+    d_close = np.array(
+        [c["close"] for c in daily_candles],
+        dtype=float,
+    )
+
+    h4_ema50 = rf_ema(
+        h4_close, 50
+    )
+    h4_ema100 = rf_ema(
+        h4_close, 100
+    )
+    h4_ema200 = rf_ema(
+        h4_close, 200
+    )
+
+    d_ema50 = rf_ema(
+        d_close, 50
+    )
+    d_ema100 = rf_ema(
+        d_close, 100
+    )
+    d_ema200 = rf_ema(
+        d_close, 200
+    )
+
+    h4_atr = atr14_array(
+        h4_candles
+    )
+    d_atr = atr14_array(
+        daily_candles
+    )
+
+    h4_atr_mean50_prev = rf_prev_mean(
+        h4_atr, 50
+    )
+    d_atr_mean50_prev = rf_prev_mean(
+        d_atr, 50
+    )
+
+    h4_atr_ratio50 = np.divide(
+        h4_atr,
+        h4_atr_mean50_prev,
+        out=np.full(
+            len(h4_atr),
+            np.nan,
+        ),
+        where=(
+            np.isfinite(
+                h4_atr_mean50_prev
+            )
+            & (
+                h4_atr_mean50_prev
+                > 0
+            )
+        ),
+    )
+
+    d_atr_ratio50 = np.divide(
+        d_atr,
+        d_atr_mean50_prev,
+        out=np.full(
+            len(d_atr),
+            np.nan,
+        ),
+        where=(
+            np.isfinite(
+                d_atr_mean50_prev
+            )
+            & (
+                d_atr_mean50_prev
+                > 0
+            )
+        ),
+    )
+
+    cache = {
+        "H4_CLOSE":
+            rf_completed_values(
+                signal_times,
+                h4_times,
+                h4_close,
+            ),
+        "H4_EMA50":
+            rf_completed_values(
+                signal_times,
+                h4_times,
+                h4_ema50,
+            ),
+        "H4_EMA100":
+            rf_completed_values(
+                signal_times,
+                h4_times,
+                h4_ema100,
+            ),
+        "H4_EMA200":
+            rf_completed_values(
+                signal_times,
+                h4_times,
+                h4_ema200,
+            ),
+        "H4_ATR_RATIO50":
+            rf_completed_values(
+                signal_times,
+                h4_times,
+                h4_atr_ratio50,
+            ),
+        "D_CLOSE":
+            rf_completed_values(
+                signal_times,
+                d_times,
+                d_close,
+            ),
+        "D_EMA50":
+            rf_completed_values(
+                signal_times,
+                d_times,
+                d_ema50,
+            ),
+        "D_EMA100":
+            rf_completed_values(
+                signal_times,
+                d_times,
+                d_ema100,
+            ),
+        "D_EMA200":
+            rf_completed_values(
+                signal_times,
+                d_times,
+                d_ema200,
+            ),
+        "D_ATR_RATIO50":
+            rf_completed_values(
+                signal_times,
+                d_times,
+                d_atr_ratio50,
+            ),
+    }
+
+    n = len(
+        signal_times
+    )
+
+    cache["NY_WEEKDAY"] = np.empty(
+        n,
+        dtype=int,
+    )
+
+    for key in (
+        "SESSION_SYDNEY",
+        "SESSION_TOKYO",
+        "SESSION_LONDON",
+        "SESSION_NY",
+    ):
+        cache[key] = np.zeros(
+            n,
+            dtype=bool,
+        )
+
+    for i, timestamp in enumerate(
+        signal_times
+    ):
+        ny = timestamp.astimezone(
+            RF_NY
+        )
+        london = timestamp.astimezone(
+            RF_LONDON
+        )
+        tokyo = timestamp.astimezone(
+            RF_TOKYO
+        )
+        sydney = timestamp.astimezone(
+            RF_SYDNEY
+        )
+
+        cache["NY_WEEKDAY"][i] = (
+            ny.weekday()
+        )
+
+        cache["SESSION_SYDNEY"][i] = (
+            8 <= sydney.hour < 17
+        )
+        cache["SESSION_TOKYO"][i] = (
+            8 <= tokyo.hour < 17
+        )
+        cache["SESSION_LONDON"][i] = (
+            7 <= london.hour < 16
+        )
+        cache["SESSION_NY"][i] = (
+            8 <= ny.hour < 17
+        )
+
+    return cache
+
+
+def rf_context_definitions():
+    return [
+        (
+            "NONE",
+            "BASE",
+            "No context filter",
+        ),
+
+        (
+            "EXCLUDE_MON_NY",
+            "WEEKDAY",
+            "Exclude Monday America/New_York",
+        ),
+        (
+            "EXCLUDE_TUE_NY",
+            "WEEKDAY",
+            "Exclude Tuesday America/New_York",
+        ),
+        (
+            "EXCLUDE_WED_NY",
+            "WEEKDAY",
+            "Exclude Wednesday America/New_York",
+        ),
+        (
+            "EXCLUDE_THU_NY",
+            "WEEKDAY",
+            "Exclude Thursday America/New_York",
+        ),
+        (
+            "EXCLUDE_FRI_NY",
+            "WEEKDAY",
+            "Exclude Friday America/New_York",
+        ),
+
+        (
+            "SESSION_SYDNEY_08_17",
+            "SESSION",
+            "08:00-16:59 Australia/Sydney",
+        ),
+        (
+            "SESSION_TOKYO_08_17",
+            "SESSION",
+            "08:00-16:59 Asia/Tokyo",
+        ),
+        (
+            "SESSION_LONDON_07_16",
+            "SESSION",
+            "07:00-15:59 Europe/London",
+        ),
+        (
+            "SESSION_NY_08_17",
+            "SESSION",
+            "08:00-16:59 America/New_York",
+        ),
+
+        (
+            "H4_CLOSE_LT_EMA100",
+            "H4_TREND",
+            "Prior strictly completed H4 close < EMA100",
+        ),
+        (
+            "H4_CLOSE_LT_EMA200",
+            "H4_TREND",
+            "Prior strictly completed H4 close < EMA200",
+        ),
+        (
+            "H4_EMA50_LT_EMA200",
+            "H4_TREND",
+            "Prior strictly completed H4 EMA50 < EMA200",
+        ),
+
+        (
+            "D_CLOSE_LT_EMA100",
+            "D_TREND",
+            "Prior strictly completed Daily close < EMA100",
+        ),
+        (
+            "D_CLOSE_LT_EMA200",
+            "D_TREND",
+            "Prior strictly completed Daily close < EMA200",
+        ),
+        (
+            "D_EMA50_LT_EMA200",
+            "D_TREND",
+            "Prior strictly completed Daily EMA50 < EMA200",
+        ),
+
+        (
+            "H4_ATR_RATIO50_GE_080",
+            "VOLATILITY",
+            "Prior completed H4 ATR14 / prior50 mean >= 0.80",
+        ),
+        (
+            "D_ATR_RATIO50_GE_080",
+            "VOLATILITY",
+            "Prior completed Daily ATR14 / prior50 mean >= 0.80",
+        ),
+    ]
+
+
+def rf_context_mask(
+    context_id,
+    cache,
+):
+    n = len(
+        cache["NY_WEEKDAY"]
+    )
+
+    if context_id == "NONE":
+        return np.ones(
+            n,
+            dtype=bool,
+        )
+
+    weekday = {
+        "EXCLUDE_MON_NY": 0,
+        "EXCLUDE_TUE_NY": 1,
+        "EXCLUDE_WED_NY": 2,
+        "EXCLUDE_THU_NY": 3,
+        "EXCLUDE_FRI_NY": 4,
+    }
+
+    if context_id in weekday:
+        return (
+            cache["NY_WEEKDAY"]
+            != weekday[context_id]
+        )
+
+    session_map = {
+        "SESSION_SYDNEY_08_17":
+            "SESSION_SYDNEY",
+        "SESSION_TOKYO_08_17":
+            "SESSION_TOKYO",
+        "SESSION_LONDON_07_16":
+            "SESSION_LONDON",
+        "SESSION_NY_08_17":
+            "SESSION_NY",
+    }
+
+    if context_id in session_map:
+        return cache[
+            session_map[context_id]
+        ].copy()
+
+    if context_id == "H4_CLOSE_LT_EMA100":
+        return (
+            np.isfinite(cache["H4_CLOSE"])
+            & np.isfinite(cache["H4_EMA100"])
+            & (
+                cache["H4_CLOSE"]
+                < cache["H4_EMA100"]
+            )
+        )
+
+    if context_id == "H4_CLOSE_LT_EMA200":
+        return (
+            np.isfinite(cache["H4_CLOSE"])
+            & np.isfinite(cache["H4_EMA200"])
+            & (
+                cache["H4_CLOSE"]
+                < cache["H4_EMA200"]
+            )
+        )
+
+    if context_id == "H4_EMA50_LT_EMA200":
+        return (
+            np.isfinite(cache["H4_EMA50"])
+            & np.isfinite(cache["H4_EMA200"])
+            & (
+                cache["H4_EMA50"]
+                < cache["H4_EMA200"]
+            )
+        )
+
+    if context_id == "D_CLOSE_LT_EMA100":
+        return (
+            np.isfinite(cache["D_CLOSE"])
+            & np.isfinite(cache["D_EMA100"])
+            & (
+                cache["D_CLOSE"]
+                < cache["D_EMA100"]
+            )
+        )
+
+    if context_id == "D_CLOSE_LT_EMA200":
+        return (
+            np.isfinite(cache["D_CLOSE"])
+            & np.isfinite(cache["D_EMA200"])
+            & (
+                cache["D_CLOSE"]
+                < cache["D_EMA200"]
+            )
+        )
+
+    if context_id == "D_EMA50_LT_EMA200":
+        return (
+            np.isfinite(cache["D_EMA50"])
+            & np.isfinite(cache["D_EMA200"])
+            & (
+                cache["D_EMA50"]
+                < cache["D_EMA200"]
+            )
+        )
+
+    if context_id == "H4_ATR_RATIO50_GE_080":
+        return (
+            np.isfinite(
+                cache["H4_ATR_RATIO50"]
+            )
+            & (
+                cache["H4_ATR_RATIO50"]
+                >= 0.80
+            )
+        )
+
+    if context_id == "D_ATR_RATIO50_GE_080":
+        return (
+            np.isfinite(
+                cache["D_ATR_RATIO50"]
+            )
+            & (
+                cache["D_ATR_RATIO50"]
+                >= 0.80
+            )
+        )
+
+    raise ValueError(
+        f"Unknown context: {context_id}"
+    )
+
+
+def rf_apply_context(
+    raw_indices,
+    context_id,
+    cache,
+):
+    raw_indices = np.asarray(
+        raw_indices,
+        dtype=int,
+    )
+
+    if not len(
+        raw_indices
+    ):
+        return raw_indices
+
+    mask = rf_context_mask(
+        context_id,
+        cache,
+    )
+
+    return raw_indices[
+        mask[raw_indices]
+    ]
+
+
+def rf_row_to_compression(
+    row,
+    rr=None,
+    context_id=None,
+):
+    return rf_compression_config(
+        row["body_atr_min"],
+        row["range_atr_min"],
+        row["compression_max"],
+        int(
+            row["breakout_lookback"]
+        ),
+        (
+            row["rr"]
+            if rr is None
+            else rr
+        ),
+        context_id=context_id,
+    )
+
+
+def rf_select_context_bases(
+    rr_rows,
+):
+    eligible = [
+        row for row in rr_rows
+        if (
+            row["full_trades"] >= 40
+            and row["full_pf"] >= 1.20
+            and row[
+                "both_temporal_splits_positive"
+            ]
+            and row["positive_eras"] >= 3
+            and row["last5y_r"] > 0
+        )
+    ]
+
+    pool = eligible if eligible else list(
+        rr_rows
+    )
+
+    pool = sorted(
+        pool,
+        key=rf_refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = []
+    seen = set()
+
+    forced_configs = [
+        rf_compression_config(
+            1.00, 1.50, 0.80, 10, 4.00
+        ),
+        rf_compression_config(
+            1.00, 1.00, 0.80, 5, 4.00
+        ),
+    ]
+
+    row_map = {
+        r["config_id"]: r
+        for r in rr_rows
+    }
+
+    for config in forced_configs:
+        row = row_map.get(
+            config["config_id"]
+        )
+        if row is not None:
+            selected.append(row)
+            seen.add(
+                row["config_id"]
+            )
+
+    for row in pool:
+        if len(selected) >= RF_CONTEXT_BASES:
+            break
+
+        if row["config_id"] in seen:
+            continue
+
+        selected.append(row)
+        seen.add(
+            row["config_id"]
+        )
+
+    return selected
+
+
+def rf_context_ablation(
+    context_rows,
+):
+    by_base = defaultdict(
+        dict
+    )
+
+    for row in context_rows:
+        key = (
+            row["body_atr_min"],
+            row["range_atr_min"],
+            row["compression_max"],
+            int(
+                row["breakout_lookback"]
+            ),
+            row["rr"],
+        )
+        by_base[key][
+            row["context_id"]
+        ] = row
+
+    output = []
+
+    for key, rows in by_base.items():
+        base = rows.get(
+            "NONE"
+        )
+
+        if base is None:
+            continue
+
+        for context_id, row in rows.items():
+            if context_id == "NONE":
+                continue
+
+            output.append({
+                "body_atr_min": key[0],
+                "range_atr_min": key[1],
+                "compression_max": key[2],
+                "breakout_lookback": key[3],
+                "rr": key[4],
+                "context_id": context_id,
+                "base_trades": base[
+                    "full_trades"
+                ],
+                "context_trades": row[
+                    "full_trades"
+                ],
+                "retention_pct": (
+                    100.0
+                    * row["full_trades"]
+                    / base["full_trades"]
+                    if base["full_trades"]
+                    else 0.0
+                ),
+                "base_pf": base["full_pf"],
+                "context_pf": row["full_pf"],
+                "delta_pf": (
+                    row["full_pf"]
+                    - base["full_pf"]
+                ),
+                "base_total_r":
+                    base["full_total_r"],
+                "context_total_r":
+                    row["full_total_r"],
+                "delta_total_r": (
+                    row["full_total_r"]
+                    - base["full_total_r"]
+                ),
+                "base_min_split_pf":
+                    base[
+                        "min_temporal_split_pf"
+                    ],
+                "context_min_split_pf":
+                    row[
+                        "min_temporal_split_pf"
+                    ],
+                "delta_min_split_pf": (
+                    row[
+                        "min_temporal_split_pf"
+                    ]
+                    - base[
+                        "min_temporal_split_pf"
+                    ]
+                ),
+                "base_last5_r":
+                    base["last5y_r"],
+                "context_last5_r":
+                    row["last5y_r"],
+                "delta_last5_r": (
+                    row["last5y_r"]
+                    - base["last5y_r"]
+                ),
+                "base_last2_r":
+                    base["last2y_r"],
+                "context_last2_r":
+                    row["last2y_r"],
+                "delta_last2_r": (
+                    row["last2y_r"]
+                    - base["last2y_r"]
+                ),
+            })
+
+    return output
+
+
+def rf_parity_check(
+    features,
+):
+    cutoff_index = bisect_right(
+        features["times"],
+        RF_DISCOVERY_CUTOFF,
+    )
+
+    # Slice only arrays/dictionaries needed by signal + backtest.
+    sliced = {}
+
+    for key, value in features.items():
+        if isinstance(
+            value,
+            np.ndarray,
+        ):
+            sliced[key] = value[
+                :cutoff_index
+            ].copy()
+
+        elif key == "times":
+            sliced[key] = value[
+                :cutoff_index
+            ]
+
+        elif key in (
+            "prev_lows",
+            "prev_highs",
+        ):
+            sliced[key] = {
+                lb: arr[
+                    :cutoff_index
+                ].copy()
+                for lb, arr
+                in value.items()
+            }
+
+        else:
+            sliced[key] = value
+
+    controls = {
+        "COMPRESSION_CENTRAL_RR4":
+            rf_compression_config(
+                1.00, 1.50, 0.80, 10, 4.00
+            ),
+
+        "COMPRESSION_FREQUENCY_RR4":
+            rf_compression_config(
+                1.00, 1.00, 0.80, 5, 4.00
+            ),
+
+        "SWEEP_LB15_RR3P5":
+            rf_sweep_config(
+                3.50
+            ),
+
+        "OUTSIDE_LB60_D030_RR4P5":
+            rf_outside_benchmark(),
+    }
+
+    rows = []
+
+    for name, config in controls.items():
+        indices = signal_indices(
+            config,
+            sliced,
+        )
+
+        row, _ = evaluate_candidate(
+            config,
+            sliced,
+            indices,
+        )
+
+        expected = RF_PARITY_EXPECTED[
+            name
+        ]
+
+        passes = (
+            row["full_trades"]
+            == expected["trades"]
+            and abs(
+                row["full_pf"]
+                - expected["pf"]
+            ) <= 1e-9
+            and abs(
+                row["full_total_r"]
+                - expected["total_r"]
+            ) <= 1e-9
+        )
+
+        rows.append({
+            "control": name,
+            "config_id":
+                config["config_id"],
+            "expected_trades":
+                expected["trades"],
+            "actual_trades":
+                row["full_trades"],
+            "expected_pf":
+                expected["pf"],
+            "actual_pf":
+                row["full_pf"],
+            "expected_total_r":
+                expected["total_r"],
+            "actual_total_r":
+                row["full_total_r"],
+            "pass":
+                passes,
+        })
+
+        if not passes:
+            raise RuntimeError(
+                f"Discovery parity failed for {name}: "
+                f"{rows[-1]}"
+            )
+
+    return rows
+
+
+def rf_secondary_control_rows(
+    features,
+):
+    rows = []
+
+    for rr in (
+        3.00,
+        3.50,
+        4.00,
+    ):
+        config = rf_sweep_config(
+            rr
+        )
+        indices = signal_indices(
+            config,
+            features,
+        )
+        row, _ = evaluate_candidate(
+            config,
+            features,
+            indices,
+        )
+        row["control_role"] = (
+            "SECONDARY_RECENTLY_POSITIVE_SWEEP"
+        )
+        rows.append(row)
+
+    config = rf_outside_benchmark()
+    indices = signal_indices(
+        config,
+        features,
+    )
+    row, _ = evaluate_candidate(
+        config,
+        features,
+        indices,
+    )
+    row["control_role"] = (
+        "FROZEN_ROBUST_OUTSIDE_BENCHMARK"
+    )
+    rows.append(row)
+
+    return rows
+
+
+def rf_select_finalists(
+    context_rows,
+    rr_rows,
+    secondary_rows,
+):
+    # We deliberately favour candidates that repair recent weakness without
+    # sacrificing the old sample.
+    context_eligible = [
+        r for r in context_rows
+        if (
+            r["full_trades"] >= 40
+            and r[
+                "both_temporal_splits_positive"
+            ]
+            and r["positive_eras"] >= 3
+            and r["last5y_r"] > 0
+            and r["last2y_r"] > 0
+        )
+    ]
+
+    context_pool = (
+        context_eligible
+        if context_eligible
+        else context_rows
+    )
+
+    context_pool = sorted(
+        context_pool,
+        key=rf_refinement_sort_key,
+        reverse=True,
+    )
+
+    selected = []
+    seen = set()
+
+    for row in context_pool:
+        if len(selected) >= RF_CONTEXT_FINAL_KEEP:
+            break
+
+        if row["config_id"] in seen:
+            continue
+
+        selected.append(
+            dict(row)
+        )
+        seen.add(
+            row["config_id"]
+        )
+
+    # Exact no-context compression references.
+    rr_map = {
+        r["config_id"]: r
+        for r in rr_rows
+    }
+
+    for config in [
+        rf_compression_config(
+            1.00, 1.50, 0.80, 10, 4.00
+        ),
+        rf_compression_config(
+            1.00, 1.00, 0.80, 5, 4.00
+        ),
+    ]:
+        row = rr_map.get(
+            config["config_id"]
+        )
+        if (
+            row is not None
+            and row["config_id"] not in seen
+        ):
+            output = dict(row)
+            output["context_id"] = "NONE"
+            output["context_group"] = "BASE"
+            output["context_description"] = (
+                "Forced no-context compression reference"
+            )
+            selected.append(output)
+            seen.add(
+                row["config_id"]
+            )
+
+    # Secondary controls are deep-diagnosed but never treated as compression
+    # refinement winners.
+    for row in secondary_rows:
+        output = dict(row)
+        output["context_id"] = "NONE"
+        output["context_group"] = "CONTROL"
+        output["context_description"] = (
+            row["control_role"]
+        )
+
+        if output["config_id"] in seen:
+            continue
+
+        selected.append(output)
+        seen.add(
+            output["config_id"]
+        )
+
+    return selected
+
+
+def rf_deep_config_from_row(
+    row,
+):
+    if (
+        row["family"]
+        == "COMPRESSION_BREAKOUT"
+    ):
+        return rf_compression_config(
+            row["body_atr_min"],
+            row["range_atr_min"],
+            row["compression_max"],
+            int(
+                row["breakout_lookback"]
+            ),
+            row["rr"],
+            context_id=row.get(
+                "context_id",
+                "NONE",
+            ),
+        )
+
+    if (
+        row["family"]
+        == "SWEEP_DISPLACEMENT"
+    ):
+        return rf_sweep_config(
+            row["rr"]
+        )
+
+    if (
+        row["family"]
+        == "OUTSIDE_REVERSAL"
+    ):
+        return rf_outside_benchmark()
+
+    raise ValueError(
+        f"Unsupported deep family: "
+        f"{row['family']}"
+    )
+
+
+def rf_screen_rows(
+    finalist_rows,
+    costs,
+    rolling_summaries,
+    calendar_summaries,
+    ablations,
+):
+    cost_lookup = {
+        (
+            r["config_id"],
+            r["cost_multiplier"],
+        ): r
+        for r in costs
+    }
+
+    roll_lookup = defaultdict(dict)
+
+    for row in rolling_summaries:
+        roll_lookup[
+            row["config_id"]
+        ][int(
+            row["months"]
+        )] = row
+
+    cal_lookup = {
+        row["config_id"]: row
+        for row in calendar_summaries
+    }
+
+    ablation_lookup = {
+        (
+            r["body_atr_min"],
+            r["range_atr_min"],
+            r["compression_max"],
+            int(
+                r["breakout_lookback"]
+            ),
+            r["rr"],
+            r["context_id"],
+        ): r
+        for r in ablations
+    }
+
+    output = []
+
+    for seed in finalist_rows:
+        row = dict(seed)
+        cid = row["config_id"]
+
+        cost2 = cost_lookup.get(
+            (cid, 2.0),
+            {},
+        )
+        r24 = roll_lookup.get(
+            cid,
+            {},
+        ).get(
+            24,
+            {},
+        )
+        r36 = roll_lookup.get(
+            cid,
+            {},
+        ).get(
+            36,
+            {},
+        )
+        cal = cal_lookup.get(
+            cid,
+            {},
+        )
+
+        context_id = row.get(
+            "context_id",
+            "NONE",
+        )
+
+        ablation = {}
+
+        if (
+            row["family"]
+            == "COMPRESSION_BREAKOUT"
+            and context_id != "NONE"
+        ):
+            ablation = ablation_lookup.get(
+                (
+                    row["body_atr_min"],
+                    row["range_atr_min"],
+                    row["compression_max"],
+                    int(
+                        row[
+                            "breakout_lookback"
+                        ]
+                    ),
+                    row["rr"],
+                    context_id,
+                ),
+                {},
+            )
+
+        row.update({
+            "cost_2x_pf":
+                cost2.get(
+                    "profit_factor",
+                    0.0,
+                ),
+            "cost_2x_total_r":
+                cost2.get(
+                    "total_r",
+                    0.0,
+                ),
+            "rolling24_positive_pct":
+                r24.get(
+                    "positive_windows_pct",
+                    0.0,
+                ),
+            "rolling24_worst_r":
+                r24.get(
+                    "worst_window_r",
+                    0.0,
+                ),
+            "rolling36_positive_pct":
+                r36.get(
+                    "positive_windows_pct",
+                    0.0,
+                ),
+            "rolling36_worst_r":
+                r36.get(
+                    "worst_window_r",
+                    0.0,
+                ),
+            "positive_calendar_year_pct":
+                cal.get(
+                    "positive_year_pct",
+                    0.0,
+                ),
+            "worst_calendar_year_r":
+                cal.get(
+                    "worst_year_r",
+                    0.0,
+                ),
+            "context_delta_pf":
+                ablation.get(
+                    "delta_pf",
+                    0.0,
+                ),
+            "context_delta_last2_r":
+                ablation.get(
+                    "delta_last2_r",
+                    0.0,
+                ),
+        })
+
+        compression_candidate = (
+            row["family"]
+            == "COMPRESSION_BREAKOUT"
+        )
+
+        row["refinement_screen_pass"] = bool(
+            compression_candidate
+            and row["full_trades"] >= 40
+            and row["full_pf"] >= 1.35
+            and row[
+                "both_temporal_splits_positive"
+            ]
+            and row[
+                "min_temporal_split_pf"
+            ] >= 1.25
+            and row["positive_eras"] >= 3
+            and row["last5y_r"] > 0
+            and row["last2y_r"] > 0
+            and row["cost_2x_pf"] >= 1.20
+            and row["cost_2x_total_r"] > 0
+            and row[
+                "rolling24_positive_pct"
+            ] >= 70.0
+            and row[
+                "rolling36_positive_pct"
+            ] >= 75.0
+            and row[
+                "positive_calendar_year_pct"
+            ] >= 55.0
+        )
+
+        output.append(row)
+
+    return output
+
+
+def run_rf_research():
+    try:
+        RF_STATUS.update({
+            "state": "fetching",
+            "message": "Fetching AUD/USD H1/H4/D history",
+        })
+
+        h1 = fetch_history(
+            "H1",
+            REQUESTED_START,
+            NOW,
+            chunk_days=180,
+        )
+
+        h4 = fetch_history(
+            "H4",
+            RF_WARMUP_START,
+            NOW,
+            chunk_days=720,
+        )
+
+        daily = fetch_history(
+            "D",
+            RF_WARMUP_START,
+            NOW,
+            chunk_days=3000,
+        )
+
+        if len(h1) < 100000:
+            raise RuntimeError(
+                f"Unexpectedly small H1 history: {len(h1)}"
+            )
+
+        if len(h4) < 10000:
+            raise RuntimeError(
+                f"Unexpectedly small H4 history: {len(h4)}"
+            )
+
+        if len(daily) < 5000:
+            raise RuntimeError(
+                f"Unexpectedly small Daily history: {len(daily)}"
+            )
+
+        coverage = [
+            {
+                "pair": PAIR,
+                "timeframe": "H1",
+                "candles": len(h1),
+                "first_candle_utc": iso(
+                    h1[0]["time"]
+                ),
+                "last_candle_utc": iso(
+                    h1[-1]["time"]
+                ),
+            },
+            {
+                "pair": PAIR,
+                "timeframe": "H4",
+                "candles": len(h4),
+                "first_candle_utc": iso(
+                    h4[0]["time"]
+                ),
+                "last_candle_utc": iso(
+                    h4[-1]["time"]
+                ),
+            },
+            {
+                "pair": PAIR,
+                "timeframe": "D",
+                "candles": len(daily),
+                "first_candle_utc": iso(
+                    daily[0]["time"]
+                ),
+                "last_candle_utc": iso(
+                    daily[-1]["time"]
+                ),
+            },
+        ]
+
+        write_csv(
+            RF_OUT["coverage"],
+            coverage,
+        )
+
+        RF_STATUS.update({
+            "state": "features",
+            "message": "Building H1 + strictly completed HTF features",
+        })
+
+        features = build_features(
+            h1,
+            "H1",
+        )
+
+        # The broad runner used 5/10/20 breakout windows. This focused
+        # refinement adds only the local midpoint LB15.
+        if 15 not in features[
+            "prev_lows"
+        ]:
+            features[
+                "prev_lows"
+            ][15] = (
+                rolling_previous_extreme(
+                    features["low"],
+                    15,
+                    want_max=False,
+                )
+            )
+            features[
+                "prev_highs"
+            ][15] = (
+                rolling_previous_extreme(
+                    features["high"],
+                    15,
+                    want_max=True,
+                )
+            )
+
+        context_cache = rf_context_cache(
+            features,
+            h4,
+            daily,
+        )
+
+        parity_rows = rf_parity_check(
+            features
+        )
+
+        write_csv(
+            RF_OUT["control_parity"],
+            parity_rows,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 1 — LOCAL COMPRESSION GEOMETRY
+        # ----------------------------------------------------
+        geometry_rows = []
+        geometry_indices = {}
+
+        geometry_configs = (
+            rf_geometry_configs()
+        )
+
+        for number, config in enumerate(
+            geometry_configs,
+            1,
+        ):
+            RF_STATUS.update({
+                "state": "geometry",
+                "message": (
+                    f"{number}/{len(geometry_configs)} "
+                    f"{config['config_id']}"
+                ),
+            })
+
+            indices = signal_indices(
+                config,
+                features,
+            )
+
+            geometry_indices[
+                config["config_id"]
+            ] = indices
+
+            row, _ = evaluate_candidate(
+                config,
+                features,
+                indices,
+            )
+
+            geometry_rows.append(row)
+
+        geometry_rows.sort(
+            key=rf_refinement_sort_key,
+            reverse=True,
+        )
+
+        write_csv(
+            RF_OUT["geometry"],
+            geometry_rows,
+        )
+
+        write_csv(
+            RF_OUT["geometry_summary"],
+            rf_geometry_summary(
+                geometry_rows
+            ),
+        )
+
+        geometry_shortlist = (
+            rf_select_geometry_shortlist(
+                geometry_rows
+            )
+        )
+
+        write_csv(
+            RF_OUT["geometry_shortlist"],
+            geometry_shortlist,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 2 — RR CONFIRMATION
+        # ----------------------------------------------------
+        rr_rows = []
+        rr_indices = {}
+
+        total_rr = (
+            len(geometry_shortlist)
+            * len(RF_RR_GRID)
+        )
+        done = 0
+
+        for base_row in geometry_shortlist:
+            base_config = (
+                rf_row_to_compression(
+                    base_row,
+                    rr=RF_GEOMETRY_RR,
+                )
+            )
+
+            indices = geometry_indices.get(
+                base_config["config_id"]
+            )
+
+            if indices is None:
+                indices = signal_indices(
+                    base_config,
+                    features,
+                )
+
+            for rr in RF_RR_GRID:
+                done += 1
+
+                config = (
+                    rf_row_to_compression(
+                        base_row,
+                        rr=rr,
+                    )
+                )
+
+                RF_STATUS.update({
+                    "state": "rr_confirmation",
+                    "message": (
+                        f"{done}/{total_rr} "
+                        f"{config['config_id']}"
+                    ),
+                })
+
+                row, _ = evaluate_candidate(
+                    config,
+                    features,
+                    indices,
+                )
+
+                rr_rows.append(row)
+                rr_indices[
+                    config["config_id"]
+                ] = indices
+
+        # Guarantee the exact two compression controls are present.
+        for config in [
+            rf_compression_config(
+                1.00, 1.50, 0.80, 10, 4.00
+            ),
+            rf_compression_config(
+                1.00, 1.00, 0.80, 5, 4.00
+            ),
+        ]:
+            if config["config_id"] in rr_indices:
+                continue
+
+            indices = signal_indices(
+                config,
+                features,
+            )
+            row, _ = evaluate_candidate(
+                config,
+                features,
+                indices,
+            )
+            rr_rows.append(row)
+            rr_indices[
+                config["config_id"]
+            ] = indices
+
+        rr_rows.sort(
+            key=rf_refinement_sort_key,
+            reverse=True,
+        )
+
+        write_csv(
+            RF_OUT["rr"],
+            rr_rows,
+        )
+
+        # ----------------------------------------------------
+        # SECONDARY FROZEN CONTROLS
+        # ----------------------------------------------------
+        secondary_rows = (
+            rf_secondary_control_rows(
+                features
+            )
+        )
+
+        write_csv(
+            RF_OUT["secondary_controls"],
+            secondary_rows,
+        )
+
+        # ----------------------------------------------------
+        # STAGE 3 — SINGLE-FACTOR CONTEXTS
+        # ----------------------------------------------------
+        context_bases = (
+            rf_select_context_bases(
+                rr_rows
+            )
+        )
+
+        write_csv(
+            RF_OUT["context_bases"],
+            context_bases,
+        )
+
+        context_rows = []
+        context_indices = {}
+
+        contexts = (
+            rf_context_definitions()
+        )
+
+        total_context = (
+            len(context_bases)
+            * len(contexts)
+        )
+        done = 0
+
+        for base_row in context_bases:
+            base_config = (
+                rf_row_to_compression(
+                    base_row
+                )
+            )
+
+            base_indices = rr_indices.get(
+                base_config["config_id"]
+            )
+
+            if base_indices is None:
+                base_indices = signal_indices(
+                    base_config,
+                    features,
+                )
+
+            for (
+                context_id,
+                context_group,
+                description,
+            ) in contexts:
+                done += 1
+
+                RF_STATUS.update({
+                    "state": "context_scan",
+                    "message": (
+                        f"{done}/{total_context} "
+                        f"{context_id}"
+                    ),
+                })
+
+                config = (
+                    rf_row_to_compression(
+                        base_row,
+                        context_id=context_id,
+                    )
+                )
+
+                indices = rf_apply_context(
+                    base_indices,
+                    context_id,
+                    context_cache,
+                )
+
+                row, _ = evaluate_candidate(
+                    config,
+                    features,
+                    indices,
+                )
+
+                row["context_id"] = (
+                    context_id
+                )
+                row["context_group"] = (
+                    context_group
+                )
+                row[
+                    "context_description"
+                ] = description
+                row[
+                    "unfiltered_signal_count"
+                ] = len(
+                    base_indices
+                )
+                row[
+                    "filtered_signal_count"
+                ] = len(
+                    indices
+                )
+                row[
+                    "signal_retention_pct"
+                ] = (
+                    100.0
+                    * len(indices)
+                    / len(base_indices)
+                    if len(base_indices)
+                    else 0.0
+                )
+
+                context_rows.append(
+                    row
+                )
+                context_indices[
+                    config["config_id"]
+                ] = indices
+
+        context_rows.sort(
+            key=rf_refinement_sort_key,
+            reverse=True,
+        )
+
+        write_csv(
+            RF_OUT["contexts"],
+            context_rows,
+        )
+
+        ablations = (
+            rf_context_ablation(
+                context_rows
+            )
+        )
+
+        write_csv(
+            RF_OUT[
+                "context_ablation"
+            ],
+            ablations,
+        )
+
+        # ----------------------------------------------------
+        # DEEP FINALISTS
+        # ----------------------------------------------------
+        finalist_seeds = (
+            rf_select_finalists(
+                context_rows,
+                rr_rows,
+                secondary_rows,
+            )
+        )
+
+        periods = []
+        costs = []
+        rolling = []
+        calendar = []
+        trades_output = []
+
+        for number, seed in enumerate(
+            finalist_seeds,
+            1,
+        ):
+            config = (
+                rf_deep_config_from_row(
+                    seed
+                )
+            )
+
+            RF_STATUS.update({
+                "state": "deep_validation",
+                "message": (
+                    f"{number}/{len(finalist_seeds)} "
+                    f"{config['config_id']}"
+                ),
+            })
+
+            if (
+                config["family"]
+                == "COMPRESSION_BREAKOUT"
+            ):
+                context_id = config.get(
+                    "context_id",
+                    "NONE",
+                )
+
+                indices = (
+                    context_indices.get(
+                        config["config_id"]
+                    )
+                )
+
+                if indices is None:
+                    base = dict(config)
+                    base.pop(
+                        "context_id",
+                        None,
+                    )
+                    base["config_id"] = (
+                        config_id(base)
+                    )
+
+                    raw = signal_indices(
+                        base,
+                        features,
+                    )
+
+                    indices = rf_apply_context(
+                        raw,
+                        context_id,
+                        context_cache,
+                    )
+
+            else:
+                indices = signal_indices(
+                    config,
+                    features,
+                )
+
+            trades = backtest(
+                config,
+                features,
+                indices,
+            )
+
+            periods.extend(
+                detailed_period_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            costs.extend(
+                cost_stress_rows(
+                    config,
+                    features,
+                    indices,
+                )
+            )
+
+            rolling.extend(
+                rolling_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            calendar.extend(
+                calendar_rows(
+                    config,
+                    trades,
+                )
+            )
+
+            for trade in trades:
+                output = dict(trade)
+                output[
+                    "signal_time"
+                ] = iso(
+                    output[
+                        "signal_time"
+                    ]
+                )
+                output[
+                    "exit_time"
+                ] = iso(
+                    output[
+                        "exit_time"
+                    ]
+                )
+                output[
+                    "context_id"
+                ] = config.get(
+                    "context_id",
+                    "NONE",
+                )
+                trades_output.append(
+                    output
+                )
+
+        rolling_summaries = (
+            rolling_summary(
+                rolling
+            )
+        )
+
+        calendar_summaries = (
+            calendar_summary(
+                calendar
+            )
+        )
+
+        final_rows = rf_screen_rows(
+            finalist_seeds,
+            costs,
+            rolling_summaries,
+            calendar_summaries,
+            ablations,
+        )
+
+        write_csv(
+            RF_OUT["finalists"],
+            final_rows,
+        )
+        write_csv(
+            RF_OUT["periods"],
+            periods,
+        )
+        write_csv(
+            RF_OUT["cost_stress"],
+            costs,
+        )
+        write_csv(
+            RF_OUT["rolling"],
+            rolling,
+        )
+        write_csv(
+            RF_OUT["rolling_summary"],
+            rolling_summaries,
+        )
+        write_csv(
+            RF_OUT["calendar"],
+            calendar,
+        )
+        write_csv(
+            RF_OUT["calendar_summary"],
+            calendar_summaries,
+        )
+        write_csv(
+            RF_OUT["trades"],
+            trades_output,
+        )
+
+        screen_passes = [
+            r for r in final_rows
+            if r[
+                "refinement_screen_pass"
+            ]
+        ]
+
+        write_csv(
+            RF_OUT["notes"],
+            [
+                {
+                    "topic": "scope",
+                    "note": (
+                        "Controlled AUD/USD H1 SHORT refinement. "
+                        "Only COMPRESSION_BREAKOUT geometry is locally "
+                        "refined. Sweep and outside-reversal branches are "
+                        "frozen controls."
+                    ),
+                },
+                {
+                    "topic": "parity",
+                    "note": (
+                        "Four exact broad-discovery controls must reproduce "
+                        "through 2026-09-18 14:00 UTC before refinement."
+                    ),
+                },
+                {
+                    "topic": "geometry",
+                    "note": (
+                        "108 compression geometries only: compression "
+                        "0.75/0.80/0.85, body 0.75/1.00/1.25 ATR, range "
+                        "1.00/1.25/1.50 ATR, breakout LB5/10/15/20; fixed RR4."
+                    ),
+                },
+                {
+                    "topic": "rr",
+                    "note": (
+                        "Only shortlisted compression geometries receive "
+                        "RR3/3.5/4/4.5/5 confirmation."
+                    ),
+                },
+                {
+                    "topic": "contexts",
+                    "note": (
+                        "Single-factor weekday/session/strictly-completed "
+                        "H4/D bearish-trend and ATR-regime contexts only. "
+                        "No context interactions."
+                    ),
+                },
+                {
+                    "topic": "recent_weakness",
+                    "note": (
+                        "The refinement screen explicitly requires positive "
+                        "last-2Y R because broad compression was strong over "
+                        "long history but weak in the most recent two years."
+                    ),
+                },
+                {
+                    "topic": "controls",
+                    "note": (
+                        "SWEEP_DISPLACEMENT body1.25/LB15/wick0.25 is retained "
+                        "at RR3/3.5/4 as the recently-positive secondary control. "
+                        "OUTSIDE_REVERSAL body1/LB60/dist0.30/close0.15/RR4.5 "
+                        "is retained as the frozen robustness benchmark."
+                    ),
+                },
+                {
+                    "topic": "costs",
+                    "note": (
+                        "H1 baseline adverse fill remains 0.5 pip; deep "
+                        "finalists are stressed through 2x cost."
+                    ),
+                },
+                {
+                    "topic": "portfolio",
+                    "note": (
+                        "No live25 portfolio integration occurs here. Any "
+                        "surviving short must next be tested as prospective "
+                        "#26 with exact AUD/USD LONG/SHORT non-hedging conflicts."
+                    ),
+                },
+                {
+                    "topic": "screen",
+                    "note": (
+                        f"{len(screen_passes)} of {len(final_rows)} deep "
+                        "rows passed the predeclared compression refinement "
+                        "screen. A pass is not a live lock."
+                    ),
+                },
+            ],
+        )
+
+        RF_STATUS.update({
+            "state": "packaging",
+            "message": "Packaging AUD/USD H1 SHORT refinement results",
+        })
+
+        rf_pack()
+
+        RF_STATUS.update({
+            "state": "complete",
+            "message": "AUD/USD H1 SHORT controlled refinement complete",
+            "h1_candles": len(h1),
+            "h4_candles": len(h4),
+            "daily_candles": len(daily),
+            "control_parity_passes": len(
+                parity_rows
+            ),
+            "geometry_configs": len(
+                geometry_rows
+            ),
+            "geometry_shortlist": len(
+                geometry_shortlist
+            ),
+            "rr_rows": len(
+                rr_rows
+            ),
+            "context_bases": len(
+                context_bases
+            ),
+            "context_rows": len(
+                context_rows
+            ),
+            "deep_finalists": len(
+                final_rows
+            ),
+            "refinement_screen_passes": len(
+                screen_passes
+            ),
+            "bundle": RF_BUNDLE,
+        })
+
+    except Exception as error:
+        import traceback
+
+        RF_STATUS.update({
+            "state": "error",
+            "message": str(error),
+            "error_type":
+                type(error).__name__,
+            "traceback":
+                traceback.format_exc(),
+        })
+
+        print(
+            "AUDUSD H1 SHORT REFINEMENT ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+@app.route(
+    "/audusd-h1-short-refinement/status"
+)
+def rf_status():
+    return jsonify(
+        RF_STATUS
+    )
+
+
+@app.route(
+    "/audusd-h1-short-refinement/results"
+)
+def rf_results():
+    if not os.path.exists(
+        RF_BUNDLE
+    ):
+        return jsonify({
+            "status": "not_ready",
+            "state": RF_STATUS[
+                "state"
+            ],
+            "message": RF_STATUS[
+                "message"
+            ],
+        }), 404
+
+    return send_file(
+        os.path.abspath(
+            RF_BUNDLE
+        ),
+        as_attachment=True,
+        download_name=RF_BUNDLE,
+    )
+
+
+@app.route(
+    "/audusd-h1-short-refinement/info"
+)
+def rf_info():
+    return jsonify({
+        "service": (
+            "AUD/USD H1 SHORT Controlled Compression Refinement"
+        ),
+        "read_only": True,
+        "orders_supported": False,
+        "primary_family":
+            "COMPRESSION_BREAKOUT",
+        "geometry_rr":
+            RF_GEOMETRY_RR,
+        "geometry_configs_expected":
+            len(RF_COMPRESSION_GRID)
+            * len(RF_BODY_GRID)
+            * len(RF_RANGE_GRID)
+            * len(RF_BREAKOUT_GRID),
+        "rr_grid":
+            RF_RR_GRID,
+        "context_count":
+            len(
+                rf_context_definitions()
+            ),
+        "secondary_controls": [
+            "SWEEP_DISPLACEMENT body1.25 LB15 wick0.25 RR3/3.5/4",
+            "OUTSIDE_REVERSAL body1 LB60 dist0.30 close0.15 RR4.5",
+        ],
+        "prospective_portfolio_strategy":
+            "#26",
+        "routes": [
+            "/audusd-h1-short-refinement/status",
+            "/audusd-h1-short-refinement/results",
+            "/audusd-h1-short-refinement/info",
+        ],
+    })
+
+
 if __name__ == "__main__":
     threading.Thread(
-        target=run_research,
+        target=run_rf_research,
         daemon=True,
     ).start()
 
     app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
+        port=int(
+            os.getenv(
+                "PORT",
+                "5000",
+            )
+        ),
         debug=False,
     )
