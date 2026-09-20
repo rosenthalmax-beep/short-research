@@ -1386,327 +1386,459 @@ def decision_rows(shortlist, costs, rollsum, calsum):
     )
 
 
+
+
 # ============================================================
-# MAIN RESEARCH RUNNER
+# AUD/USD M15 SHORT #27 — ONE FROZEN ENGULFING CONFIRMATION
+# ============================================================
+# Purpose: confirm the EXACT previously observed Stage 2 geometry
+# S2_1_H1_EMA50_LT_EMA200.  No search, top-N shortlist, retuning,
+# selection of a better neighbour or live order submission.
+#
+# Signal (M15 candle timestamp OPEN):
+#   exact bearish BODY engulfing as implemented in original discovery
+#   bearish body / prior bullish body >= 1.35
+#   bearish body / current ATR14 >= 1.00
+#   abs(current HIGH - previous120-bar HIGH)/current ATR14 <= 0.10
+#   previous strictly completed H1 EMA50 < H1 EMA200
+#   no session / weekday / additional higher-timeframe filters
+# RR3.50; reference entry=signal close; historical fill=close-1.0 pip;
+# stop=signal HIGH+10 ticks; target set from reference entry;
+# realised R measured against adverse fill; next-candle exits only;
+# exact p0; exit-candle re-entry eligible.
+#
+# All historical periods, including 2018+, are EXPLORATORY diagnostics
+# because the entire history has already influenced candidate selection.
+# Passing here ONLY authorises consideration for a separate 26->27
+# exact live-safe portfolio test; it is not proof of future returns.
 # ============================================================
 
-def run_research():
+REF_ID = "S2_1_H1_EMA50_LT_EMA200"
+CID = "AUDUSD_M15_SHORT_27_FROZEN_ENGULF_H1_50_LT_200"
+REF_LAST_M15 = datetime(2026, 9, 18, 20, 45, tzinfo=timezone.utc)
+REF_FIRST_M15 = datetime(2002, 5, 6, 20, 45, tzinfo=timezone.utc)
+REF_M15_COUNT = 546849
+REF_S2 = {
+    "trades": 62,
+    "pf": 1.609900,
+    "r": 25.0059,
+    "dd": -5.8516,
+    "winners": 21,  # 33.871% of 62 = 21 wins
+    "pre2010_trades": 16,
+    "pre2010_r": 4.6654,
+    "post2010_trades": 46,
+    "post2010_r": 20.3405,
+    "era_r": (2.9571, 6.6963, 7.4581, 7.8944),
+    "era_trades": (9, 19, 13, 21),
+}
+
+# Deliberately narrow one-factor neighbours.  They are DIAGNOSTICS:
+# neither a stronger neighbour nor a different RR replaces the frozen case.
+NEIGHBOURS = [
+    ("ENGULF_RATIO_1_25", "br_min", 1.25),
+    ("ENGULF_RATIO_1_45", "br_min", 1.45),
+    ("BODY_ATR_0_90", "body_atr_min", 0.90),
+    ("BODY_ATR_1_10", "body_atr_min", 1.10),
+    ("STRUCTURE_LB_100", "structure_lb", 100),
+    ("STRUCTURE_LB_165", "structure_lb", 165),
+    ("DISTANCE_ATR_0_075", "structure_dist_atr_max", 0.075),
+    ("DISTANCE_ATR_0_125", "structure_dist_atr_max", 0.125),
+    ("H1_CLOSE_LT_EMA200", "context", "H1_CLOSE_LT_EMA200"),
+    ("H1_CLOSE_LT_EMA100", "context", "H1_CLOSE_LT_EMA100"),
+    ("H4_CLOSE_LT_EMA200", "context", "H4_CLOSE_LT_EMA200"),
+    ("NO_HTF_TREND", "context", "NONE"),
+]
+
+OUTS = {
+    "coverage": "audusd27_engulf_confirmation_coverage.csv",
+    "parity": "audusd27_engulf_confirmation_frozen_parity.csv",
+    "frozen_config": "audusd27_engulf_confirmation_frozen_config.csv",
+    "frozen_summary": "audusd27_engulf_confirmation_frozen_summary.csv",
+    "periods": "audusd27_engulf_confirmation_periods.csv",
+    "cost": "audusd27_engulf_confirmation_cost_stress.csv",
+    "rolling": "audusd27_engulf_confirmation_rolling.csv",
+    "rolling_summary": "audusd27_engulf_confirmation_rolling_summary.csv",
+    "calendar": "audusd27_engulf_confirmation_calendar.csv",
+    "calendar_summary": "audusd27_engulf_confirmation_calendar_summary.csv",
+    "trades": "audusd27_engulf_confirmation_trades.csv",
+    "signal_audit": "audusd27_engulf_confirmation_signal_audit.csv",
+    "neighbours": "audusd27_engulf_confirmation_one_factor_neighbours.csv",
+    "neighbour_periods": "audusd27_engulf_confirmation_neighbour_periods.csv",
+    "neighbour_summary": "audusd27_engulf_confirmation_neighbour_summary.csv",
+    "decision": "audusd27_engulf_confirmation_decision.csv",
+    "notes": "audusd27_engulf_confirmation_notes.csv",
+}
+BUNDLE = "AUDUSD_M15_SHORT_27_ENGULFING_FROZEN_CONFIRMATION_RESULTS.zip"
+STATUS = {
+    "state": "not_started", "message": "Frozen Stage 2 confirmation has not started",
+    "orders_supported": False, "trading_enabled": False,
+}
+
+
+def ec_frozen_config():
+    # Build from the original discovery's EXACT S1_ENG_7 dictionary,
+    # then attach the original S2 context.  No newly invented signal.
+    original = next(x for x in stage1_configs() if x["config_id"] == "S1_ENG_7")
+    expected = {
+        "family": "BEAR_ENGULF_STRUCTURE", "rr": 3.5,
+        "br_min": 1.35, "body_atr_min": 1.0,
+        "structure_lb": 120, "structure_dist_atr_max": 0.10,
+    }
+    for key, value in expected.items():
+        if original[key] != value:
+            raise RuntimeError(f"Underlying discovery rule drift: {key}, {original[key]} != {value}")
+    selected = deepcopy(original)
+    selected["config_id"] = CID
+    selected["context"] = "H1_EMA50_LT_EMA200"
+    if selected.get("excluded_weekdays") or selected.get("excluded_ny_hours"):
+        raise RuntimeError("Unexpected old weekday/session exclusions")
+    return selected
+
+
+def ec_parity(candles, f, config):
+    """Recreate the exact prior dataset through the original last M15 candle.
+
+    The forward fetch may contain extra bars, but it MUST include exactly the
+    prior candle chronology before evaluating any prospective incremental data.
+    """
+    cutoff = bisect.bisect_right([x["time"] for x in candles], REF_LAST_M15)
+    subset_candles = candles[:cutoff]
+    rows = [{
+        "check": "prior_candle_count", "expected": REF_M15_COUNT,
+        "actual": len(subset_candles), "pass": len(subset_candles) == REF_M15_COUNT,
+    }, {
+        "check": "prior_first_open", "expected": iso(REF_FIRST_M15),
+        "actual": iso(subset_candles[0]["time"]) if subset_candles else "",
+        "pass": bool(subset_candles) and subset_candles[0]["time"] == REF_FIRST_M15,
+    }, {
+        "check": "prior_last_open", "expected": iso(REF_LAST_M15),
+        "actual": iso(subset_candles[-1]["time"]) if subset_candles else "",
+        "pass": bool(subset_candles) and subset_candles[-1]["time"] == REF_LAST_M15,
+    }]
+    if not all(x["pass"] for x in rows):
+        write_csv(OUTS["parity"], rows)
+        raise RuntimeError("Previous M15 candle coverage differs from original discovery; STOP before new analysis")
+
+    ix = [i for i in indices(config, f) if i < cutoff]
+    # Important: evaluate outcomes against the historical cutoff candles,
+    # NOT later future bars that were unavailable to the prior run.
+    BACKTEST_CACHE.clear()
+    OUTCOME_CACHE.clear()
+    trades = backtest(subset_candles, ix, config["rr"], PRIMARY_COST)
+    s = stats(trades)
+    pre = stats([x for x in trades if x["entry_time"] < datetime(2010, 1, 1, tzinfo=timezone.utc)])
+    post = stats([x for x in trades if x["entry_time"] >= datetime(2010, 1, 1, tzinfo=timezone.utc)])
+    era_stats = [stats([t for t in trades if start <= t["entry_time"] < stop])
+                 for _, start, stop in ERAS]
+    checks = [
+        ("trades", REF_S2["trades"], s["trades"], 0),
+        ("winners", REF_S2["winners"], s["winners"], 0),
+        ("pf", REF_S2["pf"], s["profit_factor"], .000051),
+        ("r", REF_S2["r"], s["total_r"], .000051),
+        ("dd", REF_S2["dd"], s["max_drawdown_r"], .000051),
+        ("pre2010_trades", REF_S2["pre2010_trades"], pre["trades"], 0),
+        ("pre2010_r", REF_S2["pre2010_r"], pre["total_r"], .000051),
+        ("post2010_trades", REF_S2["post2010_trades"], post["trades"], 0),
+        ("post2010_r", REF_S2["post2010_r"], post["total_r"], .000051),
+    ]
+    for j, era in enumerate(era_stats):
+        checks.extend([
+            (f"era{j+1}_trades", REF_S2["era_trades"][j], era["trades"], 0),
+            (f"era{j+1}_r", REF_S2["era_r"][j], era["total_r"], .000051),
+        ])
+    rows += [{"check": key, "expected": expected, "actual": actual,
+              "tolerance": tolerance, "pass": abs(actual-expected) <= tolerance}
+             for key, expected, actual, tolerance in checks]
+    write_csv(OUTS["parity"], rows)
+    if not all(x["pass"] for x in rows):
+        fail = [x["check"] for x in rows if not x["pass"]]
+        raise RuntimeError(f"Frozen discovery parity failed ({', '.join(fail)}); DO NOT select a replacement configuration")
+    BACKTEST_CACHE.clear()
+    OUTCOME_CACHE.clear()
+    return rows
+
+
+def ec_neighbours(config):
+    out = []
+    for name, field, value in NEIGHBOURS:
+        x = deepcopy(config)
+        x["config_id"] = "DIAGNOSTIC_ONLY_" + name
+        x[field] = value
+        out.append(x)
+    return out
+
+
+def ec_signal_audit(ix, trades):
+    accepted = {t["signal_index"] for t in trades}
+    return [{
+        "raw_signals": len(ix), "accepted_trades": len(trades),
+        "blocked_by_strategy_p0_or_no_exit": len(ix) - len(trades),
+        "accepted_signal_index_count": len(accepted),
+        "first_accepted_signal_utc": iso(trades[0]["entry_time"]) if trades else "",
+        "last_accepted_signal_utc": iso(trades[-1]["entry_time"]) if trades else "",
+        "signal_index_increasing": all(a < b for a, b in zip(ix, ix[1:])),
+        "entry_index_increasing": all(a["signal_index"] < b["signal_index"]
+                                      for a, b in zip(trades, trades[1:])),
+        "half_open_p0_verified": all(a["exit_index"] <= b["signal_index"]
+                                    for a, b in zip(trades, trades[1:])),
+    }]
+
+
+def ec_decision(config, candles, ix, full, periods, costs, rs, cs, neighbours):
+    pl = {x["period"]: x for x in periods}
+    co = {(x["period"], x["cost_pips"]): x for x in costs}
+    roll = {x["months"]: x for x in rs}
+    cal = cs[0]
+    primary = co[("FULL", 1.0)]
+    cost2 = co[("FULL", 2.0)]
+    val2 = co[("VALIDATION_2018_PLUS", 2.0)]
+    last5 = pl["LAST_5Y"]
+    last2 = pl["LAST_2Y"]
+    # Predeclared decision gates.  A fail never authorises retuning or
+    # promoting the best-looking neighbour.  Meaningful thresholds for the
+    # small (~62-trade) study and the failure modes of the prior shortlist.
+    checks = {
+        "at_least_60_trades": full["trades"] >= 60,
+        "full_pf_at_least_1_30": full["profit_factor"] >= 1.30,
+        "full_positive": full["total_r"] > 0,
+        "drawdown_not_worse_than_minus_12r": full["max_drawdown_r"] >= -12.0,
+        "pre2010_positive": pl["PRE_2010"]["total_r"] > 0,
+        "post2010_positive": pl["2010_PLUS"]["total_r"] > 0,
+        "at_least_3_positive_eras": sum(pl[f"ERA_{a}"]["total_r"] > 0
+                                         for a in ["2002_07", "2008_13", "2014_19", "2020_NOW"]) >= 3,
+        "validation_2018_positive": pl["VALIDATION_2018_PLUS"]["total_r"] > 0,
+        "validation_pf_at_least_1_20": pl["VALIDATION_2018_PLUS"]["profit_factor"] >= 1.20,
+        "last5_at_least_8_trades": last5["trades"] >= 8,
+        "last5_positive": last5["total_r"] > 0,
+        "last2_at_least_4_trades": last2["trades"] >= 4,
+        "last2_positive": last2["total_r"] > 0,
+        "rolling24_positive_at_least_70pct": roll[24]["positive_active_windows_pct"] >= 70,
+        "rolling36_positive_at_least_80pct": roll[36]["positive_active_windows_pct"] >= 80,
+        "rolling24_worst_not_below_minus_10r": roll[24]["worst_r"] >= -10,
+        "rolling36_worst_not_below_minus_12r": roll[36]["worst_r"] >= -12,
+        "positive_active_calendar_at_least_55pct": cal["positive_active_years_pct"] >= 55,
+        "double_cost_pf_at_least_1_15": cost2["profit_factor"] >= 1.15,
+        "double_cost_full_positive": cost2["total_r"] > 0,
+        "double_cost_validation_positive": val2["total_r"] > 0,
+    }
+    # Neighbours are an independent *diagnostic warning* only; do not
+    # use them to select a better-looking value or imply independent OOS.
+    local = [r for r in neighbours if r["diagnostic_type"] == "LOCAL_ONE_FACTOR"]
+    local_full = sum(r["full_r"] > 0 for r in local)
+    local_val = sum(r["validation2018_r"] > 0 for r in local)
+    checks["local_neighbours_full_positive_ge_6"] = local_full >= 6
+    checks["local_neighbours_validation_positive_ge_5"] = local_val >= 5
+    result = {
+        "config_id": CID, "previous_stage2_id": REF_ID,
+        "research_verdict": ("DEEP_VALIDATE_NOT_LIVE_APPROVAL" if all(checks.values())
+                             else "STOP_AUDUSD_M15_SHORT_ENGULFING_RESEARCH"),
+        "checks_passed": sum(checks.values()), "checks_total": len(checks),
+        "full_trades": full["trades"], "full_pf": full["profit_factor"],
+        "full_r": full["total_r"], "full_dd_r": full["max_drawdown_r"],
+        "validation2018_r": pl["VALIDATION_2018_PLUS"]["total_r"],
+        "last5_r": last5["total_r"], "last2_r": last2["total_r"],
+        "rolling24_positive_active_pct": roll[24]["positive_active_windows_pct"],
+        "rolling36_positive_active_pct": roll[36]["positive_active_windows_pct"],
+        "rolling24_worst_r": roll[24]["worst_r"],
+        "rolling36_worst_r": roll[36]["worst_r"],
+        "cost2_full_pf": cost2["profit_factor"],
+        "cost2_val_r": val2["total_r"],
+        "positive_active_years_pct": cal["positive_active_years_pct"],
+        "neighbour_local_full_positive": local_full,
+        "neighbour_local_validation_positive": local_val,
+        **{f"gate_{k}": bool(v) for k, v in checks.items()},
+    }
+    return result
+
+
+def run_frozen_confirmation():
     try:
-        STATUS.update({
-            "state": "fetch",
-            "message": "Fetching AUD/USD M15 + H1/H4/D history",
-            "progress": 1,
-        })
-
+        STATUS.update(state="fetch", progress=2,
+                      message="Fetching exact AUD/USD M15 + completed H1/H4/D history")
         m15 = fetch("M15", START, NOW, 35)
         h1 = fetch("H1", WARMUP, NOW, 180)
         h4 = fetch("H4", WARMUP, NOW, 700)
         daily = fetch("D", WARMUP, NOW, 3500)
-
-        if not all([m15, h1, h4, daily]):
-            raise RuntimeError("Missing required history")
-        if len(m15) < 100_000:
-            raise RuntimeError(f"Insufficient AUD/USD M15 bars: {len(m15)}")
-
+        if not all((m15, h1, h4, daily)) or len(m15) < REF_M15_COUNT:
+            raise RuntimeError("Insufficient OANDA historical candles for frozen parity")
         write_csv(OUTS["coverage"], [{
-            "instrument": PAIR,
-            "requested_start_utc": iso(START),
-            "actual_first_m15_utc": iso(m15[0]["time"]),
-            "actual_last_m15_utc": iso(m15[-1]["time"]),
-            "m15_candles": len(m15),
-            "h1_candles": len(h1),
-            "h4_candles": len(h4),
-            "daily_candles": len(daily),
-            "baseline_cost_pips": PRIMARY_COST,
-            "side": "SHORT",
+            "instrument": PAIR, "side": "SELL", "timeframe": "M15",
+            "first_m15_utc": iso(m15[0]["time"]),
+            "last_m15_utc": iso(m15[-1]["time"]),
+            "m15_candles": len(m15), "h1_candles": len(h1),
+            "h4_candles": len(h4), "daily_candles": len(daily),
+            "ref_last_m15_utc": iso(REF_LAST_M15),
+            "baseline_adverse_entry_pips": PRIMARY_COST,
+            "data_cutoff_utc": iso(NOW),
         }])
-
-        STATUS.update({
-            "state": "precompute",
-            "message": "Building strict completed-HTF alignment and M15 feature cache",
-            "progress": 20,
-        })
-
-        m15_times = [x["time"] for x in m15]
-        aligned_h1 = align_htf(m15_times, htf_state(h1))
-        aligned_h4 = align_htf(m15_times, htf_state(h4))
-        aligned_daily = align_htf(m15_times, htf_state(daily))
-        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
-
-        # ---------------- Stage 1 ----------------
-        STATUS.update({
-            "state": "stage1",
-            "message": "Stage 1: raw independent short archetypes",
-            "progress": 28,
-        })
-
-        stage1 = stage1_configs()
-        config_by_id = {x["config_id"]: x for x in stage1}
-        stage1_rows = []
-
-        for i, config in enumerate(stage1, 1):
-            if i % 8 == 0:
-                STATUS.update({
-                    "state": "stage1",
-                    "message": f"Stage 1 {i}/{len(stage1)}",
-                    "progress": 28 + int(12 * i / len(stage1)),
-                })
-            ix = indices(config, f)
-            stage1_rows.append(evaluate(config, m15, ix))
-
-        stage1_rows = sort_rows(stage1_rows)
-        stage1_family = family_summary(stage1_rows)
-        write_csv(OUTS["stage1"], stage1_rows)
-        write_csv(OUTS["stage1_family"], stage1_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        stage1_bases = select_diverse(
-            stage1_rows,
-            STAGE1_PER_FAMILY,
-            STAGE1_BASE_KEEP,
-        )
-
-        # ---------------- Stage 2 ----------------
-        STATUS.update({
-            "state": "stage2",
-            "message": "Stage 2: broad HTF / volatility / session / weekday contexts",
-            "progress": 42,
-        })
-
-        stage2 = stage2_configs(stage1_bases, config_by_id)
-        config_by_id.update({x["config_id"]: x for x in stage2})
-        stage2_rows = []
-
-        for i, config in enumerate(stage2, 1):
-            if i % 25 == 0:
-                STATUS.update({
-                    "state": "stage2",
-                    "message": f"Stage 2 {i}/{len(stage2)}",
-                    "progress": 42 + int(20 * i / len(stage2)),
-                })
-            ix = indices(config, f)
-            stage2_rows.append(evaluate(config, m15, ix))
-
-        stage2_rows = sort_rows(stage2_rows)
-        stage2_family = family_summary(stage2_rows)
-        write_csv(OUTS["stage2"], stage2_rows)
-        write_csv(OUTS["stage2_family"], stage2_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        stage2_bases = select_diverse(
-            stage2_rows,
-            STAGE2_PER_FAMILY,
-            STAGE2_BASE_KEEP,
-        )
-
-        # ---------------- Stage 3 ----------------
-        STATUS.update({
-            "state": "stage3",
-            "message": "Stage 3: local geometry and RR robustness",
-            "progress": 64,
-        })
-
-        stage3 = stage3_configs(stage2_bases, config_by_id)
-        config_by_id.update({x["config_id"]: x for x in stage3})
-        stage3_rows = []
-
-        for i, config in enumerate(stage3, 1):
-            if i % 25 == 0:
-                STATUS.update({
-                    "state": "stage3",
-                    "message": f"Stage 3 {i}/{len(stage3)}",
-                    "progress": 64 + int(15 * i / len(stage3)),
-                })
-            ix = indices(config, f)
-            stage3_rows.append(evaluate(config, m15, ix))
-
-        stage3_rows = sort_rows(stage3_rows)
-        stage3_family = family_summary(stage3_rows)
-        write_csv(OUTS["stage3"], stage3_rows)
-        write_csv(OUTS["stage3_family"], stage3_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        final_rows = select_diverse(
-            stage3_rows,
-            FINAL_PER_FAMILY,
-            FINAL_KEEP,
-        )
-        final_configs = [config_by_id[row["config_id"]] for row in final_rows]
-
-        # ---------------- Deep diagnostics on shortlist ----------------
-        STATUS.update({
-            "state": "shortlist_diagnostics",
-            "message": "Shortlist temporal / cost / rolling / calendar diagnostics",
-            "progress": 80,
-        })
-
-        shortlist = []
-        periods = []
-        costs = []
-        rolling = []
-        calendar = []
-        trades = []
-
-        for i, config in enumerate(final_configs, 1):
-            STATUS.update({
-                "state": "shortlist_diagnostics",
-                "message": f"Shortlist {i}/{len(final_configs)}: {config['config_id']}",
-                "progress": 80 + int(15 * i / max(1, len(final_configs))),
-            })
-
-            ix = indices(config, f)
-            shortlist.append(shortlist_summary(config, m15, ix))
-            periods.extend(period_rows(config, m15, ix))
-            costs.extend(cost_rows(config, m15, ix))
-            rrows = rolling_rows(config, m15, ix)
-            crows = calendar_rows(config, m15, ix)
-            rolling.extend(rrows)
-            calendar.extend(crows)
-
-            for trade in backtest(m15, ix, config["rr"], PRIMARY_COST, m15[0]["time"], NOW):
-                trades.append(serialise_trade(config, trade))
-
+        STATUS.update(state="features", progress=20,
+                      message="Building original exact M15 + strictly completed HTF features")
+        times = [bar["time"] for bar in m15]
+        f = features(m15,
+                     align_htf(times, htf_state(h1)),
+                     align_htf(times, htf_state(h4)),
+                     align_htf(times, htf_state(daily)))
+        config = ec_frozen_config()
+        write_csv(OUTS["frozen_config"], [{
+            "previous_stage2_id": REF_ID, **{k: (sorted(v) if isinstance(v, set) else v)
+                                              for k, v in config.items()},
+            "baseline_cost_pips": PRIMARY_COST,
+            "tick": TICK, "pip": PIP, "stop_ticks": STOP_TICKS,
+            "historical_reference": "signal_close",
+            "historical_fill": "signal_close_minus_cost_pips",
+            "target_from": "reference_close_risk",
+            "pyramiding": 0,
+        }])
+        ix = indices(config, f)
+        STATUS.update(state="parity", progress=30,
+                      message="Checking original 62-trade Stage 2 parity BEFORE deep results")
+        parity = ec_parity(m15, f, config)
+        STATUS.update(state="deep", progress=45,
+                      message="Full chronology, cost stress, temporal, rolling and calendar metrics")
+        full_trades = backtest(m15, ix, config["rr"], PRIMARY_COST)
+        full = stats(full_trades)
+        p = period_rows(config, m15, ix)
+        last3_start = NOW-timedelta(days=365.2425*3)
+        last3 = stat_row(config, "LAST_3Y",
+                             backtest(m15, ix, config["rr"], PRIMARY_COST,
+                                      last3_start, NOW))
+        last3["start_utc"] = iso(last3_start)
+        last3["end_utc"] = iso(NOW)
+        p.append(last3)
+        costs = cost_rows(config, m15, ix)
+        rolling = rolling_rows(config, m15, ix)
         rollsum = rolling_summary(rolling)
+        calendar = calendar_rows(config, m15, ix)
         calsum = calendar_summary(calendar)
-        decisions = decision_rows(shortlist, costs, rollsum, calsum)
-
-        write_csv(OUTS["shortlist"], shortlist)
-        write_csv(OUTS["periods"], periods)
+        write_csv(OUTS["frozen_summary"], [{"config_id": CID, **full}])
+        write_csv(OUTS["periods"], p)
         write_csv(OUTS["cost"], costs)
         write_csv(OUTS["rolling"], rolling)
         write_csv(OUTS["rolling_summary"], rollsum)
         write_csv(OUTS["calendar"], calendar)
         write_csv(OUTS["calendar_summary"], calsum)
-        write_csv(OUTS["trades"], trades)
-        write_csv(OUTS["decision"], decisions)
-
+        write_csv(OUTS["trades"], [serialise_trade(config, t) for t in full_trades])
+        write_csv(OUTS["signal_audit"], ec_signal_audit(ix, full_trades))
+        STATUS.update(state="neighbours", progress=75,
+                      message="Exactly 12 one-factor diagnostic neighbours; no candidate selection")
+        neighbours = []
+        neighbour_periods = []
+        for i, x in enumerate(ec_neighbours(config), 1):
+            ni = indices(x, f)
+            nfull = stats(backtest(m15, ni, x["rr"], PRIMARY_COST))
+            nval = stats(backtest(m15, ni, x["rr"], PRIMARY_COST,
+                                  datetime(2018,1,1,tzinfo=timezone.utc), NOW))
+            n5 = stats(backtest(m15, ni, x["rr"], PRIMARY_COST,
+                                NOW-timedelta(days=365.2425*5), NOW))
+            n2 = stats(backtest(m15, ni, x["rr"], PRIMARY_COST,
+                                NOW-timedelta(days=365.2425*2), NOW))
+            n2cost = stats(backtest(m15, ni, x["rr"], 2.0))
+            # Do not present a substantially different HTF condition as
+            # a local numeric neighbourhood of the frozen H1 EMA regime.
+            diag = ("LOCAL_ONE_FACTOR" if x["context"] == config["context"]
+                    else "ALTERNATIVE_TREND_DIAGNOSTIC")
+            neighbours.append({
+                "config_id": x["config_id"], "diagnostic_type": diag,
+                "changed_field": NEIGHBOURS[i-1][1],
+                "changed_value": NEIGHBOURS[i-1][2],
+                **config_fields(x), "context": x["context"], "rr": x["rr"],
+                "raw_signals": len(ni),
+                "full_trades": nfull["trades"], "full_pf": nfull["profit_factor"],
+                "full_r": nfull["total_r"], "full_dd": nfull["max_drawdown_r"],
+                "validation2018_trades": nval["trades"],
+                "validation2018_pf": nval["profit_factor"],
+                "validation2018_r": nval["total_r"],
+                "last5_trades": n5["trades"], "last5_r": n5["total_r"],
+                "last2_trades": n2["trades"], "last2_r": n2["total_r"],
+                "cost2_pf": n2cost["profit_factor"], "cost2_r": n2cost["total_r"],
+                "selection_eligible": False,
+            })
+            for label, s in (("FULL", nfull),("VALIDATION_2018_PLUS",nval),
+                             ("LAST_5Y", n5),("LAST_2Y", n2),
+                             ("DOUBLE_COST_FULL", n2cost)):
+                neighbour_periods.append({"config_id": x["config_id"],
+                                          "diagnostic_type": diag,
+                                          "period": label, **s})
+            STATUS.update(progress=75+int(16*i/len(NEIGHBOURS)))
+        write_csv(OUTS["neighbours"], neighbours)
+        write_csv(OUTS["neighbour_periods"], neighbour_periods)
+        local = [r for r in neighbours if r["diagnostic_type"] == "LOCAL_ONE_FACTOR"]
+        write_csv(OUTS["neighbour_summary"], [{
+            "candidate_is_frozen": True,
+            "local_one_factor_count": len(local),
+            "local_positive_full": sum(r["full_r"]>0 for r in local),
+            "local_positive_validation2018": sum(r["validation2018_r"]>0 for r in local),
+            "alternative_htf_count": len(neighbours)-len(local),
+            "alternative_htf_positive_full": sum(r["full_r"]>0 for r in neighbours if r not in local),
+            "no_neighbour_promoted": True,
+        }])
+        decision = ec_decision(config, m15, ix, full, p, costs, rollsum,
+                               calsum, neighbours)
+        write_csv(OUTS["decision"], [decision])
         write_csv(OUTS["notes"], [
-            {
-                "item": "Scope",
-                "value": "Fresh AUD/USD M15 SHORT broad research; no existing AUD/USD H1 or M15 LONG rule is a benchmark.",
-            },
-            {
-                "item": "Families",
-                "value": "Bearish engulf near highs, high-sweep displacement, failed upside breakout, outside reversal, compression breakdown, and rally rejection are searched independently.",
-            },
-            {
-                "item": "Historical execution",
-                "value": "OANDA midpoint; reference entry signal close; short fill=close-1 pip baseline; stop=signal high+10 ticks; target from reference-close risk; p0; exact exit-candle signal eligible.",
-            },
-            {
-                "item": "HTF causality",
-                "value": "H1/H4/D values become usable only at the next actual HTF candle open; no same-candle lookahead.",
-            },
-            {
-                "item": "Context search",
-                "value": "Stage 2 tests one context at a time: H1/H4/D bearish trend states, ATR regime, NY/London/Tokyo/Sydney 4-hour blocks, and weekday exclusions.",
-            },
-            {
-                "item": "Cost stress",
-                "value": "Final shortlist is retested at 0.5, 1.0, 1.5 and 2.0 pip adverse historical entry cost.",
-            },
-            {
-                "item": "No pristine OOS claim",
-                "value": "History has been repeatedly explored. Temporal splits and rolling windows are robustness diagnostics, not untouched out-of-sample evidence.",
-            },
-            {
-                "item": "Decision matrix",
-                "value": "DEEP_VALIDATE only means a candidate merits a separate frozen deep-validation runner. It is not live approval.",
-            },
-            {
-                "item": "Next gate",
-                "value": "After one candidate is frozen and deeply validated, run exact 26->27 portfolio-add analysis with non-hedging same-pair overlap handling before any live integration.",
-            },
+            {"item": "scope", "value": "Single frozen S2_1_H1_EMA50_LT_EMA200 confirmation; no search or revised winner."},
+            {"item": "source", "value": "Exact AUDUSD_M15_SHORT_27_BROAD_DISCOVERY.py functions and original Stage 2 results."},
+            {"item": "time", "value": "M15 timestamps candle OPEN; signal on completed M15; H1 regime strictly completed using next actual H1 open."},
+            {"item": "stop_and_fill", "value": "Stop=signal HIGH+10 ticks. Reference entry=signal close. Short 1-pip adverse historical fill. RR3.5 target from reference risk."},
+            {"item": "p0", "value": "One open short per exact candidate; half-open index interval; signal on exit candle eligible."},
+            {"item": "costs", "value": "0.5,1,1.5,2.0 pips are synthetic adverse historical entry fills, not separately observed spread and slippage."},
+            {"item": "multiple_testing", "value": "All original discovery dates were explored. Temporal periods are historical diagnostics, NOT clean out-of-sample proof."},
+            {"item": "neighbours", "value": "Eight numeric local diagnostics and four alternative HTF regimes; none may replace the frozen target."},
+            {"item": "risk", "value": "Research only; 26 live strategies unchanged; NOT a live trading service."},
+            {"item": "future_gate", "value": "Only if frozen candidate passes, separately verify exact current26->prospective27 non-hedging portfolio add. No live deployment from this runner."},
         ])
-
-        STATUS.update({
-            "state": "packaging",
-            "message": "Packaging AUD/USD M15 SHORT prospective #27 broad research results",
-            "progress": 97,
-        })
-
+        STATUS.update(state="packaging", progress=96,
+                      message="Packaging frozen candidate confirmation results")
         package_results()
-
-        verdict_counts = defaultdict(int)
-        for row in decisions:
-            verdict_counts[row["research_verdict"]] += 1
-
-        STATUS.update({
-            "state": "complete",
-            "message": "AUD/USD M15 SHORT prospective #27 broad research complete",
-            "progress": 100,
-            "stage1_configs": len(stage1),
-            "stage2_configs": len(stage2),
-            "stage3_configs": len(stage3),
-            "shortlist_configs": len(final_configs),
-            "decision_counts": dict(verdict_counts),
-            "bundle": BUNDLE,
-        })
-
+        STATUS.update(state="complete", progress=100, bundle=BUNDLE,
+                      parity_checks=len(parity), parity_passed=all(x["pass"] for x in parity),
+                      config_id=CID, full_trades=full["trades"],
+                      full_pf=full["profit_factor"], full_r=full["total_r"],
+                      verdict=decision["research_verdict"],
+                      message="Frozen AUD/USD M15 SHORT engulfing confirmation complete")
     except Exception as error:
-        STATUS.update({
-            "state": "error",
-            "message": str(error),
-        })
         import traceback
-        STATUS["traceback"] = traceback.format_exc()
-        print("ERROR:", repr(error), flush=True)
+        STATUS.update(state="error", message=str(error), traceback=traceback.format_exc())
+        print("AUDUSD M15 SHORT #27 FROZEN CONFIRMATION ERROR:", repr(error), flush=True)
 
-
-# ============================================================
-# FLASK ROUTES
-# ============================================================
 
 @app.route("/")
-def root():
+def frozen_root():
     return jsonify({
-        "service": "AUDUSD M15 SHORT #27 Broad Research",
-        "status": STATUS["state"],
-        "instrument": PAIR,
-        "timeframe": "M15",
-        "side": "SELL",
-        "primary_cost_pips": PRIMARY_COST,
-        "families": [
-            "BEAR_ENGULF_STRUCTURE",
-            "HIGH_SWEEP_DISPLACEMENT",
-            "FAILED_UPSIDE_BREAKOUT",
-            "BEAR_OUTSIDE_REVERSAL",
-            "BEAR_COMPRESSION_BREAKDOWN",
-            "RALLY_REJECTION",
-        ],
-        "orders_supported": False,
-        "trading_enabled": False,
-        "routes": [
-            "/audusd-m15-short-27/status",
-            "/audusd-m15-short-27/results",
-        ],
+        "service": "AUDUSD M15 SHORT #27 ONE FROZEN ENGULFING CONFIRMATION",
+        "read_only": True, "trading_enabled": False, "orders_supported": False,
+        "instrument": PAIR, "side": "SELL", "timeframe": "M15",
+        "frozen_stage2_id": REF_ID,
+        "routes": ["/audusd-m15-short-27-confirm/status",
+                   "/audusd-m15-short-27-confirm/results",
+                   "/audusd-m15-short-27-confirm/info"],
     })
 
 
-@app.route("/audusd-m15-short-27/status")
-def research_status():
+@app.route("/audusd-m15-short-27-confirm/status")
+def frozen_status():
     return jsonify(STATUS)
 
 
-@app.route("/audusd-m15-short-27/results")
-def research_results():
+@app.route("/audusd-m15-short-27-confirm/results")
+def frozen_results():
     return download(BUNDLE)
 
 
-if __name__ == "__main__":
-    threading.Thread(
-        target=run_research,
-        daemon=True,
-    ).start()
+@app.route("/audusd-m15-short-27-confirm/info")
+def frozen_info():
+    return jsonify({
+        "candidate": CID, "source": REF_ID,
+        "frozen_config": {k: sorted(v) if isinstance(v, set) else v
+                          for k, v in ec_frozen_config().items()},
+        "baseline_adverse_pips": PRIMARY_COST,
+        "cost_stress_pips": COSTS,
+        "diagnostic_neighbours": len(NEIGHBOURS),
+        "read_only": True, "trading_enabled": False,
+        "no_neighbour_promotion": True,
+    })
 
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
-        debug=False,
-    )
+
+if __name__ == "__main__":
+    threading.Thread(target=run_frozen_confirmation, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
