@@ -16,7 +16,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# AUD/USD M15 LONG — FRESH SIX-FAMILY BROAD DISCOVERY (PROSPECTIVE #27)
+# AUD/USD M15 LONG — CONTROLLED FOCUSED REFINEMENT (PROSPECTIVE #27)
 # ============================================================
 # This is standalone research, NOT a live strategy or a deployed #27.
 # The current 26 live strategies are not modified or accessed.
@@ -72,25 +72,27 @@ FINAL_PER_FAMILY = 2
 FINAL_KEEP = 14
 
 OUTS = {
-    "coverage": "audusd_m15_long_27_coverage.csv",
-    "stage1": "audusd_m15_long_27_stage1_summary.csv",
-    "stage1_family": "audusd_m15_long_27_stage1_family_summary.csv",
-    "stage2": "audusd_m15_long_27_stage2_summary.csv",
-    "stage2_family": "audusd_m15_long_27_stage2_family_summary.csv",
-    "stage3": "audusd_m15_long_27_stage3_summary.csv",
-    "stage3_family": "audusd_m15_long_27_stage3_family_summary.csv",
-    "shortlist": "audusd_m15_long_27_shortlist.csv",
-    "periods": "audusd_m15_long_27_shortlist_periods.csv",
-    "cost": "audusd_m15_long_27_shortlist_cost_stress.csv",
-    "rolling": "audusd_m15_long_27_shortlist_rolling.csv",
-    "rolling_summary": "audusd_m15_long_27_shortlist_rolling_summary.csv",
-    "calendar": "audusd_m15_long_27_shortlist_calendar_years.csv",
-    "calendar_summary": "audusd_m15_long_27_shortlist_calendar_summary.csv",
-    "trades": "audusd_m15_long_27_shortlist_trades.csv",
-    "decision": "audusd_m15_long_27_decision_matrix.csv",
-    "notes": "audusd_m15_long_27_notes.csv",
+    "coverage": "audusd27_refinement_coverage.csv",
+    "parity": "audusd27_refinement_frozen_anchor_parity.csv",
+    "anchor": "audusd27_refinement_anchor.csv",
+    "geometry": "audusd27_refinement_geometry_matrix.csv",
+    "session": "audusd27_refinement_session_neighbours.csv",
+    "rr": "audusd27_refinement_rr_neighbours.csv",
+    "one_factor": "audusd27_refinement_one_factor.csv",
+    "sweep_controls": "audusd27_refinement_sweep_family_controls.csv",
+    "geometry_plateau": "audusd27_refinement_geometry_plateau.csv",
+    "deep": "audusd27_refinement_deep_comparison.csv",
+    "periods": "audusd27_refinement_periods.csv",
+    "cost": "audusd27_refinement_cost_stress.csv",
+    "rolling": "audusd27_refinement_rolling.csv",
+    "rolling_summary": "audusd27_refinement_rolling_summary.csv",
+    "calendar": "audusd27_refinement_calendar.csv",
+    "calendar_summary": "audusd27_refinement_calendar_summary.csv",
+    "trades": "audusd27_refinement_top_trades.csv",
+    "decision": "audusd27_refinement_decision.csv",
+    "notes": "audusd27_refinement_notes.csv",
 }
-BUNDLE = "AUDUSD_M15_LONG_27_BROAD_DISCOVERY_RESULTS.zip"
+BUNDLE = "AUDUSD_M15_LONG_27_FOCUSED_REFINEMENT_RESULTS.zip"
 
 STATUS = {
     "state": "not_started",
@@ -1398,323 +1400,363 @@ def decision_rows(shortlist, costs, rollsum, calsum):
 # MAIN RESEARCH RUNNER
 # ============================================================
 
-def run_research():
+
+# ============================================================
+# FOCUSED PREDECLARED REFINEMENT — NOT AN OPEN-ENDED OPTIMISER
+# ============================================================
+# Freeze broad-discovery anchor and mechanics. No HTF filter interactions.
+# Anchor: FAILED_BREAKDOWN_RECLAIM, LB60, body1.00ATR, closeLoc0.65,
+# Sydney signal OPEN hour04:00-07:59, RR3.50, 1pip adverse M15 fill.
+# Only the geometry 3x3x4, one-factor hour/session neighbours, and
+# separate RR neighbours are studied. Alternative LOW_SWEEP_DISPLACEMENT
+# evidence is a CONTROL, not a mandatory complement or a deployed setup.
+#
+# Do NOT freeze from the best looking row: require neighbourhood/period
+# robustness and a separate 26->27 portfolio conflict test.
+# ============================================================
+
+PARITY_LAST_M15_UTC = datetime(2026, 9, 18, 20, 45, tzinfo=timezone.utc)
+PARITY_NOW = datetime(2026, 9, 19, 11, 55, tzinfo=timezone.utc)
+PARITY_REFERENCE = {
+    "trades": 55,
+    "winners": 21,
+    "full_pf": 1.955626,
+    "full_r": 32.491274,
+    "validation_trades": 13,
+    "validation_pf": 1.398884,
+    "validation_r": 3.589957,
+    "last5_r": 2.339957,
+    "last2_r": 1.146079,
+    "cost2_pf": 1.781976,
+    "cost2_r": 26.587184,
+}
+BASE_SESSION = "SYDNEY_BLOCK_04-07"
+GEOMETRY_LB = (40, 60, 80)
+GEOMETRY_BODY = (0.75, 1.00, 1.25)
+GEOMETRY_CLOSE = (0.60, 0.65, 0.70, 0.75)
+SESSION_WINDOWS = ((0,3),(2,5),(3,6),(4,7),(5,8),(6,9),(8,11))
+RR_VALUES = (3.0,3.25,3.5,3.75,4.0)
+
+
+def focus_anchor():
+    return cfg(
+        "ANCHOR_LB60_BODY100_CLOSE065_SYD04_07_RR350",
+        "FAILED_BREAKDOWN_RECLAIM", rr=3.50,
+        sweep_lb=60, body_atr_min=1.00,
+        close_loc_min=0.65, context=BASE_SESSION,
+    )
+
+
+def focus_new(base, new_id, **updates):
+    x = deepcopy(base)
+    x.update(updates)
+    x["config_id"] = new_id
+    return x
+
+
+def focus_indices(config, f):
+    # Reuse EXACT discovery signal family and original session predicate.
+    # Non-overlapping Sydney hour neighbour windows are a one-factor test.
+    session = config.get("custom_sydney_window")
+    if session is None:
+        return indices(config, f)
+    x = deepcopy(config)
+    x["context"] = "NONE"
+    raw = indices(x, f)
+    a,b = session
+    return [i for i in raw if a <= int(f["sydney_hour"][i]) <= b]
+
+
+def focus_row(config, candles, f, experiment):
+    ix = focus_indices(config, f)
+    s = evaluate(config, candles, ix)
+    s["experiment"] = experiment
+    s["raw_signal_count"] = len(ix)
+    s["session_hours"] = repr(config.get("custom_sydney_window", (4,7)))
+    return s
+
+
+def focus_full_stats(config, candles, f, start=None, end=None, cost=PRIMARY_COST):
+    ix = focus_indices(config, f)
+    tr = backtest(candles, ix, config["rr"], cost, start, end)
+    return stats(tr)
+
+
+def focus_parity(candles):
+    """Recompute anchor on the exact LAST M15 CANDLE of the uploaded study.
+
+    A later deployment may fetch newer candles; never silently compare a newer
+    sample to an older reference. The frozen anchor is always independently
+    rebuilt on the original truncated data, with no later candles allowed to
+    affect ATR, exits, p0 or rolling endpoints.
+    """
+    anchor_bars = [b for b in candles if b["time"] <= PARITY_LAST_M15_UTC]
+    if not anchor_bars or anchor_bars[-1]["time"] != PARITY_LAST_M15_UTC:
+        raise RuntimeError("Frozen parity final M15 candle missing; cannot establish discovery parity")
+    n = len(anchor_bars)
+    # Feature function needs HTF context arrays, but the anchor's only context
+    # is local Sydney time, so supply NaN placeholders. HTF must remain unused.
+    absent = {k:np.full(n,np.nan) for k in
+              ["close","ema50","ema100","ema200","atr_ratio50"]}
+    f = features(anchor_bars, absent, absent, absent)
+    c = focus_anchor()
+    ix = focus_indices(c, f)
+    tr = backtest(anchor_bars, ix, c["rr"], PRIMARY_COST)
+    whole = stats(tr)
+    validation = stats([t for t in tr if t["entry_time"] >= datetime(2018,1,1,tzinfo=timezone.utc)])
+    recent5 = stats([t for t in tr if t["entry_time"] >= PARITY_NOW - timedelta(days=365.2425*5)])
+    recent2 = stats([t for t in tr if t["entry_time"] >= PARITY_NOW - timedelta(days=365.2425*2)])
+    cost2 = stats(backtest(anchor_bars, ix, c["rr"], 2.0))
+    observed = {
+        "trades":whole["trades"],"winners":whole["winners"],
+        "full_pf":whole["profit_factor"],"full_r":whole["total_r"],
+        "validation_trades":validation["trades"],
+        "validation_pf":validation["profit_factor"],
+        "validation_r":validation["total_r"],
+        "last5_r":recent5["total_r"], "last2_r":recent2["total_r"],
+        "cost2_pf":cost2["profit_factor"],"cost2_r":cost2["total_r"],
+    }
+    rows=[]
+    for key,reference in PARITY_REFERENCE.items():
+        current=observed[key]
+        passed=(current==reference if isinstance(reference,int)
+                else abs(current-reference) <= 0.00002)
+        rows.append({"metric":key,"discovery_reference":reference,
+                     "refinement_recomputed":current,"passed":passed})
+    rows.append({"metric":"frozen_last_candle_utc", "discovery_reference":iso(PARITY_LAST_M15_UTC),
+                 "refinement_recomputed":iso(anchor_bars[-1]["time"]), "passed":True})
+    rows.append({"metric":"frozen_m15_bar_count", "discovery_reference":546849,
+                 "refinement_recomputed":n,"passed":n==546849})
+    OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
+    if not all(r["passed"] for r in rows):
+        write_csv(OUTS["parity"],rows)
+        raise RuntimeError("Frozen broad-discovery parity FAILED; see parity CSV; stop refinement")
+    write_csv(OUTS["parity"],rows)
+    return rows
+
+
+def focus_experiments(anchor):
+    geo = [focus_new(anchor, f"G_LB{lb}_B{b:.2f}_CL{cl:.2f}",
+                     sweep_lb=lb,body_atr_min=b,close_loc_min=cl)
+           for lb in GEOMETRY_LB for b in GEOMETRY_BODY for cl in GEOMETRY_CLOSE]
+    session = [focus_new(anchor, f"S_SYD_{a:02d}_{b:02d}",
+                         context="NONE", custom_sydney_window=(a,b))
+               for a,b in SESSION_WINDOWS]
+    session.append(focus_new(anchor,"S_ALL_HOURS",context="NONE"))
+    rr = [focus_new(anchor, f"RR_{value:.2f}",rr=value) for value in RR_VALUES]
+    # One parameter at a time away from the anchor. No compounding selected
+    # gains across factors; retain weaker/failing neighbours visibly.
+    one = []
+    for lb in (20,40,60,80,100):
+        one.append(focus_new(anchor,f"OF_LB{lb}",sweep_lb=lb))
+    for b in (0.50,0.75,1.00,1.25):
+        one.append(focus_new(anchor,f"OF_BODY{b:.2f}",body_atr_min=b))
+    for cl in (0.55,0.60,0.65,0.70,0.75):
+        one.append(focus_new(anchor,f"OF_CLOSE{cl:.2f}",close_loc_min=cl))
+    # Only retain known, independently surfaced low-sweep setups to avoid
+    # silently resampling hundreds of fresh control parameter combinations.
+    sweep = [
+        cfg("CONTROL_SWEEP_SYD_16_19", "LOW_SWEEP_DISPLACEMENT",rr=3.50,
+            sweep_lb=60,body_atr_min=1.25,lower_wick_body_min=0.25,
+            mom4_min=-1.50,context="SYDNEY_BLOCK_16-19"),
+        cfg("CONTROL_SWEEP_NY_20_23", "LOW_SWEEP_DISPLACEMENT",rr=3.50,
+            sweep_lb=60,body_atr_min=1.00,lower_wick_body_min=0.35,
+            mom4_min=-1.00,context="NY_BLOCK_20-23"),
+    ]
+    return geo, session, rr, one, sweep
+
+
+def focus_deep_summary(c, candles, f):
+    ix=focus_indices(c,f)
+    a=shortlist_summary(c,candles,ix)
+    roll=rolling_rows(c,candles,ix)
+    cal=calendar_rows(c,candles,ix)
+    return a, roll, cal
+
+
+def focus_checks(s,cost2,rolling,calendar):
+    """Predeclared research gates; a passing row is NOT live approval.
+    Counts and temporal returns matter more than rare high-PF samples.
+    All metrics are historical and multiply searched, not untouched OOS.
+    """
+    rs = {int(r["months"]):r for r in rolling}
+    cals = calendar
+    checks={
+        "trades_ge_70":s["full_trades"]>=70,
+        "full_pf_ge_1_30":s["full_pf"]>=1.30,
+        "both_pre2010_post2010_positive":s["pre2010_r"]>0 and s["post2010_r"]>0,
+        "validation_trades_ge_20":s["validation2018_plus_trades"]>=20,
+        "validation_pf_ge_1_20":s["validation2018_plus_pf"]>=1.20,
+        "validation_r_positive":s["validation2018_plus_r"]>0,
+        "eras_at_least_3_positive":s["positive_eras"]>=3,
+        "last5_trades_ge_12":s["last5y_trades"]>=12,
+        "last5_r_positive":s["last5y_r"]>0,
+        "last2_trades_ge_5":s["last2y_trades"]>=5,
+        "last2_r_positive":s["last2y_r"]>0,
+        "2pip_pf_ge_1_25":cost2["profit_factor"]>=1.25,
+        "2pip_total_r_positive":cost2["total_r"]>0,
+        "rolling24_positive_ge_80":rs[24]["positive_active_windows_pct"]>=80,
+        "rolling36_positive_ge_90":rs[36]["positive_active_windows_pct"]>=90,
+        "calendar_positive_active_ge_60":cals["positive_active_years_pct"]>=60,
+        "zero_trade_completed_years_le_3":cals["zero_trade_years"]<=3,
+    }
+    return checks
+
+
+def run_focused_refinement():
     try:
-        STATUS.update({
-            "state": "fetch",
-            "message": "Fetching AUD/USD M15 + H1/H4/D history",
-            "progress": 1,
-        })
+        STATUS.update(state="fetch",message="Fetching AUD/USD M15 only; no HTF filters in this controlled pass",progress=1)
+        # M15 only: even the sweep comparator uses M15 local momentum; no
+        # unneeded H1/H4/D fetch/EMA warm-up can change the frozen predicates.
+        candles=fetch("M15",START,NOW,35)
+        if len(candles)<500_000:
+            raise RuntimeError(f"Insufficient AUD/USD M15 history: {len(candles)}")
+        write_csv(OUTS["coverage"],[{"pair":PAIR,"timeframe":"M15","first_utc":iso(candles[0]["time"]),
+           "last_utc":iso(candles[-1]["time"]),"bars":len(candles),"historical_adverse_fill_pips":PRIMARY_COST,
+           "stop_buffer_ticks":STOP_TICKS,"read_only":True}])
+        STATUS.update(state="parity",message="Rebuilding the EXACT 55-trade frozen discovery anchor",progress=21)
+        focus_parity(candles)
+        n=len(candles)
+        absent={k:np.full(n,np.nan) for k in ("close","ema50","ema100","ema200","atr_ratio50")}
+        STATUS.update(state="features",message="Building M15 ATR14, prior lows and Sydney DST-aware hour cache",progress=30)
+        f=features(candles,absent,absent,absent)
+        anchor=focus_anchor()
+        geo,session,rr,one,sweep=focus_experiments(anchor)
+        groups=[("geometry",geo),("session",session),("rr",rr),("one_factor",one),("sweep_controls",sweep)]
+        all_rows={}
+        cfg_by_id={anchor["config_id"]:anchor}
+        anchor_row=focus_row(anchor,candles,f,"FROZEN_ANCHOR")
+        write_csv(OUTS["anchor"],[anchor_row])
+        cfg_by_id.update({c["config_id"]:c for _,configs in groups for c in configs})
+        for k,(label,configs) in enumerate(groups):
+            STATUS.update(state="refine",message=f"Controlled {label} {len(configs)} configurations",progress=35+8*k)
+            rows=[focus_row(c,candles,f,label) for c in configs]
+            all_rows[label]=rows
+            write_csv(OUTS[label],rows)
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
 
-        m15 = fetch("M15", START, NOW, 35)
-        h1 = fetch("H1", WARMUP, NOW, 180)
-        h4 = fetch("H4", WARMUP, NOW, 700)
-        daily = fetch("D", WARMUP, NOW, 3500)
+        # Inspect the ENTIRE central 3x3 x close-location neighbourhood,
+        # not only the single highest-scoring parameter point.
+        plateau=[]
+        for close_loc in GEOMETRY_CLOSE:
+            sub=[r for r in all_rows["geometry"] if r["close_loc_min"]==close_loc]
+            plateau.append({"close_loc_min":close_loc,"configs":len(sub),
+                 "full_profitable":sum(r["full_r"]>0 for r in sub),
+                 "both_pre2010_post2010_profitable":sum(r["pre2010_r"]>0 and r["post2010_r"]>0 for r in sub),
+                 "positive_validation2018":sum(r["era4_r"]>0 for r in sub),
+                 "median_trades":med([r["full_trades"] for r in sub]),
+                 "median_full_pf":med([r["full_pf"] for r in sub]),
+                 "median_full_r":med([r["full_r"] for r in sub])})
+        write_csv(OUTS["geometry_plateau"],plateau)
 
-        if not all([m15, h1, h4, daily]):
-            raise RuntimeError("Missing required history")
-        if len(m15) < 100_000:
-            raise RuntimeError(f"Insufficient AUD/USD M15 bars: {len(m15)}")
+        # Rank by quality AND actual frequency/validation, not rare PF alone.
+        # Deep-diagnose anchored original + up to 8 diverse eligible geometry
+        # points + 2 session + 2 RR + known sweep controls. Always retain
+        # anchor and weak neighbours; nothing is automatically frozen.
+        STATUS.update(state="deep",message="Focused shortlist: full ledger, costs, rolling and years",progress=78)
+        candidate_rows=[r for r in all_rows["geometry"] if
+                        r["full_trades"]>=45 and r["pre2010_r"]>0 and r["post2010_r"]>0]
+        candidate_rows.sort(key=lambda r:(r["positive_eras"],r["full_trades"]>=70,
+                            r["full_pf"]>=1.3,r["full_r"],r["full_trades"]),reverse=True)
+        shortlist_ids=[anchor["config_id"]]
+        picked_lb=set();picked_close=set()
+        for r in candidate_rows:
+            if len(shortlist_ids)>=9:break
+            if r["config_id"] in shortlist_ids:continue
+            if len(shortlist_ids)<=4 or r["sweep_lb"] not in picked_lb or r["close_loc_min"] not in picked_close:
+                shortlist_ids.append(r["config_id"])
+                picked_lb.add(r["sweep_lb"]);picked_close.add(r["close_loc_min"])
+        for label,keep in (("session",2),("rr",2)):
+            a=sorted(all_rows[label],key=lambda r:(r["full_trades"]>=45,r["positive_eras"],
+                            r["pre2010_r"]>0 and r["post2010_r"]>0,r["full_r"]),reverse=True)
+            shortlist_ids.extend(r["config_id"] for r in a[:keep] if r["config_id"] not in shortlist_ids)
+        shortlist_ids.extend(c["config_id"] for c in sweep)
+        shortlist_ids=list(dict.fromkeys(shortlist_ids))
 
-        write_csv(OUTS["coverage"], [{
-            "instrument": PAIR,
-            "requested_start_utc": iso(START),
-            "actual_first_m15_utc": iso(m15[0]["time"]),
-            "actual_last_m15_utc": iso(m15[-1]["time"]),
-            "m15_candles": len(m15),
-            "h1_candles": len(h1),
-            "h4_candles": len(h4),
-            "daily_candles": len(daily),
-            "baseline_cost_pips": PRIMARY_COST,
-            "side": "LONG",
-        }])
-
-        STATUS.update({
-            "state": "precompute",
-            "message": "Building strict completed-HTF alignment and M15 feature cache",
-            "progress": 20,
-        })
-
-        m15_times = [x["time"] for x in m15]
-        aligned_h1 = align_htf(m15_times, htf_state(h1))
-        aligned_h4 = align_htf(m15_times, htf_state(h4))
-        aligned_daily = align_htf(m15_times, htf_state(daily))
-        f = features(m15, aligned_h1, aligned_h4, aligned_daily)
-
-        # ---------------- Stage 1 ----------------
-        STATUS.update({
-            "state": "stage1",
-            "message": "Stage 1: raw independent long archetypes",
-            "progress": 28,
-        })
-
-        stage1 = stage1_configs()
-        config_by_id = {x["config_id"]: x for x in stage1}
-        stage1_rows = []
-
-        for i, config in enumerate(stage1, 1):
-            if i % 8 == 0:
-                STATUS.update({
-                    "state": "stage1",
-                    "message": f"Stage 1 {i}/{len(stage1)}",
-                    "progress": 28 + int(12 * i / len(stage1)),
-                })
-            ix = indices(config, f)
-            stage1_rows.append(evaluate(config, m15, ix))
-
-        stage1_rows = sort_rows(stage1_rows)
-        stage1_family = family_summary(stage1_rows)
-        write_csv(OUTS["stage1"], stage1_rows)
-        write_csv(OUTS["stage1_family"], stage1_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        stage1_bases = select_diverse(
-            stage1_rows,
-            STAGE1_PER_FAMILY,
-            STAGE1_BASE_KEEP,
-        )
-
-        # ---------------- Stage 2 ----------------
-        STATUS.update({
-            "state": "stage2",
-            "message": "Stage 2: broad HTF / volatility / session / weekday contexts",
-            "progress": 42,
-        })
-
-        stage2 = stage2_configs(stage1_bases, config_by_id)
-        config_by_id.update({x["config_id"]: x for x in stage2})
-        stage2_rows = []
-
-        for i, config in enumerate(stage2, 1):
-            if i % 25 == 0:
-                STATUS.update({
-                    "state": "stage2",
-                    "message": f"Stage 2 {i}/{len(stage2)}",
-                    "progress": 42 + int(20 * i / len(stage2)),
-                })
-            ix = indices(config, f)
-            stage2_rows.append(evaluate(config, m15, ix))
-
-        stage2_rows = sort_rows(stage2_rows)
-        stage2_family = family_summary(stage2_rows)
-        write_csv(OUTS["stage2"], stage2_rows)
-        write_csv(OUTS["stage2_family"], stage2_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        stage2_bases = select_diverse(
-            stage2_rows,
-            STAGE2_PER_FAMILY,
-            STAGE2_BASE_KEEP,
-        )
-
-        # ---------------- Stage 3 ----------------
-        STATUS.update({
-            "state": "stage3",
-            "message": "Stage 3: local geometry and RR robustness",
-            "progress": 64,
-        })
-
-        stage3 = stage3_configs(stage2_bases, config_by_id)
-        config_by_id.update({x["config_id"]: x for x in stage3})
-        stage3_rows = []
-
-        for i, config in enumerate(stage3, 1):
-            if i % 25 == 0:
-                STATUS.update({
-                    "state": "stage3",
-                    "message": f"Stage 3 {i}/{len(stage3)}",
-                    "progress": 64 + int(15 * i / len(stage3)),
-                })
-            ix = indices(config, f)
-            stage3_rows.append(evaluate(config, m15, ix))
-
-        stage3_rows = sort_rows(stage3_rows)
-        stage3_family = family_summary(stage3_rows)
-        write_csv(OUTS["stage3"], stage3_rows)
-        write_csv(OUTS["stage3_family"], stage3_family)
-
-        BACKTEST_CACHE.clear()
-        OUTCOME_CACHE.clear()
-
-        final_rows = select_diverse(
-            stage3_rows,
-            FINAL_PER_FAMILY,
-            FINAL_KEEP,
-        )
-        final_configs = [config_by_id[row["config_id"]] for row in final_rows]
-
-        # ---------------- Deep diagnostics on shortlist ----------------
-        STATUS.update({
-            "state": "shortlist_diagnostics",
-            "message": "Shortlist temporal / cost / rolling / calendar diagnostics",
-            "progress": 80,
-        })
-
-        shortlist = []
-        periods = []
-        costs = []
-        rolling = []
-        calendar = []
-        trades = []
-
-        for i, config in enumerate(final_configs, 1):
-            STATUS.update({
-                "state": "shortlist_diagnostics",
-                "message": f"Shortlist {i}/{len(final_configs)}: {config['config_id']}",
-                "progress": 80 + int(15 * i / max(1, len(final_configs))),
-            })
-
-            ix = indices(config, f)
-            shortlist.append(shortlist_summary(config, m15, ix))
-            periods.extend(period_rows(config, m15, ix))
-            costs.extend(cost_rows(config, m15, ix))
-            rrows = rolling_rows(config, m15, ix)
-            crows = calendar_rows(config, m15, ix)
-            rolling.extend(rrows)
-            calendar.extend(crows)
-
-            for trade in backtest(m15, ix, config["rr"], PRIMARY_COST, m15[0]["time"], NOW):
-                trades.append(serialise_trade(config, trade))
-
-        rollsum = rolling_summary(rolling)
-        calsum = calendar_summary(calendar)
-        decisions = decision_rows(shortlist, costs, rollsum, calsum)
-
-        write_csv(OUTS["shortlist"], shortlist)
-        write_csv(OUTS["periods"], periods)
-        write_csv(OUTS["cost"], costs)
-        write_csv(OUTS["rolling"], rolling)
-        write_csv(OUTS["rolling_summary"], rollsum)
-        write_csv(OUTS["calendar"], calendar)
-        write_csv(OUTS["calendar_summary"], calsum)
-        write_csv(OUTS["trades"], trades)
-        write_csv(OUTS["decision"], decisions)
-
-        write_csv(OUTS["notes"], [
-            {
-                "item": "Scope",
-                "value": "Fresh AUD/USD M15 LONG broad research. No existing AUD/USD H1 LONG or SHORT rule is treated as a benchmark.",
-            },
-            {
-                "item": "Families",
-                "value": "Bullish engulf near lows, low-sweep displacement, failed breakdown reclaim, outside reversal, compression breakout, and pullback rejection are searched independently.",
-            },
-            {
-                "item": "Historical execution",
-                "value": "OANDA midpoint; reference entry signal close; long fill=close+1 pip baseline; stop=signal low-10 ticks; target from reference-close risk; p0; exact exit-candle signal eligible.",
-            },
-            {
-                "item": "HTF causality",
-                "value": "H1/H4/D values become usable only at the next actual HTF candle open; no same-candle lookahead.",
-            },
-            {
-                "item": "Context search",
-                "value": "Stage 2 tests one context at a time: H1/H4/D bullish trend states, ATR regime, NY/London/Tokyo/Sydney 4-hour blocks, and weekday exclusions.",
-            },
-            {
-                "item": "Cost stress",
-                "value": "Final shortlist is retested at 0.5, 1.0, 1.5 and 2.0 pip adverse historical entry cost.",
-            },
-            {
-                "item": "No pristine OOS claim",
-                "value": "History has been repeatedly explored. Temporal splits and rolling windows are robustness diagnostics, not untouched out-of-sample evidence.",
-            },
-            {
-                "item": "Decision matrix",
-                "value": "DEEP_VALIDATE only means a candidate merits a separate frozen deep-validation runner. It is not live approval.",
-            },
-            {
-                "item": "Next gate",
-                "value": "After one candidate is frozen and deeply validated, run exact 26->27 portfolio-add analysis with non-hedging same-pair overlap handling before any live integration.",
-            },
+        deep=[];period=[];cost=[];rolling=[];calendar=[];trades=[];decisions=[]
+        for pos,identifier in enumerate(shortlist_ids):
+            STATUS.update(state="deep",message=f"Deep diagnostic {pos+1}/{len(shortlist_ids)} {identifier}",
+                          progress=79+int(17*pos/max(1,len(shortlist_ids))))
+            c=cfg_by_id[identifier];ix=focus_indices(c,f)
+            s=shortlist_summary(c,candles,ix)
+            deep.append(s)
+            period.extend(period_rows(c,candles,ix))
+            cost.extend(cost_rows(c,candles,ix))
+            rrows=rolling_rows(c,candles,ix)
+            crows=calendar_rows(c,candles,ix)
+            rolling.extend(rrows);calendar.extend(crows)
+            rs={int(r["months"]):r for r in rolling_summary(rrows)}
+            cs=calendar_summary(crows)[0]
+            cost2=stats(backtest(candles,ix,c["rr"],2.0))
+            checks=focus_checks(s,cost2,rs.values(),cs)
+            decisions.append({"config_id":identifier,"family":c["family"],"experiment":
+                ("anchor" if identifier==anchor["config_id"] else next(label for label,rows in all_rows.items()
+                 if any(r["config_id"]==identifier for r in rows))),
+                "gate_pass":all(checks.values()),"checks_passed":sum(checks.values()),"checks_total":len(checks),
+                "checks_json":str(checks),"full_trades":s["full_trades"],"full_pf":s["full_pf"],"full_r":s["full_r"],
+                "validation_trades":s["validation2018_plus_trades"],"validation_pf":s["validation2018_plus_pf"],
+                "validation_r":s["validation2018_plus_r"],"last5_trades":s["last5y_trades"],
+                "last5_r":s["last5y_r"],"last2_trades":s["last2y_trades"],"last2_r":s["last2y_r"],
+                "cost2_pf":cost2["profit_factor"],"cost2_r":cost2["total_r"],
+                "rolling12_active_pct":rs[12]["positive_active_windows_pct"],
+                "rolling24_active_pct":rs[24]["positive_active_windows_pct"],
+                "rolling36_active_pct":rs[36]["positive_active_windows_pct"],
+                "worst24_r":rs[24]["worst_r"],"worst36_r":rs[36]["worst_r"],
+                "calendar_positive_pct":cs["positive_active_years_pct"],
+                "zero_trade_completed_years":cs["zero_trade_years"],
+                "research_next_step":("FINAL_FROZEN_CONFIRMATION_REQUIRED" if all(checks.values())
+                   else "NOT_READY_FOR_PORTFOLIO_OR_LIVE")})
+            for t in backtest(candles,ix,c["rr"],PRIMARY_COST):trades.append(serialise_trade(c,t))
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        write_csv(OUTS["deep"],deep)
+        write_csv(OUTS["periods"],period)
+        write_csv(OUTS["cost"],cost)
+        write_csv(OUTS["rolling"],rolling)
+        write_csv(OUTS["rolling_summary"],rolling_summary(rolling))
+        write_csv(OUTS["calendar"],calendar)
+        write_csv(OUTS["calendar_summary"],calendar_summary(calendar))
+        write_csv(OUTS["trades"],trades)
+        write_csv(OUTS["decision"],decisions)
+        write_csv(OUTS["notes"],[
+            {"item":"source","value":"Original AUDUSD_M15_LONG_27_BROAD_DISCOVERY.py historical features, exact signals, outcome, half-open strategy p0, and 1pip model are reused verbatim."},
+            {"item":"frozen_reference","value":"Original 546849 M15 bars through 2026-09-18T20:45Z: 55 trades, 21 wins, PF1.955626, +32.491274R, 2018+13 trades +3.589957R."},
+            {"item":"geometry","value":"LB40/60/80 x body0.75/1.00/1.25 x closeLoc0.60/0.65/0.70/0.75, Sydney04-07 RR3.50; 36 cells."},
+            {"item":"sessions","value":"Single-factor Sydney 4h windows; no combined/session-interaction filters; DST-aware signal candle OPEN. Unfiltered same geometry shown as control."},
+            {"item":"rr","value":"Frozen geometry/session; separate 3.00/3.25/3.50/3.75/4.00 RR neighbours."},
+            {"item":"control","value":"Low-sweep family is separate comparator, NOT automatically joined with failed breakdown."},
+            {"item":"honesty","value":"Previously searched historical periods are not pristine OOS. Passing screening checks means final confirmation only, NOT live approval."},
+            {"item":"safety","value":"READ ONLY; no executor/OANDA order post; existing 26 live unchanged; 26->27 exact nonhedging portfolio-add test required after frozen standalone confirmation."},
         ])
-
-        STATUS.update({
-            "state": "packaging",
-            "message": "Packaging AUD/USD M15 LONG prospective #27 broad research results",
-            "progress": 97,
-        })
-
+        STATUS.update(state="packaging",message="Packaging controlled refinement ZIP",progress=98)
         package_results()
-
-        verdict_counts = defaultdict(int)
-        for row in decisions:
-            verdict_counts[row["research_verdict"]] += 1
-
-        STATUS.update({
-            "state": "complete",
-            "message": "AUD/USD M15 LONG prospective #27 broad research complete",
-            "progress": 100,
-            "stage1_configs": len(stage1),
-            "stage2_configs": len(stage2),
-            "stage3_configs": len(stage3),
-            "shortlist_configs": len(final_configs),
-            "decision_counts": dict(verdict_counts),
-            "bundle": BUNDLE,
-        })
-
-    except Exception as error:
-        STATUS.update({
-            "state": "error",
-            "message": str(error),
-        })
+        STATUS.update(state="complete",message="Focused AUD/USD M15 LONG refinement complete",progress=100,
+                      anchor_parity="PASS",geometry_configs=len(geo),session_configs=len(session),
+                      rr_configs=len(rr),one_factor_configs=len(one),deep_configs=len(deep),
+                      passing_deep=sum(r["gate_pass"] for r in decisions),bundle=BUNDLE)
+    except Exception as ex:
         import traceback
-        STATUS["traceback"] = traceback.format_exc()
-        print("ERROR:", repr(error), flush=True)
+        STATUS.update(state="error",message=str(ex),traceback=traceback.format_exc())
+        print("AUDUSD M15 LONG #27 FOCUSED REFINEMENT ERROR",repr(ex),flush=True)
 
-
-# ============================================================
-# FLASK ROUTES
-# ============================================================
 
 @app.route("/")
-def root():
-    return jsonify({
-        "service": "AUDUSD M15 LONG #27 Broad Research",
-        "status": STATUS["state"],
-        "instrument": PAIR,
-        "timeframe": "M15",
-        "side": "BUY",
-        "primary_cost_pips": PRIMARY_COST,
-        "families": [
-            "BULL_ENGULF_STRUCTURE",
-            "LOW_SWEEP_DISPLACEMENT",
-            "FAILED_BREAKDOWN_RECLAIM",
-            "OUTSIDE_REVERSAL",
-            "COMPRESSION_BREAKOUT",
-            "PULLBACK_REJECTION",
-        ],
-        "orders_supported": False,
-        "trading_enabled": False,
-        "routes": [
-            "/audusd-m15-long-27/status",
-            "/audusd-m15-long-27/results",
-        ],
-    })
+def focus_root():
+    return jsonify({"service":"AUD/USD M15 LONG #27 FOCUSED REFINEMENT", "status":STATUS["state"],
+                    "read_only":True,"orders_supported":False,"existing_live_strategies_unchanged":26,
+                    "geometry_cells":36,"historical_adverse_fill_pips":PRIMARY_COST,
+                    "endpoints":["/audusd-m15-long-27-refinement/status","/audusd-m15-long-27-refinement/results"]})
 
 
-@app.route("/audusd-m15-long-27/status")
-def research_status():
+@app.route("/audusd-m15-long-27-refinement/status")
+def focus_status():
     return jsonify(STATUS)
 
 
-@app.route("/audusd-m15-long-27/results")
-def research_results():
+@app.route("/audusd-m15-long-27-refinement/results")
+def focus_results():
     return download(BUNDLE)
 
 
 if __name__ == "__main__":
-    threading.Thread(
-        target=run_research,
-        daemon=True,
-    ).start()
-
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
-        debug=False,
-    )
+    threading.Thread(target=run_focused_refinement,daemon=True).start()
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
