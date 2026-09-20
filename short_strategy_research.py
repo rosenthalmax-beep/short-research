@@ -1739,24 +1739,517 @@ def run_focused_refinement():
         print("AUDUSD M15 LONG #27 FOCUSED REFINEMENT ERROR",repr(ex),flush=True)
 
 
-@app.route("/")
-def focus_root():
-    return jsonify({"service":"AUD/USD M15 LONG #27 FOCUSED REFINEMENT", "status":STATUS["state"],
-                    "read_only":True,"orders_supported":False,"existing_live_strategies_unchanged":26,
-                    "geometry_cells":36,"historical_adverse_fill_pips":PRIMARY_COST,
-                    "endpoints":["/audusd-m15-long-27-refinement/status","/audusd-m15-long-27-refinement/results"]})
+# ============================================================
+# AUD/USD M15 LONG #27 — FINAL FROZEN-CORE COMPLEMENT SEARCH
+# ============================================================
+# The embedded original research functions are retained verbatim. The old
+# focused-refinement runner is not launched; this study has its own routes.
+# Nothing in this file submits or enables real orders. 26 live strategies
+# remain unchanged. No portfolio-add test is claimed or performed here.
+#
+# CORE (UNCHANGED): failed breakdown/reclaim, previous60 low, bullish,
+# body>=1 ATR14, close-location>=.65, Sydney open 04:00–07:59, RR3.5.
+# M15 long fill reference close+1pip, stop low-10 ticks, reference RR target,
+# same-bar exit tie convention and exit-bar re-entry all inherited unchanged.
+#
+# Complement search is finite/predeclared (12 broad no-session geometries,
+# plus 2 previously surfaced tiny-sample sweep comparators). No searching
+# specific bad calendar years, micro-hour windows or multi-filter cocktails.
+# Every combo is shown, including failures. All have RR3.5. Same-candle
+# CORE priority, strategy-level p0 on raw-signal union, cost-stress reruns
+# whole union, never combine two separately backtested trade ledgers.
+#
+# Historical data have been repeatedly inspected: 2018+ is a validation
+# segment, NOT pristine out-of-sample; results cannot establish future edge.
+# ============================================================
+
+import json
+
+# Override only the output destination names used by shared helpers.
+OUTS = {
+    "coverage": "audusd27_complement_coverage.csv",
+    "parity": "audusd27_complement_frozen_core_parity.csv",
+    "core": "audusd27_complement_frozen_core.csv",
+    "core_trades": "audusd27_complement_core_trades.csv",
+    "raw": "audusd27_complement_predeclared_raw_matrix.csv",
+    "matrix": "audusd27_complement_union_matrix.csv",
+    "family": "audusd27_complement_family_summary.csv",
+    "periods": "audusd27_complement_periods.csv",
+    "rolling": "audusd27_complement_rolling.csv",
+    "rolling_summary": "audusd27_complement_rolling_summary.csv",
+    "calendar": "audusd27_complement_calendar.csv",
+    "calendar_summary": "audusd27_complement_calendar_summary.csv",
+    "stress": "audusd27_complement_cost_stress.csv",
+    "overlap": "audusd27_complement_overlap_diagnostics.csv",
+    "trades": "audusd27_complement_finalist_trades.csv",
+    "decision": "audusd27_complement_decision.csv",
+    "notes": "audusd27_complement_notes.csv",
+}
+BUNDLE = "AUDUSD_M15_LONG_27_FINAL_COMPLEMENT_RESULTS.zip"
+STATUS = {"state":"not_started", "message":"Read-only study not started",
+          "orders_supported":False, "trading_enabled":False}
+
+CORE_ID = "FROZEN_FAILED_BREAKDOWN_LB60_BODY100_CL065_SYD04_07_RR350"
+COMPLEMENT_RR = 3.50
+# Exactly 12 fixed, structurally distinct geometries across 3 families.
+# These are interpretations of price action, NOT optimised derivatives
+# of the failed-breakdown core. No session or weekday additions.
+COMPLEMENTS = (
+    # A. Lower-low displacement beyond previous HIGH (different completion
+    #    condition from core reclaim of the old LOW), after ~4h decline.
+    ("SWEEP_BROAD_40", "LOW_SWEEP", dict(lb=40, body=.75, wick=.20, mom=-.50)),
+    ("SWEEP_BROAD_60", "LOW_SWEEP", dict(lb=60, body=.75, wick=.20, mom=-.50)),
+    ("SWEEP_STRONG_60", "LOW_SWEEP", dict(lb=60, body=1.00, wick=.20, mom=-1.00)),
+    ("SWEEP_STRONG_80", "LOW_SWEEP", dict(lb=80, body=1.00, wick=.35, mom=-1.00)),
+    # B. Prior 4h decline followed by bullish outside reversal. No 60-bar
+    #    breakout/reclaim or session filter.
+    ("OUTSIDE_050_BODY075", "DECLINE_OUTSIDE", dict(mom=-.50, body=.75, cl=.70)),
+    ("OUTSIDE_100_BODY075", "DECLINE_OUTSIDE", dict(mom=-1.00, body=.75, cl=.70)),
+    ("OUTSIDE_050_BODY100", "DECLINE_OUTSIDE", dict(mom=-.50, body=1.00, cl=.75)),
+    ("OUTSIDE_100_BODY100", "DECLINE_OUTSIDE", dict(mom=-1.00, body=1.00, cl=.75)),
+    # C. Expansion out of prior compression to new 10/20-bar HIGH.
+    #    This is not a false low-break reclaim like the frozen core.
+    ("COMPRESSION_10_LOOSE", "COMPRESSION_UP", dict(lb=10, body=.75, ran=1.25, comp=.85)),
+    ("COMPRESSION_20_LOOSE", "COMPRESSION_UP", dict(lb=20, body=.75, ran=1.25, comp=.85)),
+    ("COMPRESSION_10_STRONG", "COMPRESSION_UP", dict(lb=10, body=1.00, ran=1.50, comp=.80)),
+    ("COMPRESSION_20_STRONG", "COMPRESSION_UP", dict(lb=20, body=1.00, ran=1.50, comp=.80)),
+    # Previously surfaced selected controls. These are NOT independent
+    # confirmation and may NOT pass if the broad family has no support.
+    ("KNOWN_SWEEP_SYD_16_19", "KNOWN_SWEEP_CONTROL", dict(lb=60,body=1.25,wick=.25,mom=-1.50,zone="SYDNEY",hours=(16,19))),
+    ("KNOWN_SWEEP_NY_20_23", "KNOWN_SWEEP_CONTROL", dict(lb=60,body=1.00,wick=.35,mom=-1.00,zone="NY",hours=(20,23))),
+)
+
+DEV_END = datetime(2018,1,1,tzinfo=timezone.utc)
+ONE_YEAR = timedelta(days=365.2425)
+FINALIST_LIMIT = 5
 
 
-@app.route("/audusd-m15-long-27-refinement/status")
-def focus_status():
+def comp_raw_indices(f, family, params):
+    """All vector predicates are fixed here; M15 signal open defines time."""
+    mask = f["valid_atr"].copy() & f["bullish"]
+    if family in ("LOW_SWEEP", "KNOWN_SWEEP_CONTROL"):
+        previous_high = np.r_[np.nan, f["high"][:-1]]
+        mask &= f["low"] < f["prev_low"][params["lb"]]
+        mask &= f["close"] > previous_high
+        mask &= f["body_atr"] >= params["body"]
+        mask &= f["lower_wick_body"] >= params["wick"]
+        mask &= f["mom4"] <= params["mom"]
+        if family == "KNOWN_SWEEP_CONTROL":
+            hours = f["sydney_hour"] if params["zone"] == "SYDNEY" else f["ny_hour"]
+            a,b = params["hours"]
+            mask &= (hours >= a) & (hours <= b)
+    elif family == "DECLINE_OUTSIDE":
+        previous_high = np.r_[np.nan, f["high"][:-1]]
+        previous_low = np.r_[np.nan, f["low"][:-1]]
+        mask &= f["low"] < previous_low
+        mask &= f["high"] > previous_high
+        mask &= f["body_atr"] >= params["body"]
+        mask &= f["close_loc"] >= params["cl"]
+        mask &= f["mom4"] <= params["mom"]
+    elif family == "COMPRESSION_UP":
+        mask &= f["compression"] <= params["comp"]
+        mask &= f["body_atr"] >= params["body"]
+        mask &= f["range_atr"] >= params["ran"]
+        mask &= f["close"] > f["prev_high"][params["lb"]]
+    else:
+        raise ValueError("Unrecognised predeclared family " + family)
+    mask[:200] = False
+    return np.flatnonzero(mask).tolist()
+
+
+def comp_union(candles, core_indices, comp_indices, cost_pips=PRIMARY_COST):
+    """Exact signal-union rebacktest: core priority, one p0 across both.
+
+    Block signals while [signal_index, exit_index) holds; if next signal
+    is ON the exit candle it is eligible (same as frozen original runner).
+    No merging of independently pyramided ledgers.
+    """
+    core_set = set(core_indices)
+    comp_set = set(comp_indices)
+    if core_indices != sorted(set(core_indices)) or comp_indices != sorted(set(comp_indices)):
+        raise ValueError("Raw indices must be strictly sorted and unique")
+    raw_union = sorted(core_set | comp_set)
+    trades = []
+    rejected_core = rejected_comp = 0
+    overlap_until = -1
+    for i in raw_union:
+        src = "CORE" if i in core_set else "COMPLEMENT"
+        if i < overlap_until:
+            if i in core_set: rejected_core += 1
+            else: rejected_comp += 1
+            continue
+        trade = outcome(candles, i, COMPLEMENT_RR, cost_pips)
+        if trade is None: continue
+        t = dict(trade)
+        t["trigger_id"] = src
+        t["raw_both_same_candle"] = i in core_set and i in comp_set
+        trades.append(t)
+        overlap_until = int(t["exit_index"])
+    return trades, {
+        "core_raw":len(core_indices), "complement_raw":len(comp_indices),
+        "same_candle_both":len(core_set & comp_set),
+        "union_unique_raw":len(raw_union),
+        "accepted_core":sum(t["trigger_id"]=="CORE" for t in trades),
+        "accepted_complement":sum(t["trigger_id"]=="COMPLEMENT" for t in trades),
+        "rejected_core_overlap":rejected_core,
+        "rejected_complement_overlap":rejected_comp,
+        "accepted":len(trades),
+    }
+
+
+def comp_window_stats(trades, start=None, end=None):
+    return stats([t for t in trades if
+                 (start is None or start<=t["entry_time"]) and
+                 (end is None or t["entry_time"]<end)])
+
+
+def comp_periods(identifier, trades):
+    out=[]
+    windows=(("FULL",START,NOW),
+             ("DEVELOPMENT_BEFORE_2018",START,DEV_END),
+             ("VALIDATION_2018_PLUS",DEV_END,NOW),
+             ("LAST5Y",NOW-5*ONE_YEAR,NOW),
+             ("LAST3Y",NOW-3*ONE_YEAR,NOW),
+             ("LAST2Y",NOW-2*ONE_YEAR,NOW),
+             ("LAST1Y",NOW-ONE_YEAR,NOW),
+             *ERAS)
+    for label,a,b in windows:
+        out.append({"config_id":identifier,"period":label,**comp_window_stats(trades,a,b)})
+    return out
+
+
+def comp_rolling(identifier, trades):
+    # Evaluates full chronological accepted ledger. The windows are slices
+    # AFTER p0; never reset p0 at a new month/period boundary.
+    first=month_floor(START)
+    last=month_floor(NOW)
+    out=[]
+    ts=[t["entry_time"] for t in trades]
+    # The trades are ordered by entry (signal open), not by close date.
+    # prefix sums make rolling windows O(log n) and do not round away R.
+    pref=[0.0]
+    for t in trades: pref.append(pref[-1]+float(t["result_r"]))
+    for months in (12,24,36):
+        start=first
+        while add_months(start,months)<=last:
+            end=add_months(start,months)
+            left=bisect.bisect_left(ts,start)
+            right=bisect.bisect_left(ts,end)
+            value=pref[right]-pref[left]
+            out.append({"config_id":identifier,"months":months,
+                "start_utc":iso(start),"end_utc":iso(end),"trades":right-left,
+                "total_r":value,"positive":value>0,"zero_trade":right==left})
+            start=add_months(start,1)
+    return out
+
+
+def comp_roll_summary(rows):
+    grouped=defaultdict(list)
+    for r in rows:grouped[(r["config_id"],int(r["months"]))].append(r)
+    out=[]
+    for (cid,months),sub in grouped.items():
+        active=[r for r in sub if r["trades"]>0]
+        out.append({"config_id":cid,"months":months,"windows":len(sub),
+            "active_windows":len(active),"zero_trade_windows":len(sub)-len(active),
+            "positive_windows_pct":100*sum(r["positive"] for r in sub)/len(sub),
+            "positive_active_windows_pct":100*sum(r["positive"] for r in active)/len(active) if active else 0.0,
+            "median_r_active":med([r["total_r"] for r in active]),
+            "worst_r":min((r["total_r"] for r in sub),default=0.0)})
+    return out
+
+
+def comp_calendar(identifier, trades):
+    out=[]
+    for year in range(max(START.year,2002),NOW.year):
+        a=datetime(year,1,1,tzinfo=timezone.utc)
+        b=datetime(year+1,1,1,tzinfo=timezone.utc)
+        s=comp_window_stats(trades,a,b)
+        out.append({"config_id":identifier,"year":year,
+                    "positive":s["total_r"]>0,"zero_trade":s["trades"]==0,**s})
+    return out
+
+
+def comp_cal_summary(rows):
+    grouped=defaultdict(list)
+    for row in rows:grouped[row["config_id"]].append(row)
+    out=[]
+    for cid,sub in grouped.items():
+        active=[r for r in sub if r["trades"]>0]
+        out.append({"config_id":cid,"completed_years":len(sub),
+            "active_completed_years":len(active),
+            "positive_years":sum(r["positive"] for r in active),
+            "zero_trade_years":len(sub)-len(active),
+            "positive_active_years_pct":100*sum(r["positive"] for r in active)/len(active) if active else 0.0,
+            "worst_year_r":min((r["total_r"] for r in sub),default=0.0)})
+    return out
+
+
+def comp_assess(identifier, trades, core_trades, rsummary, csummary,
+                psummary, cost2, family_support):
+    full=stats(trades)
+    prev=stats(core_trades)
+    ps={r["period"]:r for r in psummary}
+    rs={int(r["months"]):r for r in rsummary}
+    # Criteria predeclared here, NOT tuned to achieve a selected PASS.
+    # The core is small: require genuine frequency growth and rolling gain,
+    # without giving up long-term / modern profitability or 2pip tolerance.
+    checks={
+       "trades_ge_85":full["trades"]>=85,
+       "increment_accepted_ge_30":full["trades"]-prev["trades"]>=30,
+       "full_pf_ge_1_30":full["profit_factor"]>=1.30,
+       "total_r_exceeds_core":full["total_r"]>prev["total_r"],
+       "max_dd_no_worse_than_core_plus_3r":full["max_drawdown_r"]>=prev["max_drawdown_r"]-3.0,
+       "dev_positive":ps["DEVELOPMENT_BEFORE_2018"]["total_r"]>0,
+       "validation_trades_ge_20":ps["VALIDATION_2018_PLUS"]["trades"]>=20,
+       "validation_pf_ge_1_20":ps["VALIDATION_2018_PLUS"]["profit_factor"]>=1.20,
+       "validation_positive":ps["VALIDATION_2018_PLUS"]["total_r"]>0,
+       "last5_positive":ps["LAST5Y"]["total_r"]>0,
+       "last2_positive":ps["LAST2Y"]["total_r"]>0,
+       "double_cost_marginal_positive":family_support["cost2_marginal_r"]>0,
+       "rolling24_worst_not_worse":rs[24]["worst_r"]>=family_support["core_worst24"],
+       "rolling36_worst_not_worse":rs[36]["worst_r"]>=family_support["core_worst36"],
+       "rolling24_positive_ge_80":rs[24]["positive_active_windows_pct"]>=80,
+       "rolling36_positive_ge_90":rs[36]["positive_active_windows_pct"]>=90,
+       "rolling24_vs_core_improves":rs[24]["positive_active_windows_pct"]>family_support["core_roll24"],
+       "rolling36_vs_core_improves":rs[36]["positive_active_windows_pct"]>family_support["core_roll36"],
+       "positive_years_ge_60":csummary["positive_active_years_pct"]>=60,
+       "zero_trade_years_le_3":csummary["zero_trade_years"]<=3,
+       "double_cost_pf_ge_1_25":cost2["profit_factor"]>=1.25,
+       "double_cost_r_positive":cost2["total_r"]>0,
+       "broad_family_supported":family_support["broad_family_supported"],
+    }
+    passed=all(checks.values())
+    return {"config_id":identifier,"research_gate_pass":passed,
+        "checks_passed":sum(checks.values()),"checks_total":len(checks),
+        "checks_json":json.dumps(checks,sort_keys=True),
+        "next_step":("FROZEN_CONFIRMATION_THEN_26_TO_27_PORTFOLIO_TEST" if passed
+                     else "SHELVE_M15_LONG_OR_REQUIRE_GENUINELY_NEW_PREDECLARED_HYPOTHESIS"),
+        "full_trades":full["trades"],"full_pf":full["profit_factor"],
+        "full_r":full["total_r"],"full_dd":full["max_drawdown_r"],
+        "validation_r":ps["VALIDATION_2018_PLUS"]["total_r"],
+        "last5_r":ps["LAST5Y"]["total_r"],"last2_r":ps["LAST2Y"]["total_r"],
+        "rolling24_pct":rs[24]["positive_active_windows_pct"],
+        "rolling36_pct":rs[36]["positive_active_windows_pct"],
+        "zero_trade_years":csummary["zero_trade_years"],
+        "broad_family_supported":family_support["broad_family_supported"]}
+
+
+def comp_trade_row(identifier,t):
+    r={"config_id":identifier}
+    for k,v in t.items():
+        if isinstance(v,datetime):r[k]=iso(v)
+        else:r[k]=v
+    return r
+
+
+def run_final_complement():
+    try:
+        STATUS.update(state="fetch",message="Fetch full AUD/USD M15 (read-only)",progress=1)
+        candles=fetch("M15",START,NOW,35)
+        if len(candles)<500_000:raise RuntimeError("AUD/USD M15 history too short")
+        write_csv(OUTS["coverage"],[{"pair":PAIR,"bars":len(candles),
+           "first_utc":iso(candles[0]["time"]),"last_utc":iso(candles[-1]["time"]),
+           "baseline_cost_pips":PRIMARY_COST,"read_only":True,
+           "predeclared_broad_cells":12,"prior_selected_controls":2}])
+        STATUS.update(state="parity",message="Exact 55-trade discovery anchor at original cutoff",progress=16)
+        focus_parity(candles)  # Stops immediately on any historic anchor drift.
+        n=len(candles)
+        absent={k:np.full(n,np.nan) for k in ("close","ema50","ema100","ema200","atr_ratio50")}
+        STATUS.update(state="features",message="Build ATR14/causal M15 features and frozen raw signals",progress=25)
+        f=features(candles,absent,absent,absent)
+        core_config=focus_anchor()
+        core_ix=focus_indices(core_config,f)
+        core_trades=backtest(candles,core_ix,COMPLEMENT_RR,PRIMARY_COST)
+        core_stats=stats(core_trades)
+        core_union, core_audit=comp_union(candles,core_ix,[],PRIMARY_COST)
+        if len(core_union)!=len(core_trades) or any(
+                a["signal_index"]!=b["signal_index"] or
+                abs(a["result_r"]-b["result_r"])>1e-10
+                for a,b in zip(core_union,core_trades)):
+            raise RuntimeError("Core p0 union engine differs from frozen core ledger")
+        if len(core_trades)<PARITY_REFERENCE["trades"]:
+            raise RuntimeError("New data lost frozen core trades; abort")
+        core_periods=comp_periods(CORE_ID,core_trades)
+        core_roll=comp_roll_summary(comp_rolling(CORE_ID,core_trades))
+        core_roll_lookup={r["months"]:r for r in core_roll}
+        core_calendar=comp_calendar(CORE_ID,core_trades)
+        core_cals=comp_cal_summary(core_calendar)[0]
+        write_csv(OUTS["core"],[{"config_id":CORE_ID,**core_stats,**core_audit,
+            "rolling24_positive_active":core_roll_lookup[24]["positive_active_windows_pct"],
+            "rolling36_positive_active":core_roll_lookup[36]["positive_active_windows_pct"],
+            "zero_trade_completed_years":core_cals["zero_trade_years"]}])
+        write_csv(OUTS["core_trades"],[comp_trade_row(CORE_ID,t) for t in core_trades])
+        # First evaluate the complete fixed family list; show every failure.
+        raw_rows=[];matrix=[];overlaps=[];precomputed={};family_rows=[]
+        STATUS.update(state="families",message="Test 12 predeclared broad variants + two prior selected controls",progress=33)
+        for pos,(identifier,family,params) in enumerate(COMPLEMENTS):
+            idx=comp_raw_indices(f,family,params)
+            ledger,audit=comp_union(candles,core_ix,idx)
+            supplement=[t for t in ledger if t["trigger_id"]=="COMPLEMENT"]
+            old_ids={t["signal_index"]:t for t in core_trades}
+            new_ids={t["signal_index"]:t for t in ledger if t["trigger_id"]=="CORE"}
+            displaced=set(old_ids)-set(new_ids)
+            new_core=set(new_ids)-set(old_ids)
+            p=comp_periods(identifier,ledger)
+            rolls=comp_rolling(identifier,ledger)
+            rsum=comp_roll_summary(rolls)
+            cal=comp_calendar(identifier,ledger)
+            csum=comp_cal_summary(cal)[0]
+            pmap={x["period"]:x for x in p}
+            rmap={x["months"]:x for x in rsum}
+            row={"config_id":identifier,"family":family,
+                 "params_json":json.dumps(params,sort_keys=True),
+                 "prior_selected_control":family=="KNOWN_SWEEP_CONTROL",
+                 **audit,**{f"combined_{k}":v for k,v in stats(ledger).items()},
+                 **{f"marginal_{k}":v for k,v in stats(supplement).items()},
+                 "delta_r_vs_core":stats(ledger)["total_r"]-core_stats["total_r"],
+                 "validation2018_r":pmap["VALIDATION_2018_PLUS"]["total_r"],
+                 "marginal_dev_r":sum(t["result_r"] for t in supplement if t["entry_time"]<DEV_END),
+                 "marginal_validation_r":sum(t["result_r"] for t in supplement if t["entry_time"]>=DEV_END),
+                 "last5_r":pmap["LAST5Y"]["total_r"],
+                 "last2_r":pmap["LAST2Y"]["total_r"],
+                 "rolling12_positive_pct":rmap[12]["positive_active_windows_pct"],
+                 "rolling24_positive_pct":rmap[24]["positive_active_windows_pct"],
+                 "rolling36_positive_pct":rmap[36]["positive_active_windows_pct"],
+                 "rolling24_worst_r":rmap[24]["worst_r"],
+                 "rolling36_worst_r":rmap[36]["worst_r"],
+                 "calendar_positive_pct":csum["positive_active_years_pct"],
+                 "zero_trade_years":csum["zero_trade_years"]}
+            raw_rows.append({"config_id":identifier,"family":family,"params_json":row["params_json"],
+              "prior_selected_control":row["prior_selected_control"],"raw_signals":len(idx),
+              "raw_overlap_with_core":audit["same_candle_both"],
+              "accepted_complement":audit["accepted_complement"],
+              "marginal_r":row["marginal_total_r"],"marginal_pf":row["marginal_profit_factor"]})
+            matrix.append(row)
+            overlaps.append({"config_id":identifier,"family":family,**audit,
+              "displaced_frozen_core_count":len(displaced),
+              "displaced_frozen_core_r":sum(old_ids[i]["result_r"] for i in displaced),
+              "newly_eligible_core_count":len(new_core),
+              "newly_eligible_core_r":sum(new_ids[i]["result_r"] for i in new_core),
+              "accepted_marginal_r":sum(t["result_r"] for t in supplement),
+              "net_delta_r":row["delta_r_vs_core"]})
+            precomputed[identifier]=(idx,ledger,p,rolls,rsum,cal,csum)
+            STATUS.update(progress=34+int(34*(pos+1)/len(COMPLEMENTS)),
+                message=f"Completed {pos+1}/{len(COMPLEMENTS)} fixed complement cells")
+        write_csv(OUTS["raw"],raw_rows)
+        write_csv(OUTS["matrix"],matrix)
+        write_csv(OUTS["overlap"],overlaps)
+        # Require evidence in at least 2 of 4 broad geometry neighbours,
+        # including a positive MARGINAL contribution in BOTH broad temporal halves.
+        for family in ("LOW_SWEEP","DECLINE_OUTSIDE","COMPRESSION_UP"):
+            rows=[r for r in matrix if r["family"]==family]
+            good=0
+            for r in rows:
+                p={x["period"]:x for x in precomputed[r["config_id"]][2]}
+                if (r["marginal_total_r"]>0 and r["combined_total_r"]>core_stats["total_r"] and
+                    r["marginal_dev_r"]>0 and r["marginal_validation_r"]>0 and
+                    p["DEVELOPMENT_BEFORE_2018"]["total_r"]>0 and
+                    p["VALIDATION_2018_PLUS"]["total_r"]>0):good+=1
+            family_rows.append({"family":family,"configs":len(rows),
+              "broad_geometry_cells_supporting":good,
+              "family_supported":good>=2,
+              "median_delta_r":med([r["delta_r_vs_core"] for r in rows]),
+              "median_combined_pf":med([r["combined_profit_factor"] for r in rows]),
+              "prior_selected_controls_are_independent_evidence":False})
+        write_csv(OUTS["family"],family_rows)
+        support={r["family"]:r["family_supported"] for r in family_rows}
+        # Detailed rerun only top 4 BROAD geometries + strongest previous
+        # control as DIAGNOSTIC (never passes without broad family support).
+        eligible=[r for r in matrix if not r["prior_selected_control"]]
+        eligible.sort(key=lambda r:(r["combined_trades"]>=85,
+             r["marginal_total_r"]>0,r["validation2018_r"]>0,
+             r["rolling36_positive_pct"],r["rolling24_positive_pct"],
+             r["delta_r_vs_core"]),reverse=True)
+        final_ids=[CORE_ID]+[r["config_id"] for r in eligible[:4]]
+        controls=[r for r in matrix if r["prior_selected_control"]]
+        controls.sort(key=lambda r:r["delta_r_vs_core"],reverse=True)
+        if controls:final_ids.append(controls[0]["config_id"])
+        period_rows=list(core_periods);roll_rows=comp_rolling(CORE_ID,core_trades)
+        cal_rows=list(core_calendar);stress=[];trade_rows=[];decisions=[]
+        # Core cost rerun as an explicit comparator; no outcome ledger merge.
+        for cost in COSTS:
+            core_cost,_=comp_union(candles,core_ix,[],cost)
+            stress.append({"config_id":CORE_ID,"cost_pips":cost,
+                           **stats(core_cost),"marginal_total_r":0.0})
+        for pos,identifier in enumerate(final_ids[1:]):
+            idx,ledger,p,rolls,rsum,cal,csum=precomputed[identifier]
+            base=next(r for r in matrix if r["config_id"]==identifier)
+            cost2=None
+            cost2_marginal_r=None
+            for cost in COSTS:
+                cost_ledger,_=comp_union(candles,core_ix,idx,cost)
+                marg=[t for t in cost_ledger if t["trigger_id"]=="COMPLEMENT"]
+                stress.append({"config_id":identifier,"cost_pips":cost,
+                     **stats(cost_ledger),"marginal_total_r":stats(marg)["total_r"]})
+                if cost==2.0:
+                    cost2=stats(cost_ledger)
+                    cost2_marginal_r=stats(marg)["total_r"]
+            period_rows.extend(p);roll_rows.extend(rolls);cal_rows.extend(cal)
+            fam=base["family"]
+            checks=comp_assess(identifier,ledger,core_trades,rsum,csum,p,cost2,
+                {"core_roll24":core_roll_lookup[24]["positive_active_windows_pct"],
+                 "core_roll36":core_roll_lookup[36]["positive_active_windows_pct"],
+                 "core_worst24":core_roll_lookup[24]["worst_r"],
+                 "core_worst36":core_roll_lookup[36]["worst_r"],
+                 "cost2_marginal_r":cost2_marginal_r,
+                 "broad_family_supported":support.get(fam,False)})
+            # No previous selected narrow control can pass independently.
+            if fam=="KNOWN_SWEEP_CONTROL":
+                checks["research_gate_pass"]=False
+                checks["next_step"]="REFERENCE_ONLY_ALREADY_SELECTED_AND_SMALL_SAMPLE"
+            decisions.append(checks)
+            for t in ledger:trade_rows.append(comp_trade_row(identifier,t))
+            STATUS.update(state="deep",progress=70+int(25*(pos+1)/(len(final_ids)-1)),
+                message=f"Deep cost/rolling audit {pos+1}/{len(final_ids)-1}")
+        write_csv(OUTS["periods"],period_rows)
+        write_csv(OUTS["rolling"],roll_rows)
+        write_csv(OUTS["rolling_summary"],comp_roll_summary(roll_rows))
+        write_csv(OUTS["calendar"],cal_rows)
+        write_csv(OUTS["calendar_summary"],comp_cal_summary(cal_rows))
+        write_csv(OUTS["stress"],stress)
+        write_csv(OUTS["trades"],trade_rows)
+        write_csv(OUTS["decision"],decisions)
+        write_csv(OUTS["notes"],[
+          {"item":"purpose","value":"One last complement attempt, NOT repeat core/session/RR optimization."},
+          {"item":"research_scope","value":"12 predeclared no-session complement variants in 3 structural families; two previously selected tiny-sample sweep controls visible separately."},
+          {"item":"frozen_core","value":"Failure/reclaim prior60 low, body>=1ATR, closeLoc>=.65, Sydney04-07 signal-open, RR3.50."},
+          {"item":"exits","value":"1pip adverse M15 long entry; stop low-10 ticks; target reference close RR3.5; exit search next candle; conservative same-bar tie."},
+          {"item":"union","value":"Exact chronological raw-signal union; core same-candle priority; strategy p0 across both; exit-candle signal eligible; no merging separately pyramided ledgers."},
+          {"item":"family_quality","value":"2 of 4 broad local family geometries required; previously selected narrow controls do NOT count as independent evidence."},
+          {"item":"year_diagnostics","value":"2016-18/2020-22 and no-trade years are reported, NOT used for rule selection or date exclusion."},
+          {"item":"limitations","value":"All historical segments have been studied previously. Positive 2018+ is not untouched out-of-sample. No historical result predicts live profit."},
+          {"item":"next","value":"Only if gated family and standalone union both pass: independent frozen confirmation, then exact 26->27 live-safe AUD/USD portfolio-add conflict test."},
+          {"item":"safety","value":"Read only. No trade submission. The existing 26 strategies are unchanged."},
+        ])
+        STATUS.update(state="packaging",message="Package complete read-only results ZIP",progress=98)
+        package_results()
+        STATUS.update(state="complete",message="Final frozen-core complement research complete",
+            progress=100,anchor_parity="PASS",tested_broad=12,prior_selected_controls=2,
+            full_reported=len(matrix),deep=len(final_ids)-1,
+            research_gate_passes=sum(r["research_gate_pass"] for r in decisions),bundle=BUNDLE)
+    except Exception as ex:
+        import traceback
+        STATUS.update(state="error",message=str(ex),traceback=traceback.format_exc())
+        print("AUD/USD M15 LONG FINAL COMPLEMENT ERROR",repr(ex),flush=True)
+
+@app.route("/audusd-m15-long-27-complement/status")
+def comp_status():
     return jsonify(STATUS)
 
-
-@app.route("/audusd-m15-long-27-refinement/results")
-def focus_results():
+@app.route("/audusd-m15-long-27-complement/results")
+def comp_results():
     return download(BUNDLE)
 
+@app.route("/audusd-m15-long-27-complement/info")
+def comp_info():
+    return jsonify({"service":"AUDUSD M15 LONG frozen-core complement search",
+        "orders_supported":False,"trading_enabled":False,
+        "live_strategies_unchanged":26,"frozen_core":"FAILED_BREAKDOWN_RECLAIM",
+        "broad_complement_variants":12,"previous_selected_controls":2,
+        "cost_pips":[.5,1.0,1.5,2.0],"rr":3.5,
+        "routes":["/audusd-m15-long-27-complement/status",
+                  "/audusd-m15-long-27-complement/results"]})
 
 if __name__ == "__main__":
-    threading.Thread(target=run_focused_refinement,daemon=True).start()
+    threading.Thread(target=run_final_complement,daemon=True).start()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
