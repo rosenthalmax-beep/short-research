@@ -1,4 +1,4 @@
-"""EUR/AUD H1 LONG sweep/displacement — controlled one-factor refinement.
+"""EUR/AUD H1 LONG sweep/displacement — plateau and finalist confirmation.
 
 READ ONLY research. This script does not import any live executor and never sends orders.
 Use OANDA_TOKEN on a SEPARATE Railway research service. Fetches EUR/AUD H1 midpoint history.
@@ -9,9 +9,9 @@ Reference entry = completed signal close; stop = signal low - 10 ticks;
 2-pip adverse historical fill (4-pip doubled-cost check); target anchored to
 REFERENCE-entry risk; per-config pyramiding 0 and exit-candle signal eligible.
 
-40 configurations = control + nine ONE-FACTOR geometry/context changes,
-each at RR 2.50, 3.00, 3.50, 4.00. No interaction grid, no optimisation
-of an existing live strategy, no session/weekday/HTF hindsight filters.
+Predeclared single-factor plateau grids with bounded, rule-triggered expansion.
+Separate RR sweeps for unchanged geometries. No combined-factor optimisation,
+no live trades or automatic strategy promotion.
 Full dataset has already been inspected in discovery; all temporal splits
 are robustness diagnostics, NOT untouched out-of-sample validation.
 """
@@ -59,8 +59,8 @@ M15_PRIMARY_COST_PIPS=2.0  # original historical engine compatibility; H1 ONLY
 RR_GRID=(2.50,3.00,3.50,4.00)
 STAGE1_RR=3.5  # not used in this refinement
 COST_MULTIPLIERS=(1.0,2.0)
-BUNDLE="EURAUD_H1_LONG_CONTROLLED_REFINEMENT_RESULTS.zip"
-ROOT="euraud_h1_long_controlled_refinement"
+BUNDLE="EURAUD_H1_LONG_PLATEAU_CONFIRMATION_RESULTS.zip"
+ROOT="euraud_h1_long_plateau_confirmation"
 OUTS={
  "coverage":f"{ROOT}_coverage.csv",
  "parity":f"{ROOT}_parity.csv",
@@ -74,10 +74,12 @@ OUTS={
  "changed_trades":f"{ROOT}_trade_level_differences.csv",
  "trades":f"{ROOT}_all_accepted_trades.csv",
  "notes":f"{ROOT}_notes.csv",
+ "boundary":f"{ROOT}_boundary_decisions.csv",
+ "plateaus":f"{ROOT}_contiguous_plateaus.csv",
 }
 STATUS={"state":"not_started","message":"Waiting","pair":PAIR,
         "orders_supported":False,"trading_enabled":False,
-        "tested_configurations":40, "parity_passed":False}
+        "tested_configurations":0, "parity_passed":False}
 
 def iso(dt):
     return (
@@ -1127,140 +1129,153 @@ def period_metrics(trades, start=None, end=None):
     )
 
 
-# ============================================================
-# FROZEN EXPERIMENT PLAN. ONLY ONE GEOMETRY FIELD CHANGES.
-# ============================================================
+# ==============================================================
+# PREDECLARED PLATEAU PROTOCOL — no live/portfolio writes
+# ==============================================================
+# Boundaries are deliberately widened only by the FIXED rule below.
+# If the outermost expanded boundary remains viable, report UNRESOLVED_EDGE;
+# do not assert a plateau and do not search beyond the declared safety cap.
+# The control remains immutable at every RR and at the 2026-09-21 cutoff.
 CONTROL = dict(timeframe="H1", side="LONG", family="SWEEP_DISPLACEMENT",
                lookback=30, body_atr_min=1.00, wick_body_min=0.25,
                close_location_min=None)
-VARIANTS = [
-    ("CONTROL", None, None),
-    ("LB25", "lookback", 25),
-    ("LB35", "lookback", 35),
-    ("LB40", "lookback", 40),
-    ("BODY090", "body_atr_min", 0.90),
-    ("BODY110", "body_atr_min", 1.10),
-    ("WICK015", "wick_body_min", 0.15),
-    ("WICK035", "wick_body_min", 0.35),
-    ("CLOSE070", "close_location_min", 0.70),
-    ("CLOSE080", "close_location_min", 0.80),
-]
-assert len(VARIANTS) * len(RR_GRID) == 40
+GEOMETRIES = {
+    "FROZEN30": dict(CONTROL),
+    "LB25": dict(CONTROL, lookback=25),
+    "CLOSE080": dict(CONTROL, close_location_min=0.80),
+}
+# These are the ONLY one-factor axes. LB25 is an individually investigated
+# alternative anchor; CLOSE080 changes only the original 30-bar geometry.
+AXES = {
+    "LOOKBACK_LB25": {"anchor":"LB25", "field":"lookback", "rrs":(2.5,4.0),
+        "base":(15,20,25,30,35,40,45,50),
+        "low":(5,10), "high":(55,60,70,80,100,120)},
+    "BODY_LB25": {"anchor":"LB25", "field":"body_atr_min", "rrs":(2.5,4.0),
+        "base":(0.8,0.9,1.0,1.1,1.2),
+        "low":(0.5,0.6,0.7), "high":(1.3,1.4,1.5)},
+    "WICK_LB25": {"anchor":"LB25", "field":"wick_body_min", "rrs":(2.5,4.0),
+        "base":(0.10,0.15,0.20,0.25,0.30,0.35,0.40),
+        "low":(0.0,0.05), "high":(0.45,0.50,0.60,0.70)},
+    "CLOSE_FROZEN30": {"anchor":"FROZEN30", "field":"close_location_min",
+        "rrs":(2.5,4.0), "base":(0.65,0.70,0.75,0.80,0.85,0.90),
+        "low":(0.50,0.55,0.60), "high":(0.95,)},
+}
+RR_BASE=(2.0,2.5,3.0,3.5,4.0,4.5,5.0)
+RR_LOW=(1.5,1.75)
+RR_HIGH=(5.5,6.0,6.5,7.0)
+# Each RR sweep uses an UNCHANGED geometry, not a newly combined signal.
+# Mandatory parity on previously inspected control/finalists at cutoff.
+REF_FINALISTS = {
+    ("LB25",2.5): {"trades":106,"winners":44,"total_r":41.73519048992438,
+        "fingerprint":"156eb6b291dab8aa5a4fe788de7bcb59e4ffaecfe5284e1f0a7a93c22fa88349"},
+    ("LB25",4.0): {"trades":105,"winners":34,"total_r":57.90421353631645,
+        "fingerprint":"60918dffa0a02143416e42d7cbd9f1eee90029d063bebb822a4f7189aec90bee"},
+    ("CLOSE080",2.5): {"trades":82,"winners":36,"total_r":38.97032121126139,
+        "fingerprint":"6f9d79b3fbe25a5f8a7730b16c076e2d8338c6cba201c7d75b41ad8c27608b5b"},
+    ("CLOSE080",4.0): {"trades":82,"winners":27,"total_r":47.463767962582494,
+        "fingerprint":"46655efddf9e2cf37300c0e5692aad0cf2e53b06f5daf7bfa5d5d3ce2b18deed"},
+}
 
 
-def plan():
-    for label, key, value in VARIANTS:
-        for rr in RR_GRID:
-            conf = dict(CONTROL)
-            if key is not None:
-                conf[key] = value
-            conf["rr"] = rr
-            conf["variant"] = label
-            conf["change_field"] = key or "NONE"
-            conf["change_value"] = value
-            conf["config_id"] = f"EURAUD_H1_LONG_{label}_RR{rr:.2f}"
-            yield conf
+def label_value(x):
+    return f"{float(x):.4f}".rstrip("0").rstrip(".") if isinstance(x,float) else str(x)
 
 
-def features_for_refinement(candles):
-    f = build_features(candles, "H1")
-    for lookback in (25, 35, 40):
-        f["prev_lows"][lookback] = rolling_previous_extreme(
-            f["low"], lookback, want_max=False)
+def make_cfg(anchor, rr, axis="RR", value=None, phase="BASE"):
+    if anchor not in GEOMETRIES:
+        raise ValueError(anchor)
+    c=dict(GEOMETRIES[anchor])
+    if axis in AXES:
+        field=AXES[axis]["field"]
+        if value is None: raise ValueError("Missing one-factor value")
+        c[field]=value
+    elif axis != "RR":
+        raise ValueError(axis)
+    c["rr"]=float(rr)
+    c["axis"]=axis
+    c["anchor"]=anchor
+    c["axis_value"]=float(rr) if axis=="RR" else value
+    c["phase"]=phase
+    c["variant"]=anchor if axis=="RR" else axis
+    c["config_id"]=(f"EURAUD28_{anchor}_{axis}_{label_value(c['axis_value'])}"
+                    f"_RR{rr:.2f}")
+    return c
+
+
+def features_for_plateau(candles):
+    f=build_features(candles,"H1")
+    lbs=sorted({int(v) for v in (
+        list(AXES["LOOKBACK_LB25"]["base"])+
+        list(AXES["LOOKBACK_LB25"]["low"])+
+        list(AXES["LOOKBACK_LB25"]["high"])+[25,30])})
+    for lb in lbs:
+        if lb not in f["prev_lows"]:
+            f["prev_lows"][lb]=rolling_previous_extreme(
+                f["low"],lb,want_max=False)
     return f
 
 
-def refined_signals(config, features):
-    raw = signal_indices(config, features)
-    minimum = config.get("close_location_min")
+def refined_signals(cfg,f):
+    raw=signal_indices(cfg,f)
+    minimum=cfg.get("close_location_min")
     if minimum is not None:
-        raw = raw[features["close_location"][raw] >= minimum]
+        raw=raw[f["close_location"][raw]>=minimum]
     return raw
 
 
 def fingerprint(trades):
-    lines = [f"{int(t['signal_index'])}|{int(t['exit_index'])}|"
-             f"{t['exit_reason']}|{float(t['result_r']):.8f}" for t in trades]
-    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+    lines=[f"{int(t['signal_index'])}|{int(t['exit_index'])}|"
+           f"{t['exit_reason']}|{float(t['result_r']):.8f}" for t in trades]
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
 def reference_parity(all_candles):
-    # Make sure corrections in OANDA history or changes in the historical
-    # simulator do NOT quietly turn the discovery benchmark into a new model.
-    times = [c["time"] for c in all_candles]
-    cutoff = bisect_right(times, REF_LAST)
-    rows = [
-        {"test":"frozen_first_candle", "observed":iso(times[0]),
-         "expected":iso(REF_FIRST), "pass":times[0]==REF_FIRST},
-        {"test":"frozen_last_candle", "observed":iso(times[cutoff-1]) if cutoff else None,
-         "expected":iso(REF_LAST), "pass":bool(cutoff) and times[cutoff-1]==REF_LAST},
-        {"test":"frozen_candle_count", "observed":cutoff,
-         "expected":REF_CANDLES, "pass":cutoff==REF_CANDLES},
+    times=[c["time"] for c in all_candles]
+    cutoff=bisect_right(times,REF_LAST)
+    rows=[
+      {"test":"first_candle","actual":iso(times[0]),"expected":iso(REF_FIRST),"pass":times[0]==REF_FIRST},
+      {"test":"cutoff_last","actual":iso(times[cutoff-1]) if cutoff else "NONE",
+       "expected":iso(REF_LAST),"pass":bool(cutoff) and times[cutoff-1]==REF_LAST},
+      {"test":"cutoff_candles","actual":cutoff,"expected":REF_CANDLES,"pass":cutoff==REF_CANDLES},
     ]
     if not all(r["pass"] for r in rows):
         write_csv(OUTS["parity"],rows)
-        raise RuntimeError("FROZEN COVERAGE PARITY FAILED: inspect parity CSV, do not compare refinements")
-    f = features_for_refinement(all_candles[:cutoff])
-    for rr, expected in REF_METRICS.items():
-        cfg = dict(CONTROL,rr=rr, config_id=f"FROZEN_CONTROL_RR{rr}")
-        raw = refined_signals(cfg,f)
-        trades = backtest(cfg,f,raw,rr=rr,cost_multiplier=1.0)
-        m = metrics(trades)
-        for name in ("trades","winners","total_r","profit_factor"):
-            observed=m[name]
-            want=expected[name]
-            passed=(abs(observed-want)<1e-7 if isinstance(want,float)
-                    else observed==want)
-            rows.append({"test":f"RR{rr}_{name}","observed":observed,
+        raise RuntimeError("Candle coverage changed: STOP and inspect parity CSV")
+    f=features_for_plateau(all_candles[:cutoff])
+    tests=[("FROZEN30",rr,v) for rr,v in REF_METRICS.items()]
+    tests += [(a,rr,v) for (a,rr),v in REF_FINALISTS.items()]
+    for anchor,rr,expected in tests:
+        c=make_cfg(anchor,rr)
+        tr=backtest(c,f,refined_signals(c,f),rr=rr)
+        m=metrics(tr)
+        for k in ("trades","winners","total_r"):
+            actual=m[k]; want=expected[k]
+            passed=(abs(actual-want)<=1e-7 if isinstance(want,float)
+                    else actual==want)
+            rows.append({"test":f"{anchor}_RR{rr}_{k}","actual":actual,
                          "expected":want,"pass":passed})
-        sig=fingerprint(trades)
-        rows.append({"test":f"RR{rr}_trade_fingerprint","observed":sig,
-                     "expected":expected["fingerprint"],
-                     "pass":sig==expected["fingerprint"]})
+        fp=fingerprint(tr)
+        rows.append({"test":f"{anchor}_RR{rr}_fingerprint","actual":fp,
+                     "expected":expected["fingerprint"],"pass":fp==expected["fingerprint"]})
     write_csv(OUTS["parity"],rows)
-    if not all(x["pass"] for x in rows):
-        raise RuntimeError("FROZEN DISCOVERY TRADE PARITY FAILED: inspect parity CSV")
-    return cutoff, rows
-
-
-def details(trades):
-    return metrics(trades)
+    if not all(r["pass"] for r in rows):
+        raise RuntimeError("Original/refinement finalist parity FAILED: STOP and inspect parity CSV")
+    return cutoff,rows
 
 
 def periods(trades):
-    spans = [
-        ("FULL",None,None),
-        ("PRE_2010",None,PRE2010_END),
-        ("2010_PLUS",PRE2010_END,None),
-        ("PRE_2018",None,VALIDATION_START),
-        ("2018_PLUS",VALIDATION_START,None),
-        ("2020_PLUS",datetime(2020,1,1,tzinfo=timezone.utc),None),
-        ("LAST_5Y",NOW-timedelta(days=365.25*5),None),
-        ("LAST_3Y",NOW-timedelta(days=365.25*3),None),
-        ("LAST_2Y",NOW-timedelta(days=365.25*2),None),
-        ("LAST_1Y",NOW-timedelta(days=365.25),None),
-        ("2004_2009",None,PRE2010_END),
-        ("2010_2015",PRE2010_END,datetime(2016,1,1,tzinfo=timezone.utc)),
-        ("2016_2021",datetime(2016,1,1,tzinfo=timezone.utc),
-         datetime(2022,1,1,tzinfo=timezone.utc)),
-        ("2022_NOW",datetime(2022,1,1,tzinfo=timezone.utc),None),
-    ]
+    spans=[("FULL",None,None),
+       ("PRE2010",None,PRE2010_END),
+       ("2010_PLUS",PRE2010_END,None),
+       ("2018_PLUS",VALIDATION_START,None),
+       ("LAST5Y",NOW-timedelta(days=365.25*5),None),
+       ("LAST3Y",NOW-timedelta(days=365.25*3),None),
+       ("LAST2Y",NOW-timedelta(days=365.25*2),None),
+       ("LAST1Y",NOW-timedelta(days=365.25),None)]
     return {name:period_metrics(trades,a,b) for name,a,b in spans}
 
 
-def completed_years(trades, anchor=2005):
-    out=[]
-    for y in range(anchor,NOW.year+1):
-        a=datetime(y,1,1,tzinfo=timezone.utc)
-        b=datetime(y+1,1,1,tzinfo=timezone.utc)
-        out.append({"year":y,"year_complete":b<=NOW,
-                    **period_metrics(trades,a,b)})
-    return out
-
-
 def monthly_rolling(trades):
-    # FIXED windows anchored to the same first completed whole calendar month
-    # for ALL candidates, including windows with zero trades.
     anchor=datetime(2005,1,1,tzinfo=timezone.utc)
     last_whole=month_floor(NOW)
     out=[]
@@ -1269,7 +1284,7 @@ def monthly_rolling(trades):
         while add_months(t,length)<=last_whole:
             end=add_months(t,length)
             m=period_metrics(trades,t,end)
-            out.append({"window_months":length,"start":iso(t),"end":iso(end),
+            out.append({"months":length,"start":iso(t),"end":iso(end),
                         "active":m["trades"]>0,**m})
             t=add_months(t,1)
     return out
@@ -1278,14 +1293,13 @@ def monthly_rolling(trades):
 def rolling_group(rolls):
     out={}
     for length in (12,24,36):
-        rows=[x for x in rolls if x["window_months"]==length]
-        active=[x for x in rows if x["active"]]
-        positives=[x for x in active if x["total_r"]>0]
-        out[length]={"windows":len(rows),"active_windows":len(active),
-                     "positive_active_pct":100*len(positives)/len(active) if active else 0.0,
-                     "zero_trade_windows":len(rows)-len(active),
-                     "worst_r":min((x["total_r"] for x in rows),default=0.0),
-                     "median_r":median(x["total_r"] for x in rows) if rows else 0.0}
+        items=[r for r in rolls if r["months"]==length]
+        active=[r for r in items if r["active"]]
+        out[length]={"windows":len(items),"active_windows":len(active),
+            "zero_windows":len(items)-len(active),
+            "positive_active_pct":100*sum(r["total_r"]>0 for r in active)/len(active) if active else 0.0,
+            "worst_r":min((r["total_r"] for r in items),default=0.0),
+            "median_r":med(r["total_r"] for r in items)}
     return out
 
 
@@ -1293,185 +1307,254 @@ def compact(t):
     return {k:(iso(v) if isinstance(v,datetime) else v) for k,v in t.items()}
 
 
-def trade_attribution(control,candidate,cfg):
-    # SAME-RR comparator: new-only / dropped-only / shared changed outcomes.
-    ca={int(t["signal_index"]):t for t in candidate}
-    co={int(t["signal_index"]):t for t in control}
-    new=sorted(set(ca)-set(co))
-    dropped=sorted(set(co)-set(ca))
-    common=sorted(set(ca)&set(co))
-    def subtotal(keys,book):return sum(book[x]["result_r"] for x in keys)
-    new_r=subtotal(new,ca)
-    dropped_r=subtotal(dropped,co)
-    shared_delta=sum(ca[i]["result_r"]-co[i]["result_r"] for i in common)
-    total_delta=sum(x["result_r"] for x in candidate)-sum(x["result_r"] for x in control)
-    if abs(total_delta-(new_r-dropped_r+shared_delta))>1e-7:
-        raise RuntimeError(f"Incremental R reconciliation failed for {cfg['config_id']}")
-    changes=[]
-    for i in new:
-        changes.append({"change":"NEW_ACCEPTED","signal_index":i,
-                        "control_r":None,"candidate_r":ca[i]["result_r"],
-                        "delta_r":ca[i]["result_r"],**compact(ca[i])})
-    for i in dropped:
-        changes.append({"change":"DROPPED_ACCEPTED","signal_index":i,
-                        "control_r":co[i]["result_r"],"candidate_r":None,
-                        "delta_r":-co[i]["result_r"],**compact(co[i])})
-    for i in common:
-        delta=ca[i]["result_r"]-co[i]["result_r"]
-        if abs(delta)>1e-8 or ca[i]["exit_index"]!=co[i]["exit_index"]:
-            changes.append({"change":"SHARED_CHANGED_OUTCOME","signal_index":i,
-                            "control_r":co[i]["result_r"],
-                            "candidate_r":ca[i]["result_r"],
-                            "delta_r":delta,**compact(ca[i])})
-    for x in changes:
-        x["config_id"]=cfg["config_id"]
-        x["variant"]=cfg["variant"]
-        x["rr"]=cfg["rr"]
-    def count_recent(indices,book,start):
-        return sum(book[i]["signal_time"]>=start for i in indices)
+def trade_attribution(control,candidate):
+    base={int(x["signal_index"]):x for x in control}
+    cand={int(x["signal_index"]):x for x in candidate}
+    new=set(cand)-set(base); removed=set(base)-set(cand); shared=set(base)&set(cand)
+    new_r=sum(cand[i]["result_r"] for i in new)
+    removed_r=sum(base[i]["result_r"] for i in removed)
+    shared_delta=sum(cand[i]["result_r"]-base[i]["result_r"] for i in shared)
+    delta=metrics(candidate)["total_r"]-metrics(control)["total_r"]
+    assert abs(delta-(new_r-removed_r+shared_delta))<1e-7
     recent=NOW-timedelta(days=365.25*5)
-    return ({"new_accepted":len(new),"dropped_accepted":len(dropped),
-             "shared_accepted":len(common),"new_r":new_r,
-             "dropped_original_r":dropped_r,"shared_outcome_delta_r":shared_delta,
-             "net_delta_r":total_delta,
-             "new_last5y":count_recent(new,ca,recent),
-             "dropped_last5y":count_recent(dropped,co,recent),
-             "new_2018_plus":count_recent(new,ca,VALIDATION_START),
-             "dropped_2018_plus":count_recent(dropped,co,VALIDATION_START)},changes)
+    return {"new_accepted":len(new),"removed_accepted":len(removed),
+       "new_only_r":new_r,"removed_original_r":removed_r,
+       "shared_outcome_delta_r":shared_delta,"net_delta_r":delta,
+       "new_2018_plus":sum(cand[i]["signal_time"]>=VALIDATION_START for i in new),
+       "new_last5y":sum(cand[i]["signal_time"]>=recent for i in new),
+       "removed_last5y":sum(base[i]["signal_time"]>=recent for i in removed)}
+
+
+def viability(row):
+    # Exploratory extension trigger, NOT promotion or proof of edge.
+    # Boundary needs multiple observations/eras and doubled-cost survival.
+    return (row["full_trades"]>=55 and row["full_profit_factor"]>=1.40
+        and row["full_total_r"]>=15 and row["cost4p_r"]>=10
+        and row["r_2018_plus"]>0
+        and row["rolling24_positive_active_pct"]>=65
+        and row["rolling36_positive_active_pct"]>=65)
+
+
+def close_to_neighbour(edge,near):
+    # "Good at the extreme" means not a fragile isolated spike:
+    # both boundary and its immediate neighbour pass viability,
+    # edge total R >= 85% of neighbour and PF >= 90% of neighbour.
+    return (viability(edge) and viability(near)
+        and edge["full_total_r"]>=0.85*near["full_total_r"]
+        and edge["full_profit_factor"]>=0.90*near["full_profit_factor"])
+
+
+def add_plateau_rows(rows,axis,anchor,rr):
+    data=sorted((r for r in rows if r["axis"]==axis and r["anchor"]==anchor
+                 and abs(r["rr"]-rr)<1e-8),key=lambda r:r["axis_value"])
+    out=[]; start=None; prev=None; group=[]
+    for r in data:
+        if viability(r):
+            if start is None: start=r["axis_value"]
+            group.append(r)
+        else:
+            if group and len(group)>=3:
+                out.append({"axis":axis,"anchor":anchor,"rr":rr,
+                            "first":start,"last":prev,"members":len(group),
+                            "min_r":min(g["full_total_r"] for g in group),
+                            "min_pf":min(g["full_profit_factor"] for g in group),
+                            "min_cost4p_r":min(g["cost4p_r"] for g in group),
+                            "config_ids":";".join(g["config_id"] for g in group)})
+            start=None;group=[]
+        prev=r["axis_value"]
+    if len(group)>=3:
+        out.append({"axis":axis,"anchor":anchor,"rr":rr,
+                    "first":start,"last":prev,"members":len(group),
+                    "min_r":min(g["full_total_r"] for g in group),
+                    "min_pf":min(g["full_profit_factor"] for g in group),
+                    "min_cost4p_r":min(g["cost4p_r"] for g in group),
+                    "config_ids":";".join(g["config_id"] for g in group)})
+    return out
 
 
 def run_research():
     try:
-        STATUS.update(state="fetching",message="Fetching full EUR/AUD H1 midpoint history")
+        STATUS.update(state="fetching",message="Fetching EUR/AUD H1 midpoint candles")
         candles=fetch_history("H1",REQUESTED_START,NOW,chunk_days=180)
-        if not candles or len(candles)<REF_CANDLES:
-            raise RuntimeError(f"Too few EUR/AUD candles: {len(candles)}")
-        write_csv(OUTS["coverage"],[{
-            "instrument":PAIR,"candles":len(candles),
-            "first_utc":iso(candles[0]["time"]),
-            "last_utc":iso(candles[-1]["time"]),
-            "reference_cutoff":iso(REF_LAST),
-            "assumed_entry_cost_pips":H1_PRIMARY_COST_PIPS,
-            "stress_entry_cost_pips":2*H1_PRIMARY_COST_PIPS,
-            "read_only":True,"trading_enabled":False}])
-        STATUS.update(state="parity",message="Reproducing original discovery's 96 trades at RR2.5 and RR4.0")
-        cutoff,parity=reference_parity(candles)
-        STATUS["parity_passed"]=True
-        STATUS["parity_checks"]=len(parity)
-        STATUS.update(state="features",message="Building full H1 features after successful parity")
-        f=features_for_refinement(candles)
-        rows=[];period_rows=[];cost_rows=[];year_rows=[];rolling_rows=[]
-        rolling_summaries=[];attrib_rows=[];diff_rows=[];trade_rows=[]
-        controls={}
-        for rr in RR_GRID:
-            cfg=next(c for c in plan() if c["variant"]=="CONTROL" and c["rr"]==rr)
-            controls[rr]=backtest(cfg,f,refined_signals(cfg,f),rr=rr,cost_multiplier=1.0)
-        for n,cfg in enumerate(plan(),1):
-            STATUS.update(state="matrix",message=f"{n}/40 — {cfg['config_id']}",completed=n-1)
-            raw=refined_signals(cfg,f)
-            accepted=backtest(cfg,f,raw,rr=cfg["rr"],cost_multiplier=1.0)
-            base=controls[cfg["rr"]]
-            attribution,changed=trade_attribution(base,accepted,cfg)
-            diff_rows.extend(changed)
-            p=periods(accepted)
-            control_p=periods(base)
-            for period,stats in p.items():
-                period_rows.append({"config_id":cfg["config_id"],"variant":cfg["variant"],
-                                    "rr":cfg["rr"],"period":period,**stats})
-            cost_metrics={}
-            for multiplier in COST_MULTIPLIERS:
-                # Recompute actual R under 2 vs 4 adverse pips: same raw signals
-                # and targets, not artificial multiplication of P/L after the fact.
-                trades=(accepted if multiplier==1.0 else backtest(
-                    cfg,f,raw,rr=cfg["rr"],cost_multiplier=multiplier))
-                m=metrics(trades)
-                cost_metrics[multiplier]=m
-                cost_rows.append({"config_id":cfg["config_id"],
-                                  "variant":cfg["variant"],"rr":cfg["rr"],
-                                  "adverse_pips":H1_PRIMARY_COST_PIPS*multiplier,
-                                  **m})
-            years=completed_years(accepted)
-            for y in years:
-                year_rows.append({"config_id":cfg["config_id"],"rr":cfg["rr"],
-                                  "variant":cfg["variant"],**y})
-            rolls=monthly_rolling(accepted)
-            for r in rolls:
-                rolling_rows.append({"config_id":cfg["config_id"],
-                                     "variant":cfg["variant"],"rr":cfg["rr"],**r})
-            rolling=rolling_group(rolls)
-            for length,stat in rolling.items():
-                rolling_summaries.append({"config_id":cfg["config_id"],
-                                          "variant":cfg["variant"],"rr":cfg["rr"],
-                                          "months":length,**stat})
-            complete_years=[y for y in years if y["year_complete"]]
-            positive_years=sum(y["total_r"]>0 for y in complete_years)
-            zero_years=sum(y["trades"]==0 for y in complete_years)
-            base_m=metrics(base)
-            rows.append({"config_id":cfg["config_id"],"variant":cfg["variant"],
-                         "change_field":cfg["change_field"],
-                         "change_value":cfg["change_value"],"rr":cfg["rr"],
-                         "raw_signals":len(raw),"accepted":len(accepted),
-                         **{f"full_{k}":v for k,v in metrics(accepted).items()},
-                         "control_accepted_same_rr":len(base),
-                         "control_r_same_rr":base_m["total_r"],
-                         **attribution,
-                         "r_pre2010":p["PRE_2010"]["total_r"],
-                         "r_post2010":p["2010_PLUS"]["total_r"],
-                         "r_2018_plus":p["2018_PLUS"]["total_r"],
-                         "r_last5y":p["LAST_5Y"]["total_r"],
-                         "trades_last5y":p["LAST_5Y"]["trades"],
-                         "r_last3y":p["LAST_3Y"]["total_r"],
-                         "r_last2y":p["LAST_2Y"]["total_r"],
-                         "trades_last2y":p["LAST_2Y"]["trades"],
-                         "r_last1y":p["LAST_1Y"]["total_r"],
-                         "cost4p_r":cost_metrics[2.0]["total_r"],
-                         "cost4p_pf":cost_metrics[2.0]["profit_factor"],
-                         "positive_complete_years":positive_years,
-                         "complete_years":len(complete_years),
-                         "zero_trade_complete_years":zero_years,
-                         "rolling12_positive_active_pct":rolling[12]["positive_active_pct"],
-                         "rolling24_positive_active_pct":rolling[24]["positive_active_pct"],
-                         "rolling36_positive_active_pct":rolling[36]["positive_active_pct"],
-                         "rolling12_worst_r":rolling[12]["worst_r"],
-                         "rolling24_worst_r":rolling[24]["worst_r"],
-                         "rolling36_worst_r":rolling[36]["worst_r"]})
-            attrib_rows.append({"config_id":cfg["config_id"],"variant":cfg["variant"],
-                                "rr":cfg["rr"],**attribution,
-                                "control_last5y_r":control_p["LAST_5Y"]["total_r"],
-                                "candidate_last5y_r":p["LAST_5Y"]["total_r"]})
-            for t in accepted:
-                trade_rows.append({"variant":cfg["variant"],"rr":cfg["rr"],
-                                   **compact(t)})
-        STATUS.update(state="writing",message="Writing metrics, trade differences, rolling and calendar diagnostics")
-        for key,data in (("matrix",rows),("periods",period_rows),
-                         ("costs",cost_rows),("years",year_rows),
-                         ("rolling",rolling_rows),("rolling_summary",rolling_summaries),
-                         ("attribution",attrib_rows),("changed_trades",diff_rows),
-                         ("trades",trade_rows)):
-            write_csv(OUTS[key],data)
+        if len(candles)<REF_CANDLES:
+            raise RuntimeError("History insufficient for original locked reference")
+        write_csv(OUTS["coverage"],[{"pair":PAIR,"candles":len(candles),
+           "first":iso(candles[0]["time"]),"last":iso(candles[-1]["time"]),
+           "cutoff":iso(REF_LAST),"base_cost_pips":2,"stress_cost_pips":4,
+           "orders_supported":False,"trading_enabled":False}])
+        STATUS.update(state="parity",message="Verifying frozen control AND prior finalists")
+        cutoff,pr=reference_parity(candles)
+        STATUS.update(parity_passed=True,parity_checks=len(pr),
+                      state="features",message="Building plateau indicator arrays")
+        f=features_for_plateau(candles)
+        rows=[];period_rows=[];cost_rows=[];year_rows=[];roll_rows=[]
+        roll_sum=[];att_rows=[];diff_rows=[];tr_rows=[];bound_rows=[];plateau_rows=[]
+        memo={}; base_controls={}
+        # Every comparison uses the frozen 30-bar candidate at the SAME RR.
+        def evaluate(cfg):
+            key=cfg["config_id"]
+            if key in memo:return memo[key]
+            STATUS.update(state="evaluating",message=key,completed=len(memo))
+            sig=refined_signals(cfg,f)
+            trades=backtest(cfg,f,sig,rr=cfg["rr"])
+            stress=backtest(cfg,f,sig,rr=cfg["rr"],cost_multiplier=2.0)
+            m=metrics(trades);costm=metrics(stress)
+            p=periods(trades)
+            rolls=monthly_rolling(trades); rg=rolling_group(rolls)
+            years=[]
+            for y in range(2005,NOW.year+1):
+                a=datetime(y,1,1,tzinfo=timezone.utc); b=datetime(y+1,1,1,tzinfo=timezone.utc)
+                years.append({"year":y,"year_complete":b<=NOW,
+                              **period_metrics(trades,a,b)})
+            comp_key=cfg["rr"]
+            if cfg["anchor"]=="FROZEN30" and cfg["axis"]=="RR":
+                base_controls[comp_key]=trades
+            if comp_key not in base_controls:
+                control=make_cfg("FROZEN30",comp_key)
+                if control["config_id"]!=key:evaluate(control)
+            assert comp_key in base_controls
+            attrib=trade_attribution(base_controls[comp_key],trades)
+            row={"config_id":key,"phase":cfg["phase"],"axis":cfg["axis"],
+                 "anchor":cfg["anchor"],"axis_value":cfg["axis_value"],
+                 "rr":cfg["rr"],"lookback":cfg["lookback"],
+                 "body_atr_min":cfg["body_atr_min"],
+                 "wick_body_min":cfg["wick_body_min"],
+                 "close_location_min":cfg["close_location_min"],
+                 "raw_signals":len(sig),
+                 **{f"full_{k}":v for k,v in m.items()},
+                 "cost4p_r":costm["total_r"],"cost4p_pf":costm["profit_factor"],
+                 **attrib,
+                 **{f"r_{name.lower()}":stats["total_r"] for name,stats in p.items() if name!="FULL"},
+                 "trades_last5y":p["LAST5Y"]["trades"],
+                 "trades_last2y":p["LAST2Y"]["trades"],
+                 "rolling12_positive_active_pct":rg[12]["positive_active_pct"],
+                 "rolling24_positive_active_pct":rg[24]["positive_active_pct"],
+                 "rolling36_positive_active_pct":rg[36]["positive_active_pct"],
+                 "rolling12_worst_r":rg[12]["worst_r"],
+                 "rolling24_worst_r":rg[24]["worst_r"],
+                 "rolling36_worst_r":rg[36]["worst_r"],
+                 "positive_completed_years":sum(y["year_complete"] and y["total_r"]>0 for y in years),
+                 "zero_trade_completed_years":sum(y["year_complete"] and y["trades"]==0 for y in years)}
+            row["viability_screen_pass"] = viability(row)
+            rows.append(row)
+            for name,stats in p.items():period_rows.append({"config_id":key,"period":name,**stats})
+            for multiplier,statistics in ((1,m),(2,costm)):
+                cost_rows.append({"config_id":key,"adverse_pips":multiplier*H1_PRIMARY_COST_PIPS,
+                                  **statistics})
+            for y in years:year_rows.append({"config_id":key,**y})
+            for rrrow in rolls:roll_rows.append({"config_id":key,**rrrow})
+            for months,stat in rg.items():roll_sum.append({"config_id":key,"months":months,**stat})
+            att_rows.append({"config_id":key,**attrib})
+            bmap={int(t["signal_index"]):t for t in base_controls[comp_key]}
+            cmap={int(t["signal_index"]):t for t in trades}
+            for i in sorted(set(bmap)|set(cmap)):
+                a=bmap.get(i); b=cmap.get(i)
+                if a and b and abs(a["result_r"]-b["result_r"])<1e-8 and a["exit_index"]==b["exit_index"]:
+                    continue
+                diff_rows.append({"config_id":key,
+                    "change":"NEW" if b and not a else "REMOVED" if a and not b else "SHARED_CHANGED",
+                    "signal_index":i,"signal_time":iso((b or a)["signal_time"]),
+                    "baseline_r":a["result_r"] if a else None,
+                    "candidate_r":b["result_r"] if b else None,
+                    "delta_r":(b["result_r"] if b else 0)-(a["result_r"] if a else 0)})
+            for t in trades:tr_rows.append({"config_id":key,**compact(t)})
+            memo[key]=(row,trades)
+            STATUS["tested_configurations"]=len(memo)
+            return memo[key]
+
+        # Stage A: evaluate fixed core RR grid, then each single-factor axis.
+        # Do not pick the best configuration to decide the next research axis.
+        for anchor in GEOMETRIES:
+            for rr in RR_BASE:evaluate(make_cfg(anchor,rr))
+        for axis,settings in AXES.items():
+            for rr in settings["rrs"]:
+                for val in settings["base"]:
+                    evaluate(make_cfg(settings["anchor"],rr,axis,val))
+        # Stage B: symmetric independent upper/lower extensions only if
+        # the adjacent TWO boundary points meet the predeclared robustness rule.
+        # This guards against a single spike at the end of a grid.
+        grid_list=[(f"RR_{anchor}",anchor,"RR",rr,RR_BASE,RR_LOW,RR_HIGH)
+                   for anchor in GEOMETRIES for rr in (None,)]
+        for axis,s in AXES.items():
+            for rr in s["rrs"]:
+                grid_list.append((axis,s["anchor"],axis,rr,s["base"],s["low"],s["high"]))
+        for group,anchor,axis,rr,base_grid,lower_grid,upper_grid in grid_list:
+            ordered=sorted(base_grid)
+            for side,values in (("LOW",lower_grid),("HIGH",upper_grid)):
+                edge=ordered[0] if side=="LOW" else ordered[-1]
+                near=ordered[1] if side=="LOW" else ordered[-2]
+                def lookup(v):
+                    c=make_cfg(anchor,v) if axis=="RR" else make_cfg(anchor,rr,axis,v)
+                    return evaluate(c)[0]
+                er=lookup(edge); nr=lookup(near)
+                trigger=close_to_neighbour(er,nr)
+                extension=sorted(values) if trigger else []
+                if trigger:
+                    STATUS.update(state="extending",message=f"Boundary {group} {rr} {side}: predeclared expansion")
+                    for v in extension:
+                        c=(make_cfg(anchor,v,phase="EXTENDED") if axis=="RR" else
+                           make_cfg(anchor,rr,axis,v,phase="EXTENDED"))
+                        evaluate(c)
+                terminal=extension[0] if side=="LOW" and extension else extension[-1] if extension else None
+                terminal_near=(extension[1] if side=="LOW" and len(extension)>1 else
+                               extension[-2] if side=="HIGH" and len(extension)>1 else edge)
+                term_strong=(close_to_neighbour(lookup(terminal),lookup(terminal_near))
+                             if terminal is not None else False)
+                bound_rows.append({"group":group,"anchor":anchor,"rr":rr,
+                   "axis":axis,"side":side,"base_edge":edge,"base_neighbour":near,
+                   "edge_viable":viability(er),"neighbour_viable":viability(nr),
+                   "extension_triggered":trigger,"extended_values":";".join(map(str,extension)),
+                   "terminal_edge":terminal,"terminal_still_strong":term_strong,
+                   "boundary_status":("UNRESOLVED_EDGE_AT_CAP" if term_strong else
+                        "EXTENDED_INSIDE_CAP" if trigger else "NO_EXTENSION"),
+                   "edge_r":er["full_total_r"],"neighbour_r":nr["full_total_r"]})
+        # Plateau intervals are candidate *descriptions*, not awards/ranks.
+        for anchor in GEOMETRIES:
+            rr_rows=sorted((r for r in rows if r["axis"]=="RR" and r["anchor"]==anchor),
+                           key=lambda r:r["axis_value"])
+            # For RR the sweep axis changes rr, so axis/rr matching above is unsuitable.
+            group=[]
+            for r in rr_rows+[None]:
+                if r is not None and viability(r):group.append(r);continue
+                if len(group)>=3:
+                    plateau_rows.append({"axis":"RR","anchor":anchor,"rr":"VARIES",
+                       "first":group[0]["axis_value"],"last":group[-1]["axis_value"],
+                       "members":len(group),"min_r":min(x["full_total_r"] for x in group),
+                       "min_pf":min(x["full_profit_factor"] for x in group),
+                       "min_cost4p_r":min(x["cost4p_r"] for x in group),
+                       "config_ids":";".join(x["config_id"] for x in group)})
+                group=[]
+        for axis,s in AXES.items():
+            for rr in s["rrs"]:
+                plateau_rows.extend(add_plateau_rows(rows,axis,s["anchor"],rr))
+        STATUS.update(state="writing",message="Writing plateau and trade-level audit files")
+        for k,v in (("matrix",rows),("periods",period_rows),("costs",cost_rows),
+             ("years",year_rows),("rolling",roll_rows),("rolling_summary",roll_sum),
+             ("attribution",att_rows),("changed_trades",diff_rows),("trades",tr_rows),
+             ("boundary",bound_rows),("plateaus",plateau_rows)):
+            write_csv(OUTS[k],v)
         write_csv(OUTS["notes"],[
-            {"topic":"scope","note":"Controlled one-factor sweep/displacement LONG study only; 40 predeclared configurations. NO LIVE ORDERS."},
-            {"topic":"baseline","note":"Frozen discovery coverage and both 96-trade RR fingerprints must match before new full-history analysis."},
-            {"topic":"time_convention","note":"H1 candle OPEN = signal_time; reference entry is completed signal CLOSE; backtest exit starts NEXT H1 candle."},
-            {"topic":"cost","note":"2p adverse historical fill; 4p stress. No actual historical bid/ask or gap reconstruction."},
-            {"topic":"trade_comparison","note":"New/drop/shared are accepted-trade differences vs SAME RR control; shared exit/outcome changes are separate. Not a 27-to-28 portfolio test."},
-            {"topic":"data_snooping","note":"All historical periods examined in discovery; 2018+ and last1/2/3/5Y are NOT untouched OOS. No automatic promotion gate."},
-            {"topic":"market_exposure","note":"EUR/AUD not in live 27. No cross-pair capital, concurrency, opposite-side or NAV simulation performed."},
-            {"topic":"discovery_anchor","note":"2004-05-31T20:00Z through 2026-09-21T11:00Z; 137837 completed EUR/AUD H1 candles; frozen RR2.5 and RR4.0 fingerprints."},
-            {"topic":"rolling","note":"Fixed monthly windows 2005-Jan to last completed month; signal-entry attribution, post global p0, zero-trade windows retained."},
-            {"topic":"other","note":"New 2026+ bars may add trades; benchmark parity is checked separately at frozen cutoff."},
+          {"topic":"scope","note":"READ ONLY; no live #27 changes; this is NOT a 27-to-28 portfolio-addition test."},
+          {"topic":"parity","note":"Frozen 30-bar 96-trade RR2.5/4.0 AND prior LB25/CLOSE080 finalist fingerprints mandatory."},
+          {"topic":"axis isolation","note":"Single-factor sweeps only, with LB25 as an already studied alternative; CLOSE080 only on original 30-bar."},
+          {"topic":"boundary rule","note":"Extend low and high separately when edge + nearest interior point both viable, edge R >=85% and PF >=90% of neighbour. Caps predeclared; unresolved outer edge flagged."},
+          {"topic":"plateau","note":"Contiguous three-or-more threshold values passing an exploratory screen. NOT independent OOS and NOT approval to deploy."},
+          {"topic":"cost","note":"OANDA midpoint H1; 2 pip adverse fill and 4 pip stress are assumptions, no historical bid/ask reconstruction."},
+          {"topic":"history","note":"All prior data inspected; recent and post-2018 splits NOT untouched OOS."},
+          {"topic":"time","note":"Signal time = H1 candle open, executed at completed close with adverse fill; next-bar exit; exit-candle eligibility."},
+          {"topic":"portfolio","note":"Exact EUR/AUD versus 27 incumbents/portfolio concurrency, hedging and NAV simulation required only AFTER locking finalist."},
         ])
         pack()
-        STATUS.update(state="complete",message="40 variants complete; ZIP ready",
-                      completed=40,parity_passed=True,
-                      results_zip=BUNDLE,history_candles=len(candles),
-                      reference_candles=cutoff)
+        STATUS.update(state="complete",message="Plateau ZIP ready",completed=len(memo),
+            parity_passed=True,results_zip=BUNDLE,
+            boundary_extensions=sum(x["extension_triggered"] for x in bound_rows),
+            unresolved_boundaries=sum(x["terminal_still_strong"] for x in bound_rows),
+            plateau_intervals=len(plateau_rows),reference_candles=cutoff,
+            history_candles=len(candles))
     except Exception as exc:
         STATUS.update(state="failed",message=f"{type(exc).__name__}: {exc}")
-        try:
-            pack()  # Make parity and coverage diagnostics downloadable on failure.
-        except Exception:
-            pass
+        try:pack()
+        except Exception:pass
 
 
 RESEARCH_LOCK=threading.Lock()
@@ -1480,43 +1563,30 @@ RESEARCH_STARTED=False
 def launch_research():
     global RESEARCH_STARTED
     with RESEARCH_LOCK:
-        if RESEARCH_STARTED:
-            return False
+        if RESEARCH_STARTED:return False
         RESEARCH_STARTED=True
-        threading.Thread(target=run_research,daemon=True,name="euraud-h1-controlled-refinement").start()
+        threading.Thread(target=run_research,daemon=True,name="euraud-h1-plateau").start()
         return True
-
 
 @app.route("/")
 def root():
-    return jsonify({"service":"EUR/AUD H1 LONG controlled refinement",
-                    "pair":PAIR,"timeframe":"H1","side":"LONG",
-                    "state":STATUS["state"],"orders_supported":False,
-                    "trading_enabled":False,"variants":len(VARIANTS),
-                    "rr_grid":RR_GRID,"configurations":40,
-                    "benchmark_candles":REF_CANDLES,
-                    "benchmark_cutoff":iso(REF_LAST),
-                    "routes":["/euraud-h1-long-refinement/start",
-                              "/euraud-h1-long-refinement/status",
-                              "/euraud-h1-long-refinement/results"]})
+    return jsonify({"service":"EUR/AUD H1 LONG plateau confirmation",
+       "read_only":True,"orders_supported":False,"trading_enabled":False,
+       "status_route":"/euraud-h1-long-plateau/status",
+       "results_route":"/euraud-h1-long-plateau/results"})
 
-
-@app.route("/euraud-h1-long-refinement/start")
+@app.route("/euraud-h1-long-plateau/start")
 def start():
-    return jsonify({"started_now":launch_research(),"state":STATUS["state"],
-                    "orders_supported":False})
+    return jsonify({"started_now":launch_research(),"state":STATUS["state"]})
 
-
-@app.route("/euraud-h1-long-refinement/status")
+@app.route("/euraud-h1-long-plateau/status")
 def status():
     return jsonify(STATUS)
 
-
-@app.route("/euraud-h1-long-refinement/results")
+@app.route("/euraud-h1-long-plateau/results")
 def results():
     return download(BUNDLE)
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     launch_research()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
