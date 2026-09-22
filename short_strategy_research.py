@@ -16,10 +16,10 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# AUD/USD M15 LONG — FRESH SIX-FAMILY BROAD DISCOVERY (PROSPECTIVE #27)
+# AUD/USD M15 LONG — CONDITIONAL STAGE 2 REAUDIT (PROSPECTIVE #28)
 # ============================================================
 # This is standalone research, NOT a live strategy or a deployed #27.
-# The current 26 live strategies are not modified or accessed.
+# The 27 live strategies are not modified or accessed.
 # No AUD/USD H1 LONG/SHORT parameters are inherited.
 #
 # OANDA midpoint M15 candles. ATR14 Wilder/RMA SMA-seeded.
@@ -775,50 +775,17 @@ def stats(trades):
 
 
 
-# ======================================================================
-# PORTFOLIO 27 AUD/USD M15 LONG — STAGE 1 RAW SIGNAL & SINGLE-FACTOR AUDIT
-# ======================================================================
-# This deliberately REOPENS exploratory history. It is not independent OOS.
-# Previous setups are frozen controls; NEVER silently vary them in the scan.
-# No multi-filter combinations, RR tuning, top-row auto-selection or orders.
-# Fixed RR3.50, 1 pip adverse historical BUY fill (2 pip cost stress).
-# Baseline p0 replay is chronological before subperiod slicing.
-# A later study may test conditional interactions ONLY after these reports.
 
-OUTS = {
-    "coverage": "audusd_m15_long_reaudit_coverage.csv",
-    "parity": "audusd_m15_long_reaudit_old_core_parity.csv",
-    "raw": "audusd_m15_long_reaudit_raw_families.csv",
-    "single": "audusd_m15_long_reaudit_single_factor.csv",
-    "conditional_raw": "audusd_m15_long_reaudit_raw_trade_ledgers.csv",
-    "controls": "audusd_m15_long_reaudit_frozen_controls.csv",
-    "control_trades": "audusd_m15_long_reaudit_frozen_control_trades.csv",
-    "cost": "audusd_m15_long_reaudit_cost_stress.csv",
-    "rolling": "audusd_m15_long_reaudit_rolling.csv",
-    "calendar": "audusd_m15_long_reaudit_completed_years.csv",
-    "notes": "audusd_m15_long_reaudit_methods.csv",
-}
-BUNDLE = "AUDUSD_M15_LONG_PORTFOLIO27_RAW_EDGE_AUDIT_RESULTS.zip"
-STATUS.clear()
-STATUS.update(state="not_started", message="Waiting to fetch", progress=0,
-              orders_supported=False, trading_enabled=False)
-
-PARITY_LAST = datetime(2026, 9, 18, 20, 45, tzinfo=timezone.utc)
-PARITY_NOW = datetime(2026, 9, 19, 11, 55, tzinfo=timezone.utc)
-REFERENCE = {
-    "candle_count": 546849,
-    "trades": 55, "winners": 21, "full_pf": 1.955626,
-    "full_r": 32.491274, "since2018_trades": 13,
-    "since2018_pf": 1.398884, "since2018_r": 3.589957,
-    "last5_r": 2.339957, "last2_r": 1.146079,
-    "cost2_pf": 1.781976, "cost2_r": 26.587184,
-}
-RR_FIXED=3.5
-SCAN_MIN_TRADES_FOR_COST=50
-FAMILY_IDS=(
-    "BULL_ENGULF", "FAILED_BREAKDOWN", "LOW_SWEEP_DISPLACEMENT",
-    "OUTSIDE_REVERSAL", "COMPRESSION_BREAKOUT", "PULLBACK_REJECTION",
-)
+# AUD/USD M15 LONG: Stage 2 conditional geometry (research only).
+# Full M15 chronology, RR3.50, assumed historical 1pip adverse BUY fill,
+# doubled 2pip cost stress. Two distinct hypotheses are never combined:
+# A low-sweep displacement: LB x bullish body ATR x prior 4h decline
+#   x a predeclared additional depth diagnostic (0 or 0.10 ATR).
+# B failed-breakdown reclaim: LB x body ATR x close location.
+# No RR search, no adaptive EMA/weekday/day exclusions, no order endpoints.
+# Previously searched data is NOT untouched out-of-sample.
+# There is no selection/promotion to live here; exact 27->28 portfolio
+# replay with same-pair nonhedging is required for any eventual candidate.
 
 
 def old_anchor():
@@ -860,6 +827,7 @@ def recompute_anchor_parity(m15):
     return rows
 
 
+
 def raw_family_masks(f):
     """These are minimally defined *hypotheses*, not copies of the old winners."""
     base=f["valid_atr"] & f["bullish"]
@@ -881,48 +849,6 @@ def raw_family_masks(f):
     return out
 
 
-def predeclared_factors(f):
-    """Each entry is a single overlay on a raw family; never combine here."""
-    out=[]
-    for field,label,thresholds in [
-       ("body_atr","BODY_ATR_MIN",(.50,.75,1.00,1.25)),
-       ("range_atr","RANGE_ATR_MIN",(.75,1.00,1.25,1.50)),
-       ("close_loc","CLOSE_LOCATION_MIN",(.55,.65,.75,.85)),
-       ("lower_wick_body","LOWER_WICK_BODY_MIN",(.10,.20,.35,.50)),
-    ]:
-        for v in thresholds:out.append((f"{label}_{v:.2f}",f[field]>=v,label,v))
-    for v in (-.25,-.50,-1.00):
-        out.append((f"PRIOR_4H_DECLINE_ATR_{v:.2f}",f["mom4"]<=v,"PRIOR_4H_MOMENTUM",v))
-    for lb in (40,60,100,165):
-        for d in (.10,.25,.50):
-            out.append((f"NEAR_PREV_LOW_LB{lb}_D{d:.2f}",
-                        f["structure_dist_low"][lb]<=d,
-                        f"PRIOR_LOW_DISTANCE_LB{lb}",d))
-    for lb in (20,40,60,100):
-        out.append((f"BREAK_PREV_LOW_LB{lb}", f["low"]<f["prev_low"][lb],
-                    "PREV_LOW_BREAK_LOOKBACK",lb))
-    for name,a,b in [
-        ("H1_CLOSE_GT_EMA100","h1_close","h1_ema100"),
-        ("H1_EMA50_GT_EMA200","h1_ema50","h1_ema200"),
-        ("H4_CLOSE_GT_EMA100","h4_close","h4_ema100"),
-        ("H4_EMA100_GT_EMA200","h4_ema100","h4_ema200"),
-        ("D_CLOSE_GT_EMA200","d_close","d_ema200"),
-        ("D_EMA50_GT_EMA200","d_ema50","d_ema200"),
-    ]:out.append((name,f[a]>f[b],"COMPLETED_HTF_REGIME",name))
-    for tf in ("h1","h4","d"):
-        for level in (.80,1.00):
-            name=f"{tf.upper()}_ATR_RATIO_GE_{level:.2f}"
-            out.append((name,f[f"{tf}_atr"]>=level,"COMPLETED_HTF_VOLATILITY",level))
-    for tz,key in (("NY","ny_hour"),("SYDNEY","sydney_hour"),
-                   ("TOKYO","tokyo_hour"),("LONDON","london_hour")):
-        for start in (0,4,8,12,16,20):
-            name=f"{tz}_HOURS_{start:02d}-{start+3:02d}"
-            out.append((name,(f[key]>=start)&(f[key]<=start+3),
-                        f"TIME_4H_{tz}",start))
-    for wd in range(5):
-        out.append((f"EXCLUDE_NY_WEEKDAY_{wd}",f["ny_weekday"]!=wd,
-                    "EXCLUDE_WEEKDAY",wd))
-    return out
 
 
 def moments(trades,a=None,b=None):
@@ -986,136 +912,379 @@ def calendar_diag(config_id,trades):
     return rows
 
 
-def control_ledger(m15,f):
-    """Two OLD decisions shown as controls: no optimization/selection from them."""
-    old=old_anchor();ix=indices(old,f)
-    old_trades=backtest(m15,ix,3.5,1.0)
-    # Published complement SWEEP_STRONG_60: base previous-low sweep + strict
-    # above-previous-high displacement + prior downward momentum & wick.
-    sweep=cfg("OLD_SWEEP_STRONG_60", "LOW_SWEEP_DISPLACEMENT",rr=3.5,
-              sweep_lb=60,body_atr_min=1.0,lower_wick_body_min=.20,mom4_min=-1.0)
-    six=indices(sweep,f)
-    sweep_trades=backtest(m15,six,3.5,1.0)
-    return [(old["config_id"],ix,old_trades),
-            (sweep["config_id"],six,sweep_trades)]
+
+# ----------------------------------------------------------------------
+# FROZEN PLAN: four long-low lookbacks, fixed neighbourhoods, no adaptive
+# trial insertion based on results. Full grid = 96 SWEEP + 64 FAILED.
+# ----------------------------------------------------------------------
+from itertools import product
+import gc
+import traceback
+
+OUTS = {
+    "coverage": "audusd_m15_long_s2_coverage.csv",
+    "parity": "audusd_m15_long_s2_old_control_parity.csv",
+    "geometry": "audusd_m15_long_s2_all_160_geometries.csv",
+    "plateau": "audusd_m15_long_s2_local_neighbours.csv",
+    "attribution": "audusd_m15_long_s2_conditional_attribution.csv",
+    "diagnostic": "audusd_m15_long_s2_diagnostic_shortlist.csv",
+    "sessions": "audusd_m15_long_s2_session_diagnostics.csv",
+    "rolling": "audusd_m15_long_s2_rolling_windows.csv",
+    "calendar": "audusd_m15_long_s2_calendar_years.csv",
+    "costs": "audusd_m15_long_s2_cost_stress.csv",
+    "trades": "audusd_m15_long_s2_diagnostic_trade_ledgers.csv",
+    "signals": "audusd_m15_long_s2_signal_overlap.csv",
+    "controls": "audusd_m15_long_s2_old_controls.csv",
+    "notes": "audusd_m15_long_s2_methodology.csv",
+}
+BUNDLE = "AUDUSD_M15_LONG_PORTFOLIO27_CONDITIONAL_STAGE2_RESULTS.zip"
+STATUS.clear()
+STATUS.update(state="not_started",progress=0,message="Waiting to fetch",orders_supported=False,trading_enabled=False)
+RR_FIXED = 3.5
+
+# Same anchored historical reference as Stage 1. Do not reselect it.
+PARITY_LAST = datetime(2026, 9, 18, 20, 45, tzinfo=timezone.utc)
+PARITY_NOW = datetime(2026, 9, 19, 11, 55, tzinfo=timezone.utc)
+REFERENCE = {
+    "candle_count":546849,"trades":55,"winners":21,
+    "full_pf":1.955626,"full_r":32.491274,
+    "since2018_trades":13,"since2018_pf":1.398884,
+    "since2018_r":3.589957,"last5_r":2.339957,
+    "last2_r":1.146079,"cost2_pf":1.781976,
+    "cost2_r":26.587184,
+}
+
+LOOKBACKS=(20,40,60,100)
+SWEEP_BODIES=(.75,1.00,1.25)
+DECLINES=(.25,.50,1.00,1.50)  # positive magnitude; mom4 <= -decline
+PENETRATIONS=(0.00,.10)      # (prior low - signal low)/signal ATR
+FAILED_BODIES=(.50,.75,1.00,1.25)
+FAILED_CLOSES=(.55,.65,.75,.85)
+
+
+def make_configs():
+    rows=[]
+    for lb,body,decline,depth in product(LOOKBACKS,SWEEP_BODIES,DECLINES,PENETRATIONS):
+        rows.append(dict(branch="SWEEP",lb=lb,body=body,decline=decline,
+                         penetration=depth,close_loc=None,
+                         config_id=f"SWEEP_L{lb}_B{body:.2f}_M{decline:.2f}_P{depth:.2f}"))
+    for lb,body,cl in product(LOOKBACKS,FAILED_BODIES,FAILED_CLOSES):
+        rows.append(dict(branch="FAILED",lb=lb,body=body,decline=None,
+                         penetration=None,close_loc=cl,
+                         config_id=f"FAILED_L{lb}_B{body:.2f}_C{cl:.2f}"))
+    assert len(rows)==160 and len({r['config_id'] for r in rows})==160
+    return rows
+
+
+def geometry_mask(c,f,raw):
+    # Crucial: anchor each geometry to ITS OWN previous-low lookback.
+    # Do not inherit the raw 10-bar reclaim requirement when testing a
+    # 20/40/60/100-bar failed breakdown: close > previous 10-bar low
+    # is a DIFFERENT entry from close > previous 60-bar low.
+    mask=f["valid_atr"].copy() & f["bullish"]
+    lb=c["lb"]
+    prior=f["prev_low"][lb]
+    mask &= f["low"]<prior
+    mask &= f["body_atr"]>=c["body"]
+    if c["branch"]=="SWEEP":
+        prior_candle_high=np.r_[np.nan,f["high"][:-1]]
+        mask &= f["close"]>prior_candle_high
+        mask &= f["mom4"]<=-c["decline"]
+        # A strict low break is already required. Penetration 0.00
+        # means no additional constraint (not an equal-low signal).
+        if c["penetration"]>0:
+            mask &= (prior-f["low"])/f["atr"]>=c["penetration"]
+    else:
+        mask &= f["close"]>prior  # reclaim SAME previous low as the break
+        mask &= f["close_loc"]>=c["close_loc"]
+    mask[:200]=False
+    return mask
+
+
+def summarise(name,branch,ix,trades,stress,extra=None):
+    r=reported_row(name,branch,"CONDITIONAL_GEOMETRY",extra or "",ix,trades,stress)
+    # report_row contains full plus historical splits; not an OOS test
+    r.update(extra or {})
+    # Strictly predeclared illustrative gate, NOT portfolio approval.
+    # No redefinition based on how many pass.
+    r["diagnostic_gate"]=(
+        r["full_trades"]>=80 and r["pre2010_total_r"]>0 and
+        r["post2010_total_r"]>0 and r["since2018_total_r"]>0 and
+        r["last5_total_r"]>0 and r["last2_total_r"]>0 and
+        (r.get("2pip_total_r") or 0)>0 and r["full_max_drawdown_r"]>=-15
+    )
+    return r
+
+
+def conditional_attribution(c,f,raw,m15,full_ix,full_trades):
+    """Same-branch ablation under p0; do not subtract backtest returns
+    and call that the profitability of removed trades. Signal and
+    accepted-trade comparisons are reported separately."""
+    base_key="LOW_SWEEP_DISPLACEMENT" if c["branch"]=="SWEEP" else "FAILED_BREAKDOWN"
+    full_ids={t["signal_index"]:t for t in full_trades}
+    overlays=[("RAW",None),
+              ("BREAK_LB", f["low"]<f["prev_low"][c["lb"]]),
+              ("BODY",f["body_atr"]>=c["body"])]
+    if c["branch"]=="SWEEP":
+        overlays += [("MOMENTUM",f["mom4"]<=-c["decline"])]
+        if c["penetration"]>0:
+            overlays += [("PENETRATION",(f["prev_low"][c["lb"]]-f["low"])/f["atr"]>=c["penetration"])]
+    else:
+        overlays += [("CLOSE_LOCATION",f["close_loc"]>=c["close_loc"])]
+    lines=[]
+    for label,mask in overlays:
+        ix=np.flatnonzero(raw[base_key] if mask is None else raw[base_key]&mask).tolist()
+        tx=backtest(m15,ix,RR_FIXED,1.0)
+        tm={t["signal_index"]:t for t in tx}
+        shared=full_ids.keys() & tm.keys()
+        only=full_ids.keys()-tm.keys()
+        other=tm.keys()-full_ids.keys()
+        lines.append(dict(config_id=c["config_id"],branch=c["branch"],factor=label,
+                          raw_signals=len(ix),accepted=len(tx),total_r=stats(tx)["total_r"],
+                          shared_accepted=len(shared),selected_only=len(only),
+                          selected_only_r=sum(full_ids[i]["result_r"] for i in only),
+                          ablation_only=len(other),
+                          ablation_only_r=sum(tm[i]["result_r"] for i in other),
+                          note="p0 replay changes which signals enter; differences in total R are not isolated removal expectancy"))
+        OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+    return lines
+
+
+def local_neighbourhood(configs,rows):
+    byid={c['config_id']:c for c in configs}
+    summaries={r['config_id']:r for r in rows}
+    grouped={}
+    for c in configs:
+        grouped[(c['branch'],c['lb'],c['body'],c.get('decline'),c.get('penetration'),c.get('close_loc'))]=c
+    lines=[]
+    for c in configs:
+        dims=(['lb','body','decline','penetration'] if c['branch']=='SWEEP'
+              else ['lb','body','close_loc'])
+        ns=[];at_edge=[]
+        for d in dims:
+            values={'lb':LOOKBACKS,'body':SWEEP_BODIES if c['branch']=='SWEEP' else FAILED_BODIES,
+                    'decline':DECLINES,'penetration':PENETRATIONS,'close_loc':FAILED_CLOSES}[d]
+            i=values.index(c[d])
+            if i==0 or i==len(values)-1:at_edge.append(d)
+            for j in (i-1,i+1):
+                if 0<=j<len(values):
+                    k=dict(c);k[d]=values[j]
+                    target=(k['branch'],k['lb'],k['body'],k.get('decline'),k.get('penetration'),k.get('close_loc'))
+                    near=grouped.get(target)
+                    if near is not None:ns.append(near['config_id'])
+        nrows=[summaries[x] for x in ns]
+        good=lambda s:s['full_trades']>=50 and s['full_total_r']>0 and (s.get('2pip_total_r') or 0)>0
+        lines.append(dict(config_id=c['config_id'],branch=c['branch'],
+                          neighbour_count=len(nrows),neighbour_ids=';'.join(ns),
+                          profitable_1pip_neighbours=sum(r['full_total_r']>0 for r in nrows),
+                          profitable_2pip_neighbours=sum((r.get('2pip_total_r') or 0)>0 for r in nrows),
+                          neighbours_50trades_cost_positive=sum(good(r) for r in nrows),
+                          minimum_neighbour_r=min((r['full_total_r'] for r in nrows),default=None),
+                          minimum_neighbour_2pip_r=min((r.get('2pip_total_r') or 0 for r in nrows),default=None),
+                          at_tested_edges=';'.join(at_edge),
+                          tested_range_resolved=(len(at_edge)==0),
+                          note='Positive neighbours are descriptive; this grid cannot resolve tested boundaries. No auto-extension.' ))
+    return lines
+
+
+def diagnostic_selection(rows,neighbour_rows):
+    nr={r['config_id']:r for r in neighbour_rows}
+    selected=[]
+    for branch in ('SWEEP','FAILED'):
+        subset=[r for r in rows if r['family']==branch]
+        strict=[r for r in subset if r['diagnostic_gate']]
+        # The shortlist is only for trade and time-of-day attribution.
+        # Falls back to 3 illustrative configurations when none pass;
+        # this NEVER implies a candidate passed a gate.
+        if strict:
+            pool=strict
+        else:
+            pool=[r for r in subset if r['full_trades']>=50]
+        def rank(r):
+            n=nr[r['config_id']]
+            return (n['neighbours_50trades_cost_positive'],
+                    r['2pip_total_r']>0 if r.get('2pip_total_r') is not None else False,
+                    r['pre2010_total_r']>0,
+                    r['post2010_total_r']>0,
+                    r['last5_total_r']>0,
+                    r['last2_total_r']>0,
+                    min(r['full_trades'],200),
+                    r['full_total_r'])
+        selection=sorted(pool,key=rank,reverse=True)[:3]
+        for r in selection:
+            selected.append(dict(config_id=r['config_id'],branch=branch,
+                                 designation='GATE_PASS_DIAGNOSTIC' if strict else 'NO_GATE_PASS_ILLUSTRATIVE',
+                                 why='Review accepted trades and timed subpopulations; NOT a strategy recommendation',
+                                 **{k:v for k,v in r.items() if k not in ('config_id','branch')}))
+    return selected
+
+
+def add_ledger(c,ts):
+    return [dict(config_id=c['config_id'],branch=c['branch'],
+                 **{k:v for k,v in t.items() if k not in ('entry_time','exit_time')}) for t in ts]
+
+
+def session_diagnostics(c,m15,f,raw,unfiltered):
+    mask=geometry_mask(c,f,raw)
+    full={t['signal_index']:t for t in unfiltered}
+    out=[]
+    for key,tz in [('sydney_hour','Sydney'),('ny_hour','New_York')]:
+        for start in (0,4,8,12,16,20):
+            hours=(f[key]>=start)&(f[key]<start+4)
+            selected_ix=np.flatnonzero(mask&hours).tolist()
+            active=backtest(m15,selected_ix,RR_FIXED,1.0)
+            rawslice=[t for t in unfiltered if start<=int(f[key][t['signal_index']])<start+4]
+            out.append(dict(config_id=c['config_id'],branch=c['branch'],timezone=tz,
+                  hours=f'{start:02d}-{start+3:02d}',raw_signals=len(selected_ix),
+                  replay_trades=len(active),replay_r=stats(active)['total_r'],
+                  replay_pf=stats(active)['profit_factor'],
+                  attribution_only_accepted=len(rawslice),
+                  attribution_only_r=stats(rawslice)['total_r'],
+                  note='Diagnostic only. Filtered p0 replay may differ from attribution of accepted all-hours trades; do not select a block here.'))
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+    return out
+
+
+def overlap_controls(c,trades,old_trades,sweep_trades):
+    ids={t['signal_index']:t for t in trades}
+    out=[]
+    for name,other in [('OLD_SYDNEY_FAILED',old_trades),('OLD_SWEEP_STRONG_60',sweep_trades)]:
+        oid={t['signal_index']:t for t in other}
+        shared=ids.keys()&oid.keys()
+        unique=ids.keys()-oid.keys()
+        oldonly=oid.keys()-ids.keys()
+        out.append(dict(config_id=c['config_id'],branch=c['branch'],reference=name,
+                        shared_accepted=len(shared),candidate_only=len(unique),
+                        candidate_only_r=sum(ids[i]['result_r'] for i in unique),
+                        reference_only=len(oldonly),
+                        reference_only_r=sum(oid[i]['result_r'] for i in oldonly),
+                        note='Standalone accepted-signal overlap only; NOT chronological pair/portfolio union'))
+    return out
 
 
 def write_bundle():
-    with zipfile.ZipFile(BUNDLE,"w",zipfile.ZIP_DEFLATED) as z:
-        for path in OUTS.values():
-            if os.path.isfile(path):z.write(path,arcname=os.path.basename(path))
+    with zipfile.ZipFile(BUNDLE,'w',zipfile.ZIP_DEFLATED) as z:
+        for p in OUTS.values():
+            if os.path.isfile(p):z.write(p,arcname=os.path.basename(p))
 
 
 def run_research():
     try:
-        STATUS.update(state="fetch",progress=1,message="Fetching AUD/USD history: research only")
-        m15=fetch("M15",START,NOW,35)
-        if len(m15)<100_000:raise RuntimeError("Insufficient M15 history")
-        STATUS.update(state="old_control",progress=14,message="Recomputing old 55-trade anchor at FROZEN cutoff")
-        recompute_anchor_parity(m15)
-        STATUS.update(state="fetch_context",progress=20,message="Fetching strictly completed H1/H4/D context")
-        h1=fetch("H1",WARMUP,NOW,180)
-        h4=fetch("H4",WARMUP,NOW,700)
-        daily=fetch("D",WARMUP,NOW,3500)
-        if not all((h1,h4,daily)):raise RuntimeError("HTF data incomplete")
-        write_csv(OUTS["coverage"],[dict(instrument=PAIR,granularity="M15",side="BUY",
-                     first_m15=iso(m15[0]["time"]),last_m15=iso(m15[-1]["time"]),
-                     m15_bars=len(m15),h1_bars=len(h1),h4_bars=len(h4),
-                     daily_bars=len(daily),rr=RR_FIXED,assumed_cost_pips=PRIMARY_COST,
-                     risk_model="signal close + adverse cost; stop low-10 ticks; reference-risk target")])
-        STATUS.update(state="features",progress=27,message="Computing unbiased raw signals and HTF alignments")
-        times=[v["time"] for v in m15]
-        f=features(m15,align_htf(times,htf_state(h1)),
-                   align_htf(times,htf_state(h4)),align_htf(times,htf_state(daily)))
-        raw_masks=raw_family_masks(f)
-        factors=predeclared_factors(f)
-        raw_rows=[];factor_rows=[];raw_ledgers=[];control_rows=[];control_trades=[]
-        cost_rows=[];roll=[];cal=[]
-        for j,(name,ix,tr) in enumerate(control_ledger(m15,f)):
-            c2=backtest(m15,ix,RR_FIXED,2.0)
-            control_rows.append(reported_row(name,"OLD_REFERENCE","OLD_REFERENCE","unchanged",ix,tr,c2))
-            for t in tr:control_trades.append(dict(config_id=name,**{k:v for k,v in t.items() if k not in ("entry_time","exit_time")}))
-            for cost,ts in ((1.0,tr),(2.0,c2)):
-                cost_rows.append(dict(config_id=name,cost_pips=cost,**stats(ts)))
-            roll.extend(rolling_diag(name,tr));cal.extend(calendar_diag(name,tr))
-            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        STATUS.update(state="raw_families",progress=35,message="Six raw long mechanisms, fixed RR3.5")
-        for k,family in enumerate(FAMILY_IDS):
-            base=raw_masks[family]
-            ix=np.flatnonzero(base).tolist()
+        STATUS.update(state='fetch',progress=1,message='Fetching full AUD/USD M15 midpoint history (read-only)')
+        m15=fetch('M15',START,NOW,35)
+        if len(m15)<100_000:raise RuntimeError('Insufficient full M15 history')
+        STATUS.update(state='parity',progress=18,message='Reproducing frozen 55-trade Sydney reference')
+        parity=recompute_anchor_parity(m15)
+        STATUS.update(state='features',progress=24,message='Computing completed-candle and prev-only structure features')
+        # No HTF filters in Stage 2. Keep identical feature implementation
+        # with NaN higher-timeframe arrays; do not fetch irrelevant H1/H4/D.
+        blank={k:np.full(len(m15),np.nan) for k in ('close','ema50','ema100','ema200','atr_ratio50')}
+        f=features(m15,blank,blank,blank)
+        raw=raw_family_masks(f)
+        controls=[]
+        for config in (old_anchor(),cfg('OLD_SWEEP_STRONG_60','LOW_SWEEP_DISPLACEMENT',rr=3.5,
+                    sweep_lb=60,body_atr_min=1.0,lower_wick_body_min=.20,mom4_min=-1.0)):
+            ix=indices(config,f)
             tr=backtest(m15,ix,RR_FIXED,1.0)
-            ts=backtest(m15,ix,RR_FIXED,2.0)
-            raw_rows.append(reported_row("RAW_"+family,family,"NONE","raw",ix,tr,ts))
-            for t in tr:raw_ledgers.append(dict(config_id="RAW_"+family,**{p:v for p,v in t.items() if p not in ("entry_time","exit_time")}))
-            for cost,ledger in ((1.0,tr),(2.0,ts)):
-                cost_rows.append(dict(config_id="RAW_"+family,cost_pips=cost,**stats(ledger)))
-            roll.extend(rolling_diag("RAW_"+family,tr));cal.extend(calendar_diag("RAW_"+family,tr))
+            stress=backtest(m15,ix,RR_FIXED,2.0)
+            controls.append(dict(config_id=config['config_id'],**stats(tr),
+                                 two_pip_r=stats(stress)['total_r'],
+                                 date='growing history; archived reference at frozen cutoff is 55 trades'))
+            if config['family']=='FAILED_BREAKDOWN_RECLAIM':old_trades=tr
+            else:sweep_trades=tr
             OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-            STATUS.update(progress=35+int(20*(k+1)/len(FAMILY_IDS)),message=f"Raw family {k+1}/{len(FAMILY_IDS)}: {family}")
-        write_csv(OUTS["raw"],raw_rows)
-        write_csv(OUTS["controls"],control_rows)
-        write_csv(OUTS["conditional_raw"],raw_ledgers)
-        write_csv(OUTS["control_trades"],control_trades)
-        STATUS.update(state="single_factor",progress=56,
-                      message=f"Single-factor scans: {len(factors)} per raw family; no combos or RR tuning")
-        for k,family in enumerate(FAMILY_IDS):
-            base=raw_masks[family]
-            for j,(label,overlay,group,value) in enumerate(factors):
-                indices_arr=np.flatnonzero(base&overlay).tolist()
-                tr=backtest(m15,indices_arr,RR_FIXED,1.0)
-                # No selection: all rows exported, including negative/zero trade.
-                stress=None
-                if len(tr)>=SCAN_MIN_TRADES_FOR_COST:
-                    stress=backtest(m15,indices_arr,RR_FIXED,2.0)
-                factor_rows.append(reported_row(family+"__"+label,family,group,value,
-                                                indices_arr,tr,stress))
-                OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-            STATUS.update(progress=56+int(39*(k+1)/len(FAMILY_IDS)),
-                          message=f"Single-factor family {k+1}/{len(FAMILY_IDS)} complete")
-            write_csv(OUTS["single"],factor_rows)
-        write_csv(OUTS["cost"],cost_rows)
-        write_csv(OUTS["rolling"],roll)
-        write_csv(OUTS["calendar"],cal)
-        write_csv(OUTS["notes"],[
-            dict(item="objective",value="Reassess AUD/USD M15 LONG from raw mechanisms before conditional matrices"),
-            dict(item="prior_work",value="Old Sydney 55-trade core and strong low-sweep are searched-history REFERENCES only; archived old core+sweep 243 trades/+98.32R/-22R DD is contextual history NOT recalculated by this Stage 1 scan"),
-            dict(item="data",value="May 2002 onwards: growing OANDA midpoint candles, as complete; original parity fixed Sep 18 2026"),
-            dict(item="stage1",value="Six minimal raw bullish mechanisms, each reported separately"),
-            dict(item="factor",value="Each of the predeclared overlays applied ONE AT A TIME to every raw family"),
-            dict(item="cost",value="1pip assumed adverse BUY fill; 2pip stress for raw/control and scan rows >=50 accepted trades"),
-            dict(item="time",value="Signal is candle OPEN; completed HTF mapped at next observed HTF open; conservative at M15 boundary"),
-            dict(item="no_orders",value="Research-only GET OANDA candle API; does not import executor or place orders"),
-            dict(item="limits",value="Repeated use of old 2002-2026 data; no untouched historical out-of-sample claims"),
-            dict(item="next_stage",value="Inspect factor monotonicity, sample, era, cost, retained/removed trades, then tiny conditional matrices"),
-            dict(item="portfolio",value="Do not promote before 27->28 exact chronological AUD/USD nonhedging portfolio add"),
-            dict(item="p0",value="Full-history trade replay; same exit candle may provide new signal; historical exits are bar ambiguous"),
+        write_csv(OUTS['controls'],controls)
+        write_csv(OUTS['coverage'],[dict(pair=PAIR,granularity='M15',side='BUY',
+             first_candle=iso(m15[0]['time']),last_candle=iso(m15[-1]['time']),
+             candles=len(m15),frozen_control_parity='PASS',
+             research_rr=RR_FIXED,base_adverse_pips=1,stress_adverse_pips=2,
+             expected_configs=160,orders_supported=False)])
+        configs=make_configs()
+        rowlist=[];cache={};costs=[]
+        STATUS.update(state='conditional_grid',progress=29,message=f'Running {len(configs)} all-hours conditional geometries')
+        for j,c in enumerate(configs):
+            ix=np.flatnonzero(geometry_mask(c,f,raw)).tolist()
+            trades=backtest(m15,ix,RR_FIXED,1.0)
+            stress=backtest(m15,ix,RR_FIXED,2.0)
+            row=summarise(c['config_id'],c['branch'],ix,trades,stress,c)
+            rowlist.append(row)
+            costs.append(dict(config_id=c['config_id'],cost_pips=1.0,**stats(trades)))
+            costs.append(dict(config_id=c['config_id'],cost_pips=2.0,**stats(stress)))
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+            if j%8==7:
+                STATUS.update(progress=29+int(47*(j+1)/len(configs)),message=f'Grid {j+1}/{len(configs)}')
+                write_csv(OUTS['geometry'],rowlist)
+                write_csv(OUTS['costs'],costs)
+        assert len(rowlist)==160
+        write_csv(OUTS['geometry'],rowlist)
+        write_csv(OUTS['costs'],costs)
+        STATUS.update(state='plateau',progress=77,message='Computing actual one-factor neighbour scores')
+        near=local_neighbourhood(configs,rowlist)
+        write_csv(OUTS['plateau'],near)
+        selected=diagnostic_selection(rowlist,near)
+        write_csv(OUTS['diagnostic'],selected)
+        byid={x['config_id']:x for x in configs}
+        rolling=[];calendar=[];attrib=[];sessions=[];ledgers=[];overlap=[]
+        for k,d in enumerate(selected):
+            c=byid[d['config_id']]
+            ix=np.flatnonzero(geometry_mask(c,f,raw)).tolist()
+            tx=backtest(m15,ix,RR_FIXED,1.0)
+            # Write a complete independent trade ledger for analysis of
+            # current-only vs old-only and overlapping entry times.
+            ledgers.extend(add_ledger(c,tx))
+            rolling.extend(rolling_diag(c['config_id'],tx))
+            calendar.extend(calendar_diag(c['config_id'],tx))
+            overlap.extend(overlap_controls(c,tx,old_trades,sweep_trades))
+            sessions.extend(session_diagnostics(c,m15,f,raw,tx))
+            attrib.extend(conditional_attribution(c,f,raw,m15,ix,tx))
+            STATUS.update(state='attribution',progress=78+int(20*(k+1)/max(1,len(selected))),
+                          message=f'Diagnostic candidate {k+1}/{len(selected)}: {c["config_id"]}')
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        for key,rows in [('rolling',rolling),('calendar',calendar),('attribution',attrib),
+                          ('sessions',sessions),('trades',ledgers),('signals',overlap)]:
+            write_csv(OUTS[key],rows)
+        write_csv(OUTS['notes'],[
+          dict(item='scope',value='Two separate all-hours conditional entry hypotheses: SWEEP and FAILED; 160 fixed full-grid geometries'),
+          dict(item='control',value='Old Sydney 55-trade summary parity required at frozen 2026-09-18 cutoff, NOT archived field-by-field parity'),
+          dict(item='sweep',value='Previous-low LB x body ATR x prior 4H decline x absolute low penetration ATR; close above previous M15 high'),
+          dict(item='failed',value='Previous-low LB x body ATR x close location; close reclaims the SAME selected lookback low, not the raw 10-bar low'),
+          dict(item='no_filter',value='No session filter, EMA, weekday filter, RR tuning, wick filter or trigger union in grid'),
+          dict(item='sessions',value='Session diagnostics AFTER all-hours grid on up to 3 examples/branch; not permission to choose the best hour'),
+          dict(item='selection',value='Diagnostic gate predeclared and visible per grid row; top-three fallback per branch does not count as pass'),
+          dict(item='cost',value='OANDA midpoint bars, 1-pip adverse fill baseline, 2-pip adverse fill stress; reference-risk targets, actual-fill R'),
+          dict(item='execution',value='pyramiding zero replay starts exit search next M15; exit candle reentry eligible; both-hit approximation'),
+          dict(item='lookahead',value='All structure calculations use previous-only extrema; ATR14 includes completed signal; prior 4H momentum uses completed M15s'),
+          dict(item='rolling',value='Monthly-stepped 12/24/36m by entry timestamp; incomplete current year excluded from completed-years table'),
+          dict(item='limits',value='Old years inspected repeatedly; no unsearched OOS, gate is only further-research permission'),
+          dict(item='live',value='Portfolio27 remains unchanged; separate exact 27->28 chronological same-pair nonhedging study required'),
         ])
         write_bundle()
-        STATUS.update(state="complete",progress=100,message="Read-only Stage 1 audit complete",
-                      raw_families=len(raw_rows),single_factor_rows=len(factor_rows),
-                      factors_per_family=len(factors),old_control_parity="PASS",
-                      results_route="/audusd-m15-long-reaudit/results")
-    except Exception as ex:
-        import traceback
-        STATUS.update(state="error",message=str(ex),traceback=traceback.format_exc(),
-                      orders_supported=False,trading_enabled=False)
+        STATUS.update(state='complete',progress=100,message='Stage 2 research complete',
+                      configs=len(configs),diagnostic_rows=len(selected),
+                      gate_pass=sum(bool(r['diagnostic_gate']) for r in rowlist),
+                      old_control_parity='PASS',
+                      results='/audusd-m15-long-stage2/results')
+    except Exception as e:
+        STATUS.update(state='error',message=str(e),traceback=traceback.format_exc(),
+                      trading_enabled=False,orders_supported=False)
         try:write_bundle()
         except Exception:pass
-        print(STATUS["traceback"],flush=True)
+        print(STATUS['traceback'],flush=True)
 
-@app.route("/")
-def main_route():
-    return jsonify(dict(service="AUD/USD M15 LONG Portfolio27 raw edge reaudit",
-                        state=STATUS["state"],orders_supported=False,trading_enabled=False,
-                        status="/audusd-m15-long-reaudit/status",
-                        results="/audusd-m15-long-reaudit/results"))
 
-@app.route("/audusd-m15-long-reaudit/status")
+@app.route('/')
+def index_route():
+    return jsonify(service='AUD/USD M15 LONG Stage 2 conditional geometry research',
+                   status='/audusd-m15-long-stage2/status',
+                   results='/audusd-m15-long-stage2/results',
+                   orders_supported=False,trading_enabled=False)
+
+@app.route('/audusd-m15-long-stage2/status')
 def status_route():return jsonify(STATUS)
 
-@app.route("/audusd-m15-long-reaudit/results")
+@app.route('/audusd-m15-long-stage2/results')
 def results_route():return download(BUNDLE)
 
-if __name__=="__main__":
+if __name__=='__main__':
     threading.Thread(target=run_research,daemon=True).start()
-    app.run(host="0.0.0.0",port=int(os.getenv("PORT","8080")),debug=False)
+    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),debug=False)
