@@ -50,6 +50,7 @@ def status(state,progress,message):
  with LOCK:STATE.update(state=state,progress=progress,message=message)
 def parse(s):return dt.datetime.fromisoformat(s.replace('Z','+00:00'))
 def iso(s):return s.astimezone(dt.timezone.utc).isoformat().replace('+00:00','Z')
+def stamp(value):return iso(value if isinstance(value,dt.datetime) else parse(value))
 def strict(a,b,label,atol=1e-7):
  if not math.isclose(float(a),float(b),abs_tol=atol,rel_tol=1e-12):
   raise RuntimeError(f'PARITY {label}: actual={a} expected={b}')
@@ -942,7 +943,7 @@ def equity(trades, include_events=False):
             risk_cash = balance * rp
             outstanding_risk += risk_cash
             open_positions[idx] = (risk_cash, t)
-            if sid == 'EUR_AUD_H1_LONG':
+            if sid == SID:
                 candidate_entries += 1
                 if any(v['pair']=='AUD_USD' for _,v in open_positions.values() if v is not t):
                     candidate_with_audusd += 1
@@ -995,7 +996,7 @@ def summary(label, trades, sim, first, last):
     weighted_r=sum(t['r']*(.75 if t['sid']=='EUR_JPY_M15_SHORT' else 1.) for t in trades)
     return {'candidate':label,'portfolio_strategies':len({t['sid'] for t in trades}),
             'accepted_trades':len(trades),'accepted_candidate':sim['candidate_entries'],
-            'candidate_r':sum(t['r'] for t in trades if t['sid']=='EUR_AUD_H1_LONG'),
+            'candidate_r':sum(t['r'] for t in trades if t['sid']==SID),
             'weighted_r_equivalent_at_1pct':weighted_r,'winners':len(winner),'losers':len(loser),
             'win_rate_pct':100*len(winner)/len(trades),
             'profit_factor':sum(t['r'] for t in winner)/abs(sum(t['r'] for t in loser)),
