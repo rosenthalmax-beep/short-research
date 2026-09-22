@@ -1095,9 +1095,25 @@ def context_filter(f,context):
     raise ValueError(operator)
 
 
-def trow(config_id,tag,trades):
-    return [dict(config_id=config_id,cost_pips=tag,**{k:(iso(v) if isinstance(v,datetime) else v)
-               for k,v in tr.items()}) for tr in trades]
+def trow(config_id, tag, trades):
+    """Export ledger rows without duplicating the existing trade cost_pips field.
+
+    Preserve every original trade field; config_id is added for report identity.
+    Cost_pips is checked, not silently rewritten, so a mismatched caller fails
+    rather than outputting a misleading cost-specific ledger.
+    """
+    rows = []
+    for tr in trades:
+        row = {k: (iso(v) if isinstance(v, datetime) else v)
+               for k, v in tr.items()}
+        if "cost_pips" in row and abs(float(row["cost_pips"]) - float(tag)) > 1e-9:
+            raise ValueError(
+                f"Ledger cost disagrees with requested label: {row['cost_pips']} vs {tag}"
+            )
+        row["cost_pips"] = tag
+        row["config_id"] = config_id
+        rows.append(row)
+    return rows
 
 
 def bundle():
