@@ -1068,6 +1068,14 @@ def boundary_register():
 def run_research():
     global HISTORY_FIRST
     try:
+        # Railway may reuse the same output directory across deployments.
+        # Start each run with a clean report set; an old errors.csv must not
+        # be packaged as if it belonged to this successful run.
+        for previous in list(OUTS.values()) + [BUNDLE]:
+            try:
+                Path(previous).unlink(missing_ok=True)
+            except IsADirectoryError:
+                raise RuntimeError('Report path is a directory: '+str(previous))
         STATUS.update(state='fetch',progress=1,message='Fetching AUD/JPY M15 and completed HTF candles')
         candles=fetch('M15',START,NOW,35)
         if len(candles)<PASS2_CANDLES:raise RuntimeError('M15 shorter than frozen Pass 1 cutoff')
@@ -1102,9 +1110,13 @@ def run_research():
                 body_atr_min=body,range_atr_min=rng,
                 **metrics_row('UNCHANGED_ANCHOR',cid,{},ix,t2,t4,raw_reference)))
             for cost,ledger in ((2,t2),(4,t4)):
-                control_trades.extend(dict(anchor=aid,cost_pips=cost,
-                    **{k:v for k,v in tr.items() if k not in ('entry_time','exit_time')})
-                    for tr in ledger)
+                # cost_pips already exists on each trade; do not pass it twice.
+                # Explicit rows also avoid silently dropping important outcome fields.
+                control_trades.extend(
+                    dict(anchor=aid, **{k:v for k,v in tr.items()
+                        if k not in ('entry_time','exit_time')})
+                    for tr in ledger
+                )
         write_csv(OUTS['anchor_controls'],control_rows)
         write_csv(OUTS['control_ledgers'],control_trades)
         STATUS.update(state='conditional',progress=48,
