@@ -480,6 +480,13 @@ def stats(trades):
 # FIRST-HISTORY TOLERANCE & SAFE RESULTS PACKAGING
 # ============================================================
 
+def headers():
+    """Read-only OANDA candle endpoint authorization, as in frozen Stage 1."""
+    if not TOKEN:
+        raise RuntimeError("OANDA_TOKEN is not configured")
+    return {"Authorization": "Bearer " + TOKEN.strip()}
+
+
 def fetch_chunk(granularity, start, end):
     if not TOKEN:
         raise RuntimeError("OANDA_TOKEN is not configured")
@@ -938,4 +945,3 @@ def results_route(): return download(BUNDLE)
 if __name__=="__main__":
     threading.Thread(target=run_research,daemon=True).start()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","8080")),debug=False)
-   
