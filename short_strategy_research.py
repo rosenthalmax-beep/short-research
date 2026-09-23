@@ -1,28 +1,15 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 LONG — ENGULFING-FIRST RESEARCH, PASS 1.
+"""AUD/JPY M15 LONG — ENGULFING PASS 2: CONDITIONAL FEATURES.
 
-READ ONLY. Revisits the previously tested AUD/JPY historical period; all of
-these findings are exploratory, not untouched out-of-sample evidence.
+Three PREDECLARED anchors are frozen at the 2026-09-23 20:45 UTC Pass 1
+cutoff, then a one-factor-at-a-time diagnostic is run INSIDE each anchor.
+No RR, session or portfolio optimisation, no live orders, no automatic winner.
+Future plateau stage MUST extend boundaries if historical improvement continues
+at the edge; a winning boundary is NOT an optimum. Repeatedly inspected history.
 
-Do NOT repeat the six-family Stage 1 scan: its exact bullish-engulfing ledger
-is the immutable CONTROL. This file performs the historically productive
-engulfing-centred workflow: raw parity -> richer single-factor diagnostics ->
-broad structure x body x range matrix and its complete adjacent neighbours.
-These stages do NOT choose winners automatically. A later study may test
-additional conditional filters around defensible matrix regions; do not feed
-Portfolio 27 into parameter selection.
-
-Exact bullish engulfing: preceding candle bearish, signal bullish, signal body
-engulfs preceding real body, body ratio >=1.00. No preloaded regime/session.
-
-OANDA midpoint M15/H1/H4/D; ATR14 Wilder SMA-seeded; prior-only extrema;
-HTF values strictly completed via next actual HTF candle open.
-BUY reference = signal close; stop = signal low - 10 JPY ticks (0.01 JPY);
-RR3.50 target from REFERENCE risk; 2pip assumed adverse BUY fill and 4pip
-stress, realised R from ACTUAL fill-to-stop risk. Next-candle exits, target/
-stop tie convention archived, pyramiding zero, exit-candle re-entry eligible.
-Assumed adverse fills are NOT observed historical bid/ask spreads/slippage.
-No orders, executor or existing portfolio imports, RR/session optimisation.
+Uses exactly the Pass 1 OANDA midpoint, 2/4-pip assumed adverse fills,
+previous-only structure and completed HTF context, fixed RR3.5 and p0 model.
+2/4 pip are modelling assumptions, not measured AUD/JPY executable costs.
 """
 import os
 import csv
@@ -890,109 +877,303 @@ def anchor_rolling(cid,trades,assumption):
     return rows
 
 
+
+# ============================================================
+# PASS 2: FROZEN ARCHIVED ANCHORS + CONDITIONAL FEATURE STUDY
+# ============================================================
+PASS2_CUTOFF=datetime(2026,9,23,20,45,tzinfo=timezone.utc)
+PASS2_CANDLES=546818
+ANCHORS=(
+    ('TIGHT_LB100',100,.05,.50,1.25,136,21.269462799230844,6.959336405264406),
+    ('TIGHT_LB40',40,.05,1.00,1.25,169,18.610626380214256,.23463667419199496),
+    ('BROAD_LB60',60,.50,1.00,1.50,632,31.419163602295654,-28.007510150158648),
+)
+OUTPUT_DIR=Path(os.getenv('AUDJPY_ENGULF_PASS2_OUTPUT_DIR','/tmp/audjpy_engulf_pass2'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTS={name:str(OUTPUT_DIR/f'audjpy_engulf_pass2_{name}.csv') for name in (
+ 'coverage','raw_engulf_parity','anchor_parity','anchor_controls',
+ 'conditional_features','trade_attribution','conditional_rolling',
+ 'control_ledgers','boundary_register','methodology','errors')}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_LONG_ENGULFING_PASS2_RESULTS.zip')
+
+
+def anchor_mask(f,base,lb,d,body,rng):
+    return (base & (f['structure_dist_low'][lb]<=d)
+            & (f['body_atr']>=body) & (f['range_atr']>=rng))
+
+
+def anchor_parity(candles,f,base):
+    """Fail closed against exactly Pass 1's completed 20:45 UTC candles.
+
+    Pass 1 published aggregate anchor counts and R but NOT exact anchor
+    trade fingerprints. Accordingly this is aggregate parity, not a claim
+    that every anchor trade's field-level identity was verified.
+    """
+    ts=f['times'];n=bisect.bisect_right(ts,PASS2_CUTOFF)
+    if n!=PASS2_CANDLES or ts[n-1]!=PASS2_CUTOFF:
+        raise RuntimeError('Pass 1 anchor historical coverage mismatch: '
+                           'expected 546818 candles through 2026-09-23 20:45 UTC; '
+                           'got %s through %s'%(n,iso(ts[n-1]) if n else 'NONE'))
+    checks=[]
+    for aid,lb,d,body,rng,expected_n,expected_2,expected_4 in ANCHORS:
+        ix=np.flatnonzero(anchor_mask(f,base,lb,d,body,rng)[:n]).tolist()
+        # Full historical p0 only through the previously archived cutoff.
+        main=backtest(candles[:n],ix,RR_FIXED,PRIMARY_COST)
+        stress=backtest(candles[:n],ix,RR_FIXED,STRESS_COST)
+        actual2=stats(main); actual4=stats(stress)
+        valid=(actual2['trades']==expected_n and actual4['trades']==expected_n
+               and abs(actual2['total_r']-expected_2)<1e-7
+               and abs(actual4['total_r']-expected_4)<1e-7)
+        checks.append(dict(anchor=aid,cutoff_utc=iso(PASS2_CUTOFF),
+             expected_trades=expected_n,actual_2pip_trades=actual2['trades'],
+             actual_4pip_trades=actual4['trades'],expected_2pip_r=expected_2,
+             actual_2pip_r=actual2['total_r'],expected_4pip_r=expected_4,
+             actual_4pip_r=actual4['total_r'],
+             parity_type='archived aggregate count plus both R assumptions',
+             result='PASS' if valid else 'FAIL'))
+        if not valid:
+            write_csv(OUTS['anchor_parity'],checks)
+            raise RuntimeError('Frozen Pass 1 anchor parity FAILED for '+aid)
+    write_csv(OUTS['anchor_parity'],checks)
+    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()  # avoid cached cutoff-limited outcomes
+    return checks
+
+
+def conditional_filters(f,extra):
+    """One filter at a time INSIDE each unchanged anchor.
+
+    No geometry-distance/lookback, breakout-penetration, hour, or weekday
+    feature here; those are later plateau or timing questions. Every filter
+    including historically losing ones is reported and double-cost tested.
+    """
+    prior=independent_filters(f,extra)
+    skip=('distance_to_prior_low_','low_penetration_','ny_hour_DIAGNOSTIC',
+          'ny_weekday_DIAGNOSTIC')
+    result=[(g,ax,v,np.asarray(mask,dtype=bool)) for g,ax,v,mask in prior
+            if not g.startswith(skip)]
+    def add(g,ax,v,mask):
+        result.append((g,ax,v,np.asarray(mask,dtype=bool)))
+    for v in (.10,.20,.30,.40,.60):
+        add('lower_wick_body','max',v,f['lower_wick_body']<=v)
+    for v in (.25,.50,.75,1.00,1.25):
+        add('prior_candle_body_atr','max',v,extra['prev_body_atr']<=v)
+    for v in (.60,.75,.90,1.00):
+        add('signal_stop_atr','min',v,extra['stop_atr']>=v)
+    for v in (.70,.85,1.00,1.15):
+        add('m15_atr_ratio20','max',v,extra['m15_atr_ratio20']<=v)
+    for name in ('mom4','mom12','mom24','mom48'):
+        for v in (.25,.50,1.00):
+            add('prior_'+name+'_absolute_momentum','max',v,
+                np.abs(extra[name])<=v)
+    for name,lhs,rhs in (
+        ('h1_close_below_ema100','h1_close','h1_ema100'),
+        ('h1_ema50_below_ema200','h1_ema50','h1_ema200'),
+        ('h4_close_below_ema100','h4_close','h4_ema100'),
+        ('h4_ema100_below_ema200','h4_ema100','h4_ema200'),
+        ('daily_close_below_ema200','d_close','d_ema200'),
+        ('daily_ema50_below_ema200','d_ema50','d_ema200'),
+    ):
+        add('completed_htf_counterregime',name,'yes',f[lhs]<f[rhs])
+    for name in ('h1_atr','h4_atr','d_atr'):
+        for v in (.80,1.00,1.20):
+            add('completed_'+name,'max',v,f[name]<=v)
+    keys=[(g,ax,str(v)) for g,ax,v,_ in result]
+    if len(keys)!=len(set(keys)):
+        raise RuntimeError('Duplicate conditional factor IDs')
+    return result
+
+
+def sigmap(ledger):
+    return {t['signal_index']:t for t in ledger}
+
+
+def attribution(anchor,conditional):
+    """Accepted-trade comparison, NOT just mask subtraction.
+
+    Removing a signal can free a later previously blocked signal under p0;
+    added/removed rows are therefore individually accounted for.
+    """
+    old=sigmap(anchor);new=sigmap(conditional)
+    removed=[old[i] for i in sorted(old.keys()-new.keys())]
+    added=[new[i] for i in sorted(new.keys()-old.keys())]
+    common=len(old.keys()&new.keys())
+    oldr=sum(t['result_r'] for t in anchor)
+    newr=sum(t['result_r'] for t in conditional)
+    return dict(control_trades=len(anchor),variant_trades=len(conditional),
+      retained_control_trades=common,removed_accepted_trades=len(removed),
+      removed_winners=sum(t['result_r']>0 for t in removed),
+      removed_losers=sum(t['result_r']<0 for t in removed),
+      removed_accepted_r=sum(t['result_r'] for t in removed),
+      newly_eligible_trades=len(added),
+      newly_eligible_winners=sum(t['result_r']>0 for t in added),
+      newly_eligible_losers=sum(t['result_r']<0 for t in added),
+      newly_eligible_r=sum(t['result_r'] for t in added),
+      net_change_r=newr-oldr,
+      ledger_change_reconciles=abs((sum(t['result_r'] for t in added)
+                      -sum(t['result_r'] for t in removed))-(newr-oldr))<1e-7)
+
+
+def rolling_summary(cid,ledger,cost_pips):
+    """Full completed calendar-month windows, no p0 reset at window edges."""
+    first=datetime(HISTORY_FIRST.year,HISTORY_FIRST.month,1,tzinfo=timezone.utc)
+    if first<HISTORY_FIRST:first=add_months_utc(first,1)
+    last=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc)
+    ordered=sorted(ledger,key=lambda t:t['entry_time'])
+    entry=[t['entry_time'] for t in ordered]
+    pref=np.r_[0.0,np.cumsum([t['result_r'] for t in ordered])]
+    rows=[]
+    for months in (12,24,36):
+        window=first;vals=[];active=[];zero=0
+        while add_months_utc(window,months)<=last:
+            end=add_months_utc(window,months)
+            a=bisect.bisect_left(entry,window)
+            b=bisect.bisect_left(entry,end)
+            r=float(pref[b]-pref[a]);vals.append(r)
+            if a==b:zero+=1
+            else:active.append(r)
+            window=add_months_utc(window,1)
+        rows.append(dict(config_id=cid,cost_pips=cost_pips,
+            rolling_months=months,window_count=len(vals),
+            active_windows=len(active),zero_trade_windows=zero,
+            positive_all_windows_pct=(100*sum(x>0 for x in vals)/len(vals)
+                                       if vals else None),
+            positive_active_windows_pct=(100*sum(x>0 for x in active)/len(active)
+                                          if active else None),
+            worst_window_r=min(vals) if vals else None,
+            median_window_r=med(vals)))
+    return rows
+
+
+def boundary_register():
+    """Forward protocol, NOT a fabricated extension result."""
+    return [
+      dict(axis='previous_low_lookback',pass1_levels='20/40/60/100/165',
+           expand_if='strong region still improving at 20 or 165',
+           proposed_exploratory_extension='10/15 below 20; 200/240 above 165'),
+      dict(axis='ATR_normalised_distance',pass1_levels='.05/.10/.25/.50',
+           expand_if='promising region touches .05 or .50',
+           proposed_exploratory_extension='0/.01/.025/.075 below/near .05; .75/1.00 above .50'),
+      dict(axis='body_ATR_min',pass1_levels='.50/.75/1.00/1.25',
+           expand_if='promising region touches .50 or 1.25',
+           proposed_exploratory_extension='.25/.40 below .50; 1.40/1.60 above 1.25'),
+      dict(axis='range_ATR_min',pass1_levels='.75/1.00/1.25/1.50',
+           expand_if='promising region touches .75 or 1.50',
+           proposed_exploratory_extension='.50/.60 below .75; 1.65/1.80/2.00 above 1.50'),
+      dict(axis='conditional_feature_threshold',pass1_levels='this Pass 2 grid',
+           expand_if='broad cost-resistant response increases at either tested boundary',
+           proposed_exploratory_extension='predeclare adjacent exterior levels, test all neighbours and trade attribution'),
+    ]
+
+
 def run_research():
+    global HISTORY_FIRST
     try:
-        STATUS.update(state='fetch',progress=1,message='Fetching AUD/JPY complete midpoint candles')
+        STATUS.update(state='fetch',progress=1,message='Fetching AUD/JPY M15 and completed HTF candles')
         candles=fetch('M15',START,NOW,35)
-        if len(candles)<REFERENCE_N:raise RuntimeError('M15 history too short for frozen parity')
-        global HISTORY_FIRST
+        if len(candles)<PASS2_CANDLES:raise RuntimeError('M15 shorter than frozen Pass 1 cutoff')
         HISTORY_FIRST=candles[0]['time']
-        STATUS.update(progress=13,message='Fetching completed H1/H4/D contexts')
+        STATUS.update(progress=12,message='Fetching H1/H4/D contexts; no orders')
         h1=fetch('H1',WARMUP,NOW,180)
         h4=fetch('H4',WARMUP,NOW,700)
-        daily=fetch('D',WARMUP,NOW,3500)
-        if not (h1 and h4 and daily):raise RuntimeError('No complete H1/H4/D data')
-        write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in
-            (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
-        STATUS.update(state='features',progress=26,message='Computing past-only indicators')
-        times=[c['time'] for c in candles]
-        f=features(candles,align_htf(times,htf_state(h1)),
-                   align_htf(times,htf_state(h4)),align_htf(times,htf_state(daily)))
-        STATUS.update(state='parity',progress=34,message='Checking 19,471 original engulf trades SHA256')
-        check=raw_engulf_parity(candles,f)
+        day=fetch('D',WARMUP,NOW,3500)
+        if not(h1 and h4 and day):raise RuntimeError('Missing completed HTF data')
+        write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in (
+            ('M15',candles),('H1',h1),('H4',h4),('D',day))])
+        STATUS.update(state='features',progress=26,message='Computing causal indicators')
+        f=features(candles,align_htf([c['time'] for c in candles],htf_state(h1)),
+            align_htf([c['time'] for c in candles],htf_state(h4)),
+            align_htf([c['time'] for c in candles],htf_state(day)))
         base=engulf_base(f)
-        raw_ix=np.flatnonzero(base).tolist()
-        raw2,raw4=evaluate(candles,raw_ix)
-        st=stats(raw2)
-        write_csv(OUTS['raw_engulf_control'],[
-            metrics_row('RAW','BULL_ENGULF_BR1',{},raw_ix,raw2,raw4,st)])
-        write_csv(OUTS['raw_engulf_trades'],[
-            {k:v for k,v in tr.items() if k not in ('entry_time','exit_time')}
-            for tr in raw2])
-        STATUS.update(state='single_factor',progress=41,
-             message='Expanded one-factor diagnostics: each factor independently on engulfing')
+        STATUS.update(state='parity',progress=36,message='Checking archived raw ledger and three anchors')
+        raw_engulf_parity(candles,f)
+        anchor_parity(candles,f,base)
+        STATUS.update(state='anchors',progress=43,message='Replaying unchanged anchors on current full history')
+        controls={};control_rows=[];control_trades=[]
         extra=make_extra_features(f)
-        independent=independent_filters(f,extra)
-        factors=[]
-        for j,(group,axis,value,overlay) in enumerate(independent):
-            ix=np.flatnonzero(base&overlay).tolist()
-            tr2,tr4=evaluate(candles,ix)
-            cid='FACTOR__'+group+'__'+axis+'__'+str(value).replace('.','p')
-            row=metrics_row('ONE_FACTOR',cid,
-                dict(factor_group=group,threshold_kind=axis,threshold=value),
-                ix,tr2,tr4,st)
-            factors.append(row)
-            if j%16==15 or j==len(independent)-1:
-                STATUS.update(progress=41+int(18*(j+1)/len(independent)),
-                              message='Engulf-only filter %d/%d'%(j+1,len(independent)))
-                write_csv(OUTS['expanded_single_factors'],factors)
-            if j%36==35:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        STATUS.update(state='matrix',progress=60,
-                      message='Starting 336 predeclared engulfing structure x body x range settings')
-        grid_rows=[];anchors=[];roll=[]
-        seen=set()
-        for j,(kind,lb,d,body,rng,mask) in enumerate(geometries(f,base)):
-            cid=config_id(lb,d,body,rng)
-            if cid in seen:raise RuntimeError('Duplicate config ID '+cid)
-            seen.add(cid)
+        raw_reference=stats(backtest(candles,np.flatnonzero(base).tolist(),RR_FIXED,PRIMARY_COST))
+        OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        for aid,lb,d,body,rng,_,__,___ in ANCHORS:
+            mask=anchor_mask(f,base,lb,d,body,rng)
             ix=np.flatnonzero(mask).tolist()
-            tr2,tr4=evaluate(candles,ix)
-            r=metrics_row('MATRIX_'+kind,cid,dict(lookback=lb,distance_atr=d,
-                body_atr_min=body,range_atr_min=rng),ix,tr2,tr4,st)
-            grid_rows.append(r)
-            if (lb,d,body,rng) in FIXED_ANCHORS:
-                for assumption,ledger in ((2,tr2),(4,tr4)):
-                    roll.extend(anchor_rolling(cid,ledger,assumption))
-                    anchors.extend(dict(config_id=cid,assumed_fill_pips=assumption,
-                         **{k:v for k,v in t.items() if k not in ('entry_time','exit_time')})
-                         for t in ledger)
-            if j%12==11 or j==N_GEOMETRY-1:
-                STATUS.update(progress=60+int(34*(j+1)/N_GEOMETRY),
-                              message='Engulfing matrix %d/%d'%(j+1,N_GEOMETRY))
-                write_csv(OUTS['engulf_geometry_matrix'],grid_rows)
-            # clear grouped cache occasionally, not once per configuration
-            if j%48==47:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if len(grid_rows)!=N_GEOMETRY:raise RuntimeError('Incomplete matrix')
-        if sum(x['lookback']==0 for x in grid_rows)!=16:raise RuntimeError('Missing no-structure geometry controls')
-        if sum((r['lookback'],r['distance_atr'],r['body_atr_min'],r['range_atr_min'])
-            in FIXED_ANCHORS for r in grid_rows)!=len(FIXED_ANCHORS):
-            raise RuntimeError('Fixed anchor missing from matrix')
-        write_csv(OUTS['engulf_geometry_matrix'],grid_rows)
-        write_csv(OUTS['matrix_neighbours'],neighbours(grid_rows))
-        write_csv(OUTS['matrix_levels'],matrix_level_summary(grid_rows))
-        write_csv(OUTS['fixed_anchor_ledgers'],anchors)
-        write_csv(OUTS['rolling_fixed_anchors'],roll)
+            t2,t4=evaluate(candles,ix)
+            cid='ANCHOR__'+aid
+            controls[aid]=(mask,ix,t2,t4)
+            control_rows.append(dict(anchor=aid,lookback=lb,distance_atr=d,
+                body_atr_min=body,range_atr_min=rng,
+                **metrics_row('UNCHANGED_ANCHOR',cid,{},ix,t2,t4,raw_reference)))
+            for cost,ledger in ((2,t2),(4,t4)):
+                control_trades.extend(dict(anchor=aid,cost_pips=cost,
+                    **{k:v for k,v in tr.items() if k not in ('entry_time','exit_time')})
+                    for tr in ledger)
+        write_csv(OUTS['anchor_controls'],control_rows)
+        write_csv(OUTS['control_ledgers'],control_trades)
+        STATUS.update(state='conditional',progress=48,
+                      message='Conditional features inside three fixed geometry anchors')
+        factors=conditional_filters(f,extra)
+        rows=[];attrs=[];roll=[]
+        for aid,lb,d,body,rng,_,__,___ in ANCHORS:
+            _,anchor_ix,anchor2,anchor4=controls[aid]
+            ctrlid='ANCHOR__'+aid
+            roll.extend(rolling_summary(ctrlid,anchor2,2))
+            roll.extend(rolling_summary(ctrlid,anchor4,4))
+            for j,(group,axis,val,overlay) in enumerate(factors):
+                cid=aid+'__'+group+'__'+axis+'__'+str(val).replace('.','p')
+                mask=controls[aid][0]&overlay
+                ix=np.flatnonzero(mask).tolist()
+                t2,t4=evaluate(candles,ix)
+                row=metrics_row('CONDITIONAL',cid,dict(anchor=aid,
+                    lookback=lb,distance_atr=d,body_atr_min=body,
+                    range_atr_min=rng,filter_group=group,filter_axis=axis,
+                    filter_value=val,control_config_id=ctrlid,
+                    control_raw_signals=len(anchor_ix),
+                    control_2pip_trades=len(anchor2),control_4pip_trades=len(anchor4),
+                    delta_r_vs_anchor_2pip=stats(t2)['total_r']-stats(anchor2)['total_r'],
+                    delta_r_vs_anchor_4pip=stats(t4)['total_r']-stats(anchor4)['total_r']),
+                    ix,t2,t4,raw_reference)
+                rows.append(row)
+                for cost,t,ctl in ((2,t2,anchor2),(4,t4,anchor4)):
+                    a=attribution(ctl,t)
+                    if not a['ledger_change_reconciles']:
+                        raise RuntimeError('P0 attribution reconciliation failed '+cid)
+                    attrs.append(dict(config_id=cid,anchor=aid,cost_pips=cost,
+                        filter_group=group,filter_axis=axis,filter_value=val,**a))
+                    roll.extend(rolling_summary(cid,t,cost))
+                if j%16==15 or j==len(factors)-1:
+                    done=(ANCHORS.index(next(a for a in ANCHORS if a[0]==aid))*len(factors)+j+1)
+                    total=len(ANCHORS)*len(factors)
+                    STATUS.update(progress=48+int(47*done/total),
+                          message='Conditional %d/%d; anchor %s'%(done,total,aid))
+                    write_csv(OUTS['conditional_features'],rows)
+                    write_csv(OUTS['trade_attribution'],attrs)
+                    write_csv(OUTS['conditional_rolling'],roll)
+                if j%24==23:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        assert len(rows)==len(ANCHORS)*len(factors)
+        assert len(attrs)==2*len(rows)
+        write_csv(OUTS['conditional_features'],rows)
+        write_csv(OUTS['trade_attribution'],attrs)
+        write_csv(OUTS['conditional_rolling'],roll)
+        write_csv(OUTS['boundary_register'],boundary_register())
         write_csv(OUTS['methodology'],[
-          dict(topic='SCOPE',detail='READ ONLY, AUD/JPY M15 LONG exact bullish engulfing; no Portfolio 27 or orders'),
-          dict(topic='FROZEN_CONTROL',detail='19,471 raw engulf trades SHA256 through 2026-09-23 19:15 UTC, 546812 bars, pass or stop'),
-          dict(topic='PARAMETERS',detail='336 predeclared geometry settings: 16 no-structure + 320 prior-low structure x body x range; additional one-factor diagnostics independently'),
-          dict(topic='RR',detail='Fixed RR3.50; do not optimise exits or timing in this pass'),
-          dict(topic='COST',detail='Assumed 2-pip adverse BUY fill and 4-pip stress for all settings; not actual spread history'),
-          dict(topic='CAUSAL',detail='Signal OHLC at completed close; prior-only extrema and momentum; completed HTF through next actual open'),
-          dict(topic='EXECUTION',detail='Target from reference-close risk; actual R from fill; next-bar exit, closer-to-open tie stop fallback, exit-candle signal eligible'),
-          dict(topic='TIMING',detail='NY hours and weekdays only single-factor diagnostics, not combined or candidate selection'),
-          dict(topic='P0',detail='Recompute full chronological pyramiding-zero strategy then slice into eras; no fake boundary re-entry'),
-          dict(topic='OVERFITTING',detail='All eras repeatedly inspected. Broad neighbourhoods, cost cushion, frequency & early/late/recent matter; no automatic promotion'),
-          dict(topic='NEXT',detail='Inspect geometry landscape; test new filters CONDITIONALLY around several defensible representative regions only if warranted')])
+          dict(topic='SCOPE',detail='READ-ONLY engulfing-only, three frozen anchors, one additional factor at a time; no live or portfolio access'),
+          dict(topic='PARITY',detail='19,471 raw trades exact sha256 to 19:15 UTC plus three archived aggregate anchor parity counts and R through 20:45 UTC 2026-09-23. Anchor parity is NOT field-level hash.'),
+          dict(topic='COSTS',detail='All rows both 2 and 4 assumed adverse BUY pips, fixed RR3.5. Not measured historical bid/ask or slippage.'),
+          dict(topic='EXECUTION',detail='Signal close reference; target from reference risk, true R from adverse fill risk; next candle exit, same exit candle re-entry, p0.'),
+          dict(topic='CAUSAL',detail='Previous-only structure/momentum, completed H1/H4/D; timeframe completion based on actual next HTF open.'),
+          dict(topic='ATTRIBUTION',detail='Removed and newly eligible ACCEPTED trades distinguished per cost/anchor. Net R change reconciles; not assumed simple deletion.'),
+          dict(topic='ROLLING',detail='All complete 12/24/36 calendar-month windows computed from full p0 ledgers; no reset at splits. Overlap, not independent tests.'),
+          dict(topic='TIMING',detail='No session/weekday combined filters. No RR optimisation.'),
+          dict(topic='BOUNDARY_RULE',detail='If a promising neighbourhood improves at tested boundary, extend that parameter both directions before choosing a plateau; no boundary winner declared optimal.'),
+          dict(topic='EVIDENCE',detail='All full-history and recent periods repeatedly inspected. No fresh out-of-sample. No automatic row ranking or strategy acceptance.')])
         zip_outputs()
         STATUS.update(state='complete',progress=100,raw_engulf_parity='PASS',
-            full_candles=len(candles),single_factor_rows=len(factors),
-            geometry_rows=len(grid_rows),orders_supported=False,trading_enabled=False,
-            result_path='/audjpy-engulfing-matrix1/results',
-            message='Engulfing-first matrix complete; no live changes')
+             anchor_parity='PASS',anchor_count=len(ANCHORS),
+             conditional_factors_per_anchor=len(factors),
+             conditional_rows=len(rows),orders_supported=False,
+             trading_enabled=False,result_path='/audjpy-engulfing-pass2/results',
+             message='Read-only conditional discovery complete; no live changes')
     except Exception as exc:
         STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
-            orders_supported=False,trading_enabled=False)
+                      orders_supported=False,trading_enabled=False)
         try:
             write_csv(OUTS['errors'],[dict(error=str(exc),traceback=STATUS['traceback'])])
             zip_outputs()
@@ -1001,20 +1182,18 @@ def run_research():
 
 @app.route('/')
 def root():
-    return jsonify(service='AUD/JPY M15 LONG engulfing-first research',
-        state=STATUS['state'],status='/audjpy-engulfing-matrix1/status',
-        results='/audjpy-engulfing-matrix1/results',
-        orders_supported=False,trading_enabled=False)
+    return jsonify(service='AUD/JPY M15 LONG exact engulfing Pass 2 conditional features',
+      state=STATUS['state'],status='/audjpy-engulfing-pass2/status',
+      results='/audjpy-engulfing-pass2/results',
+      orders_supported=False,trading_enabled=False)
 
-
-@app.route('/audjpy-engulfing-matrix1/status')
+@app.route('/audjpy-engulfing-pass2/status')
 def status_route():return jsonify(STATUS)
 
-
-@app.route('/audjpy-engulfing-matrix1/results')
+@app.route('/audjpy-engulfing-pass2/results')
 def results_route():return download(BUNDLE)
-
 
 if __name__=='__main__':
     threading.Thread(target=run_research,daemon=True).start()
-    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),debug=False,use_reloader=False)
+    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
+            debug=False,use_reloader=False)
