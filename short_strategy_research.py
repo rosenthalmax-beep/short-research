@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 LONG — ENGULFING PASS 2: CONDITIONAL FEATURES.
+"""AUD/JPY M15 LONG — ENGULFING PASS 3: CONTROLLED COMBINATIONS + BOUNDARY EXTENSIONS.
 
-Three PREDECLARED anchors are frozen at the 2026-09-23 20:45 UTC Pass 1
-cutoff, then a one-factor-at-a-time diagnostic is run INSIDE each anchor.
-No RR, session or portfolio optimisation, no live orders, no automatic winner.
-Future plateau stage MUST extend boundaries if historical improvement continues
-at the edge; a winning boundary is NOT an optimum. Repeatedly inspected history.
-
-Uses exactly the Pass 1 OANDA midpoint, 2/4-pip assumed adverse fills,
-previous-only structure and completed HTF context, fixed RR3.5 and p0 model.
-2/4 pip are modelling assumptions, not measured AUD/JPY executable costs.
+All directions and grids are exploratory and PREDECLARED in the code below.
+Use only exact bullish engulfing; do not replace Stage 2 anchors or optimise RR.
+The previous Pass 1/2 histories have been repeatedly examined: no independent OOS.
+This runner is read-only; no orders or portfolio/live connections. 2/4-pip
+adverse fill are modelling assumptions, not observed historical spread quotes.
 """
+
 import os
 import csv
 import time
@@ -1065,124 +1062,297 @@ def boundary_register():
     ]
 
 
+# ============================================================
+# PASS 3 — OLD-WORKFLOW ENGULFING FEATURE COMBINATIONS
+#                  AND BOUNDARY EXTENSIONS
+# ============================================================
+# We intentionally DO NOT choose future ranges from interim results. All
+# rows are exported; no automated winner / acceptance gate. Pair = AUD_JPY.
+# Complete historical sequence, no p0 reset for eras or boundary comparisons.
+
+PASS2_RESULT_CUTOFF=datetime(2026,9,23,21,15,tzinfo=timezone.utc)
+PASS2_RESULT_CANDLES=546820
+# Exact archived Pass 2 one-extra-filter control results at that cutoff.
+# For these six tests we only have published aggregate counts and 2/4-R,
+# not a field-level hash: do not describe them as ledger identity parity.
+FROZEN_PASS2_CONTROLS=(
+ ('BROAD_MOM48_P05','BROAD_LB60','prior_mom48_rise',.5,179,64.80026118343248,40.956291054287114),
+ ('BROAD_M15ATR_130','BROAD_LB60','m15_atr_ratio20',1.3,117,44.27494488074957,32.41181667166097),
+ ('BROAD_BODY_160','BROAD_LB60','body_atr',1.6,189,41.74882363999429,24.304507223016703),
+ ('TIGHT100_DATR_100','TIGHT_LB100','completed_d_atr',1.,54,30.866456757048393,23.26141616573373),
+ ('TIGHT100_H1ATR_100','TIGHT_LB100','completed_h1_atr',1.,78,30.792614883559658,20.82181956006633),
+ ('TIGHT40_DATR_100','TIGHT_LB40','completed_d_atr',1.,70,26.92673930492475,18.189988019752683),
+)
+OUTPUT_DIR=Path(os.getenv('AUDJPY_ENGULF_PASS3_OUTPUT_DIR','/tmp/audjpy_engulf_pass3'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTS={name:str(OUTPUT_DIR/f'audjpy_engulf_pass3_{name}.csv') for name in (
+ 'coverage','raw_engulf_parity','anchor_parity','pass2_frozen_controls_parity',
+ 'baseline_controls','all_configurations','p0_trade_attribution',
+ 'rolling_summary','boundary_register','parameter_axis_neighbours',
+ 'control_ledgers','methodology','errors')}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_LONG_ENGULFING_PASS3_RESULTS.zip')
+
+BROAD_ATR=(1.00,1.15,1.30,1.40,1.50)  # 1.30 upper Pass 2 boundary, extended
+BROAD_MOM=(0.00,.50,1.00)
+BROAD_BODY=(1.00,1.25,1.40,1.60,1.80,2.00)  # extends 1.60
+BROAD_RANGE=(1.25,1.50,1.65,1.80,2.00)  # extends 1.50
+BROAD_LB=(40,60,80,100,120)
+BROAD_D=(.25,.50,.65,.75,1.00)  # extends .50
+DAILY_ATR=(.80,.90,.95,1.00,1.05,1.10,1.20,1.30)
+H1_ATR=(.80,.90,.95,1.00,1.05,1.10,1.20)
+TIGHT_LB=(40,60,80,100,120)
+TIGHT_D=(0.00,.01,.025,.05,.075,.10)  # .05 was lowest old bound
+
+
+def pass2_filter_mask(f,e,group,threshold):
+    if group=='prior_mom48_rise':return e['mom48']>=threshold
+    if group=='m15_atr_ratio20':return e['m15_atr_ratio20']>=threshold
+    if group=='body_atr':return f['body_atr']>=threshold
+    if group=='completed_d_atr':return f['d_atr']>=threshold
+    if group=='completed_h1_atr':return f['h1_atr']>=threshold
+    raise ValueError('Unknown parity group '+group)
+
+
+def pass2_controls_parity(candles,f,e,base):
+    ts=f['times'];n=bisect.bisect_right(ts,PASS2_RESULT_CUTOFF)
+    if n!=PASS2_RESULT_CANDLES or ts[n-1]!=PASS2_RESULT_CUTOFF:
+        raise RuntimeError('Pass 2 control coverage mismatch; no results authorized: '+str(n))
+    rows=[]; byid={a[0]:a for a in ANCHORS}
+    for cid,anchor,g,v,expected_n,r2,r4 in FROZEN_PASS2_CONTROLS:
+        _,lb,d,body,rng,*_=byid[anchor]
+        mask=anchor_mask(f,base,lb,d,body,rng)&pass2_filter_mask(f,e,g,v)
+        ix=np.flatnonzero(mask[:n]).tolist()
+        tr2=backtest(candles[:n],ix,RR_FIXED,PRIMARY_COST)
+        tr4=backtest(candles[:n],ix,RR_FIXED,STRESS_COST)
+        s2,s4=stats(tr2),stats(tr4)
+        passed=(s2['trades']==expected_n and s4['trades']==expected_n
+                and abs(s2['total_r']-r2)<1e-7 and abs(s4['total_r']-r4)<1e-7)
+        rows.append(dict(control_id=cid,anchor=anchor,group=g,level=v,
+           archived_cutoff_utc=iso(PASS2_RESULT_CUTOFF),
+           expected_trades=expected_n,actual_2pip_trades=s2['trades'],
+           actual_4pip_trades=s4['trades'],expected_2pip_r=r2,
+           actual_2pip_r=s2['total_r'],expected_4pip_r=r4,
+           actual_4pip_r=s4['total_r'],
+           parity_type='archived aggregate count and 2/4-pip total R; not hashed ledger',
+           result='PASS' if passed else 'FAIL'))
+        if not passed:
+            write_csv(OUTS['pass2_frozen_controls_parity'],rows)
+            raise RuntimeError('Frozen Pass 2 control parity FAILED: '+cid)
+    write_csv(OUTS['pass2_frozen_controls_parity'],rows)
+    OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear() # cutoff-only exit outcomes
+    return rows
+
+
+def research_grid(f,e,base):
+    """Explicit product grids, no row selection or adaptive optimisation."""
+    anchor={a[0]:anchor_mask(f,base,a[1],a[2],a[3],a[4]) for a in ANCHORS}
+    seen=set()
+    def emit(branch,axes,mask,ctrl):
+        cid=branch+'__'+'__'.join(k+'_'+str(v).replace('.','p') for k,v in axes.items())
+        if cid in seen:raise RuntimeError('Duplicate configuration '+cid)
+        seen.add(cid)
+        return dict(branch=branch,config_id=cid,control=ctrl,axes=axes,
+                    mask=mask)
+    broad=anchor['BROAD_LB60']
+    for m,a in itertools.product(BROAD_MOM,BROAD_ATR):
+        axes=dict(mom48_min=m,m15_atr_min=a)
+        yield emit('BROAD_MOM48_X_M15_ATR',axes,
+             broad&(e['mom48']>=m)&(e['m15_atr_ratio20']>=a),'BROAD_LB60')
+    for b,a in itertools.product(BROAD_BODY,BROAD_ATR):
+        axes=dict(body_atr_min=b,m15_atr_min=a)
+        yield emit('BROAD_BODY_X_M15_ATR',axes,
+             broad&(f['body_atr']>=b)&(e['m15_atr_ratio20']>=a),'BROAD_LB60')
+    for r,overlay in itertools.product(BROAD_RANGE,('mom48_050','m15atr_130')):
+        extra=(e['mom48']>=.5) if overlay=='mom48_050' else (e['m15_atr_ratio20']>=1.3)
+        axes=dict(range_atr_min=r,extra=overlay)
+        yield emit('BROAD_RANGE_BOUNDARY',axes,
+             base&(f['structure_dist_low'][60]<=.5)&(f['body_atr']>=1.)&
+             (f['range_atr']>=r)&extra,'BROAD_LB60')
+    for lb,d,overlay in itertools.product(BROAD_LB,BROAD_D,('mom48_050','m15atr_130')):
+        extra=(e['mom48']>=.5) if overlay=='mom48_050' else (e['m15_atr_ratio20']>=1.3)
+        axes=dict(lb=lb,distance_max=d,extra=overlay)
+        yield emit('BROAD_STRUCTURE_BOUNDARY',axes,
+             base&(f['structure_dist_low'][lb]<=d)&(f['body_atr']>=1.)&
+             (f['range_atr']>=1.5)&extra,'BROAD_LB60')
+    quality=(('none',None),('bodyratio_125',f['bull_br']>=1.25),
+      ('bodyratio_150',f['bull_br']>=1.50),('strongclose_075',f['close_loc']>=.75),
+      ('strongclose_085',f['close_loc']>=.85),
+      ('prevbody_050',e['prev_body_atr']>=.5),('prevbody_100',e['prev_body_atr']>=1.))
+    for aid in ('TIGHT_LB100','TIGHT_LB40'):
+        for d,(qname,qmask) in itertools.product(DAILY_ATR,quality):
+            axes=dict(anchor=aid,daily_atr_min=d,quality=qname)
+            mask=anchor[aid]&(f['d_atr']>=d)
+            if qmask is not None:mask=mask&qmask
+            yield emit('TIGHT_DAILY_ATR_X_QUALITY',axes,mask,aid)
+        for h in H1_ATR:
+            yield emit('TIGHT_H1_ATR_BOUNDARY',dict(anchor=aid,h1_atr_min=h),
+                       anchor[aid]&(f['h1_atr']>=h),aid)
+        for d,h in itertools.product((.90,1.,1.10),(.90,1.,1.10)):
+            axes=dict(anchor=aid,daily_atr_min=d,h1_atr_min=h)
+            yield emit('TIGHT_DAILY_X_H1_ATR',axes,
+                 anchor[aid]&(f['d_atr']>=d)&(f['h1_atr']>=h),aid)
+    for lb,d,body,overlay in itertools.product(TIGHT_LB,TIGHT_D,(.5,1.),('none','dailyatr_100')):
+        axes=dict(lb=lb,distance_max=d,body_atr_min=body,
+                  range_atr_min=1.25,extra=overlay)
+        mask=(base&(f['structure_dist_low'][lb]<=d)&(f['body_atr']>=body)
+              &(f['range_atr']>=1.25))
+        if overlay!='none':mask=mask&(f['d_atr']>=1.)
+        ctrl='TIGHT_LB100' if body==.5 else 'TIGHT_LB40'
+        yield emit('TIGHT_STRUCTURE_BOUNDARY',axes,mask,ctrl)
+
+# Total 15+30+10+50+112+14+18+120 = 369 predeclared configurations.
+PASS3_EXPECTED=369
+
+
+def pass3_boundary_register():
+    return [
+      dict(axis='broad_m15_atr_ratio_min',earlier_boundary='1.30',
+           extension='1.40/1.50',interpretation='Do not call uppermost level optimal; inspect neighbours/sample loss'),
+      dict(axis='broad_body_atr_min',earlier_boundary='1.60',
+           extension='1.80/2.00',interpretation='Separate body×volatility from momentum×volatility'),
+      dict(axis='broad_range_atr_min',earlier_boundary='1.50',
+           extension='1.65/1.80/2.00',interpretation='Extra axis; do not require all winning filters together'),
+      dict(axis='broad_previous_low_distance',earlier_boundary='0.50',
+           extension='0.65/0.75/1.00',interpretation='Extend outward; do not mislabel 0.50 a local optimum'),
+      dict(axis='broad_previous_low_lookback',earlier_boundary='LB60',
+           extension='40/80/100/120',interpretation='Assess full lookback neighbourhood'),
+      dict(axis='tight_previous_low_distance',earlier_boundary='0.05 lowest tested',
+           extension='0/0.01/0.025/0.075/0.10',interpretation='0 means low exactly previous low, not low-break only'),
+      dict(axis='tight_daily_atr_ratio',earlier_boundary='0.80/1.00/1.20',
+           extension='0.90/0.95/1.05/1.10/1.30',interpretation='Finer plateau around 1; 1.30 outward'),
+      dict(axis='tight_h1_atr_ratio',earlier_boundary='0.80/1.00/1.20',
+           extension='0.90/0.95/1.05/1.10',interpretation='Daily × H1 interaction separately'),
+      dict(axis='tight_previous_low_lookback',earlier_boundary='LB40/LB100',
+           extension='40/60/80/100/120',interpretation='Do not prematurely declare one chosen lookback'),
+      dict(axis='research_limit',earlier_boundary='369 exploratory rows',
+           extension='No new grid chosen adaptively within this run',
+           interpretation='Any later exterior bounds require an explicit new hypothesis, not chasing max R'),
+    ]
+
+
 def run_research():
     global HISTORY_FIRST
     try:
-        # Railway may reuse the same output directory across deployments.
-        # Start each run with a clean report set; an old errors.csv must not
-        # be packaged as if it belonged to this successful run.
-        for previous in list(OUTS.values()) + [BUNDLE]:
-            try:
-                Path(previous).unlink(missing_ok=True)
-            except IsADirectoryError:
-                raise RuntimeError('Report path is a directory: '+str(previous))
-        STATUS.update(state='fetch',progress=1,message='Fetching AUD/JPY M15 and completed HTF candles')
+        # Clean all outputs so errors from a previous deployment cannot persist.
+        for old in list(OUTS.values())+[BUNDLE]:Path(old).unlink(missing_ok=True)
+        STATUS.update(state='fetch',progress=1,message='AUD/JPY M15 and completed HTF candles; no trading API')
         candles=fetch('M15',START,NOW,35)
-        if len(candles)<PASS2_CANDLES:raise RuntimeError('M15 shorter than frozen Pass 1 cutoff')
+        if len(candles)<PASS2_RESULT_CANDLES:raise RuntimeError('M15 shorter than frozen Pass 2 cutoff')
         HISTORY_FIRST=candles[0]['time']
-        STATUS.update(progress=12,message='Fetching H1/H4/D contexts; no orders')
+        STATUS.update(state='fetch',progress=12,message='Fetching H1/H4/D: completed candles only')
         h1=fetch('H1',WARMUP,NOW,180)
         h4=fetch('H4',WARMUP,NOW,700)
         day=fetch('D',WARMUP,NOW,3500)
-        if not(h1 and h4 and day):raise RuntimeError('Missing completed HTF data')
-        write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in (
-            ('M15',candles),('H1',h1),('H4',h4),('D',day))])
-        STATUS.update(state='features',progress=26,message='Computing causal indicators')
+        if not (h1 and h4 and day):raise RuntimeError('Missing higher-timeframe data')
+        write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in
+                (('M15',candles),('H1',h1),('H4',h4),('D',day))])
+        STATUS.update(state='features',progress=26,message='Computing previous-only/HTF-causal indicators')
         f=features(candles,align_htf([c['time'] for c in candles],htf_state(h1)),
             align_htf([c['time'] for c in candles],htf_state(h4)),
             align_htf([c['time'] for c in candles],htf_state(day)))
-        base=engulf_base(f)
-        STATUS.update(state='parity',progress=36,message='Checking archived raw ledger and three anchors')
+        e=make_extra_features(f);base=engulf_base(f)
+        STATUS.update(state='parity',progress=33,message='Raw fingerprint + Pass 1 anchors + Pass 2 controls')
         raw_engulf_parity(candles,f)
         anchor_parity(candles,f,base)
-        STATUS.update(state='anchors',progress=43,message='Replaying unchanged anchors on current full history')
-        controls={};control_rows=[];control_trades=[]
-        extra=make_extra_features(f)
-        raw_reference=stats(backtest(candles,np.flatnonzero(base).tolist(),RR_FIXED,PRIMARY_COST))
+        pass2_controls_parity(candles,f,e,base)
         OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        for aid,lb,d,body,rng,_,__,___ in ANCHORS:
+        raw_stats=stats(backtest(candles,np.flatnonzero(base).tolist(),RR_FIXED,PRIMARY_COST))
+        OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        controls={};control_rows=[];control_ledgers=[];rolling=[]
+        for aid,lb,d,body,rng,*_ in ANCHORS:
             mask=anchor_mask(f,base,lb,d,body,rng)
             ix=np.flatnonzero(mask).tolist()
-            t2,t4=evaluate(candles,ix)
-            cid='ANCHOR__'+aid
-            controls[aid]=(mask,ix,t2,t4)
+            tr2,tr4=evaluate(candles,ix)
+            controls[aid]=(tr2,tr4)
             control_rows.append(dict(anchor=aid,lookback=lb,distance_atr=d,
-                body_atr_min=body,range_atr_min=rng,
-                **metrics_row('UNCHANGED_ANCHOR',cid,{},ix,t2,t4,raw_reference)))
-            for cost,ledger in ((2,t2),(4,t4)):
-                # cost_pips already exists on each trade; do not pass it twice.
-                # Explicit rows also avoid silently dropping important outcome fields.
-                control_trades.extend(
-                    dict(anchor=aid, **{k:v for k,v in tr.items()
-                        if k not in ('entry_time','exit_time')})
-                    for tr in ledger
-                )
-        write_csv(OUTS['anchor_controls'],control_rows)
-        write_csv(OUTS['control_ledgers'],control_trades)
-        STATUS.update(state='conditional',progress=48,
-                      message='Conditional features inside three fixed geometry anchors')
-        factors=conditional_filters(f,extra)
-        rows=[];attrs=[];roll=[]
-        for aid,lb,d,body,rng,_,__,___ in ANCHORS:
-            _,anchor_ix,anchor2,anchor4=controls[aid]
-            ctrlid='ANCHOR__'+aid
-            roll.extend(rolling_summary(ctrlid,anchor2,2))
-            roll.extend(rolling_summary(ctrlid,anchor4,4))
-            for j,(group,axis,val,overlay) in enumerate(factors):
-                cid=aid+'__'+group+'__'+axis+'__'+str(val).replace('.','p')
-                mask=controls[aid][0]&overlay
-                ix=np.flatnonzero(mask).tolist()
-                t2,t4=evaluate(candles,ix)
-                row=metrics_row('CONDITIONAL',cid,dict(anchor=aid,
-                    lookback=lb,distance_atr=d,body_atr_min=body,
-                    range_atr_min=rng,filter_group=group,filter_axis=axis,
-                    filter_value=val,control_config_id=ctrlid,
-                    control_raw_signals=len(anchor_ix),
-                    control_2pip_trades=len(anchor2),control_4pip_trades=len(anchor4),
-                    delta_r_vs_anchor_2pip=stats(t2)['total_r']-stats(anchor2)['total_r'],
-                    delta_r_vs_anchor_4pip=stats(t4)['total_r']-stats(anchor4)['total_r']),
-                    ix,t2,t4,raw_reference)
-                rows.append(row)
-                for cost,t,ctl in ((2,t2,anchor2),(4,t4,anchor4)):
-                    a=attribution(ctl,t)
-                    if not a['ledger_change_reconciles']:
-                        raise RuntimeError('P0 attribution reconciliation failed '+cid)
-                    attrs.append(dict(config_id=cid,anchor=aid,cost_pips=cost,
-                        filter_group=group,filter_axis=axis,filter_value=val,**a))
-                    roll.extend(rolling_summary(cid,t,cost))
-                if j%16==15 or j==len(factors)-1:
-                    done=(ANCHORS.index(next(a for a in ANCHORS if a[0]==aid))*len(factors)+j+1)
-                    total=len(ANCHORS)*len(factors)
-                    STATUS.update(progress=48+int(47*done/total),
-                          message='Conditional %d/%d; anchor %s'%(done,total,aid))
-                    write_csv(OUTS['conditional_features'],rows)
-                    write_csv(OUTS['trade_attribution'],attrs)
-                    write_csv(OUTS['conditional_rolling'],roll)
-                if j%24==23:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        assert len(rows)==len(ANCHORS)*len(factors)
-        assert len(attrs)==2*len(rows)
-        write_csv(OUTS['conditional_features'],rows)
-        write_csv(OUTS['trade_attribution'],attrs)
-        write_csv(OUTS['conditional_rolling'],roll)
-        write_csv(OUTS['boundary_register'],boundary_register())
+                 body_atr_min=body,range_atr_min=rng,
+                 **metrics_row('FROZEN_ANCHOR','ANCHOR__'+aid,{},ix,tr2,tr4,raw_stats)))
+            for cost,ledger in ((2,tr2),(4,tr4)):
+                rolling.extend(rolling_summary('ANCHOR__'+aid,ledger,cost))
+                control_ledgers.extend(dict(anchor=aid,**{k:v for k,v in tr.items()
+                              if k not in ('entry_time','exit_time')}) for tr in ledger)
+        write_csv(OUTS['baseline_controls'],control_rows)
+        write_csv(OUTS['control_ledgers'],control_ledgers)
+        STATUS.update(state='matrix',progress=44,message='Predeclared Pass 3 two-factor combinations and boundary grids')
+        rows=[];attributions=[];seen=set();expected=PASS3_EXPECTED
+        for j,cfg in enumerate(research_grid(f,e,base),1):
+            cid=cfg['config_id']
+            if cid in seen:raise RuntimeError('Duplicate configuration ID '+cid)
+            seen.add(cid)
+            ix=np.flatnonzero(cfg['mask']).tolist()
+            tr2,tr4=evaluate(candles,ix)
+            anchor2,anchor4=controls[cfg['control']]
+            ax=dict(branch=cfg['branch'],control_anchor=cfg['control'],**cfg['axes'],
+              baseline_2pip_r=stats(anchor2)['total_r'],
+              baseline_4pip_r=stats(anchor4)['total_r'])
+            row=metrics_row('PASS3_EXPLORATORY',cid,ax,ix,tr2,tr4,raw_stats)
+            rows.append(row)
+            for cost,ledger,control in ((2,tr2,anchor2),(4,tr4,anchor4)):
+                a=attribution(control,ledger)
+                if not a['ledger_change_reconciles']:
+                    raise RuntimeError('Accepted trade attribution did not reconcile: '+cid)
+                attributions.append(dict(config_id=cid,branch=cfg['branch'],
+                   control_anchor=cfg['control'],cost_pips=cost,**cfg['axes'],**a))
+                rolling.extend(rolling_summary(cid,ledger,cost))
+            if j%12==0 or j==expected:
+                STATUS.update(progress=44+int(49*j/expected),
+                     message='Exploratory matrix %d/%d; %s'%(j,expected,cfg['branch']))
+                write_csv(OUTS['all_configurations'],rows)
+                write_csv(OUTS['p0_trade_attribution'],attributions)
+                write_csv(OUTS['rolling_summary'],rolling)
+            if j%24==0:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if len(rows)!=expected:raise RuntimeError('Expected %d rows got %d'%(expected,len(rows)))
+        write_csv(OUTS['all_configurations'],rows)
+        write_csv(OUTS['p0_trade_attribution'],attributions)
+        write_csv(OUTS['rolling_summary'],rolling)
+        # Isolate effects of ONE axis holding all other axes fixed. Do not
+        # call sparse/isolated profitable rows a plateau.
+        nb=[]
+        bybranch=defaultdict(list)
+        for row in rows:bybranch[row['branch']].append(row)
+        for branch,group in bybranch.items():
+            axes=[k for k in group[0] if k not in ('category','config_id','branch',
+                      'control_anchor','baseline_2pip_r','baseline_4pip_r','raw_signals',
+                      'research_only') and not k.startswith(('2pip_','4pip_','delta_'))]
+            for axis in axes:
+                buckets=defaultdict(list)
+                for row in group:
+                    key=tuple((k,str(row.get(k,''))) for k in axes if k!=axis)
+                    buckets[key].append(row)
+                for fixed,items in buckets.items():
+                    if len(items)<2:continue
+                    numeric=all(isinstance(x.get(axis), (int,float)) for x in items)
+                    ordered=sorted(items,key=lambda x:float(x[axis]) if numeric else str(x[axis]))
+                    for a,b in zip(ordered,ordered[1:]):
+                        nb.append(dict(branch=branch,axis=axis,
+                           fixed_other_axes=str(fixed),from_id=a['config_id'],to_id=b['config_id'],
+                           from_level=a.get(axis,''),to_level=b.get(axis,''),
+                           from_trades=a['4pip_trades'],to_trades=b['4pip_trades'],
+                           from_4pip_r=a['4pip_total_r'],to_4pip_r=b['4pip_total_r'],
+                           delta_4pip_r=b['4pip_total_r']-a['4pip_total_r'],
+                           from_pre2010_r=a['4pip_pre2010_total_r'],
+                           to_pre2010_r=b['4pip_pre2010_total_r'],
+                           from_last2y_r=a['4pip_last2y_total_r'],
+                           to_last2y_r=b['4pip_last2y_total_r']))
+        write_csv(OUTS['parameter_axis_neighbours'],nb)
+        write_csv(OUTS['boundary_register'],pass3_boundary_register())
         write_csv(OUTS['methodology'],[
-          dict(topic='SCOPE',detail='READ-ONLY engulfing-only, three frozen anchors, one additional factor at a time; no live or portfolio access'),
-          dict(topic='PARITY',detail='19,471 raw trades exact sha256 to 19:15 UTC plus three archived aggregate anchor parity counts and R through 20:45 UTC 2026-09-23. Anchor parity is NOT field-level hash.'),
-          dict(topic='COSTS',detail='All rows both 2 and 4 assumed adverse BUY pips, fixed RR3.5. Not measured historical bid/ask or slippage.'),
-          dict(topic='EXECUTION',detail='Signal close reference; target from reference risk, true R from adverse fill risk; next candle exit, same exit candle re-entry, p0.'),
-          dict(topic='CAUSAL',detail='Previous-only structure/momentum, completed H1/H4/D; timeframe completion based on actual next HTF open.'),
-          dict(topic='ATTRIBUTION',detail='Removed and newly eligible ACCEPTED trades distinguished per cost/anchor. Net R change reconciles; not assumed simple deletion.'),
-          dict(topic='ROLLING',detail='All complete 12/24/36 calendar-month windows computed from full p0 ledgers; no reset at splits. Overlap, not independent tests.'),
-          dict(topic='TIMING',detail='No session/weekday combined filters. No RR optimisation.'),
-          dict(topic='BOUNDARY_RULE',detail='If a promising neighbourhood improves at tested boundary, extend that parameter both directions before choosing a plateau; no boundary winner declared optimal.'),
-          dict(topic='EVIDENCE',detail='All full-history and recent periods repeatedly inspected. No fresh out-of-sample. No automatic row ranking or strategy acceptance.')])
+           dict(topic='SCOPE',detail='READ ONLY; exact bullish engulfing AUD/JPY M15; original three frozen anchors; no Portfolio 27, live positions or orders'),
+           dict(topic='PARITY',detail='Raw 19,471 ledger SHA256; original three-anchor aggregates through 20:45 UTC; six Pass2 single-filter aggregate controls through 21:15 UTC. Aggregates are NOT ledger hashes.'),
+           dict(topic='RESEARCH_DESIGN',detail='369 fully predeclared exploratory rows: broad momentum×M15 ATR, body×M15 ATR, range and structure boundary; tight daily ATR×candle quality, H1/daily ATR, tight structure boundary.'),
+           dict(topic='BOUNDARIES',detail='Previous distance 0.05 extended to 0/.01/.025/.075/.10; broad distance .50 to .65/.75/1; ATR ratio 1.30 to 1.40/1.50; body 1.60 to 1.80/2.00. If end-of-grid still improves, flag unresolved; no automatic extra search.'),
+           dict(topic='COSTS',detail='RR3.5 fixed; 2/4-pip assumed adverse BUY fill, not measured spread; target based on reference risk, true R based on adverse fill. 10 JPY ticks = 1 JPY pip.'),
+           dict(topic='CAUSALITY',detail='Prev-low excludes signal; prior 48h momentum excludes signal; completed HTF candles; exit starts next M15 candle; exit-candle reentry; p0 per candidate.'),
+           dict(topic='ATTRIBUTION',detail='Both removed and newly accepted trades explicitly reconciled after fresh chronological p0 on each variant.'),
+           dict(topic='HISTORY',detail='May 2004–present, ALL eras have been examined many times, including new live period. Not independent OOS; require prospective observation before real-money confidence.'),
+           dict(topic='NO_SHORTCUTS',detail='No timing/RR/portfolio optimisation, no automated winner/plateau declaration, no live changes.')])
         zip_outputs()
         STATUS.update(state='complete',progress=100,raw_engulf_parity='PASS',
-             anchor_parity='PASS',anchor_count=len(ANCHORS),
-             conditional_factors_per_anchor=len(factors),
-             conditional_rows=len(rows),orders_supported=False,
-             trading_enabled=False,result_path='/audjpy-engulfing-pass2/results',
-             message='Read-only conditional discovery complete; no live changes')
+            anchor_parity='PASS',pass2_controls_parity='PASS',
+            configurations=len(rows),neighbour_pairs=len(nb),
+            result_path='/audjpy-engulfing-pass3/results',
+            orders_supported=False,trading_enabled=False,
+            message='Pass 3 complete: exploratory interactions and expanded bounds, no candidate locked')
     except Exception as exc:
         STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
                       orders_supported=False,trading_enabled=False)
@@ -1191,21 +1361,20 @@ def run_research():
             zip_outputs()
         finally:print(STATUS['traceback'],flush=True)
 
-
 @app.route('/')
-def root():
-    return jsonify(service='AUD/JPY M15 LONG exact engulfing Pass 2 conditional features',
-      state=STATUS['state'],status='/audjpy-engulfing-pass2/status',
-      results='/audjpy-engulfing-pass2/results',
-      orders_supported=False,trading_enabled=False)
+def home_pass3():
+    return jsonify(service='AUD/JPY M15 LONG engulfing Pass 3 research only',
+      status='/audjpy-engulfing-pass3/status',
+      results='/audjpy-engulfing-pass3/results',
+      trading_enabled=False,orders_supported=False)
 
-@app.route('/audjpy-engulfing-pass2/status')
-def status_route():return jsonify(STATUS)
+@app.route('/audjpy-engulfing-pass3/status')
+def status_pass3():return jsonify(STATUS)
 
-@app.route('/audjpy-engulfing-pass2/results')
-def results_route():return download(BUNDLE)
+@app.route('/audjpy-engulfing-pass3/results')
+def results_pass3():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=run_research,daemon=True).start()
+    threading.Thread(target=run_research,daemon=True,name='audjpy-pass3').start()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
             debug=False,use_reloader=False)
