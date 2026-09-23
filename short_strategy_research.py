@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 LONG — ENGULFING PASS 4: RANGE/STRUCTURE/MOMENTUM PLATEAU.
+"""AUD/JPY M15 LONG — ENGULFING PASS 5: LOCAL PLATEAU CONFIRMATION.
 
-Frozen exact bullish engulfing. Four bounded and fully predeclared research
-branches: range × prior-192-M15-bar momentum; structure × ATR-distance;
-range × structure; and body × range frequency recovery.
+Frozen exact bullish engulfing. 60 local LB x distance x range tests,
+plus nine separate momentum-neighbour diagnostics at three frozen geometries.
 
 Read-only OANDA midpoint research, NOT a live system. 2/4-pip adverse entry
 are cost assumptions, NOT observations of AUD/JPY bid/ask history. No RR,
@@ -1141,302 +1140,313 @@ def pass2_controls_parity(candles,f,e,base):
 
 
 # ============================================================
-# PASS 4 — PREDECLARED ROLLING PLATEAU + FREQUENCY RECOVERY
+# PASS 5 — LOCAL 3D PLATEAU + SEPARATE MOMENTUM DIAGNOSTICS
 # ============================================================
-# The previous Pass-3 cutoff is an exact archive-derived 2026-09-23 21:30.
-# Candidate controls below are frozen at that cutoff. The main study uses the
-# full current candle stream after the controls reproduce.
+# Frozen archive cutoff, 2026-09-23 21:45 UTC, 546822 M15 candles.
+# Historical data has already been mined repeatedly. This is local exploratory
+# robustness, not an untouched out-of-sample or a live performance forecast.
+PASS4_CUTOFF=datetime(2026,9,23,21,45,tzinfo=timezone.utc)
+PASS4_CANDLES=546822
+FROZEN_PASS4=((1.75, 0.5, 112, 62.2564847483502, 46.780683583162165), (1.8, 0.5, 95, 75.24561518313268, 60.16303652433871), (1.85, 0.5, 85, 65.26594891916359, 52.19453249797041), (1.9, 0.5, 74, 60.419338052169344, 49.0154303307881), (2.0, 0.5, 60, 58.1880468575462, 48.22230921691695), (1.8, -0.5, 116, 78.65558667987236, 61.45739741275097), (1.8, 0.25, 98, 76.50877307786959, 61.21303652433866))
+FROZEN_PASS4_CENTER_SHA256={2.0: '5f27b66a255f6d93b9a27753ecb3edd7b6d21a7061effa26ca2b57fd5349a22f', 4.0: 'cc45fa1b6bb65ad2cfb6181b94b7312da692d5d1fabbdcb84652ea141dcf2e58'}
+
+LOCAL_LBS=(50,60,70)
+LOCAL_D=(.40,.50,.60,.75)
+LOCAL_RANGE=(1.75,1.80,1.85,1.90,2.00)
+MOM_REPRESENTATIVES=((50,.40,1.75),(60,.50,1.80),(70,.75,1.90))
+MOM_CHECKS=(-.50,.25,.50)
+TOTAL_LOCAL=len(LOCAL_LBS)*len(LOCAL_D)*len(LOCAL_RANGE)
+TOTAL_MOM=len(MOM_REPRESENTATIVES)*len(MOM_CHECKS)
+assert (TOTAL_LOCAL,TOTAL_MOM)==(60,9)
+
+OUTPUT_DIR=Path(os.getenv('AUDJPY_ENGULF_PASS5_OUTPUT_DIR','/tmp/audjpy_engulf_pass5'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTS={name:str(OUTPUT_DIR/f'audjpy_engulf_pass5_{name}.csv') for name in (
+  'coverage','raw_engulf_parity','anchor_parity','pass2_frozen_controls_parity',
+  'pass3_frozen_controls_parity','pass4_frozen_controls_parity',
+  'frozen_full_history_controls','local_3d_geometry','momentum_checks',
+  'p0_trade_attribution','rolling_summary','local_one_axis_neighbours',
+  'boundary_register','control_trade_ledgers','methodology','errors')}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_LONG_ENGULFING_PASS5_RESULTS.zip')
+
+
+def ensure_local_lookbacks(f):
+    """Extend frozen feature cache for 50/70 without changing archived lookbacks."""
+    for lb in LOCAL_LBS:
+        if lb in f['structure_dist_low']:
+            continue
+        prior=prev_extreme(f['low'],lb,'min')  # signal excluded
+        a=f['atr']; good=np.isfinite(prior)&np.isfinite(a)&(a>0)
+        dist=np.full(f['n'],np.nan)
+        dist[good]=np.abs(f['low'][good]-prior[good])/a[good]
+        f['prev_low'][lb]=prior
+        f['structure_dist_low'][lb]=dist
+    return f
+
+
+def broad5_mask(f,e,base,lb=60,d=.50,rng=1.80,mom=.50):
+    return (base&(f['structure_dist_low'][lb]<=d)
+      &(f['body_atr']>=1.00)&(f['range_atr']>=rng)
+      &(e['mom48']>=mom))
+
 
 PASS3_CUTOFF=datetime(2026,9,23,21,30,tzinfo=timezone.utc)
 PASS3_CANDLES=546821
-# Archived full-history control summaries (trades, R2, R4), not ledger hashes.
-FROZEN_PASS3=(
-    (1.65,135,59.523175645531076,42.261597007637064),
-    (1.80,95,75.24561518313268,60.16303652433871),
-    (2.00,60,58.1880468575462,48.22230921691695),
-)
-
-OUTPUT_DIR=Path(os.getenv('AUDJPY_ENGULF_PASS4_OUTPUT_DIR','/tmp/audjpy_engulf_pass4'))
-OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
-OUTS={name:str(OUTPUT_DIR/f'audjpy_engulf_pass4_{name}.csv') for name in (
-   'coverage','raw_engulf_parity','anchor_parity','pass2_frozen_controls_parity',
-   'pass3_frozen_controls_parity','frozen_full_history_controls',
-   'all_configurations','p0_trade_attribution','rolling_summary',
-   'parameter_axis_neighbours','boundary_register','frequency_recovery',
-   'control_trade_ledgers','methodology','errors'
-)}
-BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_LONG_ENGULFING_PASS4_RESULTS.zip')
-
-# The full matrix and its edges are chosen NOW. No adaptive additions after
-# inspecting Pass 4 data; an improving exterior bound is reported UNRESOLVED.
-RANGE_LEVELS=(1.50,1.60,1.65,1.70,1.75,1.80,1.85,1.90,1.95,2.00,2.10,2.20,2.35,2.50)
-MOM_LEVELS=(-1.00,-0.50,0.00,0.25,0.50,0.75,1.00,1.50,2.00,3.00)
-LB_LEVELS=(20,40,60,80,100,120,165,200)
-DISTANCE_LEVELS=(0.10,0.20,0.30,0.40,0.50,0.60,0.75,1.00,1.25,1.50)
-RANGE_STRUCT_LBS=(40,60,80,100,120)
-RANGE_STRUCT_DS=(.30,.50,.75,1.00)
-RANGE_STRUCT_RS=(1.65,1.80,2.00,2.20)
-BODY_LEVELS=(.75,1.00,1.25,1.50,1.75,2.00)
-BODY_RANGE_LEVELS=(1.65,1.80,1.95,2.10)
-PASS4_EXPECTED=(len(RANGE_LEVELS)*len(MOM_LEVELS)
-                +len(LB_LEVELS)*len(DISTANCE_LEVELS)*2
-                +len(RANGE_STRUCT_LBS)*len(RANGE_STRUCT_DS)*len(RANGE_STRUCT_RS)
-                +len(BODY_LEVELS)*len(BODY_RANGE_LEVELS))
-assert PASS4_EXPECTED==404
-
-
-def broad4_mask(f,e,base,lb=60,d=.50,body=1.00,rng=1.80,mom=.50):
-    return (base&(f['structure_dist_low'][lb]<=d)
-            &(f['body_atr']>=body)&(f['range_atr']>=rng)
-            &(e['mom48']>=mom))
+FROZEN_PASS3=((1.65,135,59.523175645531076,42.261597007637064),
+              (1.80,95,75.24561518313268,60.16303652433871),
+              (2.00,60,58.1880468575462,48.22230921691695))
 
 
 def pass3_frozen_parity(candles,f,e,base):
     n=bisect.bisect_right(f['times'],PASS3_CUTOFF)
     if n!=PASS3_CANDLES or f['times'][n-1]!=PASS3_CUTOFF:
-        raise RuntimeError('Pass 3 coverage mismatch: expected 546821 completed M15 '
-          'candles through 2026-09-23 21:30 UTC; actual prefix '+str(n))
-    r=[]
-    for rng,expected_n,expected2,expected4 in FROZEN_PASS3:
-        ids=np.flatnonzero(broad4_mask(f,e,base,rng=rng)[:n]).tolist()
-        tr2=backtest(candles[:n],ids,RR_FIXED,PRIMARY_COST)
-        tr4=backtest(candles[:n],ids,RR_FIXED,STRESS_COST)
-        x2,x4=stats(tr2),stats(tr4)
-        passed=(x2['trades']==expected_n and x4['trades']==expected_n
-          and abs(x2['total_r']-expected2)<1e-7
-          and abs(x4['total_r']-expected4)<1e-7)
-        r.append(dict(range_atr_min=rng,cutoff_utc=iso(PASS3_CUTOFF),
-         expected_trades=expected_n,actual_2pip_trades=x2['trades'],
-         actual_4pip_trades=x4['trades'],expected_2pip_r=expected2,
-         actual_2pip_r=x2['total_r'],expected_4pip_r=expected4,
-         actual_4pip_r=x4['total_r'],
-         parity_scope='archived aggregate count and 2/4-pip R, NOT ledger hash',
-         result='PASS' if passed else 'FAIL'))
-        if not passed:
-            write_csv(OUTS['pass3_frozen_controls_parity'],r)
-            raise RuntimeError('Frozen Pass 3 candidate parity FAILED at range '+str(rng))
-    write_csv(OUTS['pass3_frozen_controls_parity'],r)
+        raise RuntimeError('Frozen Pass3 candle-prefix parity FAIL')
+    rows=[]
+    for rng,expect_n,expect2,expect4 in FROZEN_PASS3:
+        ix=np.flatnonzero(broad5_mask(f,e,base,rng=rng)[:n]).tolist()
+        a,b=evaluate(candles[:n],ix)
+        a,b=stats(a),stats(b)
+        ok=(a['trades']==expect_n and b['trades']==expect_n
+            and abs(a['total_r']-expect2)<1e-7
+            and abs(b['total_r']-expect4)<1e-7)
+        rows.append(dict(range_atr_min=rng,expected_trades=expect_n,
+              actual_2pip_trades=a['trades'],actual_4pip_trades=b['trades'],
+              expected_2pip_r=expect2,actual_2pip_r=a['total_r'],
+              expected_4pip_r=expect4,actual_4pip_r=b['total_r'],
+              result='PASS' if ok else 'FAIL',
+              parity_scope='Archived aggregate Pass3 controls (not ledger hashes)'))
+        if not ok:
+            write_csv(OUTS['pass3_frozen_controls_parity'],rows)
+            raise RuntimeError('Frozen Pass3 parity failed at '+str(rng))
+    write_csv(OUTS['pass3_frozen_controls_parity'],rows)
     OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-    return r
+    return rows
 
 
-def pass4_grid(f,e,base):
-    """404 unique, unselected masks; explicit section, axes, and control."""
-    seen=set()
-    def item(section,axes,mask):
-        cid=section+'__'+'__'.join(k+'_'+str(v).replace('.','p') for k,v in axes.items())
-        if cid in seen:raise RuntimeError('Duplicate Pass4 id '+cid)
-        seen.add(cid)
-        return dict(section=section,axes=axes,config_id=cid,mask=mask)
-    for rng,mom in itertools.product(RANGE_LEVELS,MOM_LEVELS):
-        yield item('RANGE_X_PRIOR48H_MOMENTUM',dict(range_atr_min=rng,mom48_atr_min=mom),
-             broad4_mask(f,e,base,rng=rng,mom=mom))
-    for rng in (1.80,2.00):
-        for lb,d in itertools.product(LB_LEVELS,DISTANCE_LEVELS):
-            yield item('LOOKBACK_X_DISTANCE',
-              dict(range_atr_min=rng,lookback=lb,distance_atr_max=d),
-              broad4_mask(f,e,base,lb=lb,d=d,rng=rng))
-    for lb,d,rng in itertools.product(RANGE_STRUCT_LBS,RANGE_STRUCT_DS,RANGE_STRUCT_RS):
-        yield item('RANGE_X_STRUCTURE',
-          dict(lookback=lb,distance_atr_max=d,range_atr_min=rng),
-          broad4_mask(f,e,base,lb=lb,d=d,rng=rng))
-    for body,rng in itertools.product(BODY_LEVELS,BODY_RANGE_LEVELS):
-        yield item('BODY_X_RANGE',dict(body_atr_min=body,range_atr_min=rng),
-          broad4_mask(f,e,base,body=body,rng=rng))
+def frozen_pass4_parity(candles,f,e,base):
+    n=bisect.bisect_right(f['times'],PASS4_CUTOFF)
+    if n!=PASS4_CANDLES or f['times'][n-1]!=PASS4_CUTOFF:
+        raise RuntimeError('Frozen Pass4 candle-prefix parity FAIL: '
+                           'expected 546822 through 2026-09-23 21:45 UTC; got '+str(n))
+    out=[]
+    for rng,mom,expected_n,expected2,expected4 in FROZEN_PASS4:
+        ix=np.flatnonzero(broad5_mask(f,e,base,rng=rng,mom=mom)[:n]).tolist()
+        tr2,tr4=evaluate(candles[:n],ix)
+        s2,s4=stats(tr2),stats(tr4)
+        ok=(s2['trades']==expected_n and s4['trades']==expected_n
+             and abs(s2['total_r']-expected2)<1e-7
+             and abs(s4['total_r']-expected4)<1e-7)
+        digest2=digest4=''
+        if rng==1.80 and mom==.50:
+            digest2=trade_digest(tr2)
+            digest4=trade_digest(tr4)
+            ok=ok and (digest2==FROZEN_PASS4_CENTER_SHA256[2.0]
+                       and digest4==FROZEN_PASS4_CENTER_SHA256[4.0])
+        row=dict(range_atr_min=rng,prior_192_bar_momentum_min=mom,
+            expected_n=expected_n,actual_n_2pip=s2['trades'],actual_n_4pip=s4['trades'],
+            expected_r_2pip=expected2,actual_r_2pip=s2['total_r'],
+            expected_r_4pip=expected4,actual_r_4pip=s4['total_r'],
+            central_trade_digest_2pip=digest2,central_trade_digest_4pip=digest4,
+            result='PASS' if ok else 'FAIL',
+            parity_scope='7 archived aggregate controls plus full centre ledger digests')
+        out.append(row)
+        if not ok:
+            write_csv(OUTS['pass4_frozen_controls_parity'],out)
+            raise RuntimeError('Frozen Pass4 parity FAIL at range '+str(rng)+' momentum '+str(mom))
+    write_csv(OUTS['pass4_frozen_controls_parity'],out)
+    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+    return out
 
 
-def pass4_neighbours(rows):
-    """Only true one-axis adjacent contrasts, no ranking/selection."""
-    excluded={'category','config_id','section','control_id','research_only','raw_signals'}
-    grouping=defaultdict(list)
-    for row in rows:grouping[row['section']].append(row)
-    result=[]
-    for section,rs in grouping.items():
-        axes=[k for k in rs[0] if k not in excluded and not k.startswith(('2pip_','4pip_','delta_','control_'))]
-        for axis in axes:
-            groups=defaultdict(list)
-            for r in rs:
-                key=tuple((k,r.get(k)) for k in axes if k!=axis)
-                groups[key].append(r)
-            for fixed,g in groups.items():
-                ordered=sorted(g,key=lambda row:float(row[axis]))
-                for a,b in zip(ordered,ordered[1:]):
-                    result.append(dict(section=section,axis=axis,
-                       other_axes=str(fixed),from_id=a['config_id'],to_id=b['config_id'],
-                       from_level=a[axis],to_level=b[axis],
-                       from_4pip_n=a['4pip_trades'],to_4pip_n=b['4pip_trades'],
-                       from_4pip_r=a['4pip_total_r'],to_4pip_r=b['4pip_total_r'],
-                       marginal_4pip_r=b['4pip_total_r']-a['4pip_total_r'],
-                       from_4pip_dd=a['4pip_max_drawdown_r'],
-                       to_4pip_dd=b['4pip_max_drawdown_r'],
-                       from_pre2010_r=a['4pip_pre2010_total_r'],
-                       to_pre2010_r=b['4pip_pre2010_total_r'],
-                       from_last2y_r=a['4pip_last2y_total_r'],
-                       to_last2y_r=b['4pip_last2y_total_r']))
-    return result
+def trade_digest(ledger):
+    # Decimal formatting is frozen to 10 places, from archived full-precision CSV.
+    payload=''.join(f"{t['signal_index']}|{t['exit_index']}|{float(t['result_r']):.10f}\n"
+                    for t in ledger)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def pass4_boundaries():
-    return [
-      dict(axis='range_min',tested=str(RANGE_LEVELS),
-           extension='1.80 to 2.50, with 1.50 below',
-           edge_status='NOT DETERMINED until the full run',
-           instruction='Do not call uppermost 2.50 optimal; report unresolved if still improving.'),
-      dict(axis='prior_192_M15_bar_momentum_min',tested=str(MOM_LEVELS),
-           extension='-1.00 to +3.00 ATR, relaxed and stricter than +0.50',
-           edge_status='NOT DETERMINED until the full run',
-           instruction='Signal excluded; 192 bars = 48 market hours, not necessarily 48 elapsed UTC hours over gaps.'),
-      dict(axis='previous_low_lb',tested=str(LB_LEVELS),
-           extension='20/40 through 165/200',edge_status='NOT DETERMINED until full run',
-           instruction='If best evidence is at 20 or 200, plateau is unresolved.'),
-      dict(axis='previous_low_distance_max_atr',tested=str(DISTANCE_LEVELS),
-           extension='0.10 through 1.50 beyond 0.50',edge_status='NOT DETERMINED until full run',
-           instruction='Do not select only an edge-of-grid value.'),
-      dict(axis='body_min_atr',tested=str(BODY_LEVELS),
-           extension='0.75 through 2.00 around frozen 1.00',
-           edge_status='NOT DETERMINED until full run',
-           instruction='Frequency recovery is marginal trade-level, not just sample count.'),
-      dict(axis='research_scope',tested='404 predeclared exploratory rows',
-           extension='no automatic expanded search',edge_status='REPEATEDLY_EXAMINED_HISTORY',
-           instruction='No RR, timing or portfolio results used for research selection.')
-    ]
+def configurations(f,e,base):
+    for lb,d,rng in itertools.product(LOCAL_LBS,LOCAL_D,LOCAL_RANGE):
+        axes=dict(lookback=lb,distance_atr_max=d,range_atr_min=rng,
+                  body_atr_min=1.00,mom48_atr_min=.50)
+        cid=f'LOCAL_LB{lb}_D{str(d).replace(".","p")}_R{str(rng).replace(".","p")}'
+        yield dict(section='LOCAL_3D_PLATEAU',config_id=cid,axes=axes,
+                   mask=broad5_mask(f,e,base,lb=lb,d=d,rng=rng))
+    for lb,d,rng in MOM_REPRESENTATIVES:
+        for mom in MOM_CHECKS:
+            axes=dict(lookback=lb,distance_atr_max=d,range_atr_min=rng,
+                      body_atr_min=1.00,mom48_atr_min=mom)
+            cid=(f'MOM_LB{lb}_D{str(d).replace(".","p")}_'
+                 f'R{str(rng).replace(".","p")}_M{str(mom).replace(".","p")}')
+            yield dict(section='SEPARATE_MOMENTUM_DIAGNOSTIC',config_id=cid,
+                       axes=axes,mask=broad5_mask(f,e,base,lb=lb,d=d,rng=rng,mom=mom))
+
+
+def one_axis_neighbours(rows):
+    ret=[]
+    axes=('lookback','distance_atr_max','range_atr_min')
+    for axis in axes:
+        groups=defaultdict(list)
+        for r in rows:
+            fixed=tuple((x,r[x]) for x in axes if x!=axis)
+            groups[fixed].append(r)
+        for fixed,group in groups.items():
+            ordered=sorted(group,key=lambda r:float(r[axis]))
+            for a,b in zip(ordered,ordered[1:]):
+                ret.append(dict(axis=axis,fixed_axes=str(fixed),
+                   from_id=a['config_id'],to_id=b['config_id'],
+                   from_level=a[axis],to_level=b[axis],
+                   trades_from=a['4pip_trades'],trades_to=b['4pip_trades'],
+                   total_r_from=a['4pip_total_r'],total_r_to=b['4pip_total_r'],
+                   marginal_r=b['4pip_total_r']-a['4pip_total_r'],
+                   dd_from=a['4pip_max_drawdown_r'],dd_to=b['4pip_max_drawdown_r'],
+                   pre2010_r_from=a['4pip_pre2010_total_r'],
+                   pre2010_r_to=b['4pip_pre2010_total_r'],
+                   last2y_r_from=a['4pip_last2y_total_r'],
+                   last2y_r_to=b['4pip_last2y_total_r']))
+    return ret
+
+
+def boundaries():
+    return [dict(parameter='lookback',tested=str(LOCAL_LBS),
+               outer_edge='50 / 70',status='UNRESOLVED IF EVIDENCE STILL IMPROVES AT AN EDGE',
+               action='Future extension only if analytically warranted; do not call outer limit optimal.'),
+        dict(parameter='previous_low_distance_atr_max',tested=str(LOCAL_D),
+             outer_edge='.40 / .75',status='UNRESOLVED IF IMPROVING AT AN EDGE',
+             action='Distinguish more trades from better expectancy; any extension is exploratory.'),
+        dict(parameter='minimum_signal_range_atr',tested=str(LOCAL_RANGE),
+             outer_edge='1.75 / 2.00',status='Pass4 extended as far as 2.50; this is a LOCAL plateau check',
+             action='Reference prior wide range study before interpreting 2.00 boundary.'),
+        dict(parameter='momentum_192_prior_M15_bars',tested=str(MOM_CHECKS),
+             outer_edge='-.50 / .50',status='Only nine sidecar tests',
+             action='Do not choose geometry by comparing momentum sidecar winners.'),
+        dict(parameter='risk_and_deployment',tested='RR3.5 2pip 4pip, no session/weekday/portfolio',
+             outer_edge='n/a',status='RESEARCH ONLY',
+             action='No deployment or strategy lock; all history repeatedly inspected.')]
 
 
 def run_research():
     global HISTORY_FIRST
     try:
-        for p in list(OUTS.values())+[BUNDLE]:Path(p).unlink(missing_ok=True)
-        STATUS.update(state='fetch',progress=1,message='Read-only AUD/JPY M15+H1/H4/D history')
+        for path in list(OUTS.values())+[BUNDLE]:Path(path).unlink(missing_ok=True)
+        STATUS.update(state='fetch',progress=1,message='Read-only AUD/JPY M15, H1/H4/D data')
         candles=fetch('M15',START,NOW,35)
-        if len(candles)<PASS3_CANDLES:raise RuntimeError('Insufficient M15 history for frozen Pass 3 parity')
+        if len(candles)<PASS4_CANDLES:raise RuntimeError('Not enough history for Pass4 parity')
         HISTORY_FIRST=candles[0]['time']
-        STATUS.update(state='fetch',progress=12,message='Retrieving completed higher-timeframe candles')
+        STATUS.update(state='fetch',progress=13,message='Completed H1/H4/D context for archived parity')
         h1=fetch('H1',WARMUP,NOW,180)
         h4=fetch('H4',WARMUP,NOW,700)
-        day=fetch('D',WARMUP,NOW,3500)
-        if not(h1 and h4 and day):raise RuntimeError('Missing H1/H4/D history')
+        daily=fetch('D',WARMUP,NOW,3500)
+        if not (h1 and h4 and daily):raise RuntimeError('Missing completed HTF history')
         write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in
-                    (('M15',candles),('H1',h1),('H4',h4),('D',day))])
-        STATUS.update(state='features',progress=26,message='Exact engulfing, structure, momentum and completed HTF')
+              (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
+        STATUS.update(state='features',progress=25,message='Building exact engulfing and frozen features')
         ts=[x['time'] for x in candles]
         f=features(candles,align_htf(ts,htf_state(h1)),
-           align_htf(ts,htf_state(h4)),align_htf(ts,htf_state(day)))
-        e=make_extra_features(f)
-        base=engulf_base(f)
-        # All LBs in the new grid already appear in old feature cache. This
-        # explicit assertion prevents a silently invalid lookback extension.
-        if any(lb not in f['structure_dist_low'] for lb in LB_LEVELS):
-            raise RuntimeError('Missing precomputed lookback from frozen feature engine')
-        STATUS.update(state='parity',progress=32,message='Archived raw + Pass 1, Pass 2, Pass 3 frozen controls')
+           align_htf(ts,htf_state(h4)),align_htf(ts,htf_state(daily)))
+        ensure_local_lookbacks(f)
+        e=make_extra_features(f); base=engulf_base(f)
+        for lb in LOCAL_LBS:
+            if lb not in f['structure_dist_low']:
+                raise RuntimeError('Missing lookback in frozen feature cache: '+str(lb))
+        STATUS.update(state='parity',progress=34,message='Archived raw, anchors, Pass2/3/4 controls')
         raw_engulf_parity(candles,f)
         anchor_parity(candles,f,base)
         pass2_controls_parity(candles,f,e,base)
         pass3_frozen_parity(candles,f,e,base)
+        frozen_pass4_parity(candles,f,e,base)
         OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
         raw_stats=stats(backtest(candles,np.flatnonzero(base).tolist(),RR_FIXED,PRIMARY_COST))
         OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        frozen={};freeze_rows=[];control_ledgers=[];rolling=[]
-        for rng,_,__,___ in FROZEN_PASS3:
-            key='PASS3_RANGE_'+str(rng).replace('.','p')
-            mask=broad4_mask(f,e,base,rng=rng)
-            indices=np.flatnonzero(mask).tolist()
-            tr2,tr4=evaluate(candles,indices)
-            frozen[rng]=(tr2,tr4)
-            freeze_rows.append(metrics_row('FROZEN_FULL_HISTORY_CONTROL',key,
-                dict(range_atr_min=rng,lookback=60,distance_atr_max=.50,
-                     body_atr_min=1.00,mom48_atr_min=.50),indices,tr2,tr4,raw_stats))
-            for cost,trades in ((2.,tr2),(4.,tr4)):
+        ctrls={}; controls=[];ctl_ledgers=[];rolling=[]
+        for rng,mom,_,__,___ in FROZEN_PASS4:
+            mask=broad5_mask(f,e,base,rng=rng,mom=mom)
+            ix=np.flatnonzero(mask).tolist()
+            t2,t4=evaluate(candles,ix)
+            key=f'ARCHIVE_R{rng}_M{mom}'
+            ctrls[(rng,mom)]=(t2,t4)
+            controls.append(metrics_row('PASS4_ARCHIVED_CONTROL',key,
+                dict(range_atr_min=rng,mom48_atr_min=mom,lookback=60,
+                     distance_atr_max=.50,body_atr_min=1.00),ix,t2,t4,raw_stats))
+            for cost,trades in ((2.,t2),(4.,t4)):
                 rolling.extend(rolling_summary(key,trades,cost))
-                for trade in trades:
-                    control_ledgers.append(dict(control_id=key,**{
-                     k:v for k,v in trade.items() if k not in ('entry_time','exit_time')}))
-        write_csv(OUTS['frozen_full_history_controls'],freeze_rows)
-        write_csv(OUTS['control_trade_ledgers'],control_ledgers)
-        STATUS.update(state='grid',progress=44,message='404 predeclared plateau/frequency configurations')
-        rows=[];attrib=[];freq=[]
-        for j,cfg in enumerate(pass4_grid(f,e,base),1):
+                if rng==1.80 and mom==.50:
+                    for trade in trades:
+                        ctl_ledgers.append(dict(control_id=key,**trade))
+        write_csv(OUTS['frozen_full_history_controls'],controls)
+        write_csv(OUTS['control_trade_ledgers'],ctl_ledgers)
+        STATUS.update(state='grid',progress=51,message='60 local settings plus 9 momentum diagnostics')
+        local=[];momrows=[];attrib=[]
+        centre2,centre4=ctrls[(1.80,.50)]
+        for j,cfg in enumerate(configurations(f,e,base),1):
             ix=np.flatnonzero(cfg['mask']).tolist()
             tr2,tr4=evaluate(candles,ix)
-            control_rng=(2.00 if cfg['section']=='LOOKBACK_X_DISTANCE'
-                   and cfg['axes']['range_atr_min']==2.00 else 1.80)
-            control2,control4=frozen[control_rng]
-            ax=dict(section=cfg['section'],control_id='PASS3_RANGE_'+str(control_rng).replace('.','p'),
-                **cfg['axes'])
-            row=metrics_row('PASS4_EXPLORATORY',cfg['config_id'],ax,ix,tr2,tr4,raw_stats)
-            rows.append(row)
-            for cost,trades,ctrl in ((2.,tr2,control2),(4.,tr4,control4)):
-                a=attribution(ctrl,trades)
+            row=metrics_row('PASS5_EXPLORATORY',cfg['config_id'],
+                dict(section=cfg['section'],**cfg['axes']),ix,tr2,tr4,raw_stats)
+            (local if cfg['section']=='LOCAL_3D_PLATEAU' else momrows).append(row)
+            for cost,tr,ctrl in ((2.,tr2,centre2),(4.,tr4,centre4)):
+                a=attribution(ctrl,tr)
                 if not a['ledger_change_reconciles']:
-                    raise RuntimeError('Trade attribution mismatch '+cfg['config_id'])
-                attrib.append(dict(config_id=cfg['config_id'],
-                    section=cfg['section'],cost_pips=cost,
-                    control_id=ax['control_id'],**cfg['axes'],**a))
-                rolling.extend(rolling_summary(cfg['config_id'],trades,cost))
-                if cfg['section'] in ('RANGE_X_PRIOR48H_MOMENTUM','BODY_X_RANGE'):
-                    freq.append(dict(config_id=cfg['config_id'],cost_pips=cost,
-                        control_id=ax['control_id'],**cfg['axes'],
-                        control_trades=a['control_trades'],new_trades=a['variant_trades'],
-                        newly_eligible_trades=a['newly_eligible_trades'],
-                        newly_eligible_r=a['newly_eligible_r'],
-                        removed_accepted_trades=a['removed_accepted_trades'],
-                        removed_accepted_r=a['removed_accepted_r'],
-                        net_change_r=a['net_change_r'],
-                        interpretation='Control versus variant including p0 newly eligible trades; not independent OOS'))
-            if j%16==0 or j==PASS4_EXPECTED:
-                write_csv(OUTS['all_configurations'],rows)
+                    raise RuntimeError('Pyramiding-zero attribution failed '+cfg['config_id'])
+                attrib.append(dict(config_id=cfg['config_id'],section=cfg['section'],
+                      cost_pips=cost,control_id='ARCHIVE_R1.8_M0.5',
+                      **cfg['axes'],**a))
+                rolling.extend(rolling_summary(cfg['config_id'],tr,cost))
+            if j%10==0 or j==TOTAL_LOCAL+TOTAL_MOM:
+                write_csv(OUTS['local_3d_geometry'],local)
+                write_csv(OUTS['momentum_checks'],momrows)
                 write_csv(OUTS['p0_trade_attribution'],attrib)
-                STATUS.update(progress=44+int(49*j/PASS4_EXPECTED),
-                    message='Completed %d/%d: %s'%(j,PASS4_EXPECTED,cfg['section']))
-            if j%32==0:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if len(rows)!=PASS4_EXPECTED:raise RuntimeError('Expected 404, got '+str(len(rows)))
-        write_csv(OUTS['all_configurations'],rows)
+                STATUS.update(progress=51+int(42*j/(TOTAL_LOCAL+TOTAL_MOM)),
+                       message=f'Completed {j}/{TOTAL_LOCAL+TOTAL_MOM}: {cfg["section"]}')
+            if j%24==0:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if len(local)!=60 or len(momrows)!=9 or len(attrib)!=138:
+            raise RuntimeError(f'Incomplete grid {len(local)}+{len(momrows)} attribution {len(attrib)}')
+        write_csv(OUTS['local_3d_geometry'],local)
+        write_csv(OUTS['momentum_checks'],momrows)
         write_csv(OUTS['p0_trade_attribution'],attrib)
-        write_csv(OUTS['frequency_recovery'],freq)
         write_csv(OUTS['rolling_summary'],rolling)
-        nb=pass4_neighbours(rows)
-        write_csv(OUTS['parameter_axis_neighbours'],nb)
-        write_csv(OUTS['boundary_register'],pass4_boundaries())
+        adj=one_axis_neighbours(local)
+        write_csv(OUTS['local_one_axis_neighbours'],adj)
+        write_csv(OUTS['boundary_register'],boundaries())
         write_csv(OUTS['methodology'],[
-           dict(topic='SCOPE',detail='AUD/JPY M15 exact bullish engulfing LONG only; read-only; no Portfolio 27 or live order changes'),
-           dict(topic='FROZEN',detail='Raw hashed 19,471 original; Pass1 anchors and six Pass2 controls aggregate parity; Pass3 range 1.65/1.80/2.00 aggregate count+2/4pip R parity through 2026-09-23 21:30 UTC; not falsely claimed as ledger hashes'),
-           dict(topic='GRID',detail='404 predeclared rows: 140 range×momentum; 160 structure lookback×distance at 1.8/2.0 range; 80 range×structure; 24 body×range'),
-           dict(topic='NO_SNOOPING',detail='No winner chosen by script; no optimising RR/session/weekday; every row+negative neighbours exported'),
-           dict(topic='COSTS',detail='RR3.5; EUR-equivalent model NOT assumed; JPY pip .01 JPY tick .001; 2-pip/4-pip adverse BUY fill; these are hypothetical fill assumptions not recorded spreads'),
-           dict(topic='MECHANICS',detail='Signal reference close; stop signal low minus 10 ticks; target from reference risk; actual R from adverse fill; exit scans NEXT M15 candle; p0 half-open exit-candle signal eligible; nearer-to-open intrabar tie'),
-           dict(topic='PRIOR_MOMENTUM',detail='Prior 192 M15 candles i-1 vs i-193; 48 market hours excludes current candle, can span >48 elapsed UTC hours across gaps'),
-           dict(topic='ATTRIBUTION',detail='Per-configuration chronological p0; compare removed plus newly eligible trades against full-current frozen 1.80 control or 2.00 control for 2.00 lookback branch; no deletion-only shortcuts'),
-           dict(topic='BOUNDARIES',detail='Range reaches 2.50; distance 1.50; lookback 20/200; momentum -1/3. Any improving outer-edge is unresolved, NOT a plateau.'),
-           dict(topic='VALIDATION',detail='Entire history 2004–2026 repeatedly examined; backtest results exploratory not untouched OOS; no live changes')
-        ])
+          dict(topic='SCOPE',detail='Read only; exact AUD/JPY M15 bullish engulfing LONG, frozen 27 strategies not loaded or modified.'),
+          dict(topic='ARCHIVE',detail='Pass4 prefix 546822 candles through 2026-09-23 21:45 UTC; seven aggregate controls and central full trade identity/result hashes.'),
+          dict(topic='GEOMETRY',detail='60 Cartesian settings LB50/60/70 × distance .40/.50/.60/.75 × range 1.75/1.8/1.85/1.9/2.0; body1.00 prior192-M15 momentum +.50; RR3.5 fixed.'),
+          dict(topic='MOMENTUM',detail='Nine separate frozen representative geometries × prior-192-M15-bar momentum thresholds -0.50/0.25/0.50; signal candle excluded, not necessarily 48 elapsed hours over holidays.'),
+          dict(topic='COSTS',detail='JPY pip=.01 tick=.001; BUY reference signal close; stop low-10 ticks; target reference risk×3.5; 2- and 4-pip adverse-entry hypothetical costs; actual R from filled risk.'),
+          dict(topic='P0',detail='Chronological pyramiding-zero, same exit candle signal eligible; trades removed AND newly eligible reported, NOT ledger deletion.'),
+          dict(topic='VALIDATION',detail='Full history repeatedly used for discovery; descriptive era and rolling statistics in-sample, not independent OOS; no RR, timing or portfolio search.'),
+          dict(topic='STOP RULE',detail='If edge moves to tested bound, mark unresolved, do not declare optimal and do not add ad hoc configurations in this run.')])
         zip_outputs()
-        STATUS.update(state='complete',progress=100,configurations=len(rows),
-           neighbour_pairs=len(nb),raw_engulf_parity='PASS',
-           anchor_parity='PASS',pass2_controls_parity='PASS',
-           pass3_controls_parity='PASS',orders_supported=False,trading_enabled=False,
-           result_path='/audjpy-engulfing-pass4/results',
-           message='Pass4 completed. No candidate automatically selected or locked.')
-    except Exception as exc:
-        STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
-              orders_supported=False,trading_enabled=False)
+        STATUS.update(state='complete',progress=100,local_configurations=len(local),
+            momentum_configurations=len(momrows),axis_neighbour_pairs=len(adj),
+            raw_engulf_parity='PASS',anchor_parity='PASS',
+            pass2_controls_parity='PASS',pass3_controls_parity='PASS',
+            pass4_controls_parity='PASS',orders_supported=False,trading_enabled=False,
+            result_path='/audjpy-engulfing-pass5/results',
+            message='Pass5 done: 60 local grid + nine momentum sidecars, no strategy selected.')
+    except Exception as ex:
+        STATUS.update(state='error',message=str(ex),traceback=traceback.format_exc(),
+                      orders_supported=False,trading_enabled=False)
         try:
-            write_csv(OUTS['errors'],[dict(error=str(exc),traceback=STATUS['traceback'])])
+            write_csv(OUTS['errors'],[dict(error=str(ex),traceback=STATUS['traceback'])])
             zip_outputs()
         finally:
             print(STATUS['traceback'],flush=True)
 
 @app.route('/')
-def home_pass4():
-    return jsonify(service='AUD/JPY M15 LONG engulfing Pass 4 research only',
-        status='/audjpy-engulfing-pass4/status',results='/audjpy-engulfing-pass4/results',
-        orders_supported=False,trading_enabled=False)
+def pass5_home():
+    return jsonify(service='AUD/JPY M15 LONG engulfing Pass5, research only',
+       status='/audjpy-engulfing-pass5/status',results='/audjpy-engulfing-pass5/results',
+       orders_supported=False,trading_enabled=False)
 
-@app.route('/audjpy-engulfing-pass4/status')
-def pass4_status():return jsonify(STATUS)
+@app.route('/audjpy-engulfing-pass5/status')
+def pass5_status():return jsonify(STATUS)
 
-@app.route('/audjpy-engulfing-pass4/results')
-def pass4_results():return download(BUNDLE)
+@app.route('/audjpy-engulfing-pass5/results')
+def pass5_results():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=run_research,daemon=True,name='audjpy-pass4').start()
+    threading.Thread(target=run_research,daemon=True,name='audjpy-pass5').start()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
             debug=False,use_reloader=False)
