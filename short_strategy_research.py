@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""EUR/AUD M15 LONG Stage 3: three NEW, bounded, standalone raw mechanisms.
+"""EUR/AUD M15 SHORT — Stage 1: independent, standalone bearish-edge discovery.
 
-1. Consecutive multi-bar washout and bullish reclaim.
-2. Sweep/reclaim of the COMPLETED Tokyo 09:00-14:59 session low during a
-   predeclared London 07:00-13:59 window (one mechanical session definition).
-3. M15 pullback and resumption within strictly completed H1/H4 uptrends.
+Read-only OANDA MIDPOINT research, NO orders, NO Portfolio 27 inputs.
+Six minimal bearish mechanisms and 80 independent overlays per mechanism,
+480 one-factor configurations plus six raw baselines. Fixed RR3.50 throughout.
+NO multi-factor matrices, RR/session tuning, automatic winner, or live changes.
 
-Each family has one broad RAW baseline plus eight within-mechanism geometry
-controls; RR3.5, 2-pip assumed fill and 4-pip stress remain fixed. No mixing
-with Stage-2 filters; no portfolio test, RR/time optimisation, or orders.
-The six Stage-1 raw ledgers must reproduce at the archived candle cutoff.
-Every historical period has been inspected previously: no untouched OOS claim.
+M15 candles from requested May 2002; actual EUR/AUD historical coverage may
+begin in May 2004. H1/H4/D candles aligned only after actual next candle open.
+ATR14 Wilder, past-only high/low lookbacks, prior 16-bar M15 momentum.
+
+SHORT entry reference: signal close. Assumed adverse fill = reference minus
+2 pips (4-pip stress); neither assumption is measured historical bid/ask.
+Stop = signal high + 10 ticks; TP = reference - 3.5 * (stop-reference).
+Result R uses actual fill-to-stop risk; exits from NEXT M15 candle onward.
+Both stop and TP in one bar: open-to-extreme approximation; TARGET
+only when the low is strictly closer to the open than the high. Ties => STOP. Pyramiding 0; exit-candle signals are eligible.
+Data quality and OHLC fill ambiguity limit interpretation; all historical
+years are exploratory, not unseen out-of-sample observations.
 """
 import os
 import csv
@@ -45,13 +52,13 @@ RR_FIXED = 3.50
 PRIMARY_COST = 2.0
 STRESS_COST = 4.0
 MIN_COST_STRESS_TRADES = 50
+MIN_M15_BARS = 100_000
 STATUS = dict(state="not_started", progress=0, message="Waiting to start",
               orders_supported=False, trading_enabled=False)
-OUTS = {name: f"euraud_m15_long_stage3_{name}.csv" for name in (
-    "coverage", "stage1_raw_parity", "all_mechanisms", "branch_diagnostics",
-    "neighbourhood", "anchor_trade_ledgers", "anchor_rolling",
-    "anchor_calendar", "session_checks", "methods", "errors")}
-BUNDLE = "EURAUD_M15_LONG_STAGE3_ALTERNATIVE_MECHANISMS_RESULTS.zip"
+OUTS = {name:f"euraud_m15_short_stage1_{name}.csv" for name in (
+    "coverage","raw_families","single_factors","raw_trade_ledgers",
+    "raw_cost_stress","raw_rolling","raw_calendar","methods","errors")}
+BUNDLE="EURAUD_M15_SHORT_STAGE1_RAW_EDGE_DISCOVERY_RESULTS.zip"
 
 # ============================================================
 # GENERAL HELPERS
@@ -127,6 +134,16 @@ def month_floor(dt):
 
 def med(values):
     return median(values) if values else 0.0
+
+
+# ============================================================
+# OANDA HISTORY
+# ============================================================
+
+def headers():
+    if not TOKEN:
+        raise RuntimeError("OANDA_TOKEN is not configured")
+    return {"Authorization": "Bearer " + TOKEN.strip()}
 
 
 # ============================================================
@@ -281,7 +298,7 @@ def align_htf(m15_times, state):
 
 
 # ============================================================
-# M15 FEATURE CACHE — FRESH LONG ORIENTED
+# M15 FEATURE CACHE — INDEPENDENT SHORT ORIENTED
 # ============================================================
 
 def features(candles, h1, h4, daily):
@@ -293,134 +310,133 @@ def features(candles, h1, h4, daily):
     cl = np.fromiter((x["close"] for x in candles), float, count=n)
     a = atr(candles, 14)
     am20 = sma(a, 20)
-    bullish = cl > o
-    exact_bull = np.zeros(n, dtype=bool)
-    exact_bull[1:] = ((cl[:-1] < o[:-1]) & (cl[1:] > o[1:])
-                      & (o[1:] <= cl[:-1]) & (cl[1:] >= o[:-1]))
-    bull_body = cl - o
+    bearish = cl < o
+    exact_bear = np.zeros(n, dtype=bool)
+    exact_bear[1:] = ((cl[:-1] > o[:-1]) & (cl[1:] < o[1:])
+                      & (o[1:] >= cl[:-1]) & (cl[1:] <= o[:-1]))
+    bear_body = o-cl
     prior_body = np.r_[np.nan, np.abs(cl[:-1] - o[:-1])]
     br = np.full(n, np.nan)
     ok_body = prior_body > 0
-    br[ok_body] = bull_body[ok_body] / prior_body[ok_body]
+    br[ok_body] = bear_body[ok_body] / prior_body[ok_body]
     valid_atr = np.isfinite(a) & (a > 0)
     body_atr = np.full(n, np.nan)
-    body_atr[valid_atr] = bull_body[valid_atr] / a[valid_atr]
-    candle_range = h - l
+    body_atr[valid_atr] = bear_body[valid_atr] / a[valid_atr]
+    candle_range = h-l
     range_atr = np.full(n, np.nan)
     range_atr[valid_atr] = candle_range[valid_atr] / a[valid_atr]
     close_loc = np.full(n, np.nan)
     valid_range = candle_range > 0
-    close_loc[valid_range] = (cl[valid_range] - l[valid_range]) / candle_range[valid_range]
-    lower_wick = np.minimum(o, cl) - l
-    lower_wick_body = np.full(n, np.nan)
-    lower_wick_body[bull_body > 0] = lower_wick[bull_body > 0] / bull_body[bull_body > 0]
+    close_loc[valid_range] = (cl[valid_range]-l[valid_range]) / candle_range[valid_range]
+    upper_wick = h-np.maximum(o,cl)
+    upper_wick_body = np.full(n, np.nan)
+    upper_wick_body[bear_body > 0] = upper_wick[bear_body > 0] / bear_body[bear_body > 0]
     compression = np.full(n, np.nan)
-    previous_atr = np.r_[np.nan, a[:-1]]
-    previous_atr_mean20 = np.r_[np.nan, am20[:-1]]
+    previous_atr = np.r_[np.nan,a[:-1]]
+    previous_atr_mean20 = np.r_[np.nan,am20[:-1]]
     ok_comp = (np.isfinite(previous_atr) & np.isfinite(previous_atr_mean20)
                & (previous_atr_mean20 > 0))
     compression[ok_comp] = previous_atr[ok_comp] / previous_atr_mean20[ok_comp]
-    lookbacks = [10, 20, 40, 60, 80, 100, 120, 165, 200]
-    prev_low = {lb: prev_extreme(l, lb, "min") for lb in lookbacks}
-    prev_high = {lb: prev_extreme(h, lb, "max") for lb in lookbacks}
-    dist_low = {}
-    for lb in [40, 60, 80, 100, 120, 165, 200]:
-        x = np.full(n, np.nan)
-        ok = valid_atr & np.isfinite(prev_low[lb])
-        x[ok] = np.abs(l[ok] - prev_low[lb][ok]) / a[ok]
-        dist_low[lb] = x
-    # 4h M15 momentum: strictly prior completed candles i-1 and i-17.
-    mom4 = np.full(n, np.nan)
-    mom4[17:] = np.divide(cl[16:-1] - cl[:-17], a[17:],
-                          out=np.full(n-17, np.nan), where=valid_atr[17:])
-    ny_hour = np.zeros(n, dtype=np.int16)
-    ny_weekday = np.zeros(n, dtype=np.int16)
-    london_hour = np.zeros(n, dtype=np.int16)
-    tokyo_hour = np.zeros(n, dtype=np.int16)
-    sydney_hour = np.zeros(n, dtype=np.int16)
-    sydney = ZoneInfo("Australia/Sydney")
-    for i, t in enumerate(times):
-        z = t.astimezone(NY)
-        ny_hour[i], ny_weekday[i] = z.hour, z.weekday()
-        london_hour[i] = t.astimezone(LONDON).hour
-        tokyo_hour[i] = t.astimezone(TOKYO).hour
-        sydney_hour[i] = t.astimezone(sydney).hour
+    lookbacks = [10,20,40,60,80,100,120,165,200]
+    prev_low = {lb: prev_extreme(l,lb,"min") for lb in lookbacks}
+    prev_high = {lb: prev_extreme(h,lb,"max") for lb in lookbacks}
+    dist_high = {}
+    for lb in [40,60,80,100,120,165,200]:
+        x=np.full(n,np.nan)
+        ok=valid_atr & np.isfinite(prev_high[lb])
+        x[ok]=np.abs(h[ok]-prev_high[lb][ok])/a[ok]
+        dist_high[lb]=x
+    # Strict prior 4h momentum: previous completed M15 close minus i-17 close.
+    mom4=np.full(n,np.nan)
+    mom4[17:]=np.divide(cl[16:-1]-cl[:-17],a[17:],
+                        out=np.full(n-17,np.nan),where=valid_atr[17:])
+    ny_hour=np.zeros(n,dtype=np.int16)
+    ny_weekday=np.zeros(n,dtype=np.int16)
+    london_hour=np.zeros(n,dtype=np.int16)
+    tokyo_hour=np.zeros(n,dtype=np.int16)
+    sydney_hour=np.zeros(n,dtype=np.int16)
+    sydney=ZoneInfo("Australia/Sydney")
+    for i,t in enumerate(times):
+        z=t.astimezone(NY)
+        ny_hour[i],ny_weekday[i]=z.hour,z.weekday()
+        london_hour[i]=t.astimezone(LONDON).hour
+        tokyo_hour[i]=t.astimezone(TOKYO).hour
+        sydney_hour[i]=t.astimezone(sydney).hour
     return {
-        "n": n, "times": times, "open": o, "high": h, "low": l,
-        "close": cl, "atr": a, "valid_atr": valid_atr,
-        "bullish": bullish, "exact_bull": exact_bull, "bull_br": br,
-        "body_atr": body_atr, "range_atr": range_atr,
-        "close_loc": close_loc, "lower_wick_body": lower_wick_body,
-        "compression": compression, "prev_low": prev_low,
-        "prev_high": prev_high, "structure_dist_low": dist_low,
-        "mom4": mom4, "ny_hour": ny_hour, "ny_weekday": ny_weekday,
-        "london_hour": london_hour, "tokyo_hour": tokyo_hour,
-        "sydney_hour": sydney_hour,
-        "h1_close": h1["close"], "h1_ema50": h1["ema50"],
-        "h1_ema100": h1["ema100"], "h1_ema200": h1["ema200"],
-        "h1_atr": h1["atr_ratio50"],
-        "h4_close": h4["close"], "h4_ema100": h4["ema100"],
-        "h4_ema200": h4["ema200"], "h4_atr": h4["atr_ratio50"],
-        "d_close": daily["close"], "d_ema50": daily["ema50"],
-        "d_ema200": daily["ema200"], "d_atr": daily["atr_ratio50"],
+        "n":n,"times":times,"open":o,"high":h,"low":l,"close":cl,
+        "atr":a,"valid_atr":valid_atr,"bearish":bearish,
+        "exact_bear":exact_bear,"bear_br":br,"body_atr":body_atr,
+        "range_atr":range_atr,"close_loc":close_loc,
+        "upper_wick_body":upper_wick_body,"compression":compression,
+        "prev_low":prev_low,"prev_high":prev_high,
+        "structure_dist_high":dist_high,"mom4":mom4,
+        "ny_hour":ny_hour,"ny_weekday":ny_weekday,
+        "london_hour":london_hour,"tokyo_hour":tokyo_hour,
+        "sydney_hour":sydney_hour,
+        "h1_close":h1["close"],"h1_ema50":h1["ema50"],
+        "h1_ema100":h1["ema100"],"h1_ema200":h1["ema200"],
+        "h1_atr":h1["atr_ratio50"],"h4_close":h4["close"],
+        "h4_ema100":h4["ema100"],"h4_ema200":h4["ema200"],
+        "h4_atr":h4["atr_ratio50"],"d_close":daily["close"],
+        "d_ema50":daily["ema50"],"d_ema200":daily["ema200"],
+        "d_atr":daily["atr_ratio50"],
     }
 
 
 # ============================================================
-# LONG BACKTEST — full-ledger p0, time-window metrics never reset p0
+# SHORT BACKTEST — full-ledger p0, time-window metrics never reset p0
 # ============================================================
 OUTCOME_CACHE = {}
 BACKTEST_CACHE = {}
 
 
 def outcome(candles, signal_index, rr, cost_pips):
-    key = (signal_index, round(rr,4), round(cost_pips,4))
-    if len(OUTCOME_CACHE) >= 250_000:
-        OUTCOME_CACHE.clear()  # bounded, affects only speed, never outcomes
+    key=(signal_index,round(rr,4),round(cost_pips,4))
+    if len(OUTCOME_CACHE)>=250_000:
+        OUTCOME_CACHE.clear()
     if key in OUTCOME_CACHE:
-        x = OUTCOME_CACHE[key]
-        return None if x is None else x
-    candle = candles[signal_index]
-    ref = candle["close"]
-    stop = candle["low"] - STOP_TICKS*TICK
-    ref_risk = ref - stop
-    if ref_risk <= 0:
-        OUTCOME_CACHE[key] = None
+        return OUTCOME_CACHE[key]
+    candle=candles[signal_index]
+    ref=candle["close"]
+    stop=candle["high"]+STOP_TICKS*TICK
+    reference_risk=stop-ref
+    if reference_risk<=0:
+        OUTCOME_CACHE[key]=None
         return None
-    target = ref + rr*ref_risk
-    fill = ref + cost_pips*PIP
-    actual_risk = fill - stop
-    if actual_risk <= 0:
-        OUTCOME_CACHE[key] = None
+    target=ref-rr*reference_risk
+    fill=ref-cost_pips*PIP
+    actual_risk=stop-fill
+    if actual_risk<=0:
+        OUTCOME_CACHE[key]=None
         return None
     for j in range(signal_index+1,len(candles)):
-        bar = candles[j]
-        stop_hit = bar["low"] <= stop
-        target_hit = bar["high"] >= target
+        bar=candles[j]
+        stop_hit=bar["high"]>=stop
+        target_hit=bar["low"]<=target
         if not (stop_hit or target_hit):
             continue
         if stop_hit and target_hit:
-            # If high side closer to bar open, assume TARGET first.
-            # Equal distances resolve to STOP (conservative).
-            if abs(bar["high"]-bar["open"]) < abs(bar["open"]-bar["low"]):
-                price, reason = target, "TARGET"
+            # Short: high is the STOP side, low is the TARGET side.
+            # A tie is resolved to STOP (conservative).
+            if abs(bar["low"]-bar["open"]) < abs(bar["open"]-bar["high"]):
+                price,reason=target,"TARGET"
             else:
-                price, reason = stop, "STOP"
+                price,reason=stop,"STOP"
         elif target_hit:
-            price, reason = target, "TARGET"
+            price,reason=target,"TARGET"
         else:
-            price, reason = stop, "STOP"
-        x = {
-            "signal_index": signal_index, "exit_index":j,
-            "entry_time":candle["time"], "exit_time":bar["time"],
-            "entry_time_utc":iso(candle["time"]), "exit_time_utc":iso(bar["time"]),
-            "reference_entry":ref, "historical_fill":fill,
-            "stop":stop, "target":target, "result_r":(price-fill)/actual_risk,
-            "exit_reason":reason, "rr":rr,"cost_pips":cost_pips,
+            price,reason=stop,"STOP"
+        trade={
+            "signal_index":signal_index,"exit_index":j,
+            "entry_time":candle["time"],"exit_time":bar["time"],
+            "entry_time_utc":iso(candle["time"]),"exit_time_utc":iso(bar["time"]),
+            "reference_entry":ref,"historical_fill":fill,
+            "stop":stop,"target":target,"result_r":(fill-price)/actual_risk,
+            "exit_reason":reason,"rr":rr,"cost_pips":cost_pips,
         }
-        OUTCOME_CACHE[key] = x
-        return x
-    OUTCOME_CACHE[key] = None
+        OUTCOME_CACHE[key]=trade
+        return trade
+    OUTCOME_CACHE[key]=None
     return None
 
 
@@ -480,13 +496,6 @@ def stats(trades):
 # FIRST-HISTORY TOLERANCE & SAFE RESULTS PACKAGING
 # ============================================================
 
-def headers():
-    """Read-only OANDA candle endpoint authorization, as in frozen Stage 1."""
-    if not TOKEN:
-        raise RuntimeError("OANDA_TOKEN is not configured")
-    return {"Authorization": "Bearer " + TOKEN.strip()}
-
-
 def fetch_chunk(granularity, start, end):
     if not TOKEN:
         raise RuntimeError("OANDA_TOKEN is not configured")
@@ -536,99 +545,96 @@ def zip_outputs():
             if os.path.isfile(path):z.write(path,arcname=os.path.basename(path))
 
 
-
-
-
 # ============================================================
-# FROZEN STAGE-1 PARITY REFERENCE
+# SIX MINIMAL ENTRY MECHANISMS, NOT PRE-OPTIMISED STRATEGIES
 # ============================================================
-REFERENCE_CUTOFF = parse_time("2026-09-23T09:15:00Z")
-REFERENCE_FIRST = parse_time("2004-05-31T20:45:00Z")
-REFERENCE_CANDLE_COUNT = 546817
-FROZEN_RAW = {'BULL_ENGULF': (20525, '3e1e6eef952794e4cf74b8de125ee168631fc3eba1353094a4325c47d1e1eeb7'), 'FAILED_BREAKDOWN': (17620, '25f9c5876655bc722b49b972b5cdbfb27dca34258c399733dc06ad6e1646b36c'), 'LOW_SWEEP_DISPLACEMENT': (3066, 'cc004354b947994e62cfd24e9852d76321c3c744a81090247a6ddd1bbb7fde10'), 'OUTSIDE_REVERSAL': (16343, '6cc2d7af4b32f7b7947159cb71481228cf3823b8c20999f3ecf8654f25b1097b'), 'COMPRESSION_BREAKOUT': (9905, 'a2b08adbc6df24680839aa95a97d5dd35bf1bb59be311749ff3ef0a0ace18499'), 'PULLBACK_REJECTION': (13202, '8e5128c518960e37725d84e35807fef49fdb44725b541d9f51f41fbe4456152f')}
-FROZEN_FIELDS = ['signal_index', 'exit_index', 'entry_time_utc', 'exit_time_utc', 'reference_entry', 'historical_fill', 'stop', 'target', 'result_r', 'exit_reason', 'rr', 'cost_pips']
-
-# Stage-1 replay contract is frozen; Stage-3 mechanism controls were declared after Stage 2, before Stage-3 results.
-# Dimension values are not changed during the run.
-FAMILIES = ("BULL_ENGULF", "FAILED_BREAKDOWN", "LOW_SWEEP_DISPLACEMENT",
-            "OUTSIDE_REVERSAL", "COMPRESSION_BREAKOUT", "PULLBACK_REJECTION")
-ANCHORS = {
-    "WASHOUT_RECLAIM": (2, .75, .50),
-    "TOKYO_LOW_RECLAIM": (0.00, .50, .65),
-    "TREND_PULLBACK": ("CLOSE_ABOVE_H1H4_EMA100", "PRIOR_4BAR_TOUCH", .50),
-}
-
-def frozen_row_text(t):
-    numeric = {"reference_entry", "historical_fill", "stop", "target", "result_r", "rr", "cost_pips"}
-    return "|".join(repr(float(t[k])) if k in numeric else str(t[k]) for k in FROZEN_FIELDS) + "\n"
-
-
-def stage1_raw_parity(candles, f):
-    times = [c["time"] for c in candles]
-    cutoff_count = bisect.bisect_right(times, REFERENCE_CUTOFF)
-    if not times or times[0] != REFERENCE_FIRST or cutoff_count != REFERENCE_CANDLE_COUNT or times[cutoff_count-1] != REFERENCE_CUTOFF:
-        raise RuntimeError("Frozen Stage-1 candle coverage differs: first=%s cutoff_count=%s last_at_cutoff=%s" % (
-            iso(times[0]) if times else "none", cutoff_count,
-            iso(times[cutoff_count-1]) if cutoff_count else "none"))
-    old_candles = candles[:cutoff_count]
-    rows = []
-    raw = raw_masks(f)
-    for family in FAMILIES:
-        OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
-        old_indices = np.flatnonzero(raw[family][:cutoff_count]).tolist()
-        old_trades = backtest(old_candles, old_indices, RR_FIXED, PRIMARY_COST)
-        digest = __import__("hashlib").sha256()
-        for t in old_trades: digest.update(frozen_row_text(t).encode("utf-8"))
-        expected_n, expected_hash = FROZEN_RAW[family]
-        good = len(old_trades) == expected_n and digest.hexdigest() == expected_hash
-        rows.append(dict(family=family, first=iso(times[0]), cutoff=iso(REFERENCE_CUTOFF),
-                         candle_count=cutoff_count, archived_trades=expected_n,
-                         reproduced_trades=len(old_trades), archived_sha256=expected_hash,
-                         reproduced_sha256=digest.hexdigest(), status="PASS" if good else "FAIL"))
-        if not good:
-            write_csv(OUTS["stage1_raw_parity"], rows)
-            raise RuntimeError("HARD STOP: Stage-1 raw accepted-trade ledger drift for " + family)
-    write_csv(OUTS["stage1_raw_parity"], rows)
-    OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
-    return rows
+FAMILIES=("BEAR_ENGULF","FAILED_UPBREAK","HIGH_SWEEP_DISPLACEMENT",
+          "OUTSIDE_REVERSAL","COMPRESSION_BREAKDOWN","RALLY_REJECTION")
 
 
 def raw_masks(f):
-    # Must remain byte-for-byte equivalent in behavior to the Stage-1 masks.
-    base=f["valid_atr"] & f["bullish"]
-    prev_h=np.r_[np.nan,f["high"][:-1]]
-    prev_l=np.r_[np.nan,f["low"][:-1]]
-    low10=f["prev_low"][10]
-    m={
-      "BULL_ENGULF":base & f["exact_bull"] & (f["bull_br"]>=1.0),
-      "FAILED_BREAKDOWN":base & (f["low"]<low10) & (f["close"]>low10),
-      "LOW_SWEEP_DISPLACEMENT":base & (f["low"]<low10) & (f["close"]>prev_h),
-      "OUTSIDE_REVERSAL":base & (f["low"]<prev_l) & (f["high"]>prev_h),
-      "COMPRESSION_BREAKOUT":base & (f["compression"]<=1.0) & (f["close"]>f["prev_high"][10]),
-      "PULLBACK_REJECTION":base & (f["low"]<f["prev_low"][20]) & (f["close"]>low10) & (f["mom4"]<=0),
+    base=f["valid_atr"] & f["bearish"]
+    previous_low=np.r_[np.nan,f["low"][:-1]]
+    previous_high=np.r_[np.nan,f["high"][:-1]]
+    high10=f["prev_high"][10]
+    masks={
+        "BEAR_ENGULF":base & f["exact_bear"] & (f["bear_br"]>=1.00),
+        "FAILED_UPBREAK":base & (f["high"]>high10) & (f["close"]<high10),
+        "HIGH_SWEEP_DISPLACEMENT":base & (f["high"]>high10)
+                                  & (f["close"]<previous_low),
+        "OUTSIDE_REVERSAL":base & (f["high"]>previous_high)
+                              & (f["low"]<previous_low),
+        "COMPRESSION_BREAKDOWN":base & (f["compression"]<=1.00)
+                                  & (f["close"]<f["prev_low"][10]),
+        "RALLY_REJECTION":base & (f["high"]>f["prev_high"][20])
+                             & (f["close"]<high10) & (f["mom4"]>=0),
     }
-    for x in m.values():x[:200]=False
-    return m
+    for mask in masks.values():
+        mask[:200]=False
+    return masks
 
 
+def one_at_a_time_factors(f):
+    rows=[]
+    def add(name,mask,kind,value):
+        rows.append((name,mask,kind,value))
+    for field,label,thresholds in (
+        ("body_atr","BODY_ATR_MIN",(.50,.75,1.00,1.25)),
+        ("range_atr","RANGE_ATR_MIN",(.75,1.00,1.25,1.50)),
+        ("close_loc","CLOSE_LOCATION_MAX",(.45,.35,.25,.15)),
+        ("upper_wick_body","UPPER_WICK_BODY_MIN",(.10,.20,.35,.50))):
+        for v in thresholds:
+            mask=f[field]<=v if field=="close_loc" else f[field]>=v
+            add(f"{label}_{v:.2f}",mask,label,v)
+    for v in (.25,.50,1.00):
+        add(f"PRIOR_4H_RALLY_{v:.2f}",f["mom4"]>=v,"PRIOR_4H_MOMENTUM",v)
+    for lb in (40,60,100,165):
+        for d in (.10,.25,.50):
+            add(f"NEAR_PREV_HIGH_LB{lb}_D{d:.2f}",
+                f["structure_dist_high"][lb]<=d,
+                f"PRIOR_HIGH_DISTANCE_LB{lb}",d)
+    for lb in (20,40,60,100):
+        add(f"BREAK_PREV_HIGH_LB{lb}",f["high"]>f["prev_high"][lb],
+            "PREV_HIGH_BREAK_LOOKBACK",lb)
+    penetration=(f["high"]-f["prev_high"][10])/f["atr"]
+    for depth in (.025,.05,.10,.20):
+        add(f"PENETRATE_LB10_{depth:.3f}",penetration>=depth,
+            "MINIMUM_HIGH_PENETRATION_ATR_LB10",depth)
+    for name,a,b in (
+        ("H1_CLOSE_LT_EMA100","h1_close","h1_ema100"),
+        ("H1_EMA50_LT_EMA200","h1_ema50","h1_ema200"),
+        ("H4_CLOSE_LT_EMA100","h4_close","h4_ema100"),
+        ("H4_EMA100_LT_EMA200","h4_ema100","h4_ema200"),
+        ("D_CLOSE_LT_EMA200","d_close","d_ema200"),
+        ("D_EMA50_LT_EMA200","d_ema50","d_ema200")):
+        add(name,f[a]<f[b],"COMPLETED_HTF_REGIME",name)
+    for tf in ("h1","h4","d"):
+        for threshold in (.80,1.00):
+            add(f"{tf.upper()}_ATR_RATIO_GE_{threshold:.2f}",
+                f[f"{tf}_atr"]>=threshold,"COMPLETED_HTF_VOLATILITY",threshold)
+    for tz,key in (("NY","ny_hour"),("SYDNEY","sydney_hour"),
+                   ("TOKYO","tokyo_hour"),("LONDON","london_hour")):
+        for start in (0,4,8,12,16,20):
+            add(f"{tz}_HOURS_{start:02d}-{start+3:02d}",
+                (f[key]>=start)&(f[key]<=start+3),f"TIME_4H_{tz}",start)
+    for weekday in range(5):
+        add(f"EXCLUDE_NY_WEEKDAY_{weekday}",f["ny_weekday"]!=weekday,
+            "EXCLUDE_WEEKDAY",weekday)
+    assert len(rows)==80, f"Expected 80 factors, got {len(rows)}"
+    return rows
 
-def part(trades,start=None,end=None):
+
+def selected(trades, start=None, end=None):
     return [t for t in trades if (start is None or t["entry_time"]>=start)
             and (end is None or t["entry_time"]<end)]
 
 
-def snapshot(trades):
-    ss=stats(trades)
-    return dict(trades=ss["trades"], pf=ss["profit_factor"],
-                r=ss["total_r"], dd=ss["max_drawdown_r"],
-                win_rate=ss["win_rate"],loss_streak=ss["longest_loss_streak"])
-
-
-def report_row(family,config_id,coords,signals,main,stress):
-    row=dict(family=family,config_id=config_id,**coords,signal_count=len(signals),
-             **{f"full_{k}":v for k,v in snapshot(main).items()},
-             **{f"4pip_full_{k}":v for k,v in snapshot(stress).items()})
-    slices=(
+def summary_row(config_id,family,factor_family,factor_value,raw_indices,trades,stressed):
+    s=stats(trades)
+    row=dict(config_id=config_id,family=family,factor_family=factor_family,
+             factor_value=factor_value,raw_signal_count=len(raw_indices),
+             **{f"full_{k}":v for k,v in s.items()})
+    windows=(
       ("before2010",None,datetime(2010,1,1,tzinfo=timezone.utc)),
       ("since2010",datetime(2010,1,1,tzinfo=timezone.utc),None),
       ("since2018",datetime(2018,1,1,tzinfo=timezone.utc),None),
@@ -638,308 +644,196 @@ def report_row(family,config_id,coords,signals,main,stress):
       ("era2004_2009",None,datetime(2010,1,1,tzinfo=timezone.utc)),
       ("era2010_2015",datetime(2010,1,1,tzinfo=timezone.utc),datetime(2016,1,1,tzinfo=timezone.utc)),
       ("era2016_2021",datetime(2016,1,1,tzinfo=timezone.utc),datetime(2022,1,1,tzinfo=timezone.utc)),
-      ("era2022_now",datetime(2022,1,1,tzinfo=timezone.utc),None))
-    for label,start,end in slices:
-        for prefix, ledger in (("",main),("4pip_",stress)):
-            s=stats(part(ledger,start,end))
-            for k in ("trades","profit_factor","total_r"):
-                row[f"{prefix}{label}_{k}"]=s[k]
-    row["reason_not_frozen"]="Exploratory new-entry-mechanism study; no RR/timing/portfolio selection; all history previously examined"
+      ("era2022_present",datetime(2022,1,1,tzinfo=timezone.utc),None),
+    )
+    for label,start,end in windows:
+        p=stats(selected(trades,start,end))
+        for k in ("trades","total_r","profit_factor","max_drawdown_r"):
+            row[f"{label}_{k}"]=p[k]
+    if stressed is not None:
+        p=stats(stressed)
+        for k in ("trades","total_r","profit_factor","max_drawdown_r"):
+            row[f"4pip_{k}"]=p[k]
+        p=stats(selected(stressed,NOW-timedelta(days=365.2425*2)))
+        row["4pip_last2y_total_r"]=p["total_r"]
+        row["4pip_last2y_trades"]=p["trades"]
+    row["research_only"]="All historical periods examined; not independent OOS"
     return row
 
 
-def rolling_diag(cid,trades):
+def add_months_utc(dt,n):
+    month=dt.year*12+dt.month-1+n
+    return datetime(month//12,month%12+1,1,tzinfo=timezone.utc)
+
+
+def rolling(config_id,trades):
     rows=[]
     start=datetime(2004,6,1,tzinfo=timezone.utc)
     for months in (12,24,36):
         t=start
-        while add_months(t,months)<=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc):
-            e=add_months(t,months)
-            ss=stats(part(trades,t,e))
-            rows.append(dict(config_id=cid,months=months,from_utc=iso(t),to_utc=iso(e),
-                             trades=ss["trades"],total_r=ss["total_r"],
-                             positive_active=ss["total_r"]>0 if ss["trades"] else "NO_TRADES"))
-            t=add_months(t,1)
+        while add_months_utc(t,months)<=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc):
+            end=add_months_utc(t,months)
+            st=stats(selected(trades,t,end))
+            rows.append(dict(config_id=config_id,months=months,from_utc=iso(t),
+                             to_utc=iso(end),trades=st["trades"],total_r=st["total_r"],
+                             positive_active=st["total_r"]>0 if st["trades"] else "NO_TRADES"))
+            t=add_months_utc(t,1)
     return rows
 
 
-def calendar_diag(cid,trades):
+def calendar(config_id,trades):
     rows=[]
-    for y in range(2005,NOW.year):
-        ss=stats(part(trades,datetime(y,1,1,tzinfo=timezone.utc),
-                      datetime(y+1,1,1,tzinfo=timezone.utc)))
-        rows.append(dict(config_id=cid,year=y,trades=ss["trades"],
-                         total_r=ss["total_r"],profit_factor=ss["profit_factor"]))
+    for year in range(2004,NOW.year):
+        s=stats(selected(trades,datetime(year,1,1,tzinfo=timezone.utc),
+                         datetime(year+1,1,1,tzinfo=timezone.utc)))
+        rows.append(dict(config_id=config_id,year=year,trades=s["trades"],
+                         total_r=s["total_r"],profit_factor=s["profit_factor"]))
     return rows
-
-
-
-# ============================================================
-# THREE SEPARATE MECHANISMS, FIXED IN ADVANCE
-# ============================================================
-
-def shift_prior(a, steps, fill=False):
-    """Current index i sees exclusively i-steps, never i or future."""
-    if steps <= 0: raise ValueError(steps)
-    return np.r_[np.full(steps, fill, dtype=a.dtype), a[:-steps]]
-
-
-def completed_tokyo_low(candles):
-    """Low of Tokyo 09:00:00–14:59:59 on *same Tokyo date*, usable >=15:00.
-
-    Output is NaN when fewer than 16 M15 session bars exist, outside the
-    fixed London 07:00–13:59 window, or at/before session completion. London
-    window is part of the distinct session mechanism, NOT a searched filter.
-    """
-    sessions={}
-    for candle in candles:
-        dt=candle["time"].astimezone(TOKYO)
-        if 9 <= dt.hour < 15:
-            day=dt.date()
-            old=sessions.get(day)
-            if old is None: sessions[day]=(candle["low"], 1)
-            else: sessions[day]=(min(old[0], candle["low"]), old[1]+1)
-    low=np.full(len(candles),np.nan)
-    checks=[]
-    for i,candle in enumerate(candles):
-        when=candle["time"]
-        london=when.astimezone(LONDON)
-        tokyo=when.astimezone(TOKYO)
-        if not (7 <= london.hour < 14 and tokyo.hour >= 15): continue
-        session=sessions.get(tokyo.date())
-        if session is None or session[1] < 16: continue
-        low[i]=session[0]
-    for day,(price,n) in sorted(sessions.items()):
-        if len(checks)<6: checks.append(dict(tokyo_date=day,session_m15_count=n,
-                                              completed_low=price))
-    return low, checks
-
-
-def mechanism_masks(f, candles):
-    """All 3 raw variants + 24 predeclared nested controls; NO cross-family combos."""
-    n=f["n"]
-    cl=f["close"]; op=f["open"]; hi=f["high"]; lo=f["low"]
-    a=f["atr"]; positive=f["valid_atr"] & f["bullish"]
-    prior_high=shift_prior(hi,1,fill=np.nan)
-    masks=[]
-    def add(name, axes, coords, mask, raw=False):
-        mask=np.asarray(mask & positive,dtype=bool)
-        mask[:200]=False  # identical warmup exclusion to Stages 1/2
-        tag=("RAW" if raw else "CONTROL")
-        cid=name+"__"+tag+"__"+"__".join(
-            f"{key}{str(val).replace('.','p')}" for key,val in zip(axes,coords))
-        masks.append((name,cid,dict(zip(axes,coords)),mask,raw))
-
-    # A. Consecutive bearish candles ending immediately before signal, true
-    # close-to-close washout, then current bullish CLOSE > last candle HIGH.
-    bearish=cl<op
-    wash={}
-    for k in (2,3):
-        consecutive=np.ones(n,dtype=bool)
-        for j in range(1,k+1): consecutive &= shift_prior(bearish,j)
-        decline=np.full(n,np.nan)
-        decline[k+1:] = (cl[:-(k+1)]-cl[k:-1])/a[k+1:]
-        wash[k]=(consecutive & (cl>prior_high),decline)
-    wash_axes=("bearish_bars","prior_decline_atr","signal_body_atr")
-    add("WASHOUT_RECLAIM",wash_axes,(2,0.,0.),wash[2][0],raw=True)
-    for k in (2,3):
-        for fall in (.75,1.25):
-            for body in (.50,1.00):
-                base,decline=wash[k]
-                add("WASHOUT_RECLAIM",wash_axes,(k,fall,body),
-                    base & (decline>=fall) & (f["body_atr"]>=body))
-
-    # B. Closed Tokyo SESSION low (not rolling M15 low). London 07-13 local
-    # is a single fixed observation window, not a session-hour sweep.
-    asian_low, session_checks=completed_tokyo_low(candles)
-    depth=(asian_low-lo)/a
-    session_base=(np.isfinite(asian_low) & (lo<asian_low) & (cl>asian_low))
-    session_axes=("penetration_atr","signal_body_atr","close_location")
-    add("TOKYO_LOW_RECLAIM",session_axes,(0.,0.,0.),session_base,raw=True)
-    for penetration in (0.,.10):
-        for body in (.50,1.00):
-            for close_min in (.65,.80):
-                add("TOKYO_LOW_RECLAIM",session_axes,(penetration,body,close_min),
-                    session_base & (depth>=penetration)
-                    & (f["body_atr"]>=body) & (f["close_loc"]>=close_min))
-
-    # C. Completed H1/H4 trend and M15 pullback to previous completed EMA20.
-    # Both HTF arrays were aligned with completed-bar timestamps by features().
-    ema20=ema(cl,20)
-    prev_ema20=shift_prior(ema20,1,fill=np.nan)
-    prev_close=shift_prior(cl,1,fill=np.nan)
-    prior4_low=prev_extreme(lo,4,"min")
-    htf_raw=(f["h1_close"]>f["h1_ema100"]) & (f["h4_close"]>f["h4_ema100"])
-    htf_strict=htf_raw & (f["h1_ema50"]>f["h1_ema200"])
-    # Strict context still requires completed H1+H4; it is a nested condition.
-    broad=(np.isfinite(prev_ema20) & (cl>prior_high) & (cl>prev_ema20))
-    touches={
-       "PRIOR_4BAR_TOUCH": prior4_low<=prev_ema20,
-       "PRIOR_CLOSE_BELOW": prev_close<prev_ema20,
-    }
-    trends={
-       "CLOSE_ABOVE_H1H4_EMA100": htf_raw,
-       "H1_EMA50_GT_200": htf_strict,
-    }
-    trend_axes=("htf_trend","pullback","signal_body_atr")
-    add("TREND_PULLBACK",trend_axes,
-        ("CLOSE_ABOVE_H1H4_EMA100","PRIOR_4BAR_TOUCH",0.),
-        broad & htf_raw & touches["PRIOR_4BAR_TOUCH"],raw=True)
-    for trend,htf_ok in trends.items():
-        for touch,touch_mask in touches.items():
-            for body in (.50,1.00):
-                add("TREND_PULLBACK",trend_axes,(trend,touch,body),
-                    broad & htf_ok & touch_mask & (f["body_atr"]>=body))
-
-    assert len(masks)==27,len(masks)
-    assert sum(x[4] for x in masks)==3
-    assert len({x[1] for x in masks})==27
-    return masks,session_checks
-
-
-def neighbourhood(rows):
-    """Every one-axis adjacent pair; no automated ranking or selection."""
-    groups=defaultdict(list)
-    for r in rows: groups[r["family"]].append(r)
-    out=[]
-    axes={
-      "WASHOUT_RECLAIM": ("bearish_bars","prior_decline_atr","signal_body_atr"),
-      "TOKYO_LOW_RECLAIM": ("penetration_atr","signal_body_atr","close_location"),
-      "TREND_PULLBACK": ("htf_trend","pullback","signal_body_atr"),
-    }
-    for family,items in groups.items():
-        keys=axes[family]
-        levels={a:list(dict.fromkeys(r[a] for r in items)) for a in keys}
-        vals={tuple(r[k] for k in keys):r for r in items if not r["is_raw"]}
-        for coord,r in vals.items():
-            for axis_idx,axis in enumerate(keys):
-                values=levels[axis]
-                i=values.index(r[axis])
-                if i+1>=len(values): continue
-                next_coord=list(coord);next_coord[axis_idx]=values[i+1]
-                next_r=vals.get(tuple(next_coord))
-                if not next_r:continue
-                out.append(dict(family=family,axis=axis,from_value=r[axis],
-                                to_value=next_r[axis],from_id=r["config_id"],
-                                to_id=next_r["config_id"],
-                                from_trades=r["full_trades"],to_trades=next_r["full_trades"],
-                                delta_2pip_r=next_r["full_r"]-r["full_r"],
-                                delta_4pip_r=next_r["4pip_full_r"]-r["4pip_full_r"],
-                                delta_last2y_4pip_r=next_r["4pip_last2y_total_r"]-
-                                    r["4pip_last2y_total_r"]))
-    return out
-
-
-def branch_diagnostics(rows):
-    out=[]
-    for family in ("WASHOUT_RECLAIM","TOKYO_LOW_RECLAIM","TREND_PULLBACK"):
-        items=[r for r in rows if r["family"]==family]
-        raw=next(r for r in items if r["is_raw"])
-        kept=[r for r in items if r["full_trades"]>=50 and not r["is_raw"]]
-        out.append(dict(family=family,total_settings=len(items),raw_trades=raw["full_trades"],
-                        raw_2pip_r=raw["full_r"],raw_4pip_r=raw["4pip_full_r"],
-                        controls_50trades=len(kept),positive_2pip=sum(x["full_r"]>0 for x in kept),
-                        positive_4pip=sum(x["4pip_full_r"]>0 for x in kept),
-                        early_late_positive_4pip=sum(x["4pip_before2010_total_r"]>0
-                           and x["4pip_since2010_total_r"]>0 for x in kept),
-                        note="Diagnostics only. NO auto-winner and no untouched OOS."))
-    return out
 
 
 def hist_coverage(label,candles):
-    if not candles: raise RuntimeError("No candles for "+label)
-    tt=[r["time"] for r in candles]
-    max_gap=max(((b-a).total_seconds()/86400 for a,b in zip(tt,tt[1:])),default=0.)
-    return dict(timeframe=label,count=len(tt),first_utc=iso(tt[0]),
-                last_utc=iso(tt[-1]),max_gap_days=max_gap)
+    times=[x["time"] for x in candles]
+    gap_days=max(((b-a).total_seconds()/86400 for a,b in zip(times,times[1:])),default=0)
+    return dict(timeframe=label,count=len(candles),first_utc=iso(times[0]),
+                last_utc=iso(times[-1]),max_gap_days=gap_days)
+
+
+def execution_self_tests():
+    """Mechanically verify short TP/SL, fill direction, ties, and p0 exit reuse."""
+    base=datetime(2020,1,2,tzinfo=timezone.utc)
+    def bar(i,o,h,l,c):
+        return dict(time=base+timedelta(minutes=15*i),
+                    open=o,high=h,low=l,close=c)
+    s=bar(0,1.5000,1.5005,1.4995,1.4998)
+    stop=s["high"]+STOP_TICKS*TICK
+    target=s["close"]-RR_FIXED*(stop-s["close"])
+    assert stop>s["close"]>target
+    # profitable short exits from low, with adverse SELL fill below reference
+    win=bar(1,1.4990,1.4993,target-0.0001,1.4970)
+    tr=outcome([s,win],0,RR_FIXED,PRIMARY_COST)
+    assert tr and tr["exit_reason"]=="TARGET"
+    assert tr["historical_fill"]<tr["reference_entry"]<tr["stop"]
+    assert tr["result_r"]>0 and tr["result_r"]<RR_FIXED
+    OUTCOME_CACHE.clear()
+    lose=bar(1,1.5010,stop+0.0001,1.5000,1.5010)
+    tr=outcome([s,lose],0,RR_FIXED,PRIMARY_COST)
+    assert tr and tr["exit_reason"]=="STOP" and abs(tr["result_r"]+1)<1e-12
+    OUTCOME_CACHE.clear()
+    # Same-bar target & stop with strictly closer low implies target first.
+    both=bar(1,target+0.00001,stop+0.0001,target-0.0001,target)
+    tr=outcome([s,both],0,RR_FIXED,PRIMARY_COST)
+    assert tr["exit_reason"]=="TARGET"
+    OUTCOME_CACHE.clear()
+    both=bar(1,stop-0.00001,stop+0.0001,target-0.0001,stop)
+    tr=outcome([s,both],0,RR_FIXED,PRIMARY_COST)
+    assert tr["exit_reason"]=="STOP"
+    OUTCOME_CACHE.clear()
+    # Half-open holding interval permits a new entry on exit candle.
+    m=[s,bar(1,1.5000,1.5015,1.4995,1.4999),
+       bar(2,1.4999,1.5018,1.4995,1.4998)]
+    r=backtest(m,[0,1],RR_FIXED,PRIMARY_COST)
+    assert len(r)==2 and r[0]["exit_index"]==1 and r[1]["signal_index"]==1
+    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
 
 
 def run_research():
     try:
-        STATUS.update(state="fetch",progress=1,message="Fetching full EUR/AUD M15 history")
+        execution_self_tests()
+        STATUS.update(state="fetch",progress=1,message="Fetching EUR/AUD M15 midpoint candles")
         m15=fetch("M15",START,NOW,35)
-        if len(m15)<100000:raise RuntimeError(f"Insufficient EUR/AUD M15 history: {len(m15)}")
-        STATUS.update(state="fetch",progress=17,message="Fetching completed H1/H4/D history")
+        if len(m15)<MIN_M15_BARS:raise RuntimeError(f"Insufficient EUR/AUD M15 history: {len(m15)}")
+        STATUS.update(progress=15,message="Fetching H1/H4/D complete midpoint candles")
         h1=fetch("H1",WARMUP,NOW,180)
         h4=fetch("H4",WARMUP,NOW,700)
         daily=fetch("D",WARMUP,NOW,3500)
-        if not (h1 and h4 and daily):raise RuntimeError("Missing HTF history")
-        write_csv(OUTS["coverage"],[hist_coverage(name,cd) for name,cd in
-                  (("M15",m15),("H1",h1),("H4",h4),("D",daily))])
-        STATUS.update(state="features",progress=30,message="Aligning strictly completed higher timeframes")
-        tt=[c["time"] for c in m15]
-        f=features(m15,align_htf(tt,htf_state(h1)),align_htf(tt,htf_state(h4)),
-                   align_htf(tt,htf_state(daily)))
-        STATUS.update(state="parity",progress=37,message="Stage-1 six-raw-ledger field fingerprints")
-        stage1_raw_parity(m15,f)
-        STATUS.update(state="study",progress=43,message="3 raw mechanisms + 24 predeclared within-family controls")
-        hypotheses,checks=mechanism_masks(f,m15)
-        write_csv(OUTS["session_checks"],checks)
-        rows=[];ledgers=[];roll=[];cal=[]
-        for j,(family,cid,coords,mask,is_raw) in enumerate(hypotheses):
-            ix=np.flatnonzero(mask).tolist()
-            t2=backtest(m15,ix,RR_FIXED,PRIMARY_COST)
-            t4=backtest(m15,ix,RR_FIXED,STRESS_COST)
-            row=report_row(family,cid,coords,ix,t2,t4)
-            row["is_raw"]=is_raw
-            rows.append(row)
-            if is_raw or tuple(coords.values())==ANCHORS[family]:
-                for cost,ledger in (("2pip",t2),("4pip",t4)):
-                    label=cid+"__"+cost
-                    for tr in ledger:
-                        ledgers.append(dict(config_id=cid,fill_assumption=cost,
-                           **{k:v for k,v in tr.items() if k not in ("entry_time","exit_time")}))
-                    roll.extend(rolling_diag(label,ledger))
-                    cal.extend(calendar_diag(label,ledger))
-            OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
-            write_csv(OUTS["all_mechanisms"],rows)  # save every 1/27 for resilience
-            STATUS.update(progress=43+int(50*(j+1)/len(hypotheses)),
-                           message=f"Mechanism control {j+1}/{len(hypotheses)}")
-        write_csv(OUTS["branch_diagnostics"],branch_diagnostics(rows))
-        write_csv(OUTS["neighbourhood"],neighbourhood(rows))
-        write_csv(OUTS["anchor_trade_ledgers"],ledgers)
-        write_csv(OUTS["anchor_rolling"],roll)
-        write_csv(OUTS["anchor_calendar"],cal)
+        if not all((h1,h4,daily)):
+            raise RuntimeError("Missing context history, cannot screen completed HTF factors")
+        coverage=[hist_coverage(label,candles) for label,candles in (
+            ("M15",m15),("H1",h1),("H4",h4),("D",daily))]
+        write_csv(OUTS["coverage"],coverage)
+        STATUS.update(state="features",progress=28,message="Computing causal features and six raw signal masks")
+        times=[c["time"] for c in m15]
+        f=features(m15,align_htf(times,htf_state(h1)),
+                   align_htf(times,htf_state(h4)),align_htf(times,htf_state(daily)))
+        masks=raw_masks(f)
+        factors=one_at_a_time_factors(f)
+        raw_rows=[]; factor_rows=[];raw_ledgers=[];cost_rows=[];roll=[];cal=[]
+        STATUS.update(state="raw",progress=35,message="Six raw mechanisms; 2/4-pip fills; RR3.5")
+        for j,family in enumerate(FAMILIES):
+            signal_indices=np.flatnonzero(masks[family]).tolist()
+            tr=backtest(m15,signal_indices,RR_FIXED,PRIMARY_COST)
+            s4=backtest(m15,signal_indices,RR_FIXED,STRESS_COST)
+            cid="RAW_"+family
+            raw_rows.append(summary_row(cid,family,"RAW","NONE",signal_indices,tr,s4))
+            for t in tr:
+                raw_ledgers.append(dict(config_id=cid,**{
+                    k:v for k,v in t.items() if k not in ("entry_time","exit_time")}))
+            for cost,ledger in ((PRIMARY_COST,tr),(STRESS_COST,s4)):
+                cost_rows.append(dict(config_id=cid,assumed_fill_pips=cost,**stats(ledger)))
+            roll.extend(rolling(cid,tr));cal.extend(calendar(cid,tr))
+            OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+            STATUS.update(progress=35+int(20*(j+1)/len(FAMILIES)),
+                          message=f"Raw mechanism {j+1}/{len(FAMILIES)}: {family}")
+        write_csv(OUTS["raw_families"],raw_rows)
+        write_csv(OUTS["raw_trade_ledgers"],raw_ledgers)
+        write_csv(OUTS["raw_cost_stress"],cost_rows)
+        write_csv(OUTS["raw_rolling"],roll)
+        write_csv(OUTS["raw_calendar"],cal)
+        STATUS.update(state="single_factor",progress=55,
+                      message=f"Six families x {len(factors)} separate factor settings")
+        for j,family in enumerate(FAMILIES):
+            baseline=masks[family]
+            for label,one_factor,group,value in factors:
+                ix=np.flatnonzero(baseline&one_factor).tolist()
+                tr=backtest(m15,ix,RR_FIXED,PRIMARY_COST)
+                s4=backtest(m15,ix,RR_FIXED,STRESS_COST) if len(tr)>=MIN_COST_STRESS_TRADES else None
+                factor_rows.append(summary_row(family+"__"+label,family,group,value,ix,tr,s4))
+                OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+            write_csv(OUTS["single_factors"],factor_rows)  # partial progress remains inspectable
+            STATUS.update(progress=55+int(40*(j+1)/len(FAMILIES)),
+                          message=f"Completed single-factor family {j+1}/{len(FAMILIES)}")
         write_csv(OUTS["methods"],[
-          dict(topic="scope",detail="Standalone EUR/AUD M15 LONG new entry mechanisms; Portfolio27 NOT accessed"),
-          dict(topic="families",detail="Raw + 8 controls for EACH of washout, completed Tokyo low, HTF pullback: 27 total"),
-          dict(topic="fills",detail="Fixed RR3.5, 2pip adverse reference-close BUY, 4pip stress; NOT historical measured spreads"),
-          dict(topic="stop",detail="Signal low minus 10 ticks; target 3.5 x reference-close risk; actual fill risk P/L; half-open p0"),
-          dict(topic="sessions",detail="Tokyo local 09:00-14:59 ONLY; completed >=15 Tokyo; London 07:00-13:59 ONLY; >=16 bars; predeclared mechanism, no hour search"),
-          dict(topic="htf",detail="H1/H4 complete only by next ACTUAL HTF candle open; EMA20 M15 uses prior candle"),
-          dict(topic="parity",detail="Six archived Stage-1 raw ledgers and 546817 M15 bars at fixed cutoff must match EXACTLY"),
-          dict(topic="independence",detail="Entire historical dataset has been repeatedly examined; no untouched OOS"),
-          dict(topic="selection",detail="No RR, hour/day, Stage-2-filter or Portfolio27 tuning; no auto winner"),
-          dict(topic="runtime",detail="All 27 controls predeclared; low concurrency; CSV checkpoints every setting")])
+            dict(item="scope",detail="EUR/AUD M15 SHORT standalone research only; NO Portfolio27 data or ranking"),
+            dict(item="history",detail="Start requested May 2002; actual coverage CSV determines first EUR/AUD bar"),
+            dict(item="raw",detail="Six independent bearish mechanism definitions; no parameters inherited from prior LONG research"),
+            dict(item="factors",detail="Exactly one overlay per raw family; no interaction/RR/session-combination search"),
+            dict(item="cost",detail="Assumed 2pip adverse SELL fill, 4pip stress for all raw and >=50-trade factor rows; midpoint not executable bid/ask"),
+            dict(item="entry_exit",detail="SHORT reference close, 10 tick stop above signal high, RR3.5 target below close anchored to reference risk, full history p0 before period slicing"),
+            dict(item="htf",detail="Only prior strictly completed H1/H4/D via next actual HTF open"),
+            dict(item="no_old_m15_reference",detail="No archived EUR/AUD M15 SHORT ledger exists; no claimed parity to any prior SHORT strategy"),
+            dict(item="interpretation",detail="No standalone winner or untouched OOS inferred; historical data previously explored across pair/timeframes"),
+            dict(item="next",detail="Inspect directional single-factor trends, sample size, cost and eras before authorising any small conditional study; portfolio only after standalone freeze"),
+        ])
         zip_outputs()
-        STATUS.update(state="complete",progress=100,stage1_parity="PASS",
-                      mechanism_rows=len(rows),anchor_ledger_rows=len(ledgers),
-                      result_path="/euraud-m15-long-stage3/results",
-                      message="EUR/AUD M15 LONG alternative mechanism study complete")
+        STATUS.update(state="complete",progress=100,raw_families=len(raw_rows),
+                      single_factor_rows=len(factor_rows),factors_per_family=len(factors),
+                      message="Standalone EUR/AUD M15 SHORT stage 1 complete",
+                      result_path="/euraud-m15-short-stage1/results")
     except Exception as ex:
         STATUS.update(state="error",message=str(ex),traceback=traceback.format_exc(),
                       orders_supported=False,trading_enabled=False)
         try:
-            write_csv(OUTS["errors"],[dict(message=str(ex),traceback=STATUS["traceback"],
-                                         progress=STATUS.get("progress"),state=STATUS["state"])])
+            write_csv(OUTS["errors"],[dict(error=str(ex),traceback=STATUS["traceback"],
+                                         progress=STATUS["progress"],state=STATUS["state"])])
             zip_outputs()
-        finally: print(STATUS["traceback"],flush=True)
+        finally:
+            print(STATUS["traceback"],flush=True)
 
 
 @app.route("/")
 def root():
-    return jsonify(service="EUR/AUD M15 LONG Stage 3; standalone alternative-entry research",
-                   state=STATUS["state"],status="/euraud-m15-long-stage3/status",
-                   results="/euraud-m15-long-stage3/results",
+    return jsonify(service="EUR/AUD M15 SHORT Stage 1 independent standalone research",state=STATUS["state"],
+                   status="/euraud-m15-short-stage1/status",
+                   results="/euraud-m15-short-stage1/results",
                    orders_supported=False,trading_enabled=False)
 
+@app.route("/euraud-m15-short-stage1/status")
+def status_route():
+    return jsonify(STATUS)
 
-@app.route("/euraud-m15-long-stage3/status")
-def status_route(): return jsonify(STATUS)
-
-
-@app.route("/euraud-m15-long-stage3/results")
-def results_route(): return download(BUNDLE)
+@app.route("/euraud-m15-short-stage1/results")
+def results_route():
+    return download(BUNDLE)
 
 
 if __name__=="__main__":
