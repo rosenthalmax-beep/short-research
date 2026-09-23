@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
-"""EUR/AUD M15 LONG — Stage 1 of a standalone, exploratory six-family edge study.
+"""EUR/AUD M15 LONG, Stage 2: predeclared conditional interactions, standalone.
 
-Never imports or edits Portfolio 27. No orders and no portfolio performance
-information is loaded. Raw mechanisms are tested individually, followed by
-one factor at a time on each raw family. No RR optimisation, no auto-winner,
-no multi-filter combinations, and no session-conditioned candidate selection.
-
-This is already-explored 2004–2026 EUR/AUD history: early/later and rolling
-periods are diagnostics, NOT unexamined out-of-sample validation.
-
-Market data: OANDA midpoint complete M15/H1/H4/D candles. ATR14 Wilder,
-seeded with SMA; strict past-only extrema; previous completed 16 M15 bars for
-prior 4h momentum. HTF state only used from the next ACTUAL HTF candle open.
-
-Historical BUY: signal CLOSE + assumed 2-pip adverse fill (4-pip stress).
-Stop = signal LOW - 10 ticks. TP = signal close + 3.5 x reference-close risk.
-R uses actual fill-to-stop risk. Exit starts the next M15 bar. If TP and stop
-are both touched, high-first only if the bar's high is strictly closer to
-its open; tie -> stop. Pyramiding zero; exit-candle signal is eligible.
-
-Neither adverse fill assumption is a measurement of historical bid/ask spread;
-the model cannot reproduce tick-level intrabar order or overnight gaps.
+Separate compression/low, failed-breakdown-or-engulfing, and low-sweep/decline
+hypotheses; no portfolio access, no RR or timing optimisation, no automatic
+winner selection. RR3.5 and 2-/4-pip assumed adverse BUY fills. Same OANDA
+midpoint, ATR, completed-candle and p0 rules as Stage 1. Strict frozen-cutoff
+fingerprints independently reproduce six Stage-1 accepted raw trade ledgers.
+Previously examined historical periods are NOT fresh out-of-sample evidence.
+No orders. Research service only.
 """
 import os
 import csv
@@ -57,10 +44,12 @@ STRESS_COST = 4.0
 MIN_COST_STRESS_TRADES = 50
 STATUS = dict(state="not_started", progress=0, message="Waiting to start",
               orders_supported=False, trading_enabled=False)
-OUTS = {name:f"euraud_m15_long_stage1_{name}.csv" for name in (
-    "coverage","raw_families","single_factors","raw_trade_ledgers",
-    "raw_cost_stress","raw_rolling","raw_calendar","methods","errors")}
-BUNDLE="EURAUD_M15_LONG_STAGE1_RAW_EDGE_DISCOVERY_RESULTS.zip"
+OUTS = {name:f"euraud_m15_long_stage2_{name}.csv" for name in (
+    "coverage", "stage1_raw_parity", "all_geometries", "branch_diagnostics",
+    "neighbourhood", "diagnostic_ledgers", "diagnostic_rolling",
+    "diagnostic_calendar", "methods", "errors")}
+
+BUNDLE="EURAUD_M15_LONG_STAGE2_CONDITIONAL_INTERACTIONS_RESULTS.zip"
 
 # ============================================================
 # GENERAL HELPERS
@@ -603,91 +592,166 @@ def zip_outputs():
             if os.path.isfile(path):z.write(path,arcname=os.path.basename(path))
 
 
+
 # ============================================================
-# SIX MINIMAL ENTRY MECHANISMS, NOT PRE-OPTIMISED STRATEGIES
+# LOCKED PRIOR-RESEARCH REFERENCE — no external archives required
 # ============================================================
-FAMILIES=("BULL_ENGULF","FAILED_BREAKDOWN","LOW_SWEEP_DISPLACEMENT",
-          "OUTSIDE_REVERSAL","COMPRESSION_BREAKOUT","PULLBACK_REJECTION")
+REFERENCE_CUTOFF = parse_time("2026-09-23T09:15:00Z")
+REFERENCE_FIRST = parse_time("2004-05-31T20:45:00Z")
+REFERENCE_CANDLE_COUNT = 546817
+FROZEN_RAW = {'BULL_ENGULF': (20525, '3e1e6eef952794e4cf74b8de125ee168631fc3eba1353094a4325c47d1e1eeb7'), 'FAILED_BREAKDOWN': (17620, '25f9c5876655bc722b49b972b5cdbfb27dca34258c399733dc06ad6e1646b36c'), 'LOW_SWEEP_DISPLACEMENT': (3066, 'cc004354b947994e62cfd24e9852d76321c3c744a81090247a6ddd1bbb7fde10'), 'OUTSIDE_REVERSAL': (16343, '6cc2d7af4b32f7b7947159cb71481228cf3823b8c20999f3ecf8654f25b1097b'), 'COMPRESSION_BREAKOUT': (9905, 'a2b08adbc6df24680839aa95a97d5dd35bf1bb59be311749ff3ef0a0ace18499'), 'PULLBACK_REJECTION': (13202, '8e5128c518960e37725d84e35807fef49fdb44725b541d9f51f41fbe4456152f')}
+FROZEN_FIELDS = ['signal_index', 'exit_index', 'entry_time_utc', 'exit_time_utc', 'reference_entry', 'historical_fill', 'stop', 'target', 'result_r', 'exit_reason', 'rr', 'cost_pips']
+
+# All configurations declared here, prior to seeing Stage 2 results.
+# Dimension values are not changed during the run.
+FAMILIES = ("BULL_ENGULF", "FAILED_BREAKDOWN", "LOW_SWEEP_DISPLACEMENT",
+            "OUTSIDE_REVERSAL", "COMPRESSION_BREAKOUT", "PULLBACK_REJECTION")
+DIAGNOSTIC_ANCHORS = {
+  "COMPRESSION": (60, .50, 1.00, 1.00),
+  "FAILED_BREAKDOWN": (40, 1.00, .75, 1.00),
+  "ENGULF_STRUCTURE": (60, .25, 1.00, .80),
+  "SWEEP_DECLINE": (40, 1.00, 1.00, .05),
+}
 
 
-def raw_masks(f):
-    base=f["valid_atr"] & f["bullish"]
-    previous_high=np.r_[np.nan,f["high"][:-1]]
-    previous_low=np.r_[np.nan,f["low"][:-1]]
-    low10=f["prev_low"][10]
-    masks={
-      "BULL_ENGULF":base & f["exact_bull"] & (f["bull_br"]>=1.0),
-      "FAILED_BREAKDOWN":base & (f["low"]<low10) & (f["close"]>low10),
-      "LOW_SWEEP_DISPLACEMENT":base & (f["low"]<low10) & (f["close"]>previous_high),
-      "OUTSIDE_REVERSAL":base & (f["low"]<previous_low) & (f["high"]>previous_high),
-      "COMPRESSION_BREAKOUT":base & (f["compression"]<=1.0)
-                              & (f["close"]>f["prev_high"][10]),
-      "PULLBACK_REJECTION":base & (f["low"]<f["prev_low"][20])
-                             & (f["close"]>low10) & (f["mom4"]<=0),
-    }
-    for v in masks.values():v[:200]=False
-    return masks
+def frozen_row_text(t):
+    numeric = {"reference_entry", "historical_fill", "stop", "target", "result_r", "rr", "cost_pips"}
+    return "|".join(repr(float(t[k])) if k in numeric else str(t[k]) for k in FROZEN_FIELDS) + "\n"
 
 
-def one_at_a_time_factors(f):
-    rows=[]
-    def add(name,mask,kind,value):
-        rows.append((name,mask,kind,value))
-    for field,label,thresholds in (
-        ("body_atr","BODY_ATR_MIN",(.50,.75,1.00,1.25)),
-        ("range_atr","RANGE_ATR_MIN",(.75,1.00,1.25,1.50)),
-        ("close_loc","CLOSE_LOCATION_MIN",(.55,.65,.75,.85)),
-        ("lower_wick_body","LOWER_WICK_BODY_MIN",(.10,.20,.35,.50))):
-        for v in thresholds:add(f"{label}_{v:.2f}",f[field]>=v,label,v)
-    for v in (-.25,-.50,-1.00):
-        add(f"PRIOR_4H_DECLINE_{v:.2f}",f["mom4"]<=v,"PRIOR_4H_MOMENTUM",v)
-    for lb in (40,60,100,165):
-        for d in (.10,.25,.50):
-            add(f"NEAR_PREV_LOW_LB{lb}_D{d:.2f}",
-                f["structure_dist_low"][lb]<=d,f"PRIOR_LOW_DISTANCE_LB{lb}",d)
-    for lb in (20,40,60,100):
-        add(f"BREAK_PREV_LOW_LB{lb}",f["low"]<f["prev_low"][lb],
-            "PREV_LOW_BREAK_LOOKBACK",lb)
-    for depth in (.025,.05,.10,.20):
-        # Normalised penetration below previous ten-bar low; values are
-        # overlays on all raw families, NOT a selected finalist.
-        penetration=(f["prev_low"][10]-f["low"])/f["atr"]
-        add(f"PENETRATE_LB10_{depth:.3f}",penetration>=depth,
-            "MINIMUM_LOW_PENETRATION_ATR_LB10",depth)
-    for name,a,b in (
-        ("H1_CLOSE_GT_EMA100","h1_close","h1_ema100"),
-        ("H1_EMA50_GT_EMA200","h1_ema50","h1_ema200"),
-        ("H4_CLOSE_GT_EMA100","h4_close","h4_ema100"),
-        ("H4_EMA100_GT_EMA200","h4_ema100","h4_ema200"),
-        ("D_CLOSE_GT_EMA200","d_close","d_ema200"),
-        ("D_EMA50_GT_EMA200","d_ema50","d_ema200")):
-        add(name,f[a]>f[b],"COMPLETED_HTF_REGIME",name)
-    for tf in ("h1","h4","d"):
-        for threshold in (.80,1.00):
-            add(f"{tf.upper()}_ATR_RATIO_GE_{threshold:.2f}",
-                f[f"{tf}_atr"]>=threshold,"COMPLETED_HTF_VOLATILITY",threshold)
-    for tz,key in (("NY","ny_hour"),("SYDNEY","sydney_hour"),
-                   ("TOKYO","tokyo_hour"),("LONDON","london_hour")):
-        for start in (0,4,8,12,16,20):
-            add(f"{tz}_HOURS_{start:02d}-{start+3:02d}",
-                (f[key]>=start)&(f[key]<=start+3),f"TIME_4H_{tz}",start)
-    for weekday in range(5):
-        add(f"EXCLUDE_NY_WEEKDAY_{weekday}",f["ny_weekday"]!=weekday,
-            "EXCLUDE_WEEKDAY",weekday)
+def stage1_raw_parity(candles, f):
+    times = [c["time"] for c in candles]
+    cutoff_count = bisect.bisect_right(times, REFERENCE_CUTOFF)
+    if not times or times[0] != REFERENCE_FIRST or cutoff_count != REFERENCE_CANDLE_COUNT or times[cutoff_count-1] != REFERENCE_CUTOFF:
+        raise RuntimeError("Frozen Stage-1 candle coverage differs: first=%s cutoff_count=%s last_at_cutoff=%s" % (
+            iso(times[0]) if times else "none", cutoff_count,
+            iso(times[cutoff_count-1]) if cutoff_count else "none"))
+    old_candles = candles[:cutoff_count]
+    rows = []
+    raw = raw_masks(f)
+    for family in FAMILIES:
+        OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
+        old_indices = np.flatnonzero(raw[family][:cutoff_count]).tolist()
+        old_trades = backtest(old_candles, old_indices, RR_FIXED, PRIMARY_COST)
+        digest = __import__("hashlib").sha256()
+        for t in old_trades: digest.update(frozen_row_text(t).encode("utf-8"))
+        expected_n, expected_hash = FROZEN_RAW[family]
+        good = len(old_trades) == expected_n and digest.hexdigest() == expected_hash
+        rows.append(dict(family=family, first=iso(times[0]), cutoff=iso(REFERENCE_CUTOFF),
+                         candle_count=cutoff_count, archived_trades=expected_n,
+                         reproduced_trades=len(old_trades), archived_sha256=expected_hash,
+                         reproduced_sha256=digest.hexdigest(), status="PASS" if good else "FAIL"))
+        if not good:
+            write_csv(OUTS["stage1_raw_parity"], rows)
+            raise RuntimeError("HARD STOP: Stage-1 raw accepted-trade ledger drift for " + family)
+    write_csv(OUTS["stage1_raw_parity"], rows)
+    OUTCOME_CACHE.clear(); BACKTEST_CACHE.clear()
     return rows
 
 
-def selected(trades, start=None, end=None):
+def raw_masks(f):
+    # Must remain byte-for-byte equivalent in behavior to the Stage-1 masks.
+    base=f["valid_atr"] & f["bullish"]
+    prev_h=np.r_[np.nan,f["high"][:-1]]
+    prev_l=np.r_[np.nan,f["low"][:-1]]
+    low10=f["prev_low"][10]
+    m={
+      "BULL_ENGULF":base & f["exact_bull"] & (f["bull_br"]>=1.0),
+      "FAILED_BREAKDOWN":base & (f["low"]<low10) & (f["close"]>low10),
+      "LOW_SWEEP_DISPLACEMENT":base & (f["low"]<low10) & (f["close"]>prev_h),
+      "OUTSIDE_REVERSAL":base & (f["low"]<prev_l) & (f["high"]>prev_h),
+      "COMPRESSION_BREAKOUT":base & (f["compression"]<=1.0) & (f["close"]>f["prev_high"][10]),
+      "PULLBACK_REJECTION":base & (f["low"]<f["prev_low"][20]) & (f["close"]>low10) & (f["mom4"]<=0),
+    }
+    for x in m.values():x[:200]=False
+    return m
+
+
+def declared_geometries(f):
+    """Return (family, id, coordinates, mask) for EVERY predeclared setting."""
+    base=f["valid_atr"] & f["bullish"]
+    prev_h=np.r_[np.nan,f["high"][:-1]]
+    rows=[]
+    def add(family, axis, coord, mask):
+        mask=np.asarray(mask & base, dtype=bool)
+        mask[:200]=False
+        cid=family+"__"+"__".join(f"{k}{str(v).replace('.','p')}" for k,v in zip(axis,coord))
+        rows.append((family,cid,dict(zip(axis,coord)),mask))
+
+    # C: compression breakout near a prior low, then large bullish expansion.
+    # Near-low distance uses the SIGNAL low; prior low excludes current candle.
+    c_axis=("lookback","distance_atr","body_atr","compression_max")
+    for lb in (40,60,100):
+        for dist in (.25,.50,.75):
+            for body_min in (.75,1.00,1.25):
+                for comp_max in (.80,1.00):
+                    add("COMPRESSION",c_axis,(lb,dist,body_min,comp_max),
+                        (f["compression"]<=comp_max)
+                        & (f["close"]>f["prev_high"][10])
+                        & (f["structure_dist_low"][lb]<=dist)
+                        & (f["body_atr"]>=body_min))
+
+    # F1: failed breakdown, LB-based reclaim, candle strength/quality.
+    f_axis=("lookback","body_atr","close_location","range_atr")
+    for lb in (20,40,60):
+        for body_min in (.75,1.00,1.25):
+            for close_min in (.65,.75,.85):
+                for rng in (1.00,1.50):
+                    add("FAILED_BREAKDOWN",f_axis,(lb,body_min,close_min,rng),
+                        (f["low"]<f["prev_low"][lb])
+                        & (f["close"]>f["prev_low"][lb])
+                        & (f["body_atr"]>=body_min)
+                        & (f["close_loc"]>=close_min)
+                        & (f["range_atr"]>=rng))
+
+    # F2: separate engulfing branch near a historical low, not a merged trigger.
+    e_axis=("lookback","distance_atr","body_atr","close_location")
+    for lb in (40,60,100):
+        for dist in (.10,.25):
+            for body_min in (1.00,1.25):
+                for close_min in (.65,.80):
+                    add("ENGULF_STRUCTURE",e_axis,(lb,dist,body_min,close_min),
+                        f["exact_bull"] & (f["bull_br"]>=1.00)
+                        & (f["structure_dist_low"][lb]<=dist)
+                        & (f["body_atr"]>=body_min)
+                        & (f["close_loc"]>=close_min))
+
+    # S: sweep of a strictly previous low, actual depth, strong bullish
+    # displacement above previous M15 high, and previous-only four-hour decline.
+    s_axis=("lookback","body_atr","prior4h_decline_atr","penetration_atr")
+    for lb in (20,40,60):
+        depth=(f["prev_low"][lb]-f["low"])/f["atr"]
+        for body_min in (.75,1.00,1.25):
+            for decline in (.50,1.00):
+                for penetration in (0.00,.05,.10):
+                    add("SWEEP_DECLINE",s_axis,(lb,body_min,decline,penetration),
+                        (f["low"]<f["prev_low"][lb])
+                        & (depth>=penetration)
+                        & (f["close"]>prev_h)
+                        & (f["body_atr"]>=body_min)
+                        & (f["mom4"]<=-decline))
+    assert len(rows)==186, len(rows)
+    assert len({x[1] for x in rows})==len(rows)
+    return rows
+
+
+def part(trades,start=None,end=None):
     return [t for t in trades if (start is None or t["entry_time"]>=start)
             and (end is None or t["entry_time"]<end)]
 
 
-def summary_row(config_id,family,factor_family,factor_value,raw_indices,trades,stressed):
-    s=stats(trades)
-    row=dict(config_id=config_id,family=family,factor_family=factor_family,
-             factor_value=factor_value,raw_signal_count=len(raw_indices),
-             **{f"full_{k}":v for k,v in s.items()})
-    windows=(
+def snapshot(trades):
+    ss=stats(trades)
+    return dict(trades=ss["trades"], pf=ss["profit_factor"],
+                r=ss["total_r"], dd=ss["max_drawdown_r"],
+                win_rate=ss["win_rate"],loss_streak=ss["longest_loss_streak"])
+
+
+def report_row(family,config_id,coords,signals,main,stress):
+    row=dict(family=family,config_id=config_id,**coords,signal_count=len(signals),
+             **{f"full_{k}":v for k,v in snapshot(main).items()},
+             **{f"4pip_full_{k}":v for k,v in snapshot(stress).items()})
+    slices=(
       ("before2010",None,datetime(2010,1,1,tzinfo=timezone.utc)),
       ("since2010",datetime(2010,1,1,tzinfo=timezone.utc),None),
       ("since2018",datetime(2018,1,1,tzinfo=timezone.utc),None),
@@ -697,138 +761,162 @@ def summary_row(config_id,family,factor_family,factor_value,raw_indices,trades,s
       ("era2004_2009",None,datetime(2010,1,1,tzinfo=timezone.utc)),
       ("era2010_2015",datetime(2010,1,1,tzinfo=timezone.utc),datetime(2016,1,1,tzinfo=timezone.utc)),
       ("era2016_2021",datetime(2016,1,1,tzinfo=timezone.utc),datetime(2022,1,1,tzinfo=timezone.utc)),
-      ("era2022_present",datetime(2022,1,1,tzinfo=timezone.utc),None),
-    )
-    for label,start,end in windows:
-        p=stats(selected(trades,start,end))
-        for k in ("trades","total_r","profit_factor","max_drawdown_r"):
-            row[f"{label}_{k}"]=p[k]
-    if stressed is not None:
-        p=stats(stressed)
-        for k in ("trades","total_r","profit_factor","max_drawdown_r"):
-            row[f"4pip_{k}"]=p[k]
-        p=stats(selected(stressed,NOW-timedelta(days=365.2425*2)))
-        row["4pip_last2y_total_r"]=p["total_r"]
-        row["4pip_last2y_trades"]=p["trades"]
-    row["research_only"]="All historical periods examined; not independent OOS"
+      ("era2022_now",datetime(2022,1,1,tzinfo=timezone.utc),None))
+    for label,start,end in slices:
+        for prefix, ledger in (("",main),("4pip_",stress)):
+            s=stats(part(ledger,start,end))
+            for k in ("trades","profit_factor","total_r"):
+                row[f"{prefix}{label}_{k}"]=s[k]
+    row["reason_not_frozen"]="Exploratory conditional study; no RR/timing/portfolio selection; historical periods previously examined"
     return row
 
 
-def add_months_utc(dt,n):
-    month=dt.year*12+dt.month-1+n
-    return datetime(month//12,month%12+1,1,tzinfo=timezone.utc)
-
-
-def rolling(config_id,trades):
+def rolling_diag(cid,trades):
     rows=[]
     start=datetime(2004,6,1,tzinfo=timezone.utc)
     for months in (12,24,36):
         t=start
-        while add_months_utc(t,months)<=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc):
-            end=add_months_utc(t,months)
-            st=stats(selected(trades,t,end))
-            rows.append(dict(config_id=config_id,months=months,from_utc=iso(t),
-                             to_utc=iso(end),trades=st["trades"],total_r=st["total_r"],
-                             positive_active=st["total_r"]>0 if st["trades"] else "NO_TRADES"))
-            t=add_months_utc(t,1)
+        while add_months(t,months)<=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc):
+            e=add_months(t,months)
+            ss=stats(part(trades,t,e))
+            rows.append(dict(config_id=cid,months=months,from_utc=iso(t),to_utc=iso(e),
+                             trades=ss["trades"],total_r=ss["total_r"],
+                             positive_active=ss["total_r"]>0 if ss["trades"] else "NO_TRADES"))
+            t=add_months(t,1)
     return rows
 
 
-def calendar(config_id,trades):
+def calendar_diag(cid,trades):
     rows=[]
-    for year in range(2004,NOW.year):
-        s=stats(selected(trades,datetime(year,1,1,tzinfo=timezone.utc),
-                         datetime(year+1,1,1,tzinfo=timezone.utc)))
-        rows.append(dict(config_id=config_id,year=year,trades=s["trades"],
-                         total_r=s["total_r"],profit_factor=s["profit_factor"]))
+    for y in range(2005,NOW.year):
+        ss=stats(part(trades,datetime(y,1,1,tzinfo=timezone.utc),
+                      datetime(y+1,1,1,tzinfo=timezone.utc)))
+        rows.append(dict(config_id=cid,year=y,trades=ss["trades"],
+                         total_r=ss["total_r"],profit_factor=ss["profit_factor"]))
     return rows
+
+
+def neighbourhood(rows):
+    """One-step adjacent comparisons within same family, with NO winner selection."""
+    by_family=defaultdict(list)
+    for row in rows: by_family[row["family"]].append(row)
+    out=[]
+    for family,items in by_family.items():
+        axes={key: sorted({x[key] for x in items}) for key in items[0]
+              if key in ("lookback","distance_atr","body_atr","compression_max",
+                         "close_location","range_atr","prior4h_decline_atr","penetration_atr")
+              and any(key in t for t in items)}
+        values={tuple(r[a] for a in axes):r for r in items}
+        for r in items:
+            coord=tuple(r[a] for a in axes)
+            for axis_i,(axis,levels) in enumerate(axes.items()):
+                k=levels.index(r[axis]);
+                if k+1>=len(levels):continue
+                nxt=list(coord);nxt[axis_i]=levels[k+1]
+                s=values.get(tuple(nxt))
+                if s is None:continue
+                out.append(dict(family=family,axis=axis,from_value=r[axis],to_value=s[axis],
+                                from_id=r["config_id"],to_id=s["config_id"],
+                                from_trades=r["full_trades"],to_trades=s["full_trades"],
+                                delta_r=s["full_r"]-r["full_r"],
+                                delta_4pip_r=s["4pip_full_r"]-r["4pip_full_r"],
+                                delta_last2y_r=s["last2y_total_r"]-r["last2y_total_r"],
+                                delta_last2y_4pip_r=s["4pip_last2y_total_r"]-r["4pip_last2y_total_r"]))
+    return out
+
+
+def branch_diagnostics(rows):
+    out=[]
+    for family in ("COMPRESSION","FAILED_BREAKDOWN","ENGULF_STRUCTURE","SWEEP_DECLINE"):
+        rr=[r for r in rows if r["family"]==family]
+        long_enough=[r for r in rr if r["full_trades"]>=50]
+        out.append(dict(family=family,geometries=len(rr),min_50_trades=len(long_enough),
+                        positive_2pip=sum(r["full_r"]>0 for r in long_enough),
+                        positive_4pip=sum(r["4pip_full_r"]>0 for r in long_enough),
+                        positive_early_late_4pip=sum(
+                            r["4pip_before2010_total_r"]>0 and r["4pip_since2010_total_r"]>0
+                            for r in long_enough),
+                        positive_last2y_4pip=sum(r["4pip_last2y_total_r"]>0 for r in long_enough),
+                        all_early_late_recent_4pip=sum(
+                            r["4pip_before2010_total_r"]>0 and r["4pip_since2010_total_r"]>0
+                            and r["4pip_last2y_total_r"]>0 for r in long_enough),
+                        note="Counts are diagnostics, NOT automatic candidate selections"))
+    return out
+
+
 
 
 def hist_coverage(label,candles):
-    times=[x["time"] for x in candles]
-    gap_days=max(((b-a).total_seconds()/86400 for a,b in zip(times,times[1:])),default=0)
-    return dict(timeframe=label,count=len(candles),first_utc=iso(times[0]),
-                last_utc=iso(times[-1]),max_gap_days=gap_days)
-
+    if not candles:raise RuntimeError("No candles: "+label)
+    tt=[v["time"] for v in candles]
+    gap=max(((b-a).total_seconds()/86400 for a,b in zip(tt,tt[1:])),default=0)
+    return dict(timeframe=label,count=len(tt),first_utc=iso(tt[0]),last_utc=iso(tt[-1]),max_gap_days=gap)
 
 def run_research():
     try:
-        STATUS.update(state="fetch",progress=1,message="Fetching EUR/AUD M15 midpoint candles")
+        STATUS.update(state="fetch",progress=1,message="Fetching EUR/AUD M15 full midpoint history")
         m15=fetch("M15",START,NOW,35)
-        if len(m15)<100_000:raise RuntimeError(f"Insufficient EUR/AUD M15 history: {len(m15)}")
-        STATUS.update(progress=15,message="Fetching H1/H4/D complete midpoint candles")
+        if len(m15)<100000:raise RuntimeError(f"Insufficient M15 candles: {len(m15)}")
+        STATUS.update(state="features",progress=16,message="Fetching completed H1/H4/D for identical Stage-1 feature engine")
         h1=fetch("H1",WARMUP,NOW,180)
         h4=fetch("H4",WARMUP,NOW,700)
         daily=fetch("D",WARMUP,NOW,3500)
-        if not all((h1,h4,daily)):
-            raise RuntimeError("Missing context history, cannot screen completed HTF factors")
-        coverage=[hist_coverage(label,candles) for label,candles in (
-            ("M15",m15),("H1",h1),("H4",h4),("D",daily))]
-        write_csv(OUTS["coverage"],coverage)
-        STATUS.update(state="features",progress=28,message="Computing causal features and six raw signal masks")
+        if not (h1 and h4 and daily):raise RuntimeError("Missing HTF history")
+        cov=[hist_coverage(name,cd) for name,cd in (("M15",m15),("H1",h1),("H4",h4),("D",daily))]
+        write_csv(OUTS["coverage"],cov)
+        STATUS.update(state="features",progress=30,message="Building strictly completed features")
         times=[c["time"] for c in m15]
-        f=features(m15,align_htf(times,htf_state(h1)),
-                   align_htf(times,htf_state(h4)),align_htf(times,htf_state(daily)))
-        masks=raw_masks(f)
-        factors=one_at_a_time_factors(f)
-        raw_rows=[]; factor_rows=[];raw_ledgers=[];cost_rows=[];roll=[];cal=[]
-        STATUS.update(state="raw",progress=35,message="Six raw mechanisms; 2/4-pip fills; RR3.5")
-        for j,family in enumerate(FAMILIES):
-            signal_indices=np.flatnonzero(masks[family]).tolist()
-            tr=backtest(m15,signal_indices,RR_FIXED,PRIMARY_COST)
-            s4=backtest(m15,signal_indices,RR_FIXED,STRESS_COST)
-            cid="RAW_"+family
-            raw_rows.append(summary_row(cid,family,"RAW","NONE",signal_indices,tr,s4))
-            for t in tr:
-                raw_ledgers.append(dict(config_id=cid,**{
-                    k:v for k,v in t.items() if k not in ("entry_time","exit_time")}))
-            for cost,ledger in ((PRIMARY_COST,tr),(STRESS_COST,s4)):
-                cost_rows.append(dict(config_id=cid,assumed_fill_pips=cost,**stats(ledger)))
-            roll.extend(rolling(cid,tr));cal.extend(calendar(cid,tr))
+        f=features(m15,align_htf(times,htf_state(h1)),align_htf(times,htf_state(h4)),
+                   align_htf(times,htf_state(daily)))
+        STATUS.update(state="parity",progress=37,message="Verifying all six full archived raw ledgers at Stage-1 cutoff")
+        parity=stage1_raw_parity(m15,f)
+        STATUS.update(state="grid",progress=43,message="Stage-1 parity PASS; 186 frozen conditional geometries x two cost levels")
+        geometries=declared_geometries(f)
+        rows=[];diag_trades=[];roll=[];cal=[]
+        for j,(family,cid,coords,mask) in enumerate(geometries):
+            ix=np.flatnonzero(mask).tolist()
+            tr=backtest(m15,ix,RR_FIXED,PRIMARY_COST)
+            stress=backtest(m15,ix,RR_FIXED,STRESS_COST)
+            rows.append(report_row(family,cid,coords,ix,tr,stress))
+            if tuple(coords.values())==DIAGNOSTIC_ANCHORS.get(family):
+                for label,ledger in (("2pip",tr),("4pip",stress)):
+                    for t in ledger:
+                        diag_trades.append(dict(config_id=cid,assumption=label,**{
+                            k:v for k,v in t.items() if k not in ("entry_time","exit_time")}))
+                    roll.extend(rolling_diag(cid+"__"+label,ledger))
+                    cal.extend(calendar_diag(cid+"__"+label,ledger))
             OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-            STATUS.update(progress=35+int(20*(j+1)/len(FAMILIES)),
-                          message=f"Raw mechanism {j+1}/{len(FAMILIES)}: {family}")
-        write_csv(OUTS["raw_families"],raw_rows)
-        write_csv(OUTS["raw_trade_ledgers"],raw_ledgers)
-        write_csv(OUTS["raw_cost_stress"],cost_rows)
-        write_csv(OUTS["raw_rolling"],roll)
-        write_csv(OUTS["raw_calendar"],cal)
-        STATUS.update(state="single_factor",progress=55,
-                      message=f"Six families x {len(factors)} separate factor settings")
-        for j,family in enumerate(FAMILIES):
-            baseline=masks[family]
-            for label,one_factor,group,value in factors:
-                ix=np.flatnonzero(baseline&one_factor).tolist()
-                tr=backtest(m15,ix,RR_FIXED,PRIMARY_COST)
-                s4=backtest(m15,ix,RR_FIXED,STRESS_COST) if len(tr)>=MIN_COST_STRESS_TRADES else None
-                factor_rows.append(summary_row(family+"__"+label,family,group,value,ix,tr,s4))
-                OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-            write_csv(OUTS["single_factors"],factor_rows)  # partial progress remains inspectable
-            STATUS.update(progress=55+int(40*(j+1)/len(FAMILIES)),
-                          message=f"Completed single-factor family {j+1}/{len(FAMILIES)}")
+            if j%10==9 or j==len(geometries)-1:
+                write_csv(OUTS["all_geometries"],rows) # checkpoints and error recovery
+                STATUS.update(progress=43+int(50*(j+1)/len(geometries)),
+                              message=f"Conditional geometry {j+1}/{len(geometries)}")
+        write_csv(OUTS["all_geometries"],rows)
+        write_csv(OUTS["branch_diagnostics"],branch_diagnostics(rows))
+        write_csv(OUTS["neighbourhood"],neighbourhood(rows))
+        write_csv(OUTS["diagnostic_ledgers"],diag_trades)
+        write_csv(OUTS["diagnostic_rolling"],roll)
+        write_csv(OUTS["diagnostic_calendar"],cal)
         write_csv(OUTS["methods"],[
-            dict(item="scope",detail="EUR/AUD M15 LONG standalone research only; NO Portfolio27 data or ranking"),
-            dict(item="history",detail="Start requested May 2002; actual coverage CSV determines first EUR/AUD bar"),
-            dict(item="raw",detail="Six minimal structural families; no preselected prior EUR/AUD H1/AUDUSD parameters"),
-            dict(item="factors",detail="Exactly one overlay per raw family; no interaction/RR/session-combination search"),
-            dict(item="cost",detail="Assumed 2pip adverse BUY fill, 4pip stress for all raw and >=50-trade factor rows; midpoint not executable bid/ask"),
-            dict(item="entry_exit",detail="Reference close, 10 tick stop buffer, RR3.5 target anchored to reference risk, full history p0 before period slicing"),
-            dict(item="htf",detail="Only prior strictly completed H1/H4/D via next actual HTF open"),
-            dict(item="no_old_m15_reference",detail="No archived EUR/AUD M15 LONG ledger exists for parity. Never claim parity to a nonexistent strategy"),
-            dict(item="interpretation",detail="No standalone winner or untouched OOS inferred; historical data previously explored for other pairs/timeframes"),
-            dict(item="next",detail="Inspect broad single-factor evidence, then predeclare SMALL conditional matrix independently; portfolio admission only after frozen standalone validation"),
-        ])
+          dict(topic="scope",detail="Standalone EUR/AUD M15 LONG; NO Portfolio27 code, trades or selection"),
+          dict(topic="geometry",detail="186 predeclared: compression 54, failed breakdown 54, engulf 24, sweep 54"),
+          dict(topic="freeze",detail="RR3.5; M15 signal close, low-minus-10-ticks stop, identical Stage-1 next-candle and p0 exit logic"),
+          dict(topic="cost",detail="2pip adverse BUY fill baseline; 4pip stress ALL geometries, not historical measured bid/ask"),
+          dict(topic="parity",detail="Six Stage-1 raw accepted-trade ledgers field fingerprints at exact 2026-09-23T09:15:00Z cutoff"),
+          dict(topic="independence",detail="Stage-2 historical data are previously inspected; era splits and neighbour checks are diagnostics, not untouched OOS"),
+          dict(topic="selection",detail="No auto finalist, no RR/session tuning, no combo of branch signals, no portfolio replay"),
+          dict(topic="anchors",detail="Four fixed diagnostic ledgers were predeclared before any Stage-2 results"),
+          dict(topic="next",detail="Only coherent full neighbourhood with sample/early-late/recent 4pip evidence merits focused standalone validation")])
         zip_outputs()
-        STATUS.update(state="complete",progress=100,raw_families=len(raw_rows),
-                      single_factor_rows=len(factor_rows),factors_per_family=len(factors),
-                      message="Standalone EUR/AUD M15 LONG stage 1 complete",
-                      result_path="/euraud-m15-long-stage1/results")
+        STATUS.update(state="complete",progress=100,stage1_parity="PASS",
+                      grid_rows=len(rows),diagnostic_ledgers=len(diag_trades),
+                      message="Standalone conditional Stage 2 complete",
+                      result_path="/euraud-m15-long-stage2/results")
     except Exception as ex:
         STATUS.update(state="error",message=str(ex),traceback=traceback.format_exc(),
                       orders_supported=False,trading_enabled=False)
         try:
-            write_csv(OUTS["errors"],[dict(error=str(ex),traceback=STATUS["traceback"],
-                                         progress=STATUS["progress"],state=STATUS["state"])])
+            write_csv(OUTS["errors"],[dict(message=str(ex),traceback=STATUS["traceback"],
+                                           progress=STATUS.get("progress"),state=STATUS["state"])])
             zip_outputs()
         finally:
             print(STATUS["traceback"],flush=True)
@@ -836,18 +924,19 @@ def run_research():
 
 @app.route("/")
 def root():
-    return jsonify(service="EUR/AUD M15 LONG Stage 1 standalone research",state=STATUS["state"],
-                   status="/euraud-m15-long-stage1/status",
-                   results="/euraud-m15-long-stage1/results",
+    return jsonify(service="EUR/AUD M15 LONG standalone conditional Stage 2",
+                   state=STATUS["state"],
+                   status="/euraud-m15-long-stage2/status",
+                   results="/euraud-m15-long-stage2/results",
                    orders_supported=False,trading_enabled=False)
 
-@app.route("/euraud-m15-long-stage1/status")
-def status_route():
-    return jsonify(STATUS)
 
-@app.route("/euraud-m15-long-stage1/results")
-def results_route():
-    return download(BUNDLE)
+@app.route("/euraud-m15-long-stage2/status")
+def status_route():return jsonify(STATUS)
+
+
+@app.route("/euraud-m15-long-stage2/results")
+def results_route():return download(BUNDLE)
 
 
 if __name__=="__main__":
