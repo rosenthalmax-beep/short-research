@@ -664,7 +664,11 @@ def check_native_short_parity(candles, feat):
             accepted_ledger_sha256=ledgerhash.hexdigest(),
             raw_native_parity='PASS',full_accepted_native_parity='PASS',
             cutoff_utc=iso(candles[-1]['time'])))
-    write_csv(OUTS['raw_engulf_parity'],checks)
+    # Pass4 uses the archived-control filename; earlier passes use raw_engulf_parity.
+    # Resolve the ACTIVE output map, rather than assuming the Pass1 key exists.
+    parity_key = ('archived_bearish_parity' if 'archived_bearish_parity' in OUTS
+                  else 'raw_engulf_parity')
+    write_csv(OUTS[parity_key],checks)
     OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
     return checks
 
