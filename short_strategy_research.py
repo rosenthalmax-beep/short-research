@@ -1156,162 +1156,355 @@ def validate_all_mechanisms(candles,f):
     return rows
 
 
-def run_alternatives():
+# ============================================================
+# SHORT PASS 2 — FROZEN ANCHORS / ONE CONDITIONAL FACTOR
+# PLUS SEPARATE PREDECLARED RANGE BOUNDARY EXPANSION
+# ============================================================
+# IMPORTANT: do NOT select anchors based on this pass's top row.
+# All history has been repeatedly inspected; never call it unseen OOS.
+OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_PASS2_OUTPUT_DIR','/tmp/audjpy_short_pass2'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTPUT_NAMES=('coverage','raw_engulf_parity','archived_bearish_control','anchor_parity','anchor_metrics',
+    'anchor_full_ledgers','one_factor_matrix','one_factor_marginal_attribution',
+    'boundary_matrix','boundary_marginal_attribution','boundary_neighbours',
+    'plateau_axis_summary','anchor_rolling','anchor_calendar_years',
+    'worst_rolling_by_configuration','methodology','errors')
+OUTS={name:str(OUTPUT_DIR/f'audjpy_short_pass2_{name}.csv') for name in OUTPUT_NAMES}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_PASS2_CONDITIONAL_AND_BOUNDARIES_RESULTS.zip')
+ANCHORS=(
+    ('LB40_B1.25_R2.00',40,1.25,2.00,168,5.3284244540584185),
+    ('LB60_B1.00_R2.00',60,1.00,2.00,183,12.512788156428638),
+    ('LB60_B1.25_R2.00',60,1.25,2.00,139,12.110963317166263),
+)
+# Primary 4pip baselines from the actual archived Pass1B matrix above.
+# Other fill/costs are recomputed, not tuned to this pass.
+# Range explicitly extends on BOTH SIDES of the previous tested 2.00 edge;
+# LB80 and B1.50 expand the previously tested lookback/body ceilings too.
+BOUNDARY_LB=(40,60,80)
+BOUNDARY_BODY=(.75,1.00,1.25,1.50)
+BOUNDARY_RANGE=(1.50,1.75,2.00,2.25,2.50,2.75,3.00,3.25,3.50)
+EXPECTED_BOUNDARY=len(BOUNDARY_LB)*len(BOUNDARY_BODY)*len(BOUNDARY_RANGE)
+
+
+def rally_geometry(f,lb,body,range_min):
+    """Frozen rally rejection: >=1.50 ATR preceding 16 M15 candles,
+    high strictly over previous LB high, close strictly below it; bearish.
+    All price arrays in the original PASS1B are MIRRORED to BUY-space.
+    """
+    return (family_mask_mirror(f,'RALLY_REJECTION',lb,.25)
+         & (f['body_atr']>=body)&(f['range_atr']>=range_min))
+
+
+def conditional_predicates(f):
+    """Each mask is exactly ONE condition, compared to its OWN anchor.
+    Values are predeclared; no sequential / conjunction tuning here.
+    All momentum is prior-only; candle-geometry fields known at close.
+    """
+    n=f['n']; a=f['atr']; close=f['close']; o=f['open']; high=f['high'];low=f['low']
+    ok=np.isfinite(a)&(a>0)
+    vals=[]
+    def add(group,metric,operator,threshold,array,note=''):
+        finite=np.isfinite(array)
+        if operator=='>=': mask=finite&(array>=threshold)
+        elif operator=='<=':mask=finite&(array<=threshold)
+        else:raise ValueError(operator)
+        vals.append((f'{group}__{metric}__{operator}__{threshold:.3f}',
+             dict(factor_group=group,metric=metric,operator=operator,
+                  threshold=threshold,factor_note=note),mask))
+    # Original rally signal had prior-16 rise >=1.50 ATR. Lower thresholds
+    # are vacuous; only tighten within conditional test.
+    prior16rise=-f['mom4']
+    for x in (1.75,2.,2.5,3.,4.):
+        add('prior_movement','rise_prior16_atr','>=',x,prior16rise,
+            'Preceding 16 completed M15 bars; signal ATR denominator')
+    for bars in (48,96,192):
+        rise=np.full(n,np.nan)
+        rise[bars+1:]=np.divide(close[:-(bars+1)]-close[bars:-1],a[bars+1:],
+            out=np.full(n-bars-1,np.nan),where=ok[bars+1:])
+        # mirrored price: earlier-high minus recent-low => actual rise
+        for x in (0.,.75,1.5,2.5):
+            add('prior_movement',f'rise_prior{bars}_atr','>=',x,rise,
+                'Prior completed M15 closes only; 48/96/192 MARKET bars')
+    # A strong mirrored close near high is a strong actual bearish close.
+    for x in (.60,.70,.80,.90):
+        add('signal_quality','mirrored_close_location','>=',x,f['close_loc'],
+            'Equivalent actual bearish candle close in bottom 40/30/20/10%')
+    # Mirrored lower wick = actual short upper wick. Mirror body positive.
+    for x in (.20,.40,.60,.80):
+        add('signal_quality','actual_upper_wick_body','>=',x,f['lower_wick_body'])
+    # Prior candle's absolute real body divided by signal ATR.
+    prev_body=np.full(n,np.nan)
+    prev_body[1:]=np.divide(np.abs(close[:-1]-o[:-1]),a[1:],
+        out=np.full(n-1,np.nan),where=ok[1:])
+    for x in (.50,.75,1.00,1.25):
+        add('previous_bar','prior_body_atr','>=',x,prev_body)
+    m20=sma(a,20)
+    ratio=np.divide(a,m20,out=np.full(n,np.nan),
+        where=np.isfinite(m20)&(m20>0))
+    # Always prior ATR state; signal candle ATR only used in baseline geom.
+    prior_ratio=np.r_[np.nan,ratio[:-1]]
+    for x in (.85,1.,1.10,1.25,1.50):
+        add('volatility','previous_m15_atr_ratio20','>=',x,prior_ratio)
+    for x in (.70,.85,1.,1.15):
+        add('volatility','previous_m15_atr_ratio20','<=',x,prior_ratio)
+    # Actual prior high sweep penetration: previous mirrored low - mirrored low.
+    for lb in (40,60):
+        penetration=np.divide(f['prev_low'][lb]-low,a,out=np.full(n,np.nan),where=ok)
+        for x in (.05,.10,.20,.35):
+            add('structure',f'prior_high_sweep_LB{lb}_atr','>=',x,penetration)
+    # Original target/stop geometry kept fixed; test distance as one factor.
+    stop_distance=np.divide(close-(low-STOP_TICKS*TICK),a,
+        out=np.full(n,np.nan),where=ok)
+    for x in (.60,.80,1.,1.25):
+        add('signal_quality','reference_stop_distance_atr','>=',x,stop_distance)
+    for x in (1.50,2.,2.5,3.):
+        add('signal_quality','reference_stop_distance_atr','<=',x,stop_distance)
+    return vals
+
+
+def accepted_delta(anchor,trades):
+    a={t['signal_index']:t for t in anchor}
+    b={t['signal_index']:t for t in trades}
+    new=b.keys()-a.keys();removed=a.keys()-b.keys();same=b.keys()&a.keys()
+    return dict(anchor_trades=len(a),candidate_trades=len(b),
+        retained_accepted=len(same),newly_eligible_accepted=len(new),
+        removed_accepted=len(removed),new_entries_r=sum(b[k]['result_r'] for k in new),
+        removed_entries_r=sum(a[k]['result_r'] for k in removed),
+        total_delta_r=stats(trades)['total_r']-stats(anchor)['total_r'],
+        interpretation='New entries following full chronology are not an independently tradable strategy')
+
+
+def rolling_worst(cid,ledger,cost):
+    # Full chronological ledger first, slice into completed monthly windows.
+    allrows=rolling(cid,ledger,cost)
+    out=[]
+    for duration in (12,24,36):
+        bucket=[r for r in allrows if r['window_months']==duration]
+        if not bucket:raise RuntimeError('No completed rolling windows')
+        worst=min(bucket,key=lambda r:r['total_r'])
+        with_trade=[r for r in bucket if r['trades']>0]
+        worst_with_trade=min(with_trade,key=lambda r:r['total_r']) if with_trade else None
+        out.append(dict(config_id=cid,assumed_adverse_fill_pips=cost,
+          window_months=duration,completed_windows=len(bucket),
+          zero_trade_windows=sum(r['trades']==0 for r in bucket),
+          worst_window_start_utc=worst['from_utc'],
+          worst_window_end_utc=worst['to_utc'],
+          worst_total_r=worst['total_r'],worst_trades=worst['trades'],
+          worst_with_trade_total_r=(worst_with_trade['total_r'] if worst_with_trade else None),
+          worst_with_trade_start_utc=(worst_with_trade['from_utc'] if worst_with_trade else None)))
+    return out
+
+
+def row_for_candidate(kind,cid,axes,candles,ix,base_2,base_4):
+    tr2,tr4=paired(candles,ix)
+    row=metrics_row(kind,cid,axes,ix,tr2,tr4,stats(base_2))
+    attr=[]
+    for cost,base,tr in ((2,base_2,tr2),(4,base_4,tr4)):
+        delta=accepted_delta(base,tr)
+        attr.append(dict(config_id=cid,assumed_adverse_fill_pips=cost,**axes,**delta))
+        for k,v in delta.items():
+            if k!='interpretation':row[f'{cost}pip_{k}']=v
+    return row,attr,tr2,tr4
+
+
+def pass2_run():
     try:
-        # Avoid packaging stale output from an earlier run/restart on the same research service.
         for path in list(OUTS.values())+[BUNDLE]:
             if os.path.isfile(path):os.remove(path)
-        STATUS.update(state='fetch',progress=1,message='Frozen AUD/JPY M15 OANDA MID history through 2026-09-24 19:00Z')
+        STATUS.update(state='fetch',progress=1,message='Frozen AUDJPY source and Pass1B fingerprint checks')
         candles=fetch('M15',START,FIXED_END,35)
-        if len(candles)<5000:raise RuntimeError('History insufficient')
+        if not candles:raise RuntimeError('No historical candles')
         global HISTORY_FIRST
         HISTORY_FIRST=candles[0]['time']
         cov=hist_coverage('M15',candles)
         fp=midpoint_fingerprint(candles,'M15')
-        row={**cov,**fp, 'expected_last_utc':EXPECTED_LAST,
-            'expected_midpoint_sha256':EXPECTED_SHA,
-            'source_parity':'PASS' if (cov['first_utc']==EXPECTED_FIRST and
-                cov['last_utc']==EXPECTED_LAST and cov['count']==EXPECTED_CANDLES and
-                fp['sha256_midpoint_ohlc']==EXPECTED_SHA) else 'FAIL',
-            'fixed_requested_to_utc':iso(FIXED_END)}
-        write_csv(OUTS['coverage'],[row])
-        if row['source_parity']!='PASS':
-            raise RuntimeError('OANDA M15 frozen-source parity FAILED: do not interpret any research metrics; inspect coverage.csv')
-        STATUS.update(state='features',progress=20,message='Causal M15 features; no future higher timeframe data')
+        verified=(cov['first_utc']==EXPECTED_FIRST and cov['last_utc']==EXPECTED_LAST
+              and cov['count']==EXPECTED_CANDLES and fp['sha256_midpoint_ohlc']==EXPECTED_SHA)
+        write_csv(OUTS['coverage'],[dict(**cov,**fp,expected_first_utc=EXPECTED_FIRST,
+          expected_last_utc=EXPECTED_LAST,expected_count=EXPECTED_CANDLES,
+          expected_sha256=EXPECTED_SHA,source_parity='PASS' if verified else 'FAIL')])
+        if not verified:raise RuntimeError('FROZEN SOURCE PARITY FAILED, do not interpret results')
+        STATUS.update(state='controls',progress=20,message='Archived bearish baseline and native anchor full-ledger controls')
         n=len(candles)
-        fake_state={key:np.full(n,np.nan) for key in ('close','ema50','ema100','ema200','atr_ratio50')}
-        f=features(candles,fake_state,fake_state,fake_state)
-        STATUS.update(state='control',progress=31,message='Checking exact archived bearish engulf and independent family mechanisms')
-        control=check_native_short_parity(candles,f)
+        no_htf={k:np.full(n,np.nan) for k in ('close','ema50','ema100','ema200','atr_ratio50')}
+        f=features(candles,no_htf,no_htf,no_htf)
+        original=check_native_short_parity(candles,f)
+        write_csv(OUTS['archived_bearish_control'],original)
         if any(x['raw_signal_sha256']!=EXPECTED_BEARISH_RAW_SHA or
-               x['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[x['assumed_adverse_fill_pips']] or
-               x['accepted_trades']!=21136 for x in control):
-            raise RuntimeError('FROZEN bearish engulfing raw and complete-ledger control mismatch')
-        write_csv(OUTS['historical_control'],control)
-        family_checks=validate_all_mechanisms(candles,f)
-        write_csv(OUTS['native_mechanism_parity'],family_checks)
-        write_csv(OUTS['mechanism_definitions'],[
-            dict(family=fam,mechanism=FAMILY_RULES[fam],
-                 lookbacks=str(MATRIX_LB),body_atr_min=str(MATRIX_BODY),
-                 range_atr_min=str(MATRIX_RANGE),confirmation=str(MATRIX_CONFIRM),
-                 rule='Signal candle complete; all prior extrema exclude signal')
-            for fam in FAMILIES])
-        STATUS.update(state='raw_families',progress=42,message='Six stand-alone mechanisms, full chronological replay at 2/4 pips')
-        raw=[];rep=[];roll=[];years=[]
-        for i,fam in enumerate(FAMILIES):
-            ix=np.flatnonzero(family_mask_mirror(f,fam,20,0)).tolist()
+           x['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[x['assumed_adverse_fill_pips']]
+           or x['accepted_trades']!=21136 for x in original):
+            raise RuntimeError('Archived bearish full-ledger parity FAILED')
+        anchor_rows=[];anchor_parity=[];all_anchor_ledgers=[];allroll=[];allyears=[]
+        cached={}
+        for label,lb,body,rng,expected_count,expected_r in ANCHORS:
+            mask=rally_geometry(f,lb,body,rng)
+            native=(family_mask_native(f,'RALLY_REJECTION',lb,.25)
+                & (f['body_atr']>=body)&(f['range_atr']>=rng))
+            ix=np.flatnonzero(mask).tolist(); nix=np.flatnonzero(native).tolist()
+            if ix!=nix:raise RuntimeError(f'NATIVE ANCHOR SIGNAL PARITY FAILED {label}')
             tr2,tr4=paired(candles,ix)
-            raw.append(metrics_row('RAW_MECHANISM',fam+'__LB20',
-                 family_parameters(fam,20,0),ix,tr2,tr4,stats(tr2)))
-            for cost,trades in ((2,tr2),(4,tr4)):
-                rep.extend(dict(family=fam,assumed_adverse_fill_pips=cost,**trade_public(t)) for t in trades)
-                roll.extend(rolling(fam,trades,cost))
-                years.extend(annual(fam,trades,cost))
-            STATUS.update(progress=42+int(9*(i+1)/len(FAMILIES)),
-                message=f'Raw mechanism {i+1}/{len(FAMILIES)}')
-        write_csv(OUTS['raw_family_summary'],raw)
-        write_csv(OUTS['representative_ledgers'],rep)
-        write_csv(OUTS['representative_rolling'],roll)
-        write_csv(OUTS['representative_calendar_years'],years)
-        STATUS.update(state='mechanism_matrix',progress=52,message=f'Predeclared {EXPECTED_GRID} structural/quality candidates at both assumed costs')
-        rows=[];attrib=[];j=0
-        for fam,lb,confirm in itertools.product(FAMILIES,MATRIX_LB,MATRIX_CONFIRM):
-            family_base=family_mask_mirror(f,fam,lb,confirm)
-            family_base_ix=np.flatnonzero(family_base).tolist()
-            base2,base4=paired(candles,family_base_ix)
-            baseline_by_cost={2:base2,4:base4}
-            for body,rng in itertools.product(MATRIX_BODY,MATRIX_RANGE):
-                candidate=family_base&(f['body_atr']>=body)&(f['range_atr']>=rng)
-                ix=np.flatnonzero(candidate).tolist()
-                tr2,tr4=paired(candles,ix)
-                rid=matrix_id(fam,lb,confirm,body,rng)
-                axes={**family_parameters(fam,lb,confirm),
-                      'body_atr_min':body,'range_atr_min':rng}
-                row=metrics_row('ALTERNATIVE_MECHANISM_MATRIX',rid,axes,
-                    ix,tr2,tr4,stats(tr2))
-                for cost,trades in ((2,tr2),(4,tr4)):
-                    baseline=baseline_by_cost[cost]
-                    accepted_baseline={t['signal_index']:t for t in baseline}
-                    accepted_filtered={t['signal_index']:t for t in trades}
-                    retained=set(accepted_filtered)&set(accepted_baseline)
-                    new=set(accepted_filtered)-set(accepted_baseline)
-                    removed=set(accepted_baseline)-set(accepted_filtered)
-                    prefix=f'{cost}pip_'
-                    row[prefix+'accepted_new_vs_unfiltered']=len(new)
-                    row[prefix+'accepted_removed_vs_unfiltered']=len(removed)
-                    row[prefix+'accepted_retained_vs_unfiltered']=len(retained)
-                    row[prefix+'new_entries_total_r']=sum(accepted_filtered[k]['result_r'] for k in new)
-                    row[prefix+'removed_entries_total_r']=sum(accepted_baseline[k]['result_r'] for k in removed)
-                    attrib.append(dict(config_id=rid,family=fam,lookback=lb,confirmation=confirm,
-                        assumed_adverse_fill_pips=cost,
-                        unfiltered_accepted_trades=len(baseline),
-                        filtered_accepted_trades=len(trades),
-                        new_after_full_replay=len(new),removed_after_full_replay=len(removed),
-                        common_signal_indices=len(retained),
-                        new_entries_total_r=row[prefix+'new_entries_total_r'],
-                        removed_entries_total_r=row[prefix+'removed_entries_total_r'],
-                        unfiltered_total_r=stats(baseline)['total_r'],
-                        filtered_total_r=stats(trades)['total_r'],
-                        interpretation='Pyramiding-zero full replay; candidate-only new entries are NOT an independent tradable sleeve.'))
-                rows.append(row)
-                j+=1
-                if j%12==0 or j==EXPECTED_GRID:
-                    write_csv(OUTS['mechanism_matrix'],rows)
-                    STATUS.update(progress=52+int(42*j/EXPECTED_GRID),
-                         message=f'Mechanism matrix {j}/{EXPECTED_GRID}')
-                if j%48==0:
+            if len(tr4)!=expected_count or abs(stats(tr4)['total_r']-expected_r)>1e-8:
+                raise RuntimeError(f'ARCHIVED PASS1B BASELINE MISMATCH {label}')
+            for cost,tr in ((2,tr2),(4,tr4)):
+                independent=[];p=0
+                while p<len(nix):
+                    item=native_short_outcome(candles,nix[p],RR_FIXED,cost)
+                    if item is None:p+=1;continue
+                    independent.append(item)
+                    p=bisect.bisect_left(nix,item['exit_index'],lo=p+1)
+                fields=('signal_index','exit_index','reference_entry',
+                    'historical_fill','stop','target','result_r','exit_reason')
+                if len(independent)!=len(tr):raise RuntimeError(f'NATIVE COUNT FAILED {label} {cost}')
+                for x,y in zip(tr,independent):
+                    for field in fields:
+                        if field in ('exit_reason','signal_index','exit_index'):
+                            match=x[field]==y[field]
+                        else:match=abs(x[field]-y[field])<=1e-9
+                        if not match:raise RuntimeError(f'NATIVE LEDGER PARITY FAILED {label} {cost} {field}')
+                anchor_parity.append(dict(anchor_id=label,assumed_fill_pips=cost,
+                   raw_signal_sha256=digest_indices(candles,ix),
+                   accepted_ledger_sha256=digest_ledger(tr),
+                   accepted_trades=len(tr),total_r=stats(tr)['total_r'],
+                   native_signal_parity='PASS',native_complete_ledger_parity='PASS',
+                   archived_4pip_parity='PASS' if cost==4 else 'not_applicable'))
+                all_anchor_ledgers.extend(dict(anchor_id=label,assumed_fill_pips=cost,**trade_public(t)) for t in tr)
+                allroll.extend(rolling(label,tr,cost))
+                allyears.extend(annual(label,tr,cost))
+            anchor_rows.append(metrics_row('FROZEN_PASS1B_ANCHOR',label,
+                dict(lookback=lb,body_atr_min=body,range_atr_min=rng,
+                  prior16_rise_min_atr=1.5),ix,tr2,tr4,stats(tr2)))
+            cached[label]=(ix,tr2,tr4)
+        write_csv(OUTS['anchor_parity'],anchor_parity)
+        write_csv(OUTS['anchor_metrics'],anchor_rows)
+        write_csv(OUTS['anchor_full_ledgers'],all_anchor_ledgers)
+        write_csv(OUTS['anchor_rolling'],allroll)
+        write_csv(OUTS['anchor_calendar_years'],allyears)
+        STATUS.update(state='conditional',progress=41,message='Predeclared one factor at a time within 3 immutable Pass1B anchors')
+        filters=conditional_predicates(f)
+        expected_conditional=len(ANCHORS)*len(filters)
+        rows=[];attrib=[];worst=[]
+        for label,lb,body,rng,_,_ in ANCHORS:
+            base_mask=rally_geometry(f,lb,body,rng)
+            _,base2,base4=cached[label]
+            for ident,meta,condition in filters:
+                cid=f'{label}__{ident}'
+                ix=np.flatnonzero(base_mask&condition).tolist()
+                axes=dict(anchor_id=label,lookback=lb,body_atr_min=body,
+                    range_atr_min=rng,prior16_rise_min_atr=1.5,**meta)
+                row,changes,tr2,tr4=row_for_candidate('ONE_FACTOR',cid,axes,
+                    candles,ix,base2,base4)
+                rows.append(row);attrib.extend(changes)
+                for cost,tr in ((2,tr2),(4,tr4)):
+                    worst.extend(rolling_worst(cid,tr,cost))
+                if len(rows)%15==0:
+                    write_csv(OUTS['one_factor_matrix'],rows)
+                    STATUS.update(progress=41+int(28*len(rows)/expected_conditional),
+                         message=f'One factor {len(rows)}/{expected_conditional}')
+                if len(rows)%42==0:
                     OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if j!=EXPECTED_GRID or len({r['config_id'] for r in rows})!=EXPECTED_GRID:
-            raise RuntimeError('INCOMPLETE/duplicate research matrix')
-        write_csv(OUTS['mechanism_matrix'],rows)
-        write_csv(OUTS['matrix_marginal_attribution'],attrib)
-        write_csv(OUTS['matrix_adjacent_neighbours'],matrix_neighbours(rows))
-        write_csv(OUTS['matrix_axis_summary'],axis_summary(rows))
+        if len(rows)!=expected_conditional or len({x['config_id'] for x in rows})!=len(rows):
+            raise RuntimeError('Incomplete conditional grid')
+        write_csv(OUTS['one_factor_matrix'],rows)
+        write_csv(OUTS['one_factor_marginal_attribution'],attrib)
+        STATUS.update(state='boundary',progress=70,
+           message='Independent geometry boundary extension 1.50-3.50 ATR, not conditional mixtures')
+        boundary=[];boundary_attr=[];j=0
+        for lb,body in itertools.product(BOUNDARY_LB,BOUNDARY_BODY):
+            base_mask=family_mask_mirror(f,'RALLY_REJECTION',lb,.25)
+            baseix=np.flatnonzero(base_mask).tolist()
+            base2,base4=paired(candles,baseix)
+            for rng in BOUNDARY_RANGE:
+                ix=np.flatnonzero(base_mask&(f['body_atr']>=body)&(f['range_atr']>=rng)).tolist()
+                cid=f'RALLY_REJECTION__LB{lb}__B{body:.2f}__R{rng:.2f}'
+                axes=dict(anchor_id=f'UNFILTERED_RALLY_LB{lb}',lookback=lb,
+                    confirmation=.25,body_atr_min=body,range_atr_min=rng,
+                    prior16_rise_min_atr=1.5,range_beyond_old_max=rng>2.)
+                row,changes,tr2,tr4=row_for_candidate('BOUNDARY_EXTENSION',cid,
+                    axes,candles,ix,base2,base4)
+                boundary.append(row);boundary_attr.extend(changes)
+                for cost,tr in ((2,tr2),(4,tr4)):
+                    worst.extend(rolling_worst(cid,tr,cost))
+                j+=1
+                if j%14==0:
+                    write_csv(OUTS['boundary_matrix'],boundary)
+                    STATUS.update(progress=70+int(24*j/EXPECTED_BOUNDARY),
+                         message=f'Boundary extension {j}/{EXPECTED_BOUNDARY}')
+                if j%42==0:
+                    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if j!=EXPECTED_BOUNDARY:raise RuntimeError('Incomplete boundary extension grid')
+        write_csv(OUTS['boundary_matrix'],boundary)
+        write_csv(OUTS['boundary_marginal_attribution'],boundary_attr)
+        # Every adjacent neighbour, including negative/empty high-boundary rows.
+        keyed={(r['lookback'],r['body_atr_min'],r['range_atr_min']):r for r in boundary}
+        neighbors=[];summary=[]
+        for row in boundary:
+            key=(row['lookback'],row['body_atr_min'],row['range_atr_min'])
+            for j,axis,levels in ((0,'lookback',BOUNDARY_LB),
+                                  (1,'body_atr_min',BOUNDARY_BODY),
+                                  (2,'range_atr_min',BOUNDARY_RANGE)):
+                idx=levels.index(key[j])
+                if idx+1>=len(levels):continue
+                dest=list(key);dest[j]=levels[idx+1];right=keyed[tuple(dest)]
+                neighbors.append(dict(from_id=row['config_id'],to_id=right['config_id'],
+                     axis=axis,from_value=key[j],to_value=dest[j],
+                     from_4pip_trades=row['4pip_trades'],to_4pip_trades=right['4pip_trades'],
+                     from_4pip_total_r=row['4pip_total_r'],to_4pip_total_r=right['4pip_total_r'],
+                     from_4pip_drawdown_r=row['4pip_max_drawdown_r'],
+                     to_4pip_drawdown_r=right['4pip_max_drawdown_r']))
+        for level in BOUNDARY_RANGE:
+            bucket=[r for r in boundary if r['range_atr_min']==level]
+            summary.append(dict(axis='range_atr_min',value=level,configurations=len(bucket),
+                configs_with_50_stressed_trades=sum(x['4pip_trades']>=50 for x in bucket),
+                positive_4pip_with_50=sum(x['4pip_trades']>=50 and x['4pip_total_r']>0 for x in bucket),
+                median_stressed_trades=med([x['4pip_trades'] for x in bucket]),
+                median_stressed_total_r=med([x['4pip_total_r'] for x in bucket]),
+                note='Configurations overlap; not independent discoveries or automated selection'))
+        write_csv(OUTS['boundary_neighbours'],neighbors)
+        write_csv(OUTS['plateau_axis_summary'],summary)
+        write_csv(OUTS['worst_rolling_by_configuration'],worst)
         write_csv(OUTS['methodology'],[
-         dict(topic='SCOPE',detail='AUD_JPY M15 SHORT Pass 1B: alternate mechanism search, never deploy into Portfolio28.'),
-         dict(topic='FROZEN_SOURCE',detail=f'M15 OANDA midpoint #{len(candles)} through {EXPECTED_LAST}, SHA256 {EXPECTED_SHA}; fail closed on mismatch.'),
-         dict(topic='CONTROL',detail='Exact archived bearish engulfing raw sha and native full-ledger at two assumed costs; 6 family x 2 representative geometries x both costs native full-ledger check.'),
-         dict(topic='FAMILIES',detail='Six predeclared independently distinct raw mechanisms; see definitions CSV. Bearish engulfing NOT rescued here.'),
-         dict(topic='MATRIX',detail=f'Exactly {EXPECTED_GRID} predeclared combinations: 6 families x 4 lookbacks x 2 confirm x 3 body x 3 range.'),
-         dict(topic='COST',detail='All tests 2/4-pip assumed adverse SELL entry; NOT observed historical executable spread/slippage.'),
-         dict(topic='RR',detail='Reference RR 3.5 fixed; no RR or sessions optimised, all full-history p0 replays.'),
-         dict(topic='STOP_TARGET',detail='Stop=signal actual high + .010 JPY; target=reference close - 3.5 * reference stop distance, not fill-to-stop RR.'),
-         dict(topic='TIE',detail='Next-or-later bar; if both target/stop in M15 candle, nearer to open first; equal STOP; exit candle eligible.'),
-         dict(topic='HTF',detail='Only causal M15 info used in this pass. Later conditional studies may compute H1/H4/D as strictly completed state.'),
-         dict(topic='HISTORY',detail='Previously inspected AUD/JPY period => all results exploratory in-sample. Source cutoff fixed at prior Pass1 for strict comparability.'),
-         dict(topic='REPORT',detail='Rows include raw and accepted counts, period metrics, both fill costs; adjacent neighbours include weak/empty rows. Matrix marginal attribution compares each filtered branch to its own unfiltered mechanism and correctly replayed accepted stream; representative raw-family ledgers include years & zero-trade rolling windows.'),
-         dict(topic='NEXT',detail='Review economic mechanism, robust stressed neighbourhood, frequency and weak eras; freeze only justified branch anchors for separate Pass2 conditional features. No automatic selection, no portfolio tuning.'),
+         dict(topic='SCOPE',detail='AUDJPY M15 SHORT research only; Portfolio28 and live executor/probe are unchanged; no order path'),
+         dict(topic='SOURCE',detail=f'Frozen {EXPECTED_CANDLES} OANDA MID M15 candles through {EXPECTED_LAST}; expected SHA256 {EXPECTED_SHA}; fail closed'),
+         dict(topic='ARCHIVED_CONTROL',detail='Exact bearish engulf raw signal and complete accepted ledger parity, both costs; 3 rally anchors match 4pip Pass1B count/R'),
+         dict(topic='NATIVE',detail='All three frozen anchors checked actual-price native signal and full accepted trade ledger at 2/4 pip'),
+         dict(topic='ANCHORS',detail=str(ANCHORS)),
+         dict(topic='ONE_FACTOR',detail=f'{len(filters)} predeclared single conditions x three anchors = {expected_conditional}. No combinations of new conditions.'),
+         dict(topic='BOUNDARIES',detail=f'{EXPECTED_BOUNDARY} separately tested geometries. Range 1.50/1.75/2/2.25/2.5/2.75/3/3.25/3.5 ATR; LB40/60/80; body .75/1/1.25/1.5; prior16 rise 1.5 ATR fixed.'),
+         dict(topic='STRESS',detail='2 and 4 assumed adverse SHORT fill pips on frozen historical MID candles; not observed spreads'),
+         dict(topic='EXECUTION',detail='Stop actual signal high + 10 ticks, target reference close minus 3.50 reference risk. Short fill reference minus 2 or 4 pips. Full chronological pyramiding 0, same-bar tie nearer open; exit candle eligible.'),
+         dict(topic='ROLLING',detail='Complete monthly-start 12/24/36-month windows incl zero trade in worst_rolling_by_configuration; full rolling and calendar years for all anchors'),
+         dict(topic='LIMITS',detail='Stressed profitability at R3.5 does not prove plateau. Range3.50 is predeclared outer boundary; if still improving there, report UNRESOLVED not an assumed plateau; do not auto-extend indefinitely'),
+         dict(topic='NO_OOS',detail='History repeatedly inspected, exploratory/in-sample. No strategy selection, RR tuning, live deployment or Portfolio28->29 replay in this pass'),
+         dict(topic='NEXT',detail='Inspect robust conditional families and extended-range count/period/rolling neighbourhood. Only THEN justified limited interactions and final local plateau. Explicitly report whether new outer 3.00 edge unresolved.')
         ])
         zip_outputs()
         STATUS.update(state='complete',progress=100,source_parity='PASS',
-            bearish_control_parity='PASS',native_mechanism_parity='PASS',
-            families=len(FAMILIES),matrix_rows=len(rows),full_candles=len(candles),
-            result_path='/audjpy-short-alternatives-pass1/results',
-            message='Pass 1B complete: no auto-selected strategy, Portfolio28 untouched',
-            orders_supported=False,trading_enabled=False)
+           archived_control_parity='PASS',native_anchor_ledger_parity='PASS',
+           conditional_rows=len(rows),boundary_rows=len(boundary),
+           factor_definitions=len(filters),result_path='/audjpy-short-pass2/results',
+           orders_supported=False,trading_enabled=False,
+           message='Complete; no automatic strategy freeze or portfolio selection')
     except Exception as exc:
         STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
             orders_supported=False,trading_enabled=False)
-        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,error=str(exc),
-             traceback=STATUS['traceback'])])
+        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,error=str(exc),traceback=STATUS['traceback'])])
         zip_outputs()
         print(STATUS['traceback'],flush=True)
 
 
 @app.route('/')
-def home():
-    return jsonify(service='AUD/JPY SHORT alternative-mechanism discovery PASS 1B',
-                   status='/audjpy-short-alternatives-pass1/status',
-                   results='/audjpy-short-alternatives-pass1/results',
-                   orders_supported=False,trading_enabled=False)
+def pass2_home():
+    return jsonify(service='AUDJPY SHORT Pass2 frozen anchors one factor and expanded boundaries',
+       status='/audjpy-short-pass2/status',results='/audjpy-short-pass2/results',
+       orders_supported=False,trading_enabled=False)
 
-@app.route('/audjpy-short-alternatives-pass1/status')
-def progress():return jsonify(STATUS)
+@app.route('/audjpy-short-pass2/status')
+def pass2_status():return jsonify(STATUS)
 
-@app.route('/audjpy-short-alternatives-pass1/results')
-def results():return download(BUNDLE)
+@app.route('/audjpy-short-pass2/results')
+def pass2_results():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=run_alternatives,daemon=True).start()
+    threading.Thread(target=pass2_run,daemon=True).start()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
-            debug=False,use_reloader=False)
+        debug=False,use_reloader=False)
