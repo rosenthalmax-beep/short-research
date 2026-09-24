@@ -1,1554 +1,380 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 SHORT — research-only Pass 6 FROZEN ENTRY / RR STANDALONE.
+"""AUD/JPY M15 SHORT — PASS 7: independent full-ledger confirmation.
 
-Frozen OANDA MID dataset through 2026-09-24 19:00 UTC. No live orders,
-no calls to an executor webhook, no modifications to Portfolio 28.
-Two predeclared frozen core/comparator geometries; RR2.50–4.50 by 0.25.
-RR3.50 is the reference, not a predicted winner; 2/4 adverse pips are ASSUMPTIONS,
-not actual executable spreads. No additional filter or RR optimisation.
-Results are repeatedly mined IN-SAMPLE history. No automatic choice of winner.
+RESEARCH ONLY. Does not import or modify live executor/strategy probe, does not
+send a webhook, and contains no OANDA order request. Separate OANDA MID candle
+fetch; independently computed ATR, previous-high, prior-16 rise, SELL exits.
+
+Predeclared, NOT ranked/auto-selected:
+ CORE_LB60_M1.50: prior 60 high, body>=1.50 ATR, range>=2.25 ATR,
+                    16-bar preceding rise>=1.50 ATR.
+ FREQUENCY_LB40_M1.75: prior 40 high, body>=1.50 ATR, range>=2.25 ATR,
+                        16-bar preceding rise>=1.75 ATR.
+ Both: bearish candle; high strictly above previous-high; close strictly
+ below previous-high; RR 4.00 for provisional independent check, RR3.50
+ frozen research control. Both 2 and 4 ASSUMED adverse pips; short stop =
+ signal high + 10 ticks, target referenced to signal close, p0 per strategy;
+ exit starts next M15, exit-candle reentry eligible, intrabar tie closer to
+ bar open, STOP on equal. JPY tick=.001, pip=.01.
+
+Fail closed on source count/coverage/fingerprint, raw signal digests or ANY
+accepted-ledger field. Same repeatedly researched history, NOT independent OOS.
+Portfolio28->29 historical admission is a separate gate because AUDJPY LONG
+may overlap/conflict with this proposed AUDJPY SHORT in a nonhedging account.
 """
-import os
-import csv
-import time
+from __future__ import annotations
+import base64
 import bisect
-import zipfile
-import threading
-import traceback
+import csv
+import datetime as dt
 import hashlib
-import itertools
-from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from statistics import median
+import json
+import math
+import os
+import threading
+import time
+import traceback
+import zipfile
+import zlib
+from collections import deque
 from pathlib import Path
-from zoneinfo import ZoneInfo
+
 import numpy as np
 import requests
 from flask import Flask, jsonify, send_file
 
 app = Flask(__name__)
-TOKEN = os.getenv("OANDA_TOKEN")
-BASE = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
-PAIR = "AUD_JPY"
-START = datetime(2002, 5, 6, 20, tzinfo=timezone.utc)  # request; actual first AUD/JPY candle reported
-NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-WARMUP = START - timedelta(days=900)
-NY = ZoneInfo("America/New_York")
-LONDON = ZoneInfo("Europe/London")
-TOKYO = ZoneInfo("Asia/Tokyo")
-# JPY quote precision: 1 pip = 0.01 JPY; 1 pricing tick = 0.001 JPY.
-TICK = 0.001
+API = os.getenv('OANDA_API_URL', 'https://api-fxtrade.oanda.com').rstrip('/')
+TOKEN = os.getenv('OANDA_TOKEN', '')
+PAIR = 'AUD_JPY'
 PIP = 0.01
+TICK = 0.001
 STOP_TICKS = 10
-RR_FIXED = 3.50
-PRIMARY_COST = 2.0
-STRESS_COST = 4.0
-MIN_COST_STRESS_TRADES = 50
-STATUS = dict(state="not_started", progress=0, message="Waiting to start",
-              orders_supported=False, trading_enabled=False)
-OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_PASS5_OUTPUT_DIR', '/tmp/audjpy_short_pass5'))
-OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
-OUTPUT_NAMES=('coverage','archived_bearish_parity','pass4_anchor_parity',
- 'frozen_controls','final_local_geometry','frequency_comparator',
- 'full_accepted_ledgers','candidate_marginal_attribution','adjacent_geometry',
- 'rolling_worst_all','full_rolling_controls','calendar_years_controls',
- 'joint_plateau_summaries','candidate_source_digests','methodology','errors')
-OUTS={name:str(OUTPUT_DIR/f'audjpy_short_pass5_{name}.csv') for name in OUTPUT_NAMES}
-BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_PASS5_FINAL_LOCAL_CONFIRMATION_RESULTS.zip')
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def iso(dt):
-    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def parse_time(s):
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    if "." in s:
-        left, right = s.split(".", 1)
-        sign = None
-        off = None
-        if "+" in right:
-            frac, off = right.split("+", 1)
-            sign = "+"
-        elif "-" in right:
-            frac, off = right.split("-", 1)
-            sign = "-"
-        else:
-            frac = right
-        s = left + "." + frac[:6].ljust(6, "0")
-        if sign:
-            s += sign + off
-    return datetime.fromisoformat(s).astimezone(timezone.utc)
+COSTS = (2.0, 4.0)
+RR_LEVELS = (3.5, 4.0)
+FROZEN_GEOMETRIES = (
+    ('CORE_LB60_M1.50', 60, 1.50, 2.25, 1.50),
+    ('FREQUENCY_LB40_M1.75', 40, 1.50, 2.25, 1.75),
+)
+ARCHIVED_FIRST = '2004-05-31T20:45:00Z'
+ARCHIVED_LAST = '2026-09-24T19:00:00Z'
+EXPECTED_CANDLES = 546907
+EXPECTED_MID_SHA256 = '124e81dc0a8302d45433ed1db66e8df75cab7dc7a1237948bcef357a7b65153e'
+# Allow OANDA time for full completed candle; never use candles past archive.
+FETCH_START = '2002-05-06T20:00:00Z'
+FETCH_END = '2026-09-24T19:15:00Z'
+OUTPUT = Path(os.getenv('AUDJPY_SHORT_PASS7_OUTPUT_DIR','/tmp/audjpy_short_pass7'))
+BUNDLE = OUTPUT / 'AUDJPY_M15_SHORT_PASS7_INDEPENDENT_CONFIRMATION_RESULTS.zip'
+FROZEN_RAW_SHA256 = '0a3f5c6ed076da40b90cfed4ae78d0f052c3ceb1d7a9e2908e10128849d26c6a'
+FROZEN_B85 = '''c-q~aTXSSNa^Js8KWi$0ydZ&nlND>f*p|F%KiCRI2QS4@hi0cIdU|yUg}=KKr;6k`<U!%qT?ME)Q?turAM*T}2gpoh=I=i~+&w%TfBSZP{PfH5@#o{$-#`4}AO7RR-S5Bu<<I)Lr_aCq^69tFzv*W`z`=a@s}ILtzkU7pPv1WO`S|HC-yY(pjp3gR{AB${OMf8#gE9X%e%-%){`TqfuaC!n)2~4X=J|79k9WU+`Bgvp_aFcE@18%IxE{Y=@8{!}KOgm5>sS2E-~Q>3pZ@!Qapu$ium_G8{-@8sfBW+F^TXXQ%TKId<MCiv-}!ocI(|L=`f&WT{NU$zWO?WJzx<*<j(+MVyWHB>_`mTG|Jv`LfBsc3_WJW%7eD*$%WtPEK+ymD?e6Q($8Yfypr2U%;Sc}suNpMupRE08B%xtol6M+@{Odpcw?BSNs;F0VAC36~nno4jV9n}}-B(n<3bu+y^;dr{uw2wPfY3@`IN;mw`l_`(kY8!-8?<&m#edYk;8mG7_8Oe4Fxb-t!$)iNYK>C!AtkTAgVhG>Wo@y1K-{Q^hu~KdLz{}C|3r&5`zi*5uF7PWOIj0k#C9D6r*sVR)=Vv|?3BZ0QGHnK{8?0Yupw!ttZ%OVxCVh$UDAI(0w$IO7Vo6OOived8@sQRH^{*<<yM6FRm&4yW3w!>>=I{r^%|s~*q1k`_Gnu*wfxcgl%}4!T2m`g)7HHzgahHe&BnKwYlZY`sjoun3VtxKl`m?GEAwnqQXf~{uv}shbykGylw2;@VV%~fHsEsRxqKP9N?G-O*sf)@2iVFQl_o@9efxS{ecZOuq&Fuoz)-cU`bAmzX#5{6w<>E6r(fruocdniw@WJ+3f3D0U8MqEb^yFs$6IZU-&kzWZy|lkhDBL5u<$CwMp<jY`5H$xJe#a(-uJ~F7$Ik|@v9gr4L05mtSnYUT?|RAs6vMT#BH+5B5TTEt$tInb+W3-Vzk$0S^dF7)^m+tMb)ah;8(UP;lM;GRowxF`@B_EBP<I7rt}31rc&S26{SbtkoN=PS5^A~dOOz3MqmiAQB@A!*)H$ZnkB~6H8CU{0gJ{{g{tQ(y66wLuCmdVg5Q@i9GvyFQlfFRS^>Q7PfJ{|Hc)4&%Ru9eV|-j~$`i1<z|}Za=POc7C^W|b=3spypfU$I8*Gh~Hn^~nl4&cY8hb$M$pTor+&IK%J+VbaFBvMNe7Rz1&!xc2Q@j)Uhfw{1vuJ$1&8P6&go<&Fdi>M#jnjo?Gy2I@j@0RzcG>Tn?NTKnn@y?cS2_FEqe2r9z@WPK9+&6(qR4(71$ffUAKzqBf&|m!QmG*N5BQHJX|EzwllyzUqHng>xak^5`B4bfew1je<X0P#JBV{{oF{QDOD8PRqlx<M=TL0)ovV^4uh*1zBc%gUc6X0o<>*~TC7{<xfvwR1z_Gt9t=^vX8!L6_-(;%DaI>`PMB3B_?*+j&NUK{sx99ojK#o&-l7AmYk$3vYvklCcQ&UbG+pC%$FqNT->xu2kP^ljAVYShG_t#i3AW*aOzg$t;w=2DC6H*F$2$he2ya#JG$y6gQt!i-ex^q#3s(5~YHK5vG6x82WpRGdGmn&jN0zjYke4x5~S#_kk+z_qffBi+tHnjp8Cx<pQB_`-}LrK`E^;K!qmn-(9QSCwZ#r>3@zUAr#^nRV33aW?Sru@vo#Z+RGfPV2HQ}MmJB;c#grq0)tu06^hnBD$ku5XEZ=RKjf5J(?Sqw%D>tfv~fU3*XAU~MWH?KOs4=lZct<nT5%|3+jW#yTsFd6bXPekK)SHkDFVYN*!nkN2=vRWHKnl{CZvu5W*$a}1E)pOBDiR??R%x^`9dNlYA@=sUG1een)xtLf?J<yA<35a4bhWl8oYw<H3#QYYl;itQnO-~%T@e0|GRhxqXx%qsDu7m;m%v|dk1qbKP)^N$+%CDuvhpn%-T^{7x)uNXdpX+MpMSz?zu);pc()~V`Pw&!}_@XcYKt_yw9J}=LuOGo?q1URS*q?T(&ugNugO##(}_7i&Xt>E8>`1&+!>=ndYS>p8z%5vB)r*r_^#HH#6z&ef6sO%}6v?*nsuG7`Z()paf*-YW!abH+{hu@#`TTdGB>Hg0?aAx;^KDvAs77xbx)ItzlE!VgE^Ky>F7j}PL2M}vDc5!j(+5cI+aGzRW{f_mL^&p~JSu&@<{*ub<cx}G!K(ulCRreq(`;{hXt@#Pe<}7I|tx#35&&w6p;aRQkstai<qpELJXH?@o@H#}51A<GttFU&gT6V5@>KUEO^rGMma^0e^TvHbXfS%+kFr_l8An%e@sKEevjSSFvXG3Pa^)Z{V$y*2O(sgPET%XtFmSr-;3cmg9s)k+G*VyjM6>U!f%aKc^SDdT%58^%GCTSHcy~(LaSh-r#CZ(>17+1rDl)*}65c_h?_N+>@5|_wT#S)0{K8SV3F$;>Am=C$AtlpBWgIF7n5K|}BL7fMo-c><<0=cj%1Txmv+3V?w*mI_88B=GfR;mLoy$3_v^Z&(JSRYS|<36v;{j?l{Zg%fCQmWHIRZ^a>*uHJ)jRi;?tms=*owbVhu-dl7>)vNm1}X=NB}F|3D$5oFA1$X!Rt=N)6{@~mG4xcda%w@<x2hM^cn`A8S9`x*Q0WkJNlp6UxfEr86-8^Lrqt*4ilKcC<#<Mt(hpp1(L}rll8t`+rg}OakD0!Jb*UQ#mtHH;f@i9elF#*%rrm#Xm^_hoY^$XN2HGA%Z;K{k>xA>v<tE9pN%#v-wR(1Bs`hqyE<v+h32L7`Fww7a=3V!M?pU7O`PH9_gD<EY%;tb9R<&&krhMFyRzFJ1v+tJ-i`~@ZY*j|oO|QaWU#`gQ&psR+V5&65QFY%$ya%^wMG3~e@#_VEx(cS28@CrqQxJ&_RT=E*n%vdxL+PlL-bbaV&oaM!IG<^rKq6;0OTj6a+MM)@>5EJKIgw&aYAJ{gDAy``O3v7JGgbLkW#Q?13iGzuU+oVuH~>eMO<3xcE{LqIscc2I;cYC%&U5cdAWH%yEwX-Kt;l*!iodvyGBuHsW;J;iRauRqiHy^5$w@}xSkJ!60T}akM>9x$#i=JX_=0mlY7|(v)}D&Av1hF%4k=MdYU?WE(Hp{>wKi2q?ad(s+vg|vSX&a?{zA%b^$FXltGH~p@tUEhTutxWdskq$r=4iKIOyNR^9RZ0ia@<PA82d3E_tR62V94+EiP_YVk6m<p1#qW+1FU{>59I`W6&7$RAIJTt$waotFdCe2g92fHYB?OV+<Sm+5w^lr;Q$yRvbtwRmG^PX>VbZ5N#=yWHBD9RSmdaW@C1WIi;$PRqfPs0t04QabZ)u|E8H$<HCxg*q19>(^beyAz8@ks#n~A#=A`+>#3{gRZ3Rx)_0w_fQ@|+vD+-=-RefmSYe>&D{@bpRcr?^`9)U03TpE$dOKjZodM|0#WZW1svKPcn`#Coiy`<rRe8xkV2@u*&Zmo6YZuda546n}I0<k3SFbK@&%P9IJocJyN>AQMsoxdqq&!`*YhZ;-q^aXu)oJQ@59=<fcvwX)z1xeG?#KSrRF)b7LI9zrY8C8~v8Gra)A86pCs22ub@tWII;i(=HqZL$n0x(z6JXaCA8#DaMbHTY1&=k=RxelVTR~IB0P(F*{jBRftgEe-qp%C^KU&w78vt0&tU2xeliDX$<p$2zT$YlK^Hk%K=c&fK_oXb}Xe=a{?FWcAWVSs(X#Be-0N-`AdeXr93;R79;+o}jxnfK(a8FR>2nvEKS6yqZw*%I0<JLD7m$9z3Z@Nm<0OH|tdO3}Wh)`>-a89yxoe)6!gy8)gAPIy47!V!1Oxbn3C*D?A_;=?8L7;DWh36uO)ZiM5!8Fzx?CFZ_4eNnor}%!YmA)0Y+DaX{ZE>L3x7AhPq$|XaH_l6wrB7O^oJ#R4q&!`*y<at!>xE>|rLFFwUhV-l<$%s_D_HHpQs3G1>Bi$SYLZfVwzl?xU#_`6XsEANkEctyfj|0H@UCAq*6*tm8oWAM4h1qQ`^^DC)YPZ^0sVgZDeARdw=@PpN^mmX_&VEli<f14Y&RH8*=~U9Fn|oN9adcicv}phIy=*9u@XBhlU1vvo^Vay|LYao`zwQP>0VNW!BRc?FW$qt8X&Hk>81dq-+{VnfujatDOgQ9|0EWw-PCXnD4KP3>VYRZ)?DlieE0C9wIr+#s7EoGQg*#3gLYF3%$$l=W8VkK_fXl!jmxA|2B13I4d)DE^TW>v7bsP4EtaZnSFGDsSYNPRJP5k(J?x~x1yxVAPPMixU0oRblGxvC6q5IK>>h0Jfk8Jf4w4fYfVXAr0BMoUdhnWS68WY6JhecC)33eUbkA3$F84K2gcaYaF2Y*w0k`g}v*{L$5TMU=@jPrXofLG2T%GBjuE||pu0fy5M7*VMy^psxlT$M@LiCo9SEno?&dh-~y@NomFF$Z<KBtX!y;0VJuP7QkUs1Y>27^YH`3V>LRjzu~b=ErCs%kLZ<!V6s99dl4&I=t{<T#+OHQlAQy~A{MAw1Ws>^2g<FM5mRz$~Is0~qfhv+O=+6ISCww^Ny;n_#4?WB~9ykoJPKVtlo<a-Q_u(U@hEeu8!HM~HxDbsyquCJ1vbY??LsK*`f=U6VI4Sj)0Y&jP0!i*+9eSd%<lU9o+Ps9)y!><_rm_v#O};$4{afD0c}<_TfryKzWCud-oD_HoK|gV>th_m?Yn)DQ)KIMs;mSgt=f8>)5HSZKY2`9pB2wKgsh>o((-1>w{a9Af`}Vt%j*7VEM!%Qa6CU&n%AOt!!<eighQFvMV-?pZAQ=J~uKJzLlWgS1&7Fx?u92j4VP6qW|zSVNE+Dah&zVoiAVd`0Wp!?Rejnyn#-UlnT471=Ct>^4o~-ezmP?JD7p8ptyI8k4GOEF-nXD{&-NM@d$k2$1v>;C<DxdKLD(qveu{dP8>IfDo4eqBp|_cs(6Mnski^)gkJ-zlkxRm0Df(ns$4f-Y~P-B?`Ki_uf}@TaPL)2g?*tD6<v-8lml=@xbrKHg9Wk8`X`;E0b1NLfu+$zG6pfygyjXuLb&5T)h^=+cBFx4MKRckvVRe<pgfoz9fBC%ZP$CvDot!dq#^{I8XT9u~U5yZS4`Q-h~UR6B}#s#L!r|SaG1Z?>k65b*F~(Kyi*o-&K7ar)$2M_FS!}?z^0r)gIrI_v0}HUOrIF<$fd9Kugw>@Ga@XkctxGZ%|k4k~oZJBMfb*KjYDcXgb=E@uh^Jc+6v8KTM{w;D-=~XfDDK9a2VmQ^F8UNEj-3@ZZyh;NXquzJ$vwoMts$8#hGL;f9cgWDL=Cj3G-oqrEw9h~~o$88<3ph-PFAaRp-tVoCc;tGu{Oy!ss>Lo^>`$ikpxA)1dYG&)R(=7R|(cKMqVglIm3kVtNyzd1~Z=7R}2lXdxT%@v~gxI#QASBPfh3PBA_NaHF??(`Ce3SNySMAOlPz>h=|q8VvIK*b0lee}U;7{mdP<H7WgB?!@s1R<&+2pK?c0xz$0u4lV8Lx`qh2*m|2x8V<j6QT)mLWz*{RtzDUk0As@F@$JFhR|lrQ3Xy&7s}PZ1il4Mh~~oy8O-LO2O<m6bYvm+*^{YTQ-)|h%1}P`9|<@_lL3d^A%sDJLo_3Bh--jDHa^-$f7JLN4p##X(Tu<$lV4ol!-wME0|aJoF>suPatrtn%?KZ2DOh)RI7Bwi91-xyXwSWeSHTd`d>A6mI%FdeiD*V55!MiibU`&@BB~UvBe?~Th~@(l0T<+IZp$X38QDaX&w=e?id3~&p{}+Zhn2xCFhw*UrU(bc6w!Q`qIFg}3{Nbg`G`d@60wNpBNoA+#3GuHSY%B>7shSjMKmM4C^67|k609=UU_cH1VNOm5sPR(Vv!k?SVS`tiwXkR9e5GM&RDcIfOB#8VZ0i>h-Rc0S*}19Q6RGVvx*0MKFhfZvWR9x7I7)2D1OGh9y*=^)9a9mXg*RAj!!D08A(N{QRTaMBKFoHI7Z{F%?vC5L3kpX4^L#r#}m<fcp|a|Rq?}+ifBGk5e!NyqUlIQ&(MeA@I*8po`?p;6VZHlA{-x2MDyW^hzt6PZc8en`A9|i%7KxfMKmL{h)T{}-|>qygs>1Krb+-E3((aNMl>J7C{f>ib8ZpM$Stzv+#=m@@O4&;m8(&UXg+EY=f{fN8el~80gUoZ+&5<#(S$4`@5=#3F{Q=2{ha>A6Uyf503(_XVC4N!03(_YVB}muo$)X%Bbtz91R<La+`}40@AdUVgl<7KqWP#sf(3=#!vKzGM!*r4)XML$jzFJsb3Uhmb0X*3up^oeb_7!5^^U?lq8YhIHoHXcBaq@$Ft8AdTiFHXt1*yhJ_b^1F2_LNBbpI><nr#tE(6J0Vtw90JjR{+dJH6*k%44G!JhY?hh!}B^FQQnLPVkoiAa>)@&<z=(R^?u86S>B)4`GG5Ik29k>aKWv8>#w?-K~GM?|9eh)C?l#30dx7^Ka97D|yw5KHADutssgorCDB5Rqs~A`({+kzxv1d@NXVKK625kB3C_@sO+=34%luLXadIH4MN*qA7VuSiwVrgIE6(jjpI9#F@h7ABIDM*>FhQf<QW%Q#As~t~=AIO~V`l$@w+}QdiA~eG4Wk!Xc?;uK${G?xMbRIHYy*z6F#vCJsqmf7^mXN*HVwhvcyjgjj|{3T-$f=xJsST#7(aGxhlLhY&7{T1P-ySAn%4lZPcBaTZjcgCXt8TLnYn1?JwU>3}e#gg=lYAnglTLO@c}Eh$xk`3Ojm<)CI^NV~F@!H{rWHr`^PB`_p!n_x(mJCrpCkqQ`6tilJ2>U|26HDoVpTf#ze>prFyWrt-UA>=GJheg^IwHAvMW3nby$D|@b)^W`sk`kiUA(G6xr$O5E9TSn1cLQ>?q<w))Xh~wA%XuA_mK1ywB57aB5=4^q+!alYi%3e;*5<fK2`LM>NV?>7B>~3eB1sz;X<y1b7s)OFwpRTv!;ns+y=q}dT@&Eq$PlvGG|Da)NxZkn91y^uc$bql&qWf(zO{2yE)tqHF4De~C0wL8-IDcE79o-xG$E2~S3ez6c6;BWCB^2Y;2j1HTg5|o9b~kxatSU8oNtykhf9K1TvAUHxU0b>2^c2^gEh{wwK+ZOa7nr~cX_A7;*z{+V<hdWTFXfC)aeI|%Sg(Hs##ppzQjeiB=Buwj!8?RHd<0bzXDnk`OfXCh?^8_8#l>!O@~a>{p`b%d_;wy_v8bdN0_9Qt%M~J+LEprm=BheD9+9ik`k)c5R&{MSnfJZ8J3XbYzq}>U(*sQ60HYRHVQc=6)Dw9n?WJ%OIe9R@@qO{qpAa<kYd8P4TY3YwE%@=LHahS5)_hDjxFV9B65d`sw*!wC?xTA=@;=XB9SkjpA?~xOmDPWghHweskq-UjgTWO#UEiTYWH!9HAuwe%H@En4u52~Of+cIcvSpR%6fO1M?Nm0XoOkRwMWXRTmU_iHAF$0q#YD`l*+DVNJslpR+5hFnz_*utCo<C#A5^Lh~sW(+Y11JYe+{i7*LZ9KIVl8G6q|PI*OwUidd8|AL@u)6W=JIY60J9)4cE7q#TuR<Z7TsUVln94uv5;VwaVzf*Selc&J8u9TRHAZBV0xss&IZ-PxM-8<b>}7y*~V7bWzo!x!P&fo(~x42v(KHhj^3nQ95XXffTML%?B4M$|?!+Ly9~WCX^y={F|62yGLyD4|~gv&gJDC9X}%0%nnIWfnD`Liq#x>~YB+z9<fd<T$?V^eUb+Di`3396?w0<hb}EXu}unOId<1;&th?Z<R8OFXC2wQOB`qG8Elm7GVVIynHxIl99H6S%hWWUFc*Mg*IjpbTNyN3koXU;fqugu_jhY00v_&XRC_nMYJYvG_C{%^dfGf7ulY*;7v1gA;~DF1RaRg_?bwb0HTb@S(1@eKiQQ`1%UZTM%+d+N=aEoG7|B<%R>Rl$eSjT(YpS%fn?-ef$6@38eu$dei;FY=JGK?E!1d(L2udVhJ_ko8`LPFY8}*QU31lx$Q~AIlt6UmNJa@&>qthpZntb$amOVYQ5(r<U)2(lkwe#Ipu>`k)RD?AvKgq+uBx?AqYWZBv<W;W-^jJ`jrLV7;Ts8Hx0GY@jkt|(l#sHHZ^XVYCo?YJ$hjt{(Y~rBP$O8gf7%w)L7_&8dVn0sC?RDX$q2BojIEGl<XTBaJ&6M6it$BpfQ1uro&y^-N63g=KrgaE`X2pZ=|uzu5tgeiy)FV7k)^JrOBu*0m{yRH?E&$XgN!gXyNfm84GIRZl99FmW#px=tZiJBQDWXgj$f3JvVdO{6OFx6j>#_yz6n~CkTMG`dV~DqRw=X4B5s2gQ4h2zo;KwM0PXOLFcu3r(il394iF=`XTO49v<!&%-L^X<zbKeCe$l?FCHx}YNZRxp6JO+|iCL7;uZ~$n>%oB7rfQy96rhP&v>q&04;8=!z;F*#gz?bSIt-`+x_G>qQMry(6gzi%s;<jGI-VL-_B|y8v3G@i1wALWQ)}cNsqVT|I?1VALC=A00X8+MJSaUUQ8Sc7<|I_DL*_{6E5I&9=7ct6j_<*_NGdYe<>bifkB3ahKoKX$U|+|;xSX7V;S3pMPD0fhWR8#1$oqV*B4iG?A#-}Vv)wXYvYeA6;=ns(Bqz>D&UOnpIS{bhcJrK^x?b%yC#PdevsBK;5lf(<)ag}xM%NlPPMm<-H=uQ3HcsLgCJV&b*R>jmgKIVqwJAF$5GS+&aT2=L0dau(hP9Ldai|f96MCArjmZ|r?Xz(Nh^+=-8dEr3BrZF=wQL;6(6_w}OUaS!Id~43lM*-&%(1xo=G3O@puik}Qb>*l#Ej4Tnq|lo&lX{F2(a(urVNwg+b}upIh+NBBNdpOm}%5)PQwojgpxTGE92z2bwLNTiaR1F2lHz|2APwRHIK}RIhA@T$0g<jXv5^}D_DfdA?%}J42{X*3QSHsiG2MKdwHx=JtoI<ACGWUOb%orZ#PBe&~(Tg<I6EQ>XE*FWV$<k2qlN+qU6vaWurHx<j{naoPy_mkC+p^CEb>mSL-q<nID79q3Mu0NJDaRXgW^Lnh6}nMCQ<Z$Q<KF<>b(eoE)y=<h(X|TZTZ_;^feLoE!^d!f|LmIL_!i9GZ`Zli1^L4#A=MAUGnqUH;}g9GZ`Z<4o4!zcm_%=0oG~NN60I5sd>iJRH{B59gN?$l)q99GZ@X1Ab5%4$Vlz0jfaYphI2Y_3wBxr;gPhNWh^P2{=?kz|m#N$C}pV)%aTgaA-OJj(DHl?FVAv(1a|UL^ygQ01nLuz=1&lI5Z;w2RZw^@3L?l!)x6&$}LzpG#?AcU^Wju5Eh4~!{V^do=)8wkwfz#a`G8~k!U$I87;>hLKu{mLo?EHxQ3R)-o`cK^dIzBqvg<yv>cOPT=&R1x;gncFVHd@L@&1>=g^Gg9F~H0cL$>5oVpN}R7y3*^EBhDKy+w6hz@5xvXOW?G$T(3Yj`?hoDg|^<dH4IEpR$CA5I6jAZv45vJTBi)}eehY!|ZQC^B{;c$)yN;agC4Xg<mgjzrm^`6xT<T{;X8+@bk^J1{74hvozBz(~Lynh&^RO+o*~ZP`0CBYP(?jC>!s^Eza}lFdve`<}cVnvb_*2IcM0jJ%zKsC5^;V?40)8VMo>^!94x9h#B6W4Rc&6G0rhZCTdmm-NM754b}!0(ZC^vIEx3bN7ZnPa(MqWQXR1?BMv29hwoclNznPL)M8?oC62z(MgPha!$dILF>?bXdOE~T8HLC>yRxdi64ftL-SE~U{J~qO-I>zrWA~f)}i^(Iy5L+hvq};;P_}Anh&i*T+m;1Tgnd2N7>2O4vYlcp&5ZYRC4IL!`=aOjx2zUEE5;5#@?a%*gJ_*@0$a6Xhz_UtpV;>ic>64uO@>w{+_%Ynvb```QakBM(@yk=$(8s_suChG$Dn@`x^94+`XUw1qZhv@6dGQ9q&gX@6deY9p?(_jE8~n(1Z{k2-&>gK92|J^}~i7ZR5xAcxXl*50=z&@1S{NG3?8U0^I`4L-T=oKuSEaQ5ZcmBcsP=7m$5i534~t-IZBAR|J1GS`W=f>q!ld7zoirGa`Cie(&3*^{|Ft7<Uj9aybm;cZBuOjIbUX3iiAA;2z@e`i}v+1-XYNB==Bu#~TddL-Rp=WPFGZO$YIzL-1Td?jaFx)K69i!n#Za;|~J&(0t$?c4N|dXhK@gW@iiK<R0ryEKYQ4x_~0rBlpmh<Q}df_aK2a3=ZQw$Kb9<?xFd}J=P6`>!As8J(3L|1|av)l;j?)BKIIboG1}I8jj;7ZiDWDQP4gA^-q8NU;q1$|MPGDk4jC8)Qe>M{2p#$_Gl2?!tB{FL%2=I9J7a{joD*%4YpiLIM}y5ol=O;s$kXxmWv|SQG7Oi>kV|Tt5bZ+_137swxE0xrkh3itb^Saf?pZR$F-q+Y^U+^A#gdv$HK~DIb2q@4&k$Ls$HAPemOZv)-l*nh449D(59*z%QcpRPc63k7I3A>>V3TFBDKhGrpZVH9`WiBq+$hQ%*9!9eGZDWD`piGNlh4StFTvuB9#jpok?!OA?>SKf<q#~E;{nnaY)5-E?6DNVo|erq+M;x@JNKn1>+(vi5sJLNe8WQ7FwOSrwjJ(`_|w=1oPs?F@LpgfY{UY-PI6faBqhwTYXF$6fFTxF*E_E5=Xcdn#Q)xD(Vy%3eSnGfR|m?66%x$=`+}+`w(n;l7x+C$W+JmS+1Cv=~=8U`<K3@x8laPs#kz`BW`7-9O7ifwVq4|Tt6bvrss7jUd4LGZa9S80+6G6?Mqup^$I}TrtNjHUgg>@sGY2~mqA|%Y3o2=DBKshULEvRBXY?5u{rS9zRD%wFTbu;YFHbt5B@5bR;?=dCgj(?o+ZdHx2B5vHa)M4{3;JxW2KdCf_)|QEP#E5h-d1^5?&wnRg)!reyD4SU;BFIiC-#{bJP=Q6~VvILj(M4@do-VRCOVn&AaZxz|e%(lLN9jrSmkfuq`8RQks?{nN;q@Ixx=GS?)4rE-_KETxTB#MrL)6<tx=*S1iPHTP#SpP?KnRwLbVZmBVs;lIkV30;eMDDtivGuBLazl}M@P)DHHXrdb=Y6>m`-$7%4HNGz60Yz9k&Lonej7qrv!x<1mbCUij4#<ff6S-`au*CJvO%&zXZ;Psl)x#ntoNm&PWA8w~lwpR;dYrxQXqEA}i61p83Zq_$Px3jHuJJYEzxf;YBkaxO`u?@_aleCU-hwJ7L*Ch0n33oLzd(+0Y+m*JKZ5JF-L4_<_!doqISkhYn<H1+5?O<u#>&((Ftz|CRPi9@Uv>w(&yhA+Og11~Cpso{z>$3tYGPD%C@bX#j3_EaN+#+@$W22<kg$I_Ks6CrdJwY&`VgW(W#ly5F74zJ{N;1L=H?Y?k@UfY*f*7dbmW>mJ92p4UE{j@83|u!1Uue~ZafpF6_G%KHU^!M`LfRTuV2F93K1TqT8Jv<XG6ry`5zyt*zFe_yDTsr+Qmy)~+6{=eVK?pNVS7Fk=~(N@>C&L))ya$HYU(m)Tab(UYL*}u1-Q>PuZ~<SSCb=~t_ilduV*D}al=(>*}F;zfu|P9T0)?S3G*(uDiY141`~)zjZtIYAl{0_%SxAE0>O3qtVNhW>)J4ZwzIBC*EuZb1F9S9NuzG{4cG_Hcm`E`!03y)KF{C=e88GT!l&$bmkfwxJ&34amdq)|a!Kj}GGLIEB}<#Wr*4E)jXbz;nzCC?20UNUcW-EfF14c(R|m6tBkM|ey~q|wrQQ~S^qtXO9kf_e2y0SjU>U^XzMPeaMJPj6Ko?>W*)<>*O+2RQJq`n|;VhztVdOO?L+70hnJujfw7673_W5O32QAhl4;{HC#9~6)0>q*O>5Cd}fLJV7G>(w1fh!_9<Cq0SA_(WQyj5()pq`pg?;>$swqnf*qvbZhVnW&iz@j+r^K-AxS}fO7G`@!>%3?y#I?5u&THGE}y*e7OrY{MojSslrj8wu0L^6HlGFL|h)_4aFZ4)Fgp=SXkP=8I-<pjtxzbc8c)3~wfSmx!5o%I9@y3ZCA#dudQt)~rkDO_k$R+l%}&~3E^C`QwYV(dO+@Fm4ZJ7`AT>pZ#h>$$J|g6aiqMp=WIT2cvDXEWB+Cpu^YH16wJ0%#O~zIv`QKqIvR8hdMHlF{xynvwYB!}&~eZ3&u@)<+H8CT{_nk=xLWw$or$L*#-|q#aaaoM!C+9N7qzgUd>nkQ&)}?p+uPNR8M=YBb%Y%OWKM4&I|1t%m4C#>I&|l94&fZB+G;`f_7e=Qh@eOxy-<OzBw#Z;YgeE?=z(-bkSd-q>6H8Q~M&6<F{d%u)X)o<B$~mx|Z29M{vXn_Rc6vm9$$olXUt^+3mjv~@s73Z1pg3w|-$bJDe7{axEyprhH&0%}b=xOCdVL$$R2R8RaWExhd<i^Xq^8eS8MS(6GgDGf6?%!Gz@I80g}nqix?r%r~{DGx>pUtMQTIMWIetlV;OQ5VvLxcHJXTe}Go2Xz927}X`?C}_}N*4C>2*p@)3-^26<7U8F*ru%~DD?;ci<vm}sx79ILgeF=?V-=`<M<ypUj-3YaXe3i59`9?78<SX(?%&9(>t0vN;rcMwszwoNBf9SESweIb@Lfmf*C)DG^^uyq>y;tA?$1H0B)rBRsU~T!i*>DQ7HMO<Cgw^Nuw8v;w(<IG*Qy*jw*g)gde#A6#Y*=oa9zM_%__joHKASir7c0bZiXZKCOxl=cCFDfRrZyGx+e6jgSw)1U75u~sB1MI?-}aaTi{`wtH8Nhh-hXjnC-zUg1PEvx@tYH4|A<LWhm$+&%j;xr7eNGvh<DeEQ7oH@Szdz+JDAdLwGe3NMl3>#AjH|C4CDJuR)-1$-O$_wY(NIj@IHPxNAbs0=O$U=}Hh@AMRRHfp3Cu!n!8(%wk>b!BStvOd;0QerUqF_BJ!A6J)YA3HzAW*yE+nYVhidITXl9UBP+P?-v0ey;gi(&TEYo2h#?7-Iulm_UcTl?OvDmTGKA#yfkrM6DrnmUS(~c*d}eB^9t4OY&b_By&d_O0Ke}OUM*Tn!s@7c6qD(7swKSg8V=Sjb%yXtu0d+)?<(V$ldUqgD|)cO2L>NWp^{U&0`3~UJM1dKzdqcx$`?yihvu-Z32E!Ft|3658-YuN<}SDq%*NH^zwvw$+}+&}bhXG&_|dPz+IAgc3Tu`1BF?z<v@cw@>-aX63*fo#LlZo=cX&cLNGe#{#pZ5kADNMLMc7;**Oz9vIySdPTu&uNd=aCYkhTV+8x97f&-cYMhvfp{mAr>Kl}}fc?%@fL@_efYs>Qq5m@FP>o6*&Em!aQe^GsrFV-k1E>0W9#%4o!~U4%t6bOYlZWW0wG95EZ|DgrCR5&LR=pK-*!t<sjtImAHVS?uzf35Tm7#B|t1!!6zeEeS(+Vd3>4l}U)xHJ1>(&jt3$BxHQ+?Y<W0p{&OL=UiY9r^N6pYfzGtYa)oyN}mgSb=-5sTrj`Pmuvz(?~7XvdX8h9dJTDbv?0}hMgc5IwY=X0jG?PBCe(F@`fRV>h}{52<lwh;AkW~EMj0Voh$hrVJ=e;JCVI})%NOz9<fqq}L#S31PaUgk9!~OjJ>pz_Xw&w(Eb^L_mO~qmJRxWukbF}E*0Q)30m-ouNZ#)(7?bTT*$0#ZgK-)ru;`oT<Ki?itCCReo4_NtfN9sz-2lod+OcEDo}IJYNktJvo7XeMq)FToh<2^GXNdN9Sb?2Xk+iKx)tG~2U1NnZ_FII~e$zkHDDgE>+BM7Y26b<n(Ap_&^Js0yErUg`&(<!t*a+AT&_>nX*RhDIEy4Gt8*f0>t`JqX4z5CL>xS_1fnqMVPuHWh!+L15tB05mjn>}auE)b{)0~)X<4e)n@jThSewa*c(+@#w(}ZYkI;70?rf6-N6|G&c4!p-~!@(QT4GWi7IE@ayHfNir<ZO!{hqFy{a<-9%glp5BaBWMu1>okKZJLy`ZQQ7EZJHFW%{UZMo2Dgda|KZwVpG`5s48)pe9L!4YSW}hZ8IoRn<hnSTNsq1O_Or8M@MJVr0DE~YkG5DHciUQ7RfoMH%DjFr08sCvVs4tDcUqCMVkkuXw$S5ZKy$KThyS|onGP?_N%e8X;OA};%s{)U^dMP%zkdWEdyrjmg9{&P(tb)db}Dio8|;&gC7Z)P16Fifr=^Fx`%-iwj4m?QfKXtg=EvTkZh`fWE((l0xz$0Zuz)2CY$EOWXJ70=g1C3%%(|+*)k|Gn`R|uCvsZ1!erB=m~0pdlTFiNvNwaCD~Q>;8LdXb@hyniG$}FLVD{v7Ab2)S3eTo&fy=Ey+B7Ffn|)r{8$-2eQmA%5H#-tvo2KP!a}8hHM$0t%^Tz*hxEf!ZrsZp!`~vZwwH^N+ATWE2f#Vp+Td=liTGlp8!P>Ed-L`SkqJT$6d!A2o73wxkO5L_&QnzVR>NaPc;gJB`G%bJ|YXIE3XBjc*b?dV^>ctP@Z_}jwZQz2e<ZV&hG%bpo@+se4Dz{1(n-SHj<2-D*1(lm7rE=q-RBoD-%Dq053Bv=rX;MHp3<~I`Ndeu~6m*T=meoy@vbte>KsQYb=yp&{<&GH%d7j<@f+$y`a?_+#ZZjyAo2I357evE5fNqF$RM6T0&Kah2x71Y#-83zs+j0e#n*x#5A6Rs`KA+581<Os-V!62##T`H6UJsLPruy-F(zt0-8aIwl<ECk8+$p}+E`poAbqJ2pIBRqK(jSB1rb!Xpc6<akO^V>Afe_p@DT149K?m9}G;W%e#_fGx=N&M&uG0ZuKLD-<=B8=E-1!{NKBHUx12!?UAXbGAd^JcnO$zCTK_T5VC#3rsYdRd6n<gc5)1YK-nv~3q<CD2*QZhGjL9_a8A>A}7q&r_PHWII!rsZ{0NkPavbhkRV7J|eiETCfnx*ENkCZ%_$y4i1y?51gv-L@RrtveCEjs~@IHDEVQ3hd_m_{CeZyJ=E(cYb)#%`x6IE5_UVa&~vjn6vInr+@JTaK1Xbo91M9dp{Jrn<iy<J6F((G7QF>X2p0z$fj}kh~Cl5ef<!jTL8UjTA(+UwEXO_y+O^<oKG&{oTIol+?ytadxMntZKH6$X->{J1R5UhP1C}?ZFa5R=X}S>wO}C@=(7vVR|9?1q@Zu0;pyHqC*6BZ&rQd8H${EZw5V^F_vLn}-_{cAo(1CLfjeD~`c2bPzilY+;NBC!jYWR`hulpV;501*+}1F_NxwIS^9z`pK)`8M2smYZ<-vI1G%F9>4#fkfS$W`YOa?ej$^e(~8Q?T01Dp;a!IRquf5%7xVi%{=&@&KT5ByEDg1<MeStx~oL+ts3z{W?^prxxZz-e9vI9D*h<C&89SQqX*orcL?i2zQM62MdQif)7brdhGyk`0OnAb``n1aPb%fWyJ7yN^a!SrXz*-_;KTfWwpkaBhKqpA4%S`fb<qdZ<mv9Q4~&Wp7@g-~AP5_AQFL2mr1&y8dg%xr-v#0l?So;}_Nmm=FN2eywc*fG12h3jp_6<Q7050KBTW?-c+J-6L`mc$yvPw;HU+mp`ZZA{UgcV}7qoQZFQCU`pn<H*L)CU13X@-<O!RFemhzDYwSv_}{x~R`I`i>6>j7c2xd%!r{t6zxUNFfqv^cP*QaYlS04WP8V(9fA4Br#{b53Zn4c)N9KPE=EcpRz<0$hK!Mvs0PgbyN}%ArDwFsE1-IO5y5=BK0R@juZD3J@C}C2)>_vS`nBZ>R|K4J{V>7{_jS0RhX8{vDI<C~M=fF&Ggxpe)!-MZjTZspcNt-5V2d0BVHlEF(!V}8Yp~B6&?^4=C9vBs#cW86e@O_m_sNrIuYbP6=8XkNTDtuqh5>&YL+?8$_92K7E^~v$U6M7c#!F2`d$`=mK2bVTJ_`aTbKDc_W*e>E_C^$*oP}dU_ynlpt9Gyrun|9shgNyeTnd7)1gW_FI-#i~&82i@KvH9SXb+vM+@O^13QQ-!q%ONO2g`ZkGD^cMw=<waBaI!V1a0$X<Jeydo<HBX7OHkpAzAG;?HYyxV8!9}ZX8|hw&Crs1J&UN}uFhPauW9=yS|DXT*gb%F92yY3!$7P{D}>h}#rsm15X8axW_@!6@fLlTW5w?IOs<9?F1kO6!C-ZpU~6-t))B<j`|MkJhbD-7(}oS-m9`ce?y1w&9UB`S+OXjXX$!F7v8=yI#F1Iy`CL~P8@{h-5jGrro1z0#!>NrLo)EEs8cx2`87Sh1hpNMaSAMwfCv32*fQI|X%SG?W2RJ9j)ACkA!wGFkw?9k@4Nvrv=1AcQX=_N~8sb^*D$*F76fP}v@Px1hba3IK0SPcC9o*R#BKW?VB}8yqtI2I@4on13ja$lK!1wj6#DIJ6`=l+wfJ-F;=G2yByYt(T^({3RaPf9&%l3{O;^kxSA`H0c%@Y)1z$@ce{!Z>|1bkyD`Ws`bn2)G15RJU8T#jPv(BF28vxhdJhem&=?0A>=?c*|lMwmsT0Hlo61;B4vGcBb}-+_VO*arMg=$Qw8gEw9E8-oMCQ-@#~%J;sUm6UJ0X3MrDT}mk5;_Fs|6Xl!ZnY!(4?f|Z#e8(_M*Mi_<zLOxc5>#Qn<HS4e^K!?=e3NTpdncqVV0$~kzEXqH+1{=O=<W4KW#dp7;uCjS-YTHC-wqybwA_J#-rNTCPDon-^i~g|NyL#U-T+PL?u3YS=x$uc4K0bTvC-YshVI^PMk+yfgYj)54$SLD+XU%Oh*$vWHfvn0YtwUJNOwWWQHIx@khYH3Ei2Ab@Xadcc-?iU2`gTAug>gCDvsRy(Q{6>HBaYP@tje;0Nw4@#ZN6!*x2Z9XhV1J>sf;C=5_a%Z`Cu4?ylxZKcl;QiwTl(?GCRSBTxF}!&#Dyz6HGQ&D2_M)3<=vUCZTtNt|`_x{(X2j^3fWRT!}*mJ$I5V=gBai^$!yCd)Q13<c!wYC}GeyKVQ<@MauNA;mkUa9teh=pB(h3q%>EvlQ>xcelzfV6)PrQoOm1;+@j7isCKedsmABinli(S}5MVSlLMN_O8H)-vPZbRuQ}a3D8_V<*5aFL)l<)m=x%ZZ9wmYv~@u5b)90<5yaR)Z`TI&PDq;vdN-}MWAnUI5@sOY2?^^U-kSpZMrjKm-c{4PULoGSJ&maAC=`>sV{*a=9|;~#*q-63X{qz*?h^~Vb73t&cROEYx~D64KmD-^)E3ja^QK$E=k^}D^c<YeO>KPceLYL~+zwsW?ld-^+nT(ul|gmy4?L<wb#M6gp-tt1sok!P+MSpsRY2{Qbsv7Co&!_6xsBSL(6f%(&Au;NJ~*}8xh7QizO*H%ZeZzMU`IxEC+fR$eC~vvb$o8XzWUliK6f=l@0ritomX_O7|I<dAvzJ~Ij~W~gpAS!Ol}*bZzUL;$z9Mvp22hPOIw2HCfhd$sSM8@%!fuicW<$m!*V<~#<@vi4S0is0jy;7EdX?T>8oEJ9MGK@ik72tC-f|!a>rweUOfk<atGgp;!fz9MRDuixONJ-RnIJnyPCPn=gHu`DDHTOog0n1L*>R;yy!^d?>LG|jO3Pr3M%(PHuT+AJT8?xm^Lc+zO*G&Zrx$pL>w5(?WKvtoe;5(#7*m&^w=hCp2QvCLko#}J%PEg^Bz-pyB+*C#;OeKFrcdFV*Nx$>N@^*Y(nhmyD8&uduou{cULRL4m|c1(Cs+SM5BI^ctCEP<fN{EZo{?(hnl1w8M>XQ3C)qV6Vld^wk7oSjEqg%Mw=hzlYwsUt6T})2I`xnSP0#&DqnhqZu@Q)w4{QyUDCF!{&>jr=oOK+4fgfu4Nlso5-Yw4-A+hb1KswKP1fi94h`Lg7S47;*8<KqfpnW}p0mwuobB#mH14HzqYSPs;=ns(Bq#1%Y<fZ80=PB=?AA9A*RC5)vxaN;x@VTkf!bmTJfC01XT+@mYR7r(eTbVPptf%UYWwb!$;fiWa-cRI(D2J2$t2J#aoU#qT24pDX(vvAvkdKhajO~HxW;)?v%JGHw6Teyoe;N(p^XHsGLFm8_9j2G?jlb+p=c#fn{DUm#Mo%<(1zAdXj_NY2I`v%T87r9MznV59=c>qw$)^xvMn0LS_#G>I&~#3r+8{9+q#$b8T8=1ZGck7HXfMq*;%s;nf9q7$~HmYP_{zKw*SyX+2&q^mN_`7plru8B6TSQV^uLqrqH1bv+dT!d(f)zu$XPk7D48S+bM1H#O;^^uh(;M;C6sE%J#mDMU-vAK6>u>lx?n{Y{v?d*AKCm$F<f|wmnnHl1o!kwjtzj@i!%I)11U@<I5@A>R!EmWEy{e2xOZkgly9xWvw@bY}2fe?Sf@s54as2D&4P^SL-tQ$R9)8rYVWr=g}Wy5VvVg;x^Kdm~EO9vu!E20^FRqO_LJ0jT;rSO_O4_83$!+)3j`Du3~Gy4zaQffv&~Yrb*e_W>B^^P0H4`FeXr&CIxDb&d{bw8QKXK_2%GgniQNZl5<jT&d{bw8QRWdGXS^7Y15=QZ5|1yP1EAEp@yN&szErvK)4z~n<gb_Cl0ko!e-N~*zD&v+%jyovvF8oAnTB<_gBMa)126B@PlHrX<BSHPz5U+9jecwf5($Kjpq4*sBD@Rl}$CMY~5siY`|MyjlTsco8}~Ci}zVCb|7drO$yDHk)YW$D>OTi#JUkFn<gb?!=R*WnwFG}oLxhAq1le%wHp-W7SL>(6q;=?d-ysKKbt1yXH&Mw<<=~1nv<o?KCkSJx!N=-S394U9SN~b(;~LH2C>cFMw37N2mRF$+cYg=+vFFBJ>0hLUp}HLEVDuMatquxO^e%RDOfvp$lK1Tt6@p?RI@x|wyr|nrb)@$c1-d%O-kP8tT#Logqx;?aAOUGTZ|JTuL~-&Ww-@{n<iy&0~aJEZ;RumX>r_?&-m_=x#MIX<1Aa<=+GLz1)7^CMRVgwXl|Mm&AoPs!tj)Cnv~KFBT>3(QcAZq1x=#21$NV<z-}0y(oNG+x*b%YxnJk1S+bd7<KL6aO_P$j&7fp%nwHF65clpvx{U{RUSmnbfZkq>(M{7bx-A!jxg(=jT?NbfIFr8k>!G=6S~NG8<G8_kdESP+WC|X?CytvY#c|{KIBuF2$DM*~?J&3_$|-QL9-YJ>D(5o%7zj5_3gNcnL%3;D2se!b;igF;+++*-%!c7{)2uvh@AEqEqPY>`+05xRH&*d`lDTP8GIu_Kb8|>HO$zCTK_T5VC#3tCWjZpMn<gc5)1YK-nv~3q<CD2*QZhGjK{xtsA>A}7q&r^~HWII!rsZ{0N!7;=x*IUolLOcYKz8A3=x&-6-JNP(zcsI$rsZ|p8eX@hIPd@TdhSrU3a*<b#dULj&f=}f-83n=J3k%h<`8e172@rE4Y@n+?a%*$gIj>RX-;sr_alM3X;N^va|P`t!!W#QR)#l(Z2op1=MD7wVMC4^`(tq4G%d~>OZs|t$lkGj|K-dwtND-Mdefv_Z;%qFZ4|^e&58Iv&k-J)>rK;gy=``>-bZ}1t{P6=A=cmlAxE73euQtDl<*BSJl31$#ClsPncr|z#y3sN_;z_uZWs5>Vg;i=ghDP;0`)y<-!v`l+lB(~?LGNh_ovr?4CJ`#KLq_v)1tp^Ir>}OEN{r4UL*+Lg8faivcD<oDG!DLr&%%Jb|?%u&58kc!=t}xQuMcskN&1P(cg3k34Yu@@0&z-GbeGlp>>%Cp&x|%rde^{8+R>~qra^;u~)^Z=zt>ELx0n}=x?q<f9rN+4THl7cL?r!=x>@7{hb<9bQ9h;&C2_hY@|E@`kUrOe`6K;8v){ExZu%n92570+28;8S05g}{LAs{-OtAlfA|mm-+%daA+C`N%W2}%=dZtidu2({nWDC4$o+D+`idys$>Ca6vHku}cfjt`pFcnT_T}@h-#&f$r(Yfx02Cd)eS9!?db99I`isKjqkX)0?&u$%gdgti<?%u8?6S!C`-kHbvfRnNQ%@6*YAhcfKmUCE{hM0IKd9Y2JRE=friSy&@$u*5*H5Q!tKUekX`YTpyw@lCc&|>OdAjEZ@(#kIgh#UY_~_&zIR7BW@MQFR$Np{6i0jea-#_Usyj=U+*Sp8#?@K#N{B)91|MVCA%&&LfKL5+{({FcQKYxqA^S}G+zyJHKDgDjg{^^fuMQ*X8Wti93yMO(3{x!ecz@2{xCisW=1F9HLY9yA}In{z5)%mm!;U3JBJ096Sk$cozx^pVqJ(GHw=Kk4;@NmwBq?Ee9dw4qDqkp=;yN@HU9)*u|cYoA)hV8?>e|mCk%+V0IyQlDIDY(0UclxW72jd?f>Xf31m4ZiycgXhs-rOC{@e!PR!n>n>ngam1d$=RZhK_eGpo+uCJ9s*py9Yj+n1I_?O6Iev_)EN~)T4g6@Z+5z@cn}t6+a?5dU8VeWbr8M-IIa4$A>48d%g=QD?5u$9_8`mHC8A^6DtLGx)>ooseK&p-IG3U*4l6v<mma~-s;k2_3977n#V^z-aj25AMaI0kt3_6Et%){N-cSnZktMMd3$mlpWt4CzgKD8gD$1VdjZlP+Z{m{67_CXA7ObQdeQ~`(Jz^LW97*aI$eB<AHfIn<naOBqkVXwaCdkA@Z^uq9#uwETMI`Yt9aFjbZfDXcMtTWOIa+~eA54APODP6Tr|5}A@DuI$x0nNz0~6qI6xm~qmqfWKsI1BtRs=XgNK;Mx_|HwkF0yaqyNukUD=26j_{~^9a4yo-ksBj&hasjZh=q6(i1*BG2O*IQAj_{cMoukN6QZn_bxaW{&QK^B9}UgzyEf8ID1>kU;6!*$AABH_wB1Xe9_U?l{L5O{_^F^KdbBU&k+Y6|No!w{_WGF-p=EffBp3oZ20BMzkU7u<*Rj{zJC7w7_T0`%gcB8?dz8(_2i%K9@Gn8KI?-)G0u@U7~oVLclYbh$JGy~@y}MeWpfGZhe|!@FW*$tMFu=L@YVsx0r;@QL|Z@SUqAo)>+$O%MlN|Yj81|KRs&$&c0GmDnP{I*7)iLSQ3S^URHxxo4LS{FPbz_3f-4SA12aCQ80vI7{o-GBT7cOakAOaSs@AF3c;n;DXHWV|Lq@BSnxHo)bVR326b>%1iCIOpC&DGK)}T|FJtdacl~|M#OZ2DoHaLNZ;KfVQNn*`1x*Tg{?9|J2=L)<M@d6~*EEkW%Ek?AWUO8;ETQ;Ou?GQU{tXaDd$Ax*)#~{7}a)Wj*E@QET*Xx?&%MCBB9m>Iju8eWe1*!?22D#RY_rneEB{fg%!*W7aD_-!{gg8CPqp?yi-MghtrSs}|>*MO;xi(%>4sK<3@$Bx^?qr#(QT@n*VGce54%IWje(A^`NY@WU@q*#he{@N@fBb*{A5f*l^Z'''
+STATUS = dict(state='idle', progress=0, message='Not started',
+              orders_supported=False, trading_enabled=False,
+              portfolio28_unchanged=True)
+STATUS_LOCK = threading.Lock()
 
 
-def write_csv(path, rows):
-    if not rows:
-        Path(path).write_text("", encoding="utf-8")
-        return
-    fields = []
-    seen = set()
-    for row in rows:
-        for key in row:
-            if key not in seen:
-                seen.add(key)
-                fields.append(key)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+def update(state, progress, message, **details):
+    with STATUS_LOCK:
+        STATUS.update(state=state, progress=progress, message=message, **details)
+
+
+def when(text):
+    return dt.datetime.fromisoformat(text.replace('Z','+00:00')).astimezone(dt.timezone.utc)
+
+
+def iso(t):
+    return t.astimezone(dt.timezone.utc).isoformat().replace('+00:00','Z')
+
+
+def save_csv(name, rows):
+    rows = list(rows)
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    columns = list(dict.fromkeys(key for row in rows for key in row)) or ['empty']
+    with (OUTPUT / (name+'.csv')).open('w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f,fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def download(path):
-    if not os.path.exists(path):
-        return jsonify({"error": "not ready"}), 404
-    return send_file(
-        os.path.abspath(path),
-        as_attachment=True,
-        download_name=os.path.basename(path),
-    )
+def package():
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(BUNDLE,'w',zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(OUTPUT.glob('*.csv')):z.write(p,arcname=p.name)
 
 
-def package_results():
-    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as z:
-        for path in OUTS.values():
-            if os.path.exists(path):
-                z.write(path, arcname=os.path.basename(path))
+def archival_reference():
+    raw=zlib.decompress(base64.b85decode(FROZEN_B85))
+    if hashlib.sha256(raw).hexdigest()!=FROZEN_RAW_SHA256:
+        raise RuntimeError('Embedded frozen Pass6 ledger/archive is corrupted')
+    obj=json.loads(raw)
+    if (len(obj['specs'])!=8 or len(obj['accepted_ledgers'])!=674 or
+        len(obj['digests'])!=8):
+        raise RuntimeError('Unexpected frozen Pass6 reference counts')
+    return obj
 
 
-def add_months(dt, n):
-    m = dt.year * 12 + dt.month - 1 + n
-    return datetime(m // 12, m % 12 + 1, 1, tzinfo=timezone.utc)
-
-
-def month_floor(dt):
-    return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
-
-
-def med(values):
-    return median(values) if values else 0.0
-
-
-# ============================================================
-# OANDA HISTORY
-# ============================================================
-
-def headers():
+def fetch_chunk(start, end):
     if not TOKEN:
-        raise RuntimeError("OANDA_TOKEN is not configured")
-    return {"Authorization": "Bearer " + TOKEN.strip()}
-
-
-# ============================================================
-# INDICATORS / HTF CAUSAL ALIGNMENT
-# ============================================================
-
-def sma(values, length):
-    values = np.asarray(values, dtype=float)
-    out = np.full(len(values), np.nan)
-    if len(values) < length:
-        return out
-    valid = np.isfinite(values).astype(int)
-    sums = np.cumsum(np.where(np.isfinite(values), values, 0.0))
-    cnts = np.cumsum(valid)
-    sums = np.r_[0.0, sums]
-    cnts = np.r_[0, cnts]
-    for i in range(length - 1, len(values)):
-        total = sums[i + 1] - sums[i + 1 - length]
-        count = cnts[i + 1] - cnts[i + 1 - length]
-        if count == length:
-            out[i] = total / length
-    return out
-
-
-def ema(values, length):
-    values = np.asarray(values, dtype=float)
-    out = np.full(len(values), np.nan)
-    if len(values) < length:
-        return out
-
-    seed_i = None
-    for i in range(length - 1, len(values)):
-        window = values[i - length + 1:i + 1]
-        if np.all(np.isfinite(window)):
-            seed_i = i
-            out[i] = float(np.mean(window))
-            break
-
-    if seed_i is None:
-        return out
-
-    alpha = 2.0 / (length + 1.0)
-    for i in range(seed_i + 1, len(values)):
-        if np.isfinite(values[i]) and np.isfinite(out[i - 1]):
-            out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
-    return out
-
-
-def atr(candles, length=14):
-    n = len(candles)
-    out = np.full(n, np.nan)
-    if n == 0:
-        return out
-
-    tr = np.full(n, np.nan)
-    for i, candle in enumerate(candles):
-        h = candle["high"]
-        l = candle["low"]
-        if i == 0:
-            tr[i] = h - l
-        else:
-            pc = candles[i - 1]["close"]
-            tr[i] = max(h - l, abs(h - pc), abs(l - pc))
-
-    if n < length:
-        return out
-
-    out[length - 1] = float(np.mean(tr[:length]))
-    for i in range(length, n):
-        out[i] = ((out[i - 1] * (length - 1)) + tr[i]) / length
-    return out
-
-
-def prev_extreme(values, lookback, mode):
-    values = np.asarray(values, dtype=float)
-    out = np.full(len(values), np.nan)
-    from collections import deque
-    dq = deque()
-
-    for i in range(len(values)):
-        while dq and dq[0] < i - lookback:
-            dq.popleft()
-        if i > 0:
-            j = i - 1
-            if mode == "max":
-                while dq and values[dq[-1]] <= values[j]:
-                    dq.pop()
-            else:
-                while dq and values[dq[-1]] >= values[j]:
-                    dq.pop()
-            dq.append(j)
-        if i >= lookback and dq:
-            out[i] = values[dq[0]]
-    return out
-
-
-def infer_completion_times(candles):
-    """Next ACTUAL candle open = first time the prior HTF bar is safely usable."""
-    complete_at = [None] * len(candles)
-    for i in range(len(candles) - 1):
-        complete_at[i] = candles[i + 1]["time"]
-    return complete_at
-
-
-def htf_state(candles):
-    closes = np.array([x["close"] for x in candles], dtype=float)
-    atr14 = atr(candles, 14)
-    atr_mean50 = sma(atr14, 50)
-
-    e50 = ema(closes, 50)
-    e100 = ema(closes, 100)
-    e200 = ema(closes, 200)
-    complete_at = infer_completion_times(candles)
-
-    rows = []
-    for i, candle in enumerate(candles):
-        ratio = None
-        if (
-            np.isfinite(atr14[i])
-            and np.isfinite(atr_mean50[i])
-            and atr_mean50[i] > 0
-        ):
-            ratio = float(atr14[i] / atr_mean50[i])
-
-        rows.append({
-            "time": candle["time"],
-            "complete_at": complete_at[i],
-            "close": float(candle["close"]),
-            "ema50": float(e50[i]) if np.isfinite(e50[i]) else None,
-            "ema100": float(e100[i]) if np.isfinite(e100[i]) else None,
-            "ema200": float(e200[i]) if np.isfinite(e200[i]) else None,
-            "atr_ratio50": ratio,
-        })
-    return rows
-
-
-def align_htf(m15_times, state):
-    rows = [row for row in state if row["complete_at"] is not None]
-    completion_times = [row["complete_at"] for row in rows]
-    keys = ["close", "ema50", "ema100", "ema200", "atr_ratio50"]
-    out = {key: np.full(len(m15_times), np.nan) for key in keys}
-
-    for i, signal_time in enumerate(m15_times):
-        p = bisect.bisect_right(completion_times, signal_time) - 1
-        if p < 0:
-            continue
-        row = rows[p]
-        for key in keys:
-            if row[key] is not None:
-                out[key][i] = row[key]
-    return out
-
-
-# ============================================================
-# M15 FEATURE CACHE — MIRRORED SHORT SPACE
-# ============================================================
-
-def features(candles, h1, h4, daily):
-    n = len(candles)
-    times = [x["time"] for x in candles]
-    o = np.fromiter((x["open"] for x in candles), float, count=n)
-    h = np.fromiter((x["high"] for x in candles), float, count=n)
-    l = np.fromiter((x["low"] for x in candles), float, count=n)
-    cl = np.fromiter((x["close"] for x in candles), float, count=n)
-    a = atr(candles, 14)
-    am20 = sma(a, 20)
-    bullish = cl > o
-    exact_bull = np.zeros(n, dtype=bool)
-    exact_bull[1:] = ((cl[:-1] < o[:-1]) & (cl[1:] > o[1:])
-                      & (o[1:] <= cl[:-1]) & (cl[1:] >= o[:-1]))
-    bull_body = cl - o
-    prior_body = np.r_[np.nan, np.abs(cl[:-1] - o[:-1])]
-    br = np.full(n, np.nan)
-    ok_body = prior_body > 0
-    br[ok_body] = bull_body[ok_body] / prior_body[ok_body]
-    valid_atr = np.isfinite(a) & (a > 0)
-    body_atr = np.full(n, np.nan)
-    body_atr[valid_atr] = bull_body[valid_atr] / a[valid_atr]
-    candle_range = h - l
-    range_atr = np.full(n, np.nan)
-    range_atr[valid_atr] = candle_range[valid_atr] / a[valid_atr]
-    close_loc = np.full(n, np.nan)
-    valid_range = candle_range > 0
-    close_loc[valid_range] = (cl[valid_range] - l[valid_range]) / candle_range[valid_range]
-    lower_wick = np.minimum(o, cl) - l
-    lower_wick_body = np.full(n, np.nan)
-    lower_wick_body[bull_body > 0] = lower_wick[bull_body > 0] / bull_body[bull_body > 0]
-    compression = np.full(n, np.nan)
-    previous_atr = np.r_[np.nan, a[:-1]]
-    previous_atr_mean20 = np.r_[np.nan, am20[:-1]]
-    ok_comp = (np.isfinite(previous_atr) & np.isfinite(previous_atr_mean20)
-               & (previous_atr_mean20 > 0))
-    compression[ok_comp] = previous_atr[ok_comp] / previous_atr_mean20[ok_comp]
-    lookbacks = [10, 20, 30, 40, 50, 60, 70, 80, 100, 120, 165, 200]
-    prev_low = {lb: prev_extreme(l, lb, "min") for lb in lookbacks}
-    prev_high = {lb: prev_extreme(h, lb, "max") for lb in lookbacks}
-    dist_low = {}
-    for lb in [20, 40, 60, 80, 100, 120, 165, 200]:
-        x = np.full(n, np.nan)
-        ok = valid_atr & np.isfinite(prev_low[lb])
-        x[ok] = np.abs(l[ok] - prev_low[lb][ok]) / a[ok]
-        dist_low[lb] = x
-    # Mirrored 4h momentum: prior actual rise => negative mirrored momentum.
-    mom4 = np.full(n, np.nan)
-    mom4[17:] = np.divide(cl[16:-1] - cl[:-17], a[17:],
-                          out=np.full(n-17, np.nan), where=valid_atr[17:])
-    ny_hour = np.zeros(n, dtype=np.int16)
-    ny_weekday = np.zeros(n, dtype=np.int16)
-    london_hour = np.zeros(n, dtype=np.int16)
-    tokyo_hour = np.zeros(n, dtype=np.int16)
-    sydney_hour = np.zeros(n, dtype=np.int16)
-    sydney = ZoneInfo("Australia/Sydney")
-    for i, t in enumerate(times):
-        z = t.astimezone(NY)
-        ny_hour[i], ny_weekday[i] = z.hour, z.weekday()
-        london_hour[i] = t.astimezone(LONDON).hour
-        tokyo_hour[i] = t.astimezone(TOKYO).hour
-        sydney_hour[i] = t.astimezone(sydney).hour
-    return {
-        "n": n, "times": times, "open": o, "high": h, "low": l,
-        "close": cl, "atr": a, "valid_atr": valid_atr,
-        "bullish": bullish, "exact_bull": exact_bull, "bull_br": br,
-        "body_atr": body_atr, "range_atr": range_atr,
-        "close_loc": close_loc, "lower_wick_body": lower_wick_body,
-        "compression": compression, "prev_low": prev_low,
-        "prev_high": prev_high, "structure_dist_low": dist_low,
-        "mom4": mom4, "ny_hour": ny_hour, "ny_weekday": ny_weekday,
-        "london_hour": london_hour, "tokyo_hour": tokyo_hour,
-        "sydney_hour": sydney_hour,
-        "h1_close": h1["close"], "h1_ema50": h1["ema50"],
-        "h1_ema100": h1["ema100"], "h1_ema200": h1["ema200"],
-        "h1_atr": h1["atr_ratio50"],
-        "h4_close": h4["close"], "h4_ema100": h4["ema100"],
-        "h4_ema200": h4["ema200"], "h4_atr": h4["atr_ratio50"],
-        "d_close": daily["close"], "d_ema50": daily["ema50"],
-        "d_ema200": daily["ema200"], "d_atr": daily["atr_ratio50"],
-    }
-
-
-# ============================================================
-# MIRRORED SHORT BACKTEST — full-ledger p0, time-window metrics never reset p0
-# ============================================================
-OUTCOME_CACHE = {}
-BACKTEST_CACHE = {}
-
-
-def outcome(candles, signal_index, rr, cost_pips):
-    key = (signal_index, round(rr,4), round(cost_pips,4))
-    if len(OUTCOME_CACHE) >= 250_000:
-        OUTCOME_CACHE.clear()  # bounded, affects only speed, never outcomes
-    if key in OUTCOME_CACHE:
-        x = OUTCOME_CACHE[key]
-        return None if x is None else x
-    candle = candles[signal_index]
-    ref = candle["close"]
-    stop = candle["low"] - STOP_TICKS*TICK
-    ref_risk = ref - stop
-    if ref_risk <= 0:
-        OUTCOME_CACHE[key] = None
-        return None
-    target = ref + rr*ref_risk
-    fill = ref + cost_pips*PIP
-    actual_risk = fill - stop
-    if actual_risk <= 0:
-        OUTCOME_CACHE[key] = None
-        return None
-    for j in range(signal_index+1,len(candles)):
-        bar = candles[j]
-        stop_hit = bar["low"] <= stop
-        target_hit = bar["high"] >= target
-        if not (stop_hit or target_hit):
-            continue
-        if stop_hit and target_hit:
-            # If high side closer to bar open, assume TARGET first.
-            # Equal distances resolve to STOP (conservative).
-            if abs(bar["high"]-bar["open"]) < abs(bar["open"]-bar["low"]):
-                price, reason = target, "TARGET"
-            else:
-                price, reason = stop, "STOP"
-        elif target_hit:
-            price, reason = target, "TARGET"
-        else:
-            price, reason = stop, "STOP"
-        x = {
-            "signal_index": signal_index, "exit_index":j,
-            "entry_time":candle["time"], "exit_time":bar["time"],
-            "entry_time_utc":iso(candle["time"]), "exit_time_utc":iso(bar["time"]),
-            "reference_entry":-ref, "historical_fill":-fill,
-            "stop":-stop, "target":-target, "result_r":(price-fill)/actual_risk,
-            "exit_reason":reason, "rr":rr,"cost_pips":cost_pips,
-        }
-        OUTCOME_CACHE[key] = x
-        return x
-    OUTCOME_CACHE[key] = None
-    return None
-
-
-def backtest(candles, candidate_indices, rr, cost_pips, start=None, end=None):
-    # Full exact chronological strategy p0 FIRST, then slice by signal open.
-    # This avoids fabricated extra trades at each historical window boundary.
-    key = (tuple(candidate_indices), round(rr,4), round(cost_pips,4))
-    trades = BACKTEST_CACHE.get(key)
-    if trades is None:
-        trades = []
-        p = 0
-        while p < len(candidate_indices):
-            trade = outcome(candles,candidate_indices[p],rr,cost_pips)
-            if trade is None:
-                p += 1
-                continue
-            trades.append(trade)
-            # Half-open holding [signal_index, exit_index): same exit candle eligible.
-            p = bisect.bisect_left(candidate_indices,trade["exit_index"],lo=p+1)
-        BACKTEST_CACHE[key] = trades
-    if start is None and end is None:
-        return trades
-    return [t for t in trades
-            if (start is None or start <= t["entry_time"])
-            and (end is None or t["entry_time"] < end)]
-
-
-def stats(trades):
-    results = [float(x["result_r"]) for x in trades]
-    wins = [r for r in results if r>0]
-    losses = [r for r in results if r<0]
-    gross = sum(wins)
-    loss = -sum(losses)
-    equity=peak=drawdown=0.0
-    streak=longest=0
-    for r in results:
-        equity += r
-        peak=max(peak,equity)
-        drawdown=min(drawdown,equity-peak)
-        if r<0:
-            streak+=1; longest=max(longest,streak)
-        else:
-            streak=0
-    return {
-        "trades":len(results), "winners":len(wins), "losers":len(losses),
-        "win_rate":100*len(wins)/len(results) if results else 0.0,
-        "profit_factor":gross/loss if loss>0 else (999.0 if gross>0 else 0.0),
-        "total_r":sum(results), "expectancy_r":sum(results)/len(results) if results else 0.0,
-        "max_drawdown_r":drawdown, "longest_loss_streak":longest,
-    }
-
-
-
-
-
-# ============================================================
-# HISTORY FETCH & SAFE RESULTS PACKAGING
-# ============================================================
-
-def fetch_chunk(granularity, start, end):
-    if not TOKEN:
-        raise RuntimeError("OANDA_TOKEN is not configured")
-    params = dict(price="M", granularity=granularity, smooth="false",
-                  **{"from":iso(start),"to":iso(end),"includeFirst":"true"})
-    if granularity == "D":
-        params.update(dailyAlignment=17, alignmentTimezone="America/New_York")
-    response=requests.get(f"{BASE}/v3/instruments/{PAIR}/candles",
-                          headers=headers(),params=params,timeout=70)
-    if response.status_code >= 400:
-        msg=response.text[:400]
-        if response.status_code in (400,404) and (
-            "no candles" in msg.lower() or "no data" in msg.lower()
-            or "no candle" in msg.lower()
-        ):
+        raise RuntimeError('OANDA_TOKEN is required for read-only MID candles')
+    q={'price':'M','granularity':'M15','smooth':'false',
+       'from':iso(start),'to':iso(end),'includeFirst':'true'}
+    res=requests.get(f'{API}/v3/instruments/{PAIR}/candles',params=q,
+                     headers={'Authorization':'Bearer '+TOKEN.strip()}, timeout=80)
+    if res.status_code>=400:
+        detail=res.text[:380]
+        if res.status_code in (400,404) and any(s in detail.lower() for s in
+                                          ('no candle','no data')):
             return []
-        response.raise_for_status()
-    rows=[]
-    for candle in response.json().get("candles",[]):
-        if not candle.get("complete",False):continue
-        mid=candle["mid"]
-        rows.append(dict(time=parse_time(candle["time"]),open=float(mid["o"]),
-                         high=float(mid["h"]),low=float(mid["l"]),close=float(mid["c"])))
-    return rows
+        raise RuntimeError(f'Historical candle HTTP {res.status_code}: {detail[:200]}')
+    result=[]
+    for item in res.json().get('candles',[]):
+        if not item.get('complete'): continue
+        mid=item['mid']
+        result.append((when(item['time']),float(mid['o']),float(mid['h']),
+                       float(mid['l']),float(mid['c'])))
+    return result
 
 
-def mirror_ohlc(c):
-    """Invert the price axis; enforce proper ordered OHLC in mirrored space."""
-    return dict(time=c['time'], open=-c['open'], high=-c['low'],
-                low=-c['high'], close=-c['close'])
+def fetch_archived_candles():
+    all_bars={};cursor=when(FETCH_START);end=when(FETCH_END);parts=0
+    while cursor<end:
+        nxt=min(cursor+dt.timedelta(days=35),end)
+        for bar in fetch_chunk(cursor,nxt):
+            if bar[0]<=when(ARCHIVED_LAST):all_bars[bar[0]]=bar
+        cursor=nxt;parts+=1
+        if parts%8==1:
+            update('fetching', min(10+parts//3,44),
+                   f'OANDA M15 candle chunk {parts}; through {iso(cursor)}')
+        if parts%12==0:time.sleep(0.04)
+    bars=[all_bars[t] for t in sorted(all_bars)]
+    if not bars or (len(bars)!=EXPECTED_CANDLES or
+                    iso(bars[0][0])!=ARCHIVED_FIRST or
+                    iso(bars[-1][0])!=ARCHIVED_LAST):
+        raise RuntimeError('OANDA history coverage changed; fail-closed. '
+             f'Got {len(bars)} bars, first={iso(bars[0][0]) if bars else None}, '
+             f'last={iso(bars[-1][0]) if bars else None}')
+    h=hashlib.sha256()
+    for b in bars:
+        h.update((iso(b[0])+'|'+repr(b[1])+'|'+repr(b[2])+'|'+
+                  repr(b[3])+'|'+repr(b[4])+'\n').encode())
+    sha=h.hexdigest()
+    if sha!=EXPECTED_MID_SHA256:
+        raise RuntimeError('OANDA MID source SHA256 differs from frozen Pass6; '
+                           'NO research interpretation until reconciled')
+    return bars,sha
 
 
-def fetch(granularity,start,end,chunk_days):
-    seen={};current=start;chunk=0;had_history=False
-    while current<end:
-        chunk+=1;nxt=min(current+timedelta(days=chunk_days),end)
-        STATUS.update(state="fetch",message=f"{granularity} chunk {chunk}: {iso(current)} → {iso(nxt)}")
-        rows=fetch_chunk(granularity,current,nxt)
-        if rows:had_history=True
-        elif had_history and granularity in ("M15","H1","H4","D"):
-            # A short empty span can occur in market closures. Nonempty overlap
-            # and history continuity are also exposed in coverage for inspection.
-            pass
-        for row in rows:seen[row["time"]]=row
-        current=nxt
-        time.sleep(.04)
-    return [mirror_ohlc(seen[t]) for t in sorted(seen)]
+def atr_wilder(bars):
+    """Independent native-price ATR14, first TR high-low and SMA seed at 13."""
+    n=len(bars)
+    high=np.fromiter((b[2] for b in bars),float,count=n)
+    low=np.fromiter((b[3] for b in bars),float,count=n)
+    close=np.fromiter((b[4] for b in bars),float,count=n)
+    true_range=np.maximum(high-low,
+                np.maximum(abs(high-np.r_[close[0],close[:-1]]),
+                           abs(low-np.r_[close[0],close[:-1]])))
+    atr=np.full(n,np.nan)
+    atr[13]=float(np.mean(true_range[:14]))
+    for i in range(14,n):atr[i]=(atr[i-1]*13+true_range[i])/14
+    return atr
 
 
-def zip_outputs():
-    with zipfile.ZipFile(BUNDLE,"w",zipfile.ZIP_DEFLATED) as z:
-        for name,path in OUTS.items():
-            if os.path.isfile(path):z.write(path,arcname=os.path.basename(path))
+def previous_high(bars, length):
+    """Native price, signal candle EXCLUDED, high strictly > historic high."""
+    high=np.fromiter((b[2] for b in bars),float,count=len(bars))
+    prev=np.full(len(bars),np.nan)
+    queue=deque()
+    for i in range(len(bars)):
+        if i>0:
+            j=i-1
+            while queue and high[queue[-1]]<=high[j]:queue.pop()
+            queue.append(j)
+        while queue and queue[0]<i-length:queue.popleft()
+        if i>=length:prev[i]=high[queue[0]]
+    return prev
 
 
-# ============================================================
-# SIX MINIMAL ENTRY MECHANISMS, NOT PRE-OPTIMISED STRATEGIES
-# ============================================================
-FAMILIES=("BEAR_ENGULF","FAILED_BREAKOUT","HIGH_SWEEP_DISPLACEMENT",
-          "OUTSIDE_REVERSAL","COMPRESSION_BREAKDOWN","RALLY_REJECTION")
+def independent_signals(bars, atr, lb, body_min, range_min, prior_rise_min):
+    """Direct SELL predicates; no mirrored signal engine or Pass6 import."""
+    n=len(bars)
+    op=np.fromiter((b[1] for b in bars),float,count=n)
+    high=np.fromiter((b[2] for b in bars),float,count=n)
+    low=np.fromiter((b[3] for b in bars),float,count=n)
+    close=np.fromiter((b[4] for b in bars),float,count=n)
+    prevhi=previous_high(bars,lb)
+    prior_rise=np.full(n,np.nan)
+    prior_rise[17:]=(close[16:-1]-close[:-17])/atr[17:]
+    good=np.isfinite(atr)&(atr>0)&np.isfinite(prevhi)&np.isfinite(prior_rise)
+    mask=(good&(close<op)&(high>prevhi)&(close<prevhi)&
+          ((op-close)/atr>=body_min)&
+          ((high-low)/atr>=range_min)&
+          (prior_rise>=prior_rise_min))
+    mask[:200]=False
+    return np.flatnonzero(mask).tolist()
 
 
-def raw_masks(f):
-    base=f["valid_atr"] & f["bullish"]
-    previous_high=np.r_[np.nan,f["high"][:-1]]
-    previous_low=np.r_[np.nan,f["low"][:-1]]
-    low10=f["prev_low"][10]
-    masks={
-      "BEAR_ENGULF":base & f["exact_bull"] & (f["bull_br"]>=1.0),
-      "FAILED_BREAKOUT":base & (f["low"]<low10) & (f["close"]>low10),
-      "HIGH_SWEEP_DISPLACEMENT":base & (f["low"]<low10) & (f["close"]>previous_high),
-      "OUTSIDE_REVERSAL":base & (f["low"]<previous_low) & (f["high"]>previous_high),
-      "COMPRESSION_BREAKDOWN":base & (f["compression"]<=1.0)
-                              & (f["close"]>f["prev_high"][10]),
-      "RALLY_REJECTION":base & (f["low"]<f["prev_low"][20])
-                             & (f["close"]>low10) & (f["mom4"]<=0),
-    }
-    for v in masks.values():v[:200]=False
-    return masks
-
-
-
-
-# ============================================================
-# INDEPENDENT NATIVE-SHORT CONTROL (not the archived long ledger)
-# ============================================================
-REFERENCE_N = 0  # Short has no previously frozen historical ledger.
-
-
-def actual_bearish_indices(candles):
-    """Native actual-price bearish engulf, separately from mirror features."""
-    o=np.array([-x['open'] for x in candles], dtype=float)
-    cl=np.array([-x['close'] for x in candles], dtype=float)
-    prev_body=np.r_[np.nan,np.abs(cl[:-1]-o[:-1])]
-    body=o-cl
-    native=np.zeros(len(candles),dtype=bool)
-    native[1:]=(cl[:-1]>o[:-1])&(cl[1:]<o[1:])& \
-               (o[1:]>=cl[:-1])&(cl[1:]<=o[:-1])& \
-               (prev_body[1:]>0)&(body[1:]/np.maximum(prev_body[1:],1e-50)>=1.0)
-    native[:200]=False
-    return np.flatnonzero(native).tolist()
-
-
-def native_short_outcome(candles, ix, rr, cost_pips):
-    """Independent REAL-price SELL path, for exact baseline-ledger validation."""
-    signal=candles[ix]
-    ref=-signal['close']
-    stop=-signal['low']+STOP_TICKS*TICK
-    risk=stop-ref
-    if risk<=0:return None
-    target=ref-rr*risk
-    fill=ref-cost_pips*PIP
-    actual_risk=stop-fill
-    if actual_risk<=0:return None
-    for j in range(ix+1,len(candles)):
-        bar=candles[j]
-        high=-bar['low'];low=-bar['high'];open_price=-bar['open']
-        hit_stop=high>=stop;hit_target=low<=target
+def simulate_one(bars, index, rr, cost):
+    """Native SELL fill-to-stop risk, target anchored to reference price."""
+    bar=bars[index]
+    reference=bar[4]
+    stop=bar[2]+STOP_TICKS*TICK
+    reference_risk=stop-reference
+    fill=reference-cost*PIP
+    cash_risk=stop-fill
+    if reference_risk<=0 or cash_risk<=0:
+        return None
+    target=reference-rr*reference_risk
+    for j in range(index+1,len(bars)):
+        b=bars[j]
+        hit_stop=b[2]>=stop
+        hit_target=b[3]<=target
         if not (hit_stop or hit_target):continue
         if hit_stop and hit_target:
-            exit_price,reason=(target,'TARGET') if abs(open_price-low)<abs(high-open_price) \
-                 else (stop,'STOP')
-        elif hit_target:exit_price,reason=target,'TARGET'
-        else:exit_price,reason=stop,'STOP'
-        return dict(signal_index=ix,exit_index=j,reference_entry=ref,
-            historical_fill=fill,stop=stop,target=target,
-            result_r=(fill-exit_price)/actual_risk,exit_reason=reason)
+            reason='TARGET' if abs(b[3]-b[1])<abs(b[2]-b[1]) else 'STOP'
+        else:reason='STOP' if hit_stop else 'TARGET'
+        price=stop if reason=='STOP' else target
+        return dict(signal_index=index, exit_index=j,
+             entry_time_utc=iso(bar[0]),exit_time_utc=iso(b[0]),
+             reference_entry=reference,historical_fill=fill,
+             stop=stop,target=target,
+             result_r=(fill-price)/cash_risk,exit_reason=reason)
     return None
 
 
-def check_native_short_parity(candles, feat):
-    mirrored_indices=np.flatnonzero(engulf_base(feat)).tolist()
-    native_indices=actual_bearish_indices(candles)
-    if mirrored_indices!=native_indices:
-        raise RuntimeError('Native bearish engulf raw-index parity FAILED')
-    checks=[]
-    for cost in (PRIMARY_COST,STRESS_COST):
-        OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        baseline=backtest(candles,mirrored_indices,RR_FIXED,cost)
-        native=[];p=0
-        while p<len(native_indices):
-            trade=native_short_outcome(candles,native_indices[p],RR_FIXED,cost)
-            if trade is None:
-                p+=1;continue
-            native.append(trade)
-            p=bisect.bisect_left(native_indices,trade['exit_index'],lo=p+1)
-        if len(baseline)!=len(native):
-            raise RuntimeError('Native bearish accepted-count parity FAILED')
-        fields=('signal_index','exit_index','reference_entry','historical_fill',
-                'stop','target','result_r','exit_reason')
-        for a,b in zip(baseline,native):
-            for field in fields:
-                if (abs(a[field]-b[field])>1e-9 if field not in
-                    ('signal_index','exit_index','exit_reason') else a[field]!=b[field]):
-                    raise RuntimeError('Native bearish accepted-ledger parity FAILED on '+field)
-        digest=hashlib.sha256()
-        for index in mirrored_indices:
-            digest.update((iso(candles[index]['time'])+'\n').encode())
-        ledgerhash=hashlib.sha256()
-        for t in baseline:
-            ledgerhash.update((str(t['signal_index'])+'|'+str(t['exit_index'])+'|'+
-                repr(t['result_r'])+'\n').encode())
-        checks.append(dict(direction='SELL',pattern='EXACT_BEARISH_ENGULF_BR1',
-            assumed_adverse_fill_pips=cost,raw_signal_count=len(mirrored_indices),
-            accepted_trades=len(baseline),raw_signal_sha256=digest.hexdigest(),
-            accepted_ledger_sha256=ledgerhash.hexdigest(),
-            raw_native_parity='PASS',full_accepted_native_parity='PASS',
-            cutoff_utc=iso(candles[-1]['time'])))
-    # Pass4 uses the archived-control filename; earlier passes use raw_engulf_parity.
-    # Resolve the ACTIVE output map, rather than assuming the Pass1 key exists.
-    parity_key = ('archived_bearish_parity' if 'archived_bearish_parity' in OUTS
-                  else 'raw_engulf_parity')
-    write_csv(OUTS[parity_key],checks)
-    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-    return checks
-
-
-def midpoint_fingerprint(candles, timeframe):
-    digest=hashlib.sha256()
-    for c in candles:
-        digest.update((iso(c['time'])+'|'+repr(-c['open'])+'|'+
-           repr(-c['low'])+'|'+repr(-c['high'])+'|'+repr(-c['close'])+'\n').encode())
-    return dict(timeframe=timeframe,sha256_midpoint_ohlc=digest.hexdigest())
-
-
-# ============================================================
-
-def hist_coverage(label,candles):
-    if not candles:raise RuntimeError('No candles for '+label)
-    ts=[x['time'] for x in candles]
-    return dict(timeframe=label,count=len(ts),first_utc=iso(ts[0]),last_utc=iso(ts[-1]),
-        max_gap_days=max(((b-a).total_seconds()/86400 for a,b in zip(ts,ts[1:])),default=0))
-
-def add_months_utc(value,n):
-    return add_months(value,n)
-
-# ============================================================
-# SHORT ENGULFING-ONLY EXPLORATORY FEATURES (mirrored/real mapping)
-# ============================================================
-GEOMETRY_LB=(20,40,60,100,165)
-GEOMETRY_D=(.05,.10,.25,.50)
-GEOMETRY_BODY=(.50,.75,1.00,1.25)
-GEOMETRY_RANGE=(.75,1.00,1.25,1.50)
-# 5 x 4 x 4 x 4 = 320, plus 16 no-structure controls. Fixed RR3.5.
-N_GEOMETRY=5*4*4*4+4*4
-FIXED_ANCHORS={
-  (40,.25,.75,1.00),
-  (60,.10,1.00,1.25),
-  (100,.25,1.00,1.25),
-  (165,.10,1.25,1.50),
-}
-
-
-def prior_shift(values,bars,fill=np.nan):
-    values=np.asarray(values)
-    return np.r_[np.full(bars,fill,dtype=values.dtype),values[:-bars]]
-
-
-def make_extra_features(f):
-    """Only causal fields. Signal-candle geometry may use current OHLC at close."""
-    n=f['n'];close=f['close'];low=f['low'];atr14=f['atr']
-    good=np.isfinite(atr14)&(atr14>0)
-    ret={}
-    reference_risk=close-(low-STOP_TICKS*TICK)
-    ret['stop_atr']=np.divide(reference_risk,atr14,
-        out=np.full(n,np.nan),where=good)
-    ret['body_ratio']=f['bull_br']
-    ret['m15_atr_ratio20']=np.divide(atr14, sma(atr14,20),
-        out=np.full(n,np.nan),where=np.isfinite(sma(atr14,20))&(sma(atr14,20)>0))
-    ret['upper_wick_body']=np.divide(f['high']-np.maximum(f['open'],close),
-        close-f['open'],out=np.full(n,np.nan),where=close>f['open'])
-    # prior N-bar momentum i-1 versus i-(N+1), denominator known at signal close
-    for name,bars in [('mom4',16),('mom12',48),('mom24',96),('mom48',192)]:
-        m=np.full(n,np.nan)
-        m[bars+1:]=np.divide(close[bars:-1]-close[:-(bars+1)],
-            atr14[bars+1:],out=np.full(n-(bars+1),np.nan),where=good[bars+1:])
-        ret[name]=m
-    # Prior candle's ATR-scaled body; no forward data.
-    pbody=np.abs(prior_shift(close-f['open'],1))
-    ret['prev_body_atr']=np.divide(pbody,atr14,out=np.full(n,np.nan),where=good)
-    for lb in GEOMETRY_LB:
-        prior_low=f['prev_low'][lb]
-        penetration=np.full(n,np.nan)
-        mask=good&np.isfinite(prior_low)
-        penetration[mask]=(prior_low[mask]-low[mask])/atr14[mask]
-        ret[f'penetration_{lb}']=penetration
-    return ret
-
-
-def engulf_base(f):
-    m=np.asarray(f['valid_atr']&f['exact_bull']&(f['bull_br']>=1.0),dtype=bool).copy()
-    m[:200]=False
-    return m
-
-
-def independent_filters(f,e):
-    """Old-style factor scan: independent predicates on raw mirrored bearish engulfing ONLY.
-
-    Each returned predicate is run as full chronological p0; cost stress for
-    EVERY setting. Timing is explicitly diagnostic, not a selectable gate here.
-    """
-    rows=[]
-    def add(group,axis,val,mask):
-        rows.append((group,axis,val,np.asarray(mask,dtype=bool)))
-    for v in (1.00,1.10,1.25,1.50,1.75,2.00):
-        add('body_ratio','min',v,f['bull_br']>=v)
-    for name,vals in [
-        ('body_atr',(.40,.60,.80,1.00,1.20,1.40,1.60)),
-        ('range_atr',(.70,.90,1.10,1.30,1.50,1.80)),
-        ('close_near_actual_low',(.55,.65,.75,.85,.90)),
-        ('actual_upper_wick_body',(.10,.20,.30,.40,.60)),
-        ('m15_atr_ratio20',(.70,.85,1.00,1.15,1.30)),
-        ('prev_body_atr',(.25,.50,.75,1.00,1.25)),
-    ]:
-        x=(f['close_loc'] if name=='close_near_actual_low' else
-           f['lower_wick_body'] if name=='actual_upper_wick_body' else
-           e.get(name,f.get(name)))
-        for v in vals:add(name,'min',v,x>=v)
-    for v in (.10,.20,.30,.50,.75):
-        add('actual_lower_wick_body','max',v,e['upper_wick_body']<=v)
-    for v in (1.00,1.25,1.50,2.00,2.50,3.00):
-        add('stop_atr','max',v,e['stop_atr']<=v)
-    for lb in GEOMETRY_LB:
-        for d in (.05,.10,.25,.50,1.00):
-            add('distance_to_actual_prior_high_'+str(lb),'max',d,
-                f['structure_dist_low'][lb]<=d)
-        for p in (.00,.05,.10,.20):
-            add('actual_high_penetration_'+str(lb),'min',p,
-                e['penetration_'+str(lb)]>=p)
-    for name in ('mom4','mom12','mom24','mom48'):
-        for v in (.00,-.50,-1.00,-1.50):
-            add('actual_prior_'+name+'_rise','min',-v,e[name]<=v)
-        for v in (.00,.50,1.00):
-            add('actual_prior_'+name+'_decline','min',v,e[name]>=v)
-    for name,lhs,rhs in (
-        ('h1_close_lt_ema50','h1_close','h1_ema50'),
-        ('h1_close_lt_ema100','h1_close','h1_ema100'),
-        ('h1_ema50_lt_ema200','h1_ema50','h1_ema200'),
-        ('h4_close_lt_ema100','h4_close','h4_ema100'),
-        ('h4_ema100_lt_ema200','h4_ema100','h4_ema200'),
-        ('daily_close_lt_ema50','d_close','d_ema50'),
-        ('daily_close_lt_ema200','d_close','d_ema200'),
-        ('daily_ema50_lt_ema200','d_ema50','d_ema200'),
-    ):
-        add('completed_htf_regime',name,'yes',f[lhs]>f[rhs])
-    for name in ('h1_atr','h4_atr','d_atr'):
-        for v in (.80,1.00,1.20):add('completed_'+name,'min',v,f[name]>=v)
-    # TIMING DIAGNOSTICS only: do not combine with matrix or automatically rank.
-    for v in range(24):
-        add('ny_hour_DIAGNOSTIC','equals',v,f['ny_hour']==v)
-    for v in range(5):
-        add('ny_weekday_DIAGNOSTIC','exclude',v,f['ny_weekday']!=v)
-    assert len(rows)==len({(a,b,str(c)) for a,b,c,_ in rows})
-    return rows
-
-
-def geometries(f,base):
-    """Core old-style matrix, not several unrelated raw trigger families."""
-    strong=f['body_atr'];large=f['range_atr']
-    count=0
-    for body,rng in itertools.product(GEOMETRY_BODY,GEOMETRY_RANGE):
-        mask=base&(strong>=body)&(large>=rng)
-        yield ('NO_STRUCTURE',0,None,body,rng,mask)
-        count+=1
-    for lb in GEOMETRY_LB:
-        dist=f['structure_dist_low'][lb]
-        for d,body,rng in itertools.product(GEOMETRY_D,GEOMETRY_BODY,GEOMETRY_RANGE):
-            mask=base&(dist<=d)&(strong>=body)&(large>=rng)
-            yield ('NEAR_PREV_LOW',lb,d,body,rng,mask)
-            count+=1
-    if count!=N_GEOMETRY:raise RuntimeError('Geometry count '+str(count))
-
-
-def config_id(lb,d,body,rng):
-    return 'ENGULF__LB'+str(lb)+'__D'+('NONE' if d is None else str(d).replace('.','p'))+\
-       '__BODY'+str(body).replace('.','p')+'__RANGE'+str(rng).replace('.','p')
-
-
-def subset(trades,start=None,end=None):
-    return [t for t in trades if (start is None or t['entry_time']>=start)
-                and (end is None or t['entry_time']<end)]
-
-
-def metrics_row(category,cid,axes,ix,main,stress,raw_stats):
-    s2=stats(main);s4=stats(stress)
-    row=dict(category=category,config_id=cid,**axes,raw_signals=len(ix),
-        **{'2pip_'+k:v for k,v in s2.items()},
-        **{'4pip_'+k:v for k,v in s4.items()},
-        delta_expectancy_vs_raw_2pip=s2['expectancy_r']-raw_stats['expectancy_r'])
-    windows=[
-        ('pre2010',None,datetime(2010,1,1,tzinfo=timezone.utc)),
-        ('2010to2015',datetime(2010,1,1,tzinfo=timezone.utc),datetime(2016,1,1,tzinfo=timezone.utc)),
-        ('2016to2021',datetime(2016,1,1,tzinfo=timezone.utc),datetime(2022,1,1,tzinfo=timezone.utc)),
-        ('2022on',datetime(2022,1,1,tzinfo=timezone.utc),None),
-        ('since2010',datetime(2010,1,1,tzinfo=timezone.utc),None),
-        ('last5y',NOW-timedelta(days=365.2425*5),None),
-        ('last2y',NOW-timedelta(days=365.2425*2),None),
-        ('last1y',NOW-timedelta(days=365.2425),None),
-    ]
-    for name,start,end in windows:
-        for label,ledger in (('2pip',main),('4pip',stress)):
-            s=stats(subset(ledger,start,end))
-            for k in ('trades','total_r','profit_factor','max_drawdown_r'):
-                row[label+'_'+name+'_'+k]=s[k]
-    row['research_only']='Repeatedly examined history; not independent OOS'
-    return row
-
-
-def evaluate(candles,indices):
-    tr=backtest(candles,indices,RR_FIXED,PRIMARY_COST)
-    stress=backtest(candles,indices,RR_FIXED,STRESS_COST)
-    return tr,stress
-
-
-def neighbours(rows):
-    """Every *adjacent* setting, including losing neighbours and empty rows."""
-    ix={(r['lookback'],r['distance_atr'],r['body_atr_min'],r['range_atr_min']):r
-        for r in rows}
-    result=[]
-    axes={'lookback':(0,GEOMETRY_LB),'distance_atr':(1,GEOMETRY_D),
-          'body_atr_min':(2,GEOMETRY_BODY),'range_atr_min':(3,GEOMETRY_RANGE)}
-    for r in rows:
-        if r['lookback']==0:continue
-        orig=(r['lookback'],r['distance_atr'],r['body_atr_min'],r['range_atr_min'])
-        for axis,(pos,levels) in axes.items():
-            idx=levels.index(orig[pos])
-            if idx+1>=len(levels):continue
-            nextcoord=list(orig);nextcoord[pos]=levels[idx+1]
-            s=ix.get(tuple(nextcoord))
-            if s is None:continue
-            result.append(dict(axis=axis,from_id=r['config_id'],to_id=s['config_id'],
-                from_value=orig[pos],to_value=nextcoord[pos],
-                from_n=r['2pip_trades'],to_n=s['2pip_trades'],
-                from_r=r['2pip_total_r'],to_r=s['2pip_total_r'],
-                from_4pip_r=r['4pip_total_r'],to_4pip_r=s['4pip_total_r'],
-                from_expectancy=r['2pip_expectancy_r'],to_expectancy=s['2pip_expectancy_r']))
-    return result
-
-
-def matrix_level_summary(rows):
-    result=[]
-    for name,levels in [('lookback',GEOMETRY_LB),('distance_atr',GEOMETRY_D),
-                        ('body_atr_min',GEOMETRY_BODY),('range_atr_min',GEOMETRY_RANGE)]:
-        for val in levels:
-            v=[r for r in rows if r['lookback']>0 and r[name]==val]
-            valid=[r for r in v if r['2pip_trades']>=50]
-            result.append(dict(axis=name,value=val,rows=len(v),rows_50trades=len(valid),
-                median_2pip_expectancy=med([x['2pip_expectancy_r'] for x in valid]),
-                median_4pip_expectancy=med([x['4pip_expectancy_r'] for x in valid]),
-                positive_2pip=sum(x['2pip_total_r']>0 for x in valid),
-                positive_4pip=sum(x['4pip_total_r']>0 for x in valid),
-                positive_pre2010_and_since2010_4pip=sum(x['4pip_pre2010_total_r']>0 and
-                    x['4pip_since2010_total_r']>0 for x in valid),
-                interpretation='Aggregate descriptive only; configurations overlap heavily'))
-    return result
-
-
-def anchor_rolling(cid,trades,assumption):
-    rows=[]
-    begin=datetime(HISTORY_FIRST.year,HISTORY_FIRST.month,1,tzinfo=timezone.utc)
-    if HISTORY_FIRST>begin:begin=add_months_utc(begin,1)
-    end_full=datetime(NOW.year,NOW.month,1,tzinfo=timezone.utc)
-    for duration in (12,24,36):
-        win=begin
-        while add_months_utc(win,duration)<=end_full:
-            finish=add_months_utc(win,duration)
-            x=stats(subset(trades,win,finish))
-            rows.append(dict(config_id=cid,cost_pips=assumption,months=duration,
-                from_utc=iso(win),to_utc=iso(finish),trades=x['trades'],total_r=x['total_r']))
-            win=add_months_utc(win,1)
-    return rows
-
-
-
-# ============================================================
-# PREDECLARED NEW PASS: SIX INDEPENDENT MECHANISMS
-# ============================================================
-FIXED_END=datetime(2026,9,24,19,15,tzinfo=timezone.utc)  # 19:00 M15 open was fully closed
-EXPECTED_LAST='2026-09-24T19:00:00Z'
-EXPECTED_FIRST='2004-05-31T20:45:00Z'
-EXPECTED_CANDLES=546907
-EXPECTED_SHA='124e81dc0a8302d45433ed1db66e8df75cab7dc7a1237948bcef357a7b65153e'
-EXPECTED_BEARISH_RAW_SHA='81f0d6f3c26e7c4a48d053b33da0ce229dc857faaa08e0613a19438d3ff7102d'
-EXPECTED_BEARISH_LEDGER_SHA={2.0:'37e5d9cd21eebdbea97187477dc1f8688b2cadde3ba5acd7acc13570d46c2a3f',
-    4.0:'ea8d77cf87ef56a2273af87d66fa516304ccc098b42f3ce4c6f9b8b7c3154bb5'}
-# Preserve the date-origin of all last-N-year calculations in output rows.
-NOW=FIXED_END
-MATRIX_LB=(10,20,40,60)
-MATRIX_BODY=(.75,1.00,1.25)
-MATRIX_RANGE=(1.00,1.50,2.00)
-MATRIX_CONFIRM=(0.00,.25)
-FAMILIES=('FAILED_HIGH_BREAKOUT','HIGH_SWEEP_DISPLACEMENT','OUTSIDE_REVERSAL',
-          'COMPRESSION_BREAKDOWN','RALLY_REJECTION','DOWNSIDE_BREAKDOWN')
-EXPECTED_GRID=len(FAMILIES)*len(MATRIX_LB)*len(MATRIX_BODY)*len(MATRIX_RANGE)*len(MATRIX_CONFIRM)
-
-FAMILY_RULES={
- 'FAILED_HIGH_BREAKOUT':'high > prior N high; close < prior N high minus confirm*ATR; bearish',
- 'HIGH_SWEEP_DISPLACEMENT':'high > prior N high; close < previous M15 low minus confirm*ATR; bearish',
- 'OUTSIDE_REVERSAL':'high > prior N high and low < prior N low; close location in bottom 40% (confirm=0) or bottom 20% (confirm=.25); bearish',
- 'COMPRESSION_BREAKDOWN':'previous ATR14/previous 20-bar ATR average <=1.00 (confirm=0) or <=.80 (confirm=.25); close < prior N low; bearish',
- 'RALLY_REJECTION':'high > prior N high, close < prior N high; preceding 16 M15-bar actual close rise >= .50 ATR (confirm=0) or 1.50 ATR (confirm=.25); bearish',
- 'DOWNSIDE_BREAKDOWN':'close < prior N low minus confirm*ATR; bearish',
-}
-
-
-def family_mask_mirror(f,family,lb,confirm):
-    """Arrays in mirrored short-space: prior low = actual prior high."""
-    atr14=f['atr']; lo=f['low']; hi=f['high'];cl=f['close']
-    prev_low=f['prev_low'][lb];prev_high=f['prev_high'][lb]
-    prev_bar_high=np.r_[np.nan,hi[:-1]]  # actual previous candle low negated
-    bearish=f['bullish'] & f['valid_atr']
-    if family=='FAILED_HIGH_BREAKOUT':
-        m=(lo<prev_low)&(cl>prev_low+confirm*atr14)
-    elif family=='HIGH_SWEEP_DISPLACEMENT':
-        m=(lo<prev_low)&(cl>prev_bar_high+confirm*atr14)
-    elif family=='OUTSIDE_REVERSAL':
-        m=(lo<prev_low)&(hi>prev_high)&(f['close_loc']>=.60+.80*confirm)
-    elif family=='COMPRESSION_BREAKDOWN':
-        m=(f['compression']<=1.0-.8*confirm)&(cl>prev_high)
-    elif family=='RALLY_REJECTION':
-        m=(lo<prev_low)&(cl>prev_low)&(f['mom4']<=-(.50+4*confirm))
-    elif family=='DOWNSIDE_BREAKDOWN':
-        m=cl>prev_high+confirm*atr14
-    else:raise ValueError('Unknown family: '+family)
-    ret=np.asarray(bearish&m,dtype=bool)
-    ret[:200]=False
-    return ret
-
-
-def family_mask_native(f,family,lb,confirm):
-    """SEPARATELY assembled actual-price SELL predicates, not mirror function."""
-    high=-f['low'];low=-f['high'];close=-f['close'];op=-f['open'];a=f['atr']
-    prevhi=prev_extreme(high,lb,'max');prevlo=prev_extreme(low,lb,'min')
-    lastlow=np.r_[np.nan,low[:-1]]
-    bearish=(close<op)&np.isfinite(a)&(a>0)
-    if family=='FAILED_HIGH_BREAKOUT':
-        pred=(high>prevhi)&(close<prevhi-confirm*a)
-    elif family=='HIGH_SWEEP_DISPLACEMENT':
-        pred=(high>prevhi)&(close<lastlow-confirm*a)
-    elif family=='OUTSIDE_REVERSAL':
-        cloc=np.divide(close-low,high-low,out=np.full(len(a),np.nan),where=high>low)
-        pred=(high>prevhi)&(low<prevlo)&(cloc<=.40-.80*confirm+1e-12)
-    elif family=='COMPRESSION_BREAKDOWN':
-        pred=(f['compression']<=1-.8*confirm)&(close<prevlo)
-    elif family=='RALLY_REJECTION':
-        priorrise=-f['mom4']
-        pred=(high>prevhi)&(close<prevhi)&(priorrise>=.50+4*confirm)
-    elif family=='DOWNSIDE_BREAKDOWN':
-        pred=close<prevlo-confirm*a
-    else:raise ValueError(family)
-    ans=np.asarray(bearish&pred,dtype=bool)
-    ans[:200]=False
-    return ans
-
-
-def digest_indices(candles,ix):
-    h=hashlib.sha256()
-    for i in ix:h.update((iso(candles[i]['time'])+'\n').encode())
-    return h.hexdigest()
-
-
-def digest_ledger(trades):
-    h=hashlib.sha256()
-    for t in trades:
-        h.update((str(t['signal_index'])+'|'+str(t['exit_index'])+'|'+
-                  repr(t['result_r'])+'\n').encode())
-    return h.hexdigest()
-
-
-def paired(candles,ix):
-    return (backtest(candles,ix,RR_FIXED,PRIMARY_COST),
-            backtest(candles,ix,RR_FIXED,STRESS_COST))
-
-
-def family_parameters(family,lb,confirm):
-    return dict(family=family,lookback=lb,confirmation=confirm,
-                rule=FAMILY_RULES[family])
-
-
-def matrix_id(family,lb,confirm,body,rng):
-    return f'{family}__LB{lb}__C{confirm:.2f}__B{body:.2f}__R{rng:.2f}'
-
-
-def trade_public(t):
-    return {k:v for k,v in t.items() if k not in ('entry_time','exit_time')}
-
-
-def rolling(family,ledger,cost):
-    rows=[]
-    begin=month_floor(HISTORY_FIRST)
-    if begin<HISTORY_FIRST:begin=add_months(begin,1)
-    last_full=month_floor(FIXED_END)
-    for duration in (12,24,36):
-        t=begin
-        while add_months(t,duration)<=last_full:
-            end=add_months(t,duration)
-            sr=stats(subset(ledger,t,end))
-            rows.append(dict(family=family,assumed_adverse_fill_pips=cost,
-                window_months=duration,from_utc=iso(t),to_utc=iso(end),
-                trades=sr['trades'],total_r=sr['total_r'],
-                profit_factor=sr['profit_factor']))
-            t=add_months(t,1)
-    return rows
-
-
-def annual(family,ledger,cost):
-    rows=[]
-    for year in range(HISTORY_FIRST.year,FIXED_END.year+1):
-        left=datetime(year,1,1,tzinfo=timezone.utc)
-        right=datetime(year+1,1,1,tzinfo=timezone.utc)
-        st=stats(subset(ledger,left,right))
-        rows.append(dict(family=family,assumed_adverse_fill_pips=cost,
-             calendar_year=year,partial_year=year in (HISTORY_FIRST.year,FIXED_END.year),
-             trades=st['trades'],total_r=st['total_r'],
-             profit_factor=st['profit_factor']))
-    return rows
-
-
-def matrix_neighbours(rows):
-    keys=('family','lookback','confirmation','body_atr_min','range_atr_min')
-    table={tuple(row[k] for k in keys):row for row in rows}
-    levels=(FAMILIES,MATRIX_LB,MATRIX_CONFIRM,MATRIX_BODY,MATRIX_RANGE)
-    output=[]
-    for row in rows:
-        k=tuple(row[x] for x in keys)
-        for j in (1,2,3,4):
-            lev=levels[j]; n=lev.index(k[j]);
-            if n+1==len(lev):continue
-            neighbor=list(k);neighbor[j]=lev[n+1]
-            b=table.get(tuple(neighbor))
-            if b is None:continue
-            output.append(dict(from_id=row['config_id'],to_id=b['config_id'],axis=keys[j],
-                 from_value=k[j],to_value=neighbor[j],
-                 from_2pip_r=row['2pip_total_r'],to_2pip_r=b['2pip_total_r'],
-                 from_4pip_r=row['4pip_total_r'],to_4pip_r=b['4pip_total_r'],
-                 from_4pip_trades=row['4pip_trades'],to_4pip_trades=b['4pip_trades']))
-    return output
-
-
-def axis_summary(rows):
-    result=[]
-    for axis,levels in (('family',FAMILIES),('lookback',MATRIX_LB),
-                        ('confirmation',MATRIX_CONFIRM),('body_atr_min',MATRIX_BODY),
-                        ('range_atr_min',MATRIX_RANGE)):
-        for level in levels:
-            bucket=[x for x in rows if x[axis]==level]
-            enough=[x for x in bucket if x['4pip_trades']>=50]
-            result.append(dict(axis=axis,value=level,configs=len(bucket),
-                configs_with_50_trades=len(enough),
-                positive_2pip=sum(x['2pip_total_r']>0 for x in enough),
-                positive_4pip=sum(x['4pip_total_r']>0 for x in enough),
-                median_2pip_expectancy=med([x['2pip_expectancy_r'] for x in enough]),
-                median_4pip_expectancy=med([x['4pip_expectancy_r'] for x in enough]),
-                description='Descriptive only: highly overlapping configurations; not independent discoveries'))
-    return result
-
-
-def validate_all_mechanisms(candles,f):
-    rows=[]
-    for family in FAMILIES:
-        for lb,confirm in ((20,0.0),(40,.25)):
-            mirrored=np.flatnonzero(family_mask_mirror(f,family,lb,confirm)).tolist()
-            native=np.flatnonzero(family_mask_native(f,family,lb,confirm)).tolist()
-            if mirrored!=native:raise RuntimeError(f'NATIVE SIGNAL PARITY FAILED: {family} LB{lb} confirm{confirm}')
-            # Independently compute all accepted trades for each primary raw family.
-            for cost in (PRIMARY_COST,STRESS_COST):
-                trades=backtest(candles,mirrored,RR_FIXED,cost)
-                native_ledger=[];p=0
-                while p<len(native):
-                    trade=native_short_outcome(candles,native[p],RR_FIXED,cost)
-                    if trade is None:p+=1;continue
-                    native_ledger.append(trade)
-                    p=bisect.bisect_left(native,trade['exit_index'],lo=p+1)
-                if len(trades)!=len(native_ledger):
-                    raise RuntimeError(f'NATIVE TRADE COUNT PARITY FAILED: {family} {cost}')
-                checks=('signal_index','exit_index','reference_entry',
-                    'historical_fill','stop','target','result_r','exit_reason')
-                for a,b in zip(trades,native_ledger):
-                    for field in checks:
-                        if field in ('exit_reason',):ok=a[field]==b[field]
-                        elif field in ('signal_index','exit_index'):ok=a[field]==b[field]
-                        else:ok=abs(a[field]-b[field])<=1e-9
-                        if not ok:raise RuntimeError(f'NATIVE FULL LEDGER PARITY FAILED: {family} {cost} {field}')
-                rows.append(dict(family=family,lookback=lb,confirmation=confirm,
-                   assumed_adverse_fill_pips=cost,raw_signals=len(mirrored),
-                   accepted_trades=len(trades),raw_sha256=digest_indices(candles,mirrored),
-                   accepted_ledger_sha256=digest_ledger(trades),
-                   independent_native_signal_parity='PASS',
-                   independent_full_accepted_ledger_parity='PASS'))
-    return rows
-
-
-# ============================================================
-# SHORT PASS 2 — FROZEN ANCHORS / ONE CONDITIONAL FACTOR
-# PLUS SEPARATE PREDECLARED RANGE BOUNDARY EXPANSION
-# ============================================================
-# IMPORTANT: do NOT select anchors based on this pass's top row.
-# All history has been repeatedly inspected; never call it unseen OOS.
-ANCHORS=(
-    ('LB40_B1.25_R2.00',40,1.25,2.00,168,5.3284244540584185),
-    ('LB60_B1.00_R2.00',60,1.00,2.00,183,12.512788156428638),
-    ('LB60_B1.25_R2.00',60,1.25,2.00,139,12.110963317166263),
-)
-# Primary 4pip baselines from the actual archived Pass1B matrix above.
-# Other fill/costs are recomputed, not tuned to this pass.
-# Range explicitly extends on BOTH SIDES of the previous tested 2.00 edge;
-# LB80 and B1.50 expand the previously tested lookback/body ceilings too.
-BOUNDARY_LB=(40,60,80)
-BOUNDARY_BODY=(.75,1.00,1.25,1.50)
-BOUNDARY_RANGE=(1.50,1.75,2.00,2.25,2.50,2.75,3.00,3.25,3.50)
-EXPECTED_BOUNDARY=len(BOUNDARY_LB)*len(BOUNDARY_BODY)*len(BOUNDARY_RANGE)
-
-
-def rally_geometry(f,lb,body,range_min):
-    """Frozen rally rejection: >=1.50 ATR preceding 16 M15 candles,
-    high strictly over previous LB high, close strictly below it; bearish.
-    All price arrays in the original PASS1B are MIRRORED to BUY-space.
-    """
-    return (family_mask_mirror(f,'RALLY_REJECTION',lb,.25)
-         & (f['body_atr']>=body)&(f['range_atr']>=range_min))
-
-
-def conditional_predicates(f):
-    """Each mask is exactly ONE condition, compared to its OWN anchor.
-    Values are predeclared; no sequential / conjunction tuning here.
-    All momentum is prior-only; candle-geometry fields known at close.
-    """
-    n=f['n']; a=f['atr']; close=f['close']; o=f['open']; high=f['high'];low=f['low']
-    ok=np.isfinite(a)&(a>0)
-    vals=[]
-    def add(group,metric,operator,threshold,array,note=''):
-        finite=np.isfinite(array)
-        if operator=='>=': mask=finite&(array>=threshold)
-        elif operator=='<=':mask=finite&(array<=threshold)
-        else:raise ValueError(operator)
-        vals.append((f'{group}__{metric}__{operator}__{threshold:.3f}',
-             dict(factor_group=group,metric=metric,operator=operator,
-                  threshold=threshold,factor_note=note),mask))
-    # Original rally signal had prior-16 rise >=1.50 ATR. Lower thresholds
-    # are vacuous; only tighten within conditional test.
-    prior16rise=-f['mom4']
-    for x in (1.75,2.,2.5,3.,4.):
-        add('prior_movement','rise_prior16_atr','>=',x,prior16rise,
-            'Preceding 16 completed M15 bars; signal ATR denominator')
-    for bars in (48,96,192):
-        rise=np.full(n,np.nan)
-        rise[bars+1:]=np.divide(close[:-(bars+1)]-close[bars:-1],a[bars+1:],
-            out=np.full(n-bars-1,np.nan),where=ok[bars+1:])
-        # mirrored price: earlier-high minus recent-low => actual rise
-        for x in (0.,.75,1.5,2.5):
-            add('prior_movement',f'rise_prior{bars}_atr','>=',x,rise,
-                'Prior completed M15 closes only; 48/96/192 MARKET bars')
-    # A strong mirrored close near high is a strong actual bearish close.
-    for x in (.60,.70,.80,.90):
-        add('signal_quality','mirrored_close_location','>=',x,f['close_loc'],
-            'Equivalent actual bearish candle close in bottom 40/30/20/10%')
-    # Mirrored lower wick = actual short upper wick. Mirror body positive.
-    for x in (.20,.40,.60,.80):
-        add('signal_quality','actual_upper_wick_body','>=',x,f['lower_wick_body'])
-    # Prior candle's absolute real body divided by signal ATR.
-    prev_body=np.full(n,np.nan)
-    prev_body[1:]=np.divide(np.abs(close[:-1]-o[:-1]),a[1:],
-        out=np.full(n-1,np.nan),where=ok[1:])
-    for x in (.50,.75,1.00,1.25):
-        add('previous_bar','prior_body_atr','>=',x,prev_body)
-    m20=sma(a,20)
-    ratio=np.divide(a,m20,out=np.full(n,np.nan),
-        where=np.isfinite(m20)&(m20>0))
-    # Always prior ATR state; signal candle ATR only used in baseline geom.
-    prior_ratio=np.r_[np.nan,ratio[:-1]]
-    for x in (.85,1.,1.10,1.25,1.50):
-        add('volatility','previous_m15_atr_ratio20','>=',x,prior_ratio)
-    for x in (.70,.85,1.,1.15):
-        add('volatility','previous_m15_atr_ratio20','<=',x,prior_ratio)
-    # Actual prior high sweep penetration: previous mirrored low - mirrored low.
-    for lb in (40,60):
-        penetration=np.divide(f['prev_low'][lb]-low,a,out=np.full(n,np.nan),where=ok)
-        for x in (.05,.10,.20,.35):
-            add('structure',f'prior_high_sweep_LB{lb}_atr','>=',x,penetration)
-    # Original target/stop geometry kept fixed; test distance as one factor.
-    stop_distance=np.divide(close-(low-STOP_TICKS*TICK),a,
-        out=np.full(n,np.nan),where=ok)
-    for x in (.60,.80,1.,1.25):
-        add('signal_quality','reference_stop_distance_atr','>=',x,stop_distance)
-    for x in (1.50,2.,2.5,3.):
-        add('signal_quality','reference_stop_distance_atr','<=',x,stop_distance)
-    return vals
-
-
-def accepted_delta(anchor,trades):
-    a={t['signal_index']:t for t in anchor}
-    b={t['signal_index']:t for t in trades}
-    new=b.keys()-a.keys();removed=a.keys()-b.keys();same=b.keys()&a.keys()
-    return dict(anchor_trades=len(a),candidate_trades=len(b),
-        retained_accepted=len(same),newly_eligible_accepted=len(new),
-        removed_accepted=len(removed),new_entries_r=sum(b[k]['result_r'] for k in new),
-        removed_entries_r=sum(a[k]['result_r'] for k in removed),
-        total_delta_r=stats(trades)['total_r']-stats(anchor)['total_r'],
-        interpretation='New entries following full chronology are not an independently tradable strategy')
-
-
-def rolling_worst(cid,ledger,cost):
-    # Full chronological ledger first, slice into completed monthly windows.
-    allrows=rolling(cid,ledger,cost)
-    out=[]
-    for duration in (12,24,36):
-        bucket=[r for r in allrows if r['window_months']==duration]
-        if not bucket:raise RuntimeError('No completed rolling windows')
-        worst=min(bucket,key=lambda r:r['total_r'])
-        with_trade=[r for r in bucket if r['trades']>0]
-        worst_with_trade=min(with_trade,key=lambda r:r['total_r']) if with_trade else None
-        out.append(dict(config_id=cid,assumed_adverse_fill_pips=cost,
-          window_months=duration,completed_windows=len(bucket),
-          zero_trade_windows=sum(r['trades']==0 for r in bucket),
-          worst_window_start_utc=worst['from_utc'],
-          worst_window_end_utc=worst['to_utc'],
-          worst_total_r=worst['total_r'],worst_trades=worst['trades'],
-          worst_with_trade_total_r=(worst_with_trade['total_r'] if worst_with_trade else None),
-          worst_with_trade_start_utc=(worst_with_trade['from_utc'] if worst_with_trade else None)))
-    return out
-
-
-def row_for_candidate(kind,cid,axes,candles,ix,base_2,base_4):
-    tr2,tr4=paired(candles,ix)
-    row=metrics_row(kind,cid,axes,ix,tr2,tr4,stats(base_2))
-    attr=[]
-    for cost,base,tr in ((2,base_2,tr2),(4,base_4,tr4)):
-        delta=accepted_delta(base,tr)
-        attr.append(dict(config_id=cid,assumed_adverse_fill_pips=cost,**axes,**delta))
-        for k,v in delta.items():
-            if k!='interpretation':row[f'{cost}pip_{k}']=v
-    return row,attr,tr2,tr4
-
-
-
-
-
-
-
-# ==============================================================
-# PASS 5 — PREDECLARED JOINT LOCAL CONFIRMATION, NO NEW FILTERS
-# ==============================================================
-
-# ===========================================================
-# PASS 6 — ENTRIES FROZEN BEFORE RR, NO NEW ENTRY SEARCH
-# ===========================================================
-# FROZEN from Pass 5 (not automatically choosing the highest historical R):
-# Primary: central LB60 / B1.50 / R2.25 / preceding 16 M15 rise>=1.50 ATR.
-# Frequency comparator: LB40 / B1.50 / R2.25 / rise>=1.75 ATR.
-# Frozen reference RR3.50. Two and four adverse pip cost assumptions;
-# OANDA MID is NOT observed broker bid/ask history.
-def rally_mask(f,lb,body,rng,rise,base_cache):
-    return (base_cache[lb] & (f['body_atr']>=body) &
-            (f['range_atr']>=rng) & (-f['mom4']>=rise))
-
-RR_LEVELS=(2.50,2.75,3.00,3.25,3.50,3.75,4.00,4.25,4.50)
-RR_REFERENCE=3.50
-FROZEN_GEOMETRIES=(
-    ('CORE_LB60_M1.50',60,1.50,2.25,1.50),
-    ('FREQUENCY_LB40_M1.75',40,1.50,2.25,1.75),
-)
-ARCHIVED_PASS5_CONTROLS={
-    ('CORE_LB60_M1.50',2.): ('a8c9098c68c7123f322145667a74d6191c9b20f6ee51f46dd41a6a12b541280b','d1d0fee3b299eb0240fb5c48629d79d413dd67c968c7e9f0df733597347d6bbf',78,43.62816257539212),
-    ('CORE_LB60_M1.50',4.): ('a8c9098c68c7123f322145667a74d6191c9b20f6ee51f46dd41a6a12b541280b','bacfeb38fbab0272d75e4abe28551cb8ff6500e0426af9d1496a93a4547c08dc',78,36.02554654285602),
-    ('FREQUENCY_LB40_M1.75',2.): ('ef2b798bd616cdf7eb724ddc6e2be2631d41757c44fcefd861999017f6436eb3','2a9d433f202eb6fb8f1119a97e85cb1eb016ddc910dd5ebfeddbf6777e550429',91,46.83913228671294),
-    ('FREQUENCY_LB40_M1.75',4.): ('ef2b798bd616cdf7eb724ddc6e2be2631d41757c44fcefd861999017f6436eb3','c0f83c36d1cc49aabcf8e61e2a933259e80452d7dd451dac4f4ab2752f4f4078',91,37.825233593369575),
-}
-OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_PASS6_OUTPUT_DIR','/tmp/audjpy_short_pass6'))
-OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
-OUTPUT_NAMES=('coverage','archived_bearish_parity','pass5_frozen_control_parity',
- 'rr_sweep','full_accepted_ledgers','accepted_ledger_digests','rr_trade_attribution',
- 'rr_neighbours','paired_cost_stress','calendar_years','periods',
- 'rolling_12_24_36','worst_rolling','methodology','errors')
-OUTS={name:str(OUTPUT_DIR/f'audjpy_short_pass6_{name}.csv') for name in OUTPUT_NAMES}
-BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_PASS6_RR_STANDALONE_RESULTS.zip')
-STATUS=dict(state='not_started',progress=0,message='Awaiting research start',
- orders_supported=False,trading_enabled=False)
-
-def native_full_parity(candles,ix,trades,rr,cost):
-    # Independently replay real-price SELL; verify EVERY accepted trade field.
-    independent=[];p=0
-    while p<len(ix):
-        tr=native_short_outcome(candles,ix[p],rr,cost)
-        if tr is None:p+=1;continue
-        independent.append(tr)
-        p=bisect.bisect_left(ix,tr['exit_index'],lo=p+1)
-    if len(independent)!=len(trades):
-        raise RuntimeError(f'FULL NATIVE TRADE COUNT MISMATCH: {rr} {cost}')
-    for a,b in zip(trades,independent):
-        for key in ('signal_index','exit_index','reference_entry','historical_fill',
-                    'stop','target','result_r','exit_reason'):
-            if isinstance(a[key],(int,float)):
-                if abs(a[key]-b[key])>1e-9:
-                    raise RuntimeError(f'FULL NATIVE PARITY FAILED {key}: RR{rr},cost{cost}')
-            elif a[key]!=b[key]:
-                raise RuntimeError(f'FULL NATIVE PARITY FAILED {key}: RR{rr},cost{cost}')
-    return 'PASS'
-
-def rr_comparison(reference,variant):
-    a={t['signal_index']:t for t in reference}
-    b={t['signal_index']:t for t in variant}
-    retained=a.keys()&b.keys()
-    introduced=b.keys()-a.keys()
-    removed=a.keys()-b.keys()
-    same_r=sum(b[k]['result_r']-a[k]['result_r'] for k in retained)
-    added_r=sum(b[k]['result_r'] for k in introduced)
-    removed_r=sum(a[k]['result_r'] for k in removed)
-    delta=stats(variant)['total_r']-stats(reference)['total_r']
-    if abs(delta-(same_r+added_r-removed_r))>1e-8:
-        raise RuntimeError('RR marginal attribution failed reconciliation')
-    return dict(reference_trades=len(reference),variant_trades=len(variant),
-        common_signals=len(retained),newly_eligible=len(introduced),
-        displaced=len(removed),common_r_difference=same_r,
-        new_entry_r=added_r,displaced_entry_r=removed_r,
-        total_delta_r=delta)
-
-def periods(cid,ledger,cost,rr):
-    first=HISTORY_FIRST
-    windows=[('pre2010',first,datetime(2010,1,1,tzinfo=timezone.utc)),
-       ('2010to2015',datetime(2010,1,1,tzinfo=timezone.utc),datetime(2016,1,1,tzinfo=timezone.utc)),
-       ('2016to2021',datetime(2016,1,1,tzinfo=timezone.utc),datetime(2022,1,1,tzinfo=timezone.utc)),
-       ('2022on',datetime(2022,1,1,tzinfo=timezone.utc),FIXED_END),
-       ('last5y',add_months_utc(FIXED_END,-60),FIXED_END),
-       ('last2y',add_months_utc(FIXED_END,-24),FIXED_END),
-       ('last1y',add_months_utc(FIXED_END,-12),FIXED_END)]
-    return [dict(geometry=cid,rr=rr,assumed_fill_pips=cost,period=name,
-                 from_utc=iso(left),to_utc=iso(right),**stats(subset(ledger,left,right)))
-             for name,left,right in windows]
-
-def trade_row(geometry,rr,cost,t):
-    # Existing mirrored model already outputs REAL positive AUD/JPY short prices.
-    return dict(geometry=geometry,rr=rr,assumed_fill_pips=cost,
-       signal_index=t['signal_index'],exit_index=t['exit_index'],
-       entry_time_utc=t['entry_time_utc'],exit_time_utc=t['exit_time_utc'],
-       reference_entry=t['reference_entry'],historical_fill=t['historical_fill'],
-       stop=t['stop'],target=t['target'],result_r=t['result_r'],
-       exit_reason=t['exit_reason'],
-       fill_is_assumed_not_measured=True)
-
-def run_pass6():
+def chronological_p0(bars, indices, rr, cost):
+    trades=[];k=0
+    while k<len(indices):
+        row=simulate_one(bars,indices[k],rr,cost)
+        if row is None:
+            k+=1;continue
+        trades.append(row)
+        k=bisect.bisect_left(indices,row['exit_index'],lo=k+1)
+    return trades
+
+
+def verify_ledger(reference,actual,description):
+    columns=('signal_index','exit_index','entry_time_utc','exit_time_utc',
+             'reference_entry','historical_fill','stop','target',
+             'result_r','exit_reason')
+    if len(reference)!=len(actual):
+        raise RuntimeError(f'{description}: accepted count mismatch: '
+                           f'{len(actual)} != {len(reference)}')
+    for j,(a,b) in enumerate(zip(reference,actual)):
+        for col in columns:
+            if col in ('signal_index','exit_index'):
+                matches=int(a[col])==int(b[col])
+            elif col in ('entry_time_utc','exit_time_utc','exit_reason'):
+                matches=a[col]==b[col]
+            else:matches=math.isclose(float(a[col]),float(b[col]),
+                                      rel_tol=0,abs_tol=2e-8)
+            if not matches:
+                raise RuntimeError(f'{description}: first mismatch at trade '
+                                   f'{j+1}, {col}: archived={a[col]}, new={b[col]}')
+    return len(columns)*len(reference)
+
+
+def run():
     try:
-        for p in list(OUTS.values())+[BUNDLE]:
-            if os.path.exists(p):os.remove(p)
-        STATUS.update(state='fetch',progress=1,message='Fetching frozen midpoint history; no live trades')
-        candles=fetch('M15',START,FIXED_END,35)
-        if not candles:raise RuntimeError('No OANDA candles')
-        global HISTORY_FIRST
-        HISTORY_FIRST=candles[0]['time']
-        cov=hist_coverage('M15',candles)
-        fp=midpoint_fingerprint(candles,'M15')
-        source_pass=(cov['first_utc']==EXPECTED_FIRST and cov['last_utc']==EXPECTED_LAST
-             and cov['count']==EXPECTED_CANDLES and fp['sha256_midpoint_ohlc']==EXPECTED_SHA)
-        write_csv(OUTS['coverage'],[dict(**cov,
-          sha256_midpoint_ohlc=fp['sha256_midpoint_ohlc'],
-          expected_first_utc=EXPECTED_FIRST,expected_last_utc=EXPECTED_LAST,
-          expected_count=EXPECTED_CANDLES,expected_sha256=EXPECTED_SHA,
-          source_parity='PASS' if source_pass else 'FAIL')])
-        if not source_pass:raise RuntimeError('FROZEN SOURCE PARITY FAILED; no RR results valid')
-        STATUS.update(state='parity',progress=22,message='Archived bearish and frozen Pass5 control checks')
-        n=len(candles)
-        no_htf={k:np.full(n,np.nan) for k in ('close','ema50','ema100','ema200','atr_ratio50')}
-        f=features(candles,no_htf,no_htf,no_htf)
-        old=check_native_short_parity(candles,f)
-        if len(old)!=2 or any(
-           row['raw_signal_sha256']!=EXPECTED_BEARISH_RAW_SHA or
-           row['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[row['assumed_adverse_fill_pips']] or
-           row['accepted_trades']!=21136 or row['raw_native_parity']!='PASS' or
-           row['full_accepted_native_parity']!='PASS' for row in old):
-            raise RuntimeError('ARCHIVED BEARISH CONTROL PARITY FAILED')
-        base_cache={lb:family_mask_mirror(f,'RALLY_REJECTION',lb,0.0)
-                  for _,lb,_,_,_ in FROZEN_GEOMETRIES}
-        original={};control_rows=[];inputs={}
-        for name,lb,body,rng,rise in FROZEN_GEOMETRIES:
-            ix=np.flatnonzero(rally_mask(f,lb,body,rng,rise,base_cache)).tolist()
-            native=np.flatnonzero(family_mask_native(f,'RALLY_REJECTION',lb,.25)
-                  &(f['body_atr']>=body)&(f['range_atr']>=rng)
-                  &(-f['mom4']>=rise)).tolist()
-            if ix!=native:raise RuntimeError('FROZEN NATIVE SIGNAL PARITY FAILED '+name)
-            rawsha=digest_indices(candles,ix);inputs[name]=ix
-            for cost in (2.,4.):
-                BACKTEST_CACHE.clear();OUTCOME_CACHE.clear()
-                tr=backtest(candles,ix,RR_REFERENCE,cost)
-                expected=ARCHIVED_PASS5_CONTROLS[name,cost]
-                ledgerhash=digest_ledger(tr)
-                if (rawsha!=expected[0] or ledgerhash!=expected[1] or
-                   len(tr)!=expected[2] or abs(stats(tr)['total_r']-expected[3])>1e-8):
-                    raise RuntimeError('PASS5 FULL LEDGER PARITY FAILED '+str((name,cost)))
-                native_full_parity(candles,ix,tr,RR_REFERENCE,cost)
-                original[name,cost]=tr
-                control_rows.append(dict(geometry=name,assumed_fill_pips=cost,
-                  rr=RR_REFERENCE,raw_signal_count=len(ix),accepted_trades=len(tr),
-                  total_r=stats(tr)['total_r'],raw_sha256=rawsha,
-                  accepted_ledger_sha256=ledgerhash,
-                  archived_pass5_parity='PASS',native_full_ledger_parity='PASS'))
-        write_csv(OUTS['pass5_frozen_control_parity'],control_rows)
-        STATUS.update(state='rr_sweep',progress=40,message='Frozen entries; RR-only full chronological replay')
-        sweep=[];ledgers=[];hashes=[];rrattr=[];annualrows=[];periodrows=[];rollingrows=[];worstrows=[]
-        planned=len(FROZEN_GEOMETRIES)*len(RR_LEVELS)*2
-        done=0
-        for name,lb,body,rng,rise in FROZEN_GEOMETRIES:
-            ix=inputs[name];rawsha=digest_indices(candles,ix)
+        OUTPUT.mkdir(parents=True,exist_ok=True)
+        reference=archival_reference()
+        update('fetching',5,'Independently retrieving OANDA MID M15 history')
+        bars,sha=fetch_archived_candles()
+        save_csv('coverage',[dict(source='OANDA MID',candles=len(bars),
+            first_utc=iso(bars[0][0]),last_utc=iso(bars[-1][0]),
+            sha256_midpoint_ohlc=sha,archive_sha256=FROZEN_RAW_SHA256,
+            parity='PASS')])
+        update('signals',48,'Independently computing native SELL geometry')
+        atr=atr_wilder(bars)
+        accepted_audit=[];raw_audit=[];summaries=[];complete_ledgers=[]
+        for geometry,lb,body,rng,rise in FROZEN_GEOMETRIES:
+            ix=independent_signals(bars,atr,lb,body,rng,rise)
+            digest=hashlib.sha256(''.join(iso(bars[i][0])+'\n' for i in ix).encode()).hexdigest()
+            frozen_digests=[x for x in reference['digests'] if x['geometry']==geometry]
+            if len(frozen_digests)!=4:raise RuntimeError(geometry+' reference rows missing')
+            if any(x['raw_signal_sha256']!=digest for x in frozen_digests):
+                raise RuntimeError(geometry+' independent raw signal SHA256 mismatch')
+            raw_audit.append(dict(geometry=geometry,independent_raw_signals=len(ix),
+                                  raw_signal_sha256=digest,parity='PASS'))
             for rr in RR_LEVELS:
-                for cost in (2.,4.):
-                    BACKTEST_CACHE.clear();OUTCOME_CACHE.clear()
-                    tr=backtest(candles,ix,rr,cost)
-                    parity=native_full_parity(candles,ix,tr,rr,cost)
-                    sr=stats(tr)
-                    compare=rr_comparison(original[name,cost],tr)
-                    sweep.append(dict(geometry=name,lookback=lb,body_atr_min=body,
-                       range_atr_min=rng,prior16_rise_min_atr=rise,
-                       rr=rr,assumed_fill_pips=cost,raw_signals=len(ix),
-                       full_native_parity=parity,**sr,**compare))
-                    hashes.append(dict(geometry=name,rr=rr,assumed_fill_pips=cost,
-                       accepted_trades=len(tr),raw_signal_sha256=rawsha,
-                       accepted_ledger_sha256=digest_ledger(tr),
-                       full_native_parity=parity))
-                    ledgers.extend(trade_row(name,rr,cost,t) for t in tr)
-                    rrattr.append(dict(geometry=name,rr=rr,assumed_fill_pips=cost,**compare))
-                    annualrows.extend(dict(geometry=name,rr=rr,**r) for r in annual(name,tr,cost))
-                    periodrows.extend(periods(name,tr,cost,rr))
-                    rolls=rolling(name,tr,cost)
-                    rollingrows.extend(dict(geometry=name,rr=rr,**r) for r in rolls)
-                    worstrows.extend(dict(geometry=name,rr=rr,**r) for r in rolling_worst(name,tr,cost))
-                    done+=1
-                    STATUS.update(progress=40+int(52*done/planned),
-                     message=f'Full replay {done}/{planned}: {name},RR{rr},cost{cost}')
-        if len(sweep)!=planned or len(hashes)!=planned:
-            raise RuntimeError('INCOMPLETE RR × GEOMETRY × COST GRID')
-        write_csv(OUTS['rr_sweep'],sweep)
-        write_csv(OUTS['full_accepted_ledgers'],ledgers)
-        write_csv(OUTS['accepted_ledger_digests'],hashes)
-        write_csv(OUTS['rr_trade_attribution'],rrattr)
-        write_csv(OUTS['calendar_years'],annualrows)
-        write_csv(OUTS['periods'],periodrows)
-        write_csv(OUTS['rolling_12_24_36'],rollingrows)
-        write_csv(OUTS['worst_rolling'],worstrows)
-        neighbours=[];pairedcost=[]
-        tbl={(r['geometry'],r['rr'],r['assumed_fill_pips']):r for r in sweep}
-        for name,_,_,_,_ in FROZEN_GEOMETRIES:
-            for cost in (2.,4.):
-                for before,after in zip(RR_LEVELS,RR_LEVELS[1:]):
-                    a=tbl[name,before,cost];b=tbl[name,after,cost]
-                    neighbours.append(dict(geometry=name,assumed_fill_pips=cost,
-                      from_rr=before,to_rr=after,from_trades=a['trades'],
-                      to_trades=b['trades'],from_total_r=a['total_r'],
-                      to_total_r=b['total_r'],from_dd_r=a['max_drawdown_r'],
-                      to_dd_r=b['max_drawdown_r']))
-            for rr in RR_LEVELS:
-                a=tbl[name,rr,2.];b=tbl[name,rr,4.]
-                pairedcost.append(dict(geometry=name,rr=rr,
-                 trades_2pip=a['trades'],trades_4pip=b['trades'],
-                 total_r_2pip=a['total_r'],total_r_4pip=b['total_r'],
-                 delta_r=b['total_r']-a['total_r'],
-                 pf_2pip=a['profit_factor'],pf_4pip=b['profit_factor'],
-                 dd_2pip=a['max_drawdown_r'],dd_4pip=b['max_drawdown_r']))
-        write_csv(OUTS['rr_neighbours'],neighbours)
-        write_csv(OUTS['paired_cost_stress'],pairedcost)
-        write_csv(OUTS['methodology'],[
-           dict(topic='SCOPE',detail='RESEARCH ONLY. No executor, strategy probe, webhook, OANDA orders, or Portfolio28 changes.'),
-           dict(topic='SOURCE',detail=f'Frozen OANDA M15 MID {EXPECTED_FIRST}..{EXPECTED_LAST}, {EXPECTED_CANDLES} candles; SHA {EXPECTED_SHA}. Fail closed.'),
-           dict(topic='FROZEN_ENTRIES',detail=str(FROZEN_GEOMETRIES)+'; standalone core and frequency comparator; no entry optimization'),
-           dict(topic='RR',detail=f'{RR_LEVELS}; reference {RR_REFERENCE}; no RR auto-selection; each RR/cost replays strategy pyramiding=0 chronologically'),
-           dict(topic='EXECUTION',detail='True SELL ref signal close; stop high+10 ticks, target from reference risk; adverse fill -2/-4 pips; realised R from actual assumed fill-to-stop risk; MID high/low tie closer to open, STOP tie; exit next candle; exit candle signal eligible.'),
-           dict(topic='PARITY',detail='Historical MID source fingerprint, bearish archive, complete Pass5 core/frequency accepted-ledger SHA256 and independently computed real-price SELL full field parity at each RR/cost.'),
-           dict(topic='COST',detail='2-/4-pip adverse fills are ASSUMED backtest costs, not historical observed spread or actual live slippage; no extra spread added.'),
-           dict(topic='REPORTS',detail='Full accepted trade ledgers; RR vs RR3.50 retained/new/displaced attribution, local RR neighbours, paired cost, calendar years, eras, trailing 1/2/5 years, monthly-start completed 12/24/36 windows incl zero-trade counts and worst windows.'),
-           dict(topic='STATUS',detail='All historical data repeatedly researched in sample. No independent OOS; standalone historical RR research is NOT live deployment or exact 28->29 portfolio admission.'),
-           dict(topic='NEXT',detail='If RR region is stable, freeze written primary and comparator and independently confirm full accepted ledgers then exact Portfolio28->29. No new entry filters or chasing RR maxima.')
+                for cost in COSTS:
+                    label=f'{geometry}|RR{rr:.2f}|{cost:g}pip'
+                    rows=chronological_p0(bars,ix,rr,cost)
+                    control=[x for x in reference['specs'] if
+                              x['geometry']==geometry and float(x['rr'])==rr and
+                              float(x['assumed_fill_pips'])==cost]
+                    archived=[x for x in reference['accepted_ledgers'] if
+                              x['geometry']==geometry and float(x['rr'])==rr and
+                              float(x['assumed_fill_pips'])==cost]
+                    if len(control)!=1 or len(rows)!=int(control[0]['trades']):
+                        raise RuntimeError(label+' summary control mismatch')
+                    fields=verify_ledger(archived,rows,label)
+                    total=sum(x['result_r'] for x in rows)
+                    if not math.isclose(total,float(control[0]['total_r']),
+                                        rel_tol=0,abs_tol=2e-7):
+                        raise RuntimeError(label+' total-R control mismatch')
+                    winners=sum(x['result_r']>0 for x in rows)
+                    if winners!=int(control[0]['winners']):
+                        raise RuntimeError(label+' winner count mismatch')
+                    accepted_audit.append(dict(geometry=geometry,rr=rr,
+                        assumed_fill_pips=cost,raw_signals=len(ix),trades=len(rows),
+                        tested_fields=fields,total_r=total,full_field_parity='PASS'))
+                    summaries.append(dict(geometry=geometry,rr=rr,
+                        assumed_fill_pips=cost,raw_signals=len(ix),trades=len(rows),
+                        winners=winners,total_r=total,
+                        reference_archived_total_r=control[0]['total_r'],
+                        full_field_parity='PASS',
+                        assumption_not_observed_spread=True))
+                    complete_ledgers.extend(dict(geometry=geometry,rr=rr,
+                        assumed_fill_pips=cost,**row) for row in rows)
+                    update('confirming',50+int(45*len(accepted_audit)/8),
+                           f'Independent field parity PASS: {label}')
+        save_csv('raw_signal_parity',raw_audit)
+        save_csv('full_accepted_ledger_parity',accepted_audit)
+        save_csv('independent_standalone_summary',summaries)
+        save_csv('complete_independent_ledgers',complete_ledgers)
+        save_csv('methodology',[
+            dict(topic='SOURCE',detail='Frozen 546907 OANDA MID candles, exact source SHA parity; archived through 2026-09-24T19:00Z'),
+            dict(topic='ENTRY',detail=str(FROZEN_GEOMETRIES)+' native SELL, prior16 completed M15 rise, no new filter/timing search'),
+            dict(topic='RR',detail='Fixed frozen control 3.50 and predeclared interior provisional 4.00; both at assumed 2/4 adverse pips'),
+            dict(topic='SCOPE',detail='Independent historical implementation parity only; repeated in-sample data, NOT new unseen OOS'),
+            dict(topic='NEXT',detail='Exact Portfolio28->29 requires AUDJPY LONG and SHORT raw chronological signal streams; nonhedging same-pair opposite entries may change incumbent acceptance. Do not simply append short accepted trades.'),
+            dict(topic='READ_ONLY',detail='GET historical OANDA candles ONLY; no account trading API, executor/probe, orders or webhooks'),
         ])
-        zip_outputs()
-        STATUS.update(state='complete',progress=100,source_parity='PASS',
-          pass5_full_ledger_parity='PASS',all_rr_native_parity='PASS',
-          rr_configuration_rows=len(sweep),orders_supported=False,trading_enabled=False,
-          results='/audjpy-short-pass6/results',
-          message='Pass6 complete. No automatic RR/strategy selection and NO live changes.')
-    except Exception as exc:
-        STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
-          orders_supported=False,trading_enabled=False)
-        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,
-          error=str(exc),traceback=STATUS['traceback'],progress=STATUS['progress'])])
-        zip_outputs()
-        print(STATUS['traceback'],flush=True)
+        package()
+        update('complete',100,'Independent raw signals and ALL 8 complete accepted ledgers matched frozen Pass6',
+               result_path='/audjpy-short-pass7/results',
+               independent_full_field_parity='PASS',
+               portfolio_28_to_29_tested=False)
+    except Exception as error:
+        save_csv('error_report',[dict(error_type=type(error).__name__,
+                        message=str(error),traceback=traceback.format_exc(),
+                        orders_supported=False,portfolio28_unchanged=True)])
+        package()
+        update('error',100,str(error),traceback=traceback.format_exc(),
+               independent_full_field_parity='FAIL',portfolio_28_to_29_tested=False)
 
-@app.route('/')
-def rr_home():
-    return jsonify(service='AUDJPY M15 SHORT Pass6 RR-only standalone RESEARCH',
-      status='/audjpy-short-pass6/status',results='/audjpy-short-pass6/results',
-      orders_supported=False,trading_enabled=False)
 
-@app.route('/audjpy-short-pass6/status')
-def rr_status():return jsonify(STATUS)
+@app.get('/')
+def index():
+    return jsonify(service='AUD/JPY M15 SHORT Pass7 independent confirmation',
+                   status='/audjpy-short-pass7/status',
+                   results='/audjpy-short-pass7/results',
+                   orders_supported=False,trading_enabled=False,
+                   portfolio28_unchanged=True)
 
-@app.route('/audjpy-short-pass6/results')
-def rr_results():return download(BUNDLE)
+
+@app.get('/audjpy-short-pass7/status')
+def get_status():
+    with STATUS_LOCK:return jsonify(dict(STATUS))
+
+
+@app.get('/audjpy-short-pass7/results')
+def get_results():
+    if not BUNDLE.is_file():
+        return jsonify(status='not_ready',message='Wait for complete or error'),404
+    return send_file(BUNDLE.resolve(),as_attachment=True,download_name=BUNDLE.name)
+
 
 if __name__=='__main__':
-    threading.Thread(target=run_pass6,daemon=True).start()
-    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
-            debug=False,use_reloader=False)
+    threading.Thread(target=run,daemon=True).start()
+    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),debug=False,use_reloader=False)
