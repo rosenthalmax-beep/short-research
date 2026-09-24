@@ -948,7 +948,7 @@ def run_research():
         h4=fetch('H4',WARMUP,NOW,700)
         daily=fetch('D',WARMUP,NOW,3500)
         if not (h1 and h4 and daily):raise RuntimeError('No complete H1/H4/D data')
-        write_csv(OUTS['coverage'],[dict(**hist_coverage(k,v),**midpoint_fingerprint(v,k)) for k,v in
+        write_csv(OUTS['coverage'],[{**hist_coverage(k,v),**midpoint_fingerprint(v,k)} for k,v in
             (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
         STATUS.update(state='features',progress=26,message='Computing past-only indicators')
         times=[c['time'] for c in candles]
