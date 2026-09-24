@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 LONG — ENGULFING PASS 5: LOCAL PLATEAU CONFIRMATION.
+"""AUD/JPY M15 LONG — ENGULFING PASS 6: FROZEN RR / STANDALONE VALIDATION.
 
-Frozen exact bullish engulfing. 60 local LB x distance x range tests,
-plus nine separate momentum-neighbour diagnostics at three frozen geometries.
+Frozen exact bullish engulfing. TWO predeclared LB60 geometries; RR
+2.50 through 4.50 in 0.25 increments. No new entry rules or session selection.
 
 Read-only OANDA midpoint research, NOT a live system. 2/4-pip adverse entry
 are cost assumptions, NOT observations of AUD/JPY bid/ask history. No RR,
@@ -1325,128 +1325,248 @@ def boundaries():
              action='No deployment or strategy lock; all history repeatedly inspected.')]
 
 
+# ============================================================
+# PASS 6 — FROZEN GEOMETRIES, RR SWEEP AND STANDALONE REPORTS
+# ============================================================
+# All in-sample history repeatedly viewed; NO untouched historical holdout.
+# All previous entry-filter discovery is complete. This study must NEVER
+# mutate the live portfolio/executor/probe, or auto-pick a winner.
+ARCHIVE_PASS5_CUTOFF=datetime(2026,9,23,22,0,tzinfo=timezone.utc)
+ARCHIVE_PASS5_CANDLES=546823
+FROZEN_PASS5_CORE=((2.0, 95, 75.24561518313268, '5f27b66a255f6d93b9a27753ecb3edd7b6d21a7061effa26ca2b57fd5349a22f'), (4.0, 95, 60.16303652433871, 'cc45fa1b6bb65ad2cfb6181b94b7312da692d5d1fabbdcb84652ea141dcf2e58'))
+FROZEN_PASS5_FREQUENCY=((2.0, 133, 77.21999148240585), (4.0, 133, 58.27039916017875))
+FROZEN_GEOMETRIES=(
+    ('CORE_D0p50',.50),
+    ('FREQUENCY_D0p75',.75),
+)
+RR_LEVELS=(2.50,2.75,3.00,3.25,3.50,3.75,4.00,4.25,4.50)
+assert len(RR_LEVELS)*len(FROZEN_GEOMETRIES)==18
+RR_ANCHOR=3.50
+COST_LEVELS=(2.0,4.0)
+OUTPUT_DIR=Path(os.getenv('AUDJPY_ENGULF_PASS6_OUTPUT_DIR','/tmp/audjpy_engulf_pass6'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTS={name:str(OUTPUT_DIR/f'audjpy_engulf_pass6_{name}.csv') for name in (
+    'coverage','raw_engulf_parity','anchor_parity',
+    'pass2_frozen_controls_parity','pass3_frozen_controls_parity',
+    'pass4_frozen_controls_parity','pass5_archived_parity',
+    'rr_full_and_periods','rr_all_accepted_trades','rr_rolling_summary','rr_calendar_years',
+    'rr_reference_trade_attribution','rr_neighbourhood',
+    'rr_paired_cost_stress','frozen_reference_ledgers',
+    'study_protocol','errors')}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_LONG_ENGULFING_PASS6_RESULTS.zip')
+
+
+def parity_pass5(candles,f,e,base):
+    n=bisect.bisect_right(f['times'],ARCHIVE_PASS5_CUTOFF)
+    if n!=ARCHIVE_PASS5_CANDLES or f['times'][n-1]!=ARCHIVE_PASS5_CUTOFF:
+        raise RuntimeError('Pass5 candle prefix mismatch: expected 546823 through '
+            '2026-09-23T22:00:00Z; got '+str(n))
+    rows=[]
+    for name,d in FROZEN_GEOMETRIES:
+        ix=np.flatnonzero(broad5_mask(f,e,base,lb=60,d=d,rng=1.80,mom=.50)[:n]).tolist()
+        for cost in COST_LEVELS:
+            ledger=backtest(candles[:n],ix,RR_ANCHOR,cost)
+            got=stats(ledger)
+            if d==.50:
+                expected_n,expected_r,expected_sha=next((k,r,h) for c,k,r,h in FROZEN_PASS5_CORE if c==cost)
+                digest=trade_digest(ledger)
+                ok=(got['trades']==expected_n and abs(got['total_r']-expected_r)<1e-7
+                    and digest==expected_sha)
+                parity_scope='full accepted signal/exit/outcome hash'
+            else:
+                expected_n,expected_r=next((k,r) for c,k,r in FROZEN_PASS5_FREQUENCY if c==cost)
+                digest='NOT ARCHIVED'
+                ok=(got['trades']==expected_n and abs(got['total_r']-expected_r)<1e-7)
+                parity_scope='counts and total R only; no archived frequency digest'
+            rows.append(dict(geometry=name,cost_pips=cost,expected_trades=expected_n,
+                actual_trades=got['trades'],expected_r=expected_r,actual_r=got['total_r'],
+                actual_digest=digest,scope=parity_scope,result='PASS' if ok else 'FAIL'))
+            if not ok:
+                write_csv(OUTS['pass5_archived_parity'],rows)
+                raise RuntimeError('Archived Pass5 parity FAIL at '+name+' / '+str(cost)+'pip')
+    write_csv(OUTS['pass5_archived_parity'],rows)
+    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+    return rows
+
+
+def calendar_years(config_id,cost,ledger):
+    grouped=defaultdict(list)
+    for t in ledger:grouped[t['entry_time'].year].append(t)
+    first=HISTORY_FIRST.year;last=NOW.year
+    return [dict(config_id=config_id,cost_pips=cost,year=year,
+                 complete_year=first<year<last,**stats(grouped[year]))
+            for year in range(first,last+1)]
+
+
+def pair_rr_ledger_attribution(base,variant):
+    """Changing RR changes exits AND which subsequent signals are p0 eligible.
+    Common signal IDs can have DIFFERENT outcomes; account for that explicitly.
+    """
+    old=sigmap(base);new=sigmap(variant)
+    oldkeys=set(old);newkeys=set(new)
+    common=oldkeys&newkeys
+    lost=oldkeys-newkeys;added=newkeys-oldkeys
+    lost_r=sum(old[k]['result_r'] for k in lost)
+    added_r=sum(new[k]['result_r'] for k in added)
+    common_r=sum(new[k]['result_r']-old[k]['result_r'] for k in common)
+    actual=sum(t['result_r'] for t in variant)-sum(t['result_r'] for t in base)
+    return dict(reference_trades=len(base),variant_trades=len(variant),
+        retained_signal_entries=len(common),removed_accepted=len(lost),
+        removed_winners=sum(old[k]['result_r']>0 for k in lost),
+        removed_losers=sum(old[k]['result_r']<0 for k in lost),
+        removed_r=lost_r,newly_eligible=len(added),
+        newly_eligible_winners=sum(new[k]['result_r']>0 for k in added),
+        newly_eligible_losers=sum(new[k]['result_r']<0 for k in added),
+        newly_eligible_r=added_r,common_signal_outcome_delta_r=common_r,
+        actual_delta_r=actual,identity_and_pnl_reconcile=abs(added_r-lost_r+common_r-actual)<1e-7)
+
+
+def rr_neighbourhood(rows):
+    out=[]
+    for geom in [a for a,_ in FROZEN_GEOMETRIES]:
+        v=sorted((r for r in rows if r['geometry']==geom),key=lambda r:r['rr'])
+        for a,b in zip(v,v[1:]):
+            out.append(dict(geometry=geom,rr_from=a['rr'],rr_to=b['rr'],
+                trades_2pip_from=a['2pip_trades'],trades_2pip_to=b['2pip_trades'],
+                r_2pip_from=a['2pip_total_r'],r_2pip_to=b['2pip_total_r'],
+                r_4pip_from=a['4pip_total_r'],r_4pip_to=b['4pip_total_r'],
+                dd_4pip_from=a['4pip_max_drawdown_r'],
+                dd_4pip_to=b['4pip_max_drawdown_r'],
+                weak_era_4pip_from=a['4pip_2016to2021_total_r'],
+                weak_era_4pip_to=b['4pip_2016to2021_total_r'],
+                last2y_4pip_from=a['4pip_last2y_total_r'],
+                last2y_4pip_to=b['4pip_last2y_total_r']))
+    return out
+
+
+def paired_stress(rows):
+    return [dict(geometry=r['geometry'],rr=r['rr'],
+        trades_at_2pip=r['2pip_trades'],trades_at_4pip=r['4pip_trades'],
+        total_r_2pip=r['2pip_total_r'],total_r_4pip=r['4pip_total_r'],
+        stress_delta_r=r['4pip_total_r']-r['2pip_total_r'],
+        wins_at_2pip=r['2pip_winners'],wins_at_4pip=r['4pip_winners'],
+        stop_dd_2pip=r['2pip_max_drawdown_r'],stop_dd_4pip=r['4pip_max_drawdown_r'])
+        for r in rows]
+
+
 def run_research():
     global HISTORY_FIRST
     try:
         for path in list(OUTS.values())+[BUNDLE]:Path(path).unlink(missing_ok=True)
-        STATUS.update(state='fetch',progress=1,message='Read-only AUD/JPY M15, H1/H4/D data')
+        STATUS.update(state='fetch',progress=1,message='Read-only AUD/JPY M15 and completed H1/H4/D')
         candles=fetch('M15',START,NOW,35)
-        if len(candles)<PASS4_CANDLES:raise RuntimeError('Not enough history for Pass4 parity')
+        if len(candles)<ARCHIVE_PASS5_CANDLES:raise RuntimeError('Insufficient M15 data')
         HISTORY_FIRST=candles[0]['time']
-        STATUS.update(state='fetch',progress=13,message='Completed H1/H4/D context for archived parity')
+        STATUS.update(state='fetch',progress=12,message='Fetching HTF context for exact historical parity')
         h1=fetch('H1',WARMUP,NOW,180)
         h4=fetch('H4',WARMUP,NOW,700)
         daily=fetch('D',WARMUP,NOW,3500)
-        if not (h1 and h4 and daily):raise RuntimeError('Missing completed HTF history')
+        if not (h1 and h4 and daily):raise RuntimeError('Missing H1/H4/D candles')
         write_csv(OUTS['coverage'],[hist_coverage(k,v) for k,v in
-              (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
-        STATUS.update(state='features',progress=25,message='Building exact engulfing and frozen features')
+            (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
+        STATUS.update(state='features',progress=25,message='Rebuilding unchanged engulfing signal features')
         ts=[x['time'] for x in candles]
         f=features(candles,align_htf(ts,htf_state(h1)),
-           align_htf(ts,htf_state(h4)),align_htf(ts,htf_state(daily)))
+            align_htf(ts,htf_state(h4)),align_htf(ts,htf_state(daily)))
         ensure_local_lookbacks(f)
-        e=make_extra_features(f); base=engulf_base(f)
-        for lb in LOCAL_LBS:
-            if lb not in f['structure_dist_low']:
-                raise RuntimeError('Missing lookback in frozen feature cache: '+str(lb))
-        STATUS.update(state='parity',progress=34,message='Archived raw, anchors, Pass2/3/4 controls')
+        e=make_extra_features(f)
+        base=engulf_base(f)
+        STATUS.update(state='parity',progress=34,message='Original raw and Pass1–5 controls')
         raw_engulf_parity(candles,f)
         anchor_parity(candles,f,base)
         pass2_controls_parity(candles,f,e,base)
         pass3_frozen_parity(candles,f,e,base)
         frozen_pass4_parity(candles,f,e,base)
-        OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        parity_pass5(candles,f,e,base)
+        STATUS.update(state='rr',progress=47,message='18 frozen geometry × RR configurations')
         raw_stats=stats(backtest(candles,np.flatnonzero(base).tolist(),RR_FIXED,PRIMARY_COST))
         OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        ctrls={}; controls=[];ctl_ledgers=[];rolling=[]
-        for rng,mom,_,__,___ in FROZEN_PASS4:
-            mask=broad5_mask(f,e,base,rng=rng,mom=mom)
-            ix=np.flatnonzero(mask).tolist()
-            t2,t4=evaluate(candles,ix)
-            key=f'ARCHIVE_R{rng}_M{mom}'
-            ctrls[(rng,mom)]=(t2,t4)
-            controls.append(metrics_row('PASS4_ARCHIVED_CONTROL',key,
-                dict(range_atr_min=rng,mom48_atr_min=mom,lookback=60,
-                     distance_atr_max=.50,body_atr_min=1.00),ix,t2,t4,raw_stats))
-            for cost,trades in ((2.,t2),(4.,t4)):
-                rolling.extend(rolling_summary(key,trades,cost))
-                if rng==1.80 and mom==.50:
-                    for trade in trades:
-                        ctl_ledgers.append(dict(control_id=key,**trade))
-        write_csv(OUTS['frozen_full_history_controls'],controls)
-        write_csv(OUTS['control_trade_ledgers'],ctl_ledgers)
-        STATUS.update(state='grid',progress=51,message='60 local settings plus 9 momentum diagnostics')
-        local=[];momrows=[];attrib=[]
-        centre2,centre4=ctrls[(1.80,.50)]
-        for j,cfg in enumerate(configurations(f,e,base),1):
-            ix=np.flatnonzero(cfg['mask']).tolist()
-            tr2,tr4=evaluate(candles,ix)
-            row=metrics_row('PASS5_EXPLORATORY',cfg['config_id'],
-                dict(section=cfg['section'],**cfg['axes']),ix,tr2,tr4,raw_stats)
-            (local if cfg['section']=='LOCAL_3D_PLATEAU' else momrows).append(row)
-            for cost,tr,ctrl in ((2.,tr2,centre2),(4.,tr4,centre4)):
-                a=attribution(ctrl,tr)
-                if not a['ledger_change_reconciles']:
-                    raise RuntimeError('Pyramiding-zero attribution failed '+cfg['config_id'])
-                attrib.append(dict(config_id=cfg['config_id'],section=cfg['section'],
-                      cost_pips=cost,control_id='ARCHIVE_R1.8_M0.5',
-                      **cfg['axes'],**a))
-                rolling.extend(rolling_summary(cfg['config_id'],tr,cost))
-            if j%10==0 or j==TOTAL_LOCAL+TOTAL_MOM:
-                write_csv(OUTS['local_3d_geometry'],local)
-                write_csv(OUTS['momentum_checks'],momrows)
-                write_csv(OUTS['p0_trade_attribution'],attrib)
-                STATUS.update(progress=51+int(42*j/(TOTAL_LOCAL+TOTAL_MOM)),
-                       message=f'Completed {j}/{TOTAL_LOCAL+TOTAL_MOM}: {cfg["section"]}')
-            if j%24==0:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if len(local)!=60 or len(momrows)!=9 or len(attrib)!=138:
-            raise RuntimeError(f'Incomplete grid {len(local)}+{len(momrows)} attribution {len(attrib)}')
-        write_csv(OUTS['local_3d_geometry'],local)
-        write_csv(OUTS['momentum_checks'],momrows)
-        write_csv(OUTS['p0_trade_attribution'],attrib)
-        write_csv(OUTS['rolling_summary'],rolling)
-        adj=one_axis_neighbours(local)
-        write_csv(OUTS['local_one_axis_neighbours'],adj)
-        write_csv(OUTS['boundary_register'],boundaries())
-        write_csv(OUTS['methodology'],[
-          dict(topic='SCOPE',detail='Read only; exact AUD/JPY M15 bullish engulfing LONG, frozen 27 strategies not loaded or modified.'),
-          dict(topic='ARCHIVE',detail='Pass4 prefix 546822 candles through 2026-09-23 21:45 UTC; seven aggregate controls and central full trade identity/result hashes.'),
-          dict(topic='GEOMETRY',detail='60 Cartesian settings LB50/60/70 × distance .40/.50/.60/.75 × range 1.75/1.8/1.85/1.9/2.0; body1.00 prior192-M15 momentum +.50; RR3.5 fixed.'),
-          dict(topic='MOMENTUM',detail='Nine separate frozen representative geometries × prior-192-M15-bar momentum thresholds -0.50/0.25/0.50; signal candle excluded, not necessarily 48 elapsed hours over holidays.'),
-          dict(topic='COSTS',detail='JPY pip=.01 tick=.001; BUY reference signal close; stop low-10 ticks; target reference risk×3.5; 2- and 4-pip adverse-entry hypothetical costs; actual R from filled risk.'),
-          dict(topic='P0',detail='Chronological pyramiding-zero, same exit candle signal eligible; trades removed AND newly eligible reported, NOT ledger deletion.'),
-          dict(topic='VALIDATION',detail='Full history repeatedly used for discovery; descriptive era and rolling statistics in-sample, not independent OOS; no RR, timing or portfolio search.'),
-          dict(topic='STOP RULE',detail='If edge moves to tested bound, mark unresolved, do not declare optimal and do not add ad hoc configurations in this run.')])
+        main=[];rolling=[];calendar=[];attribution=[];refledgers=[];alltrades=[]
+        control={}
+        masks={name:np.flatnonzero(broad5_mask(
+            f,e,base,lb=60,d=d,rng=1.80,mom=.50)).tolist()
+            for name,d in FROZEN_GEOMETRIES}
+        for geometry,dist in FROZEN_GEOMETRIES:
+            indices=masks[geometry]
+            control[geometry]={cost:backtest(candles,indices,RR_ANCHOR,cost)
+                               for cost in COST_LEVELS}
+            for cost,ledger in control[geometry].items():
+                for tr in ledger:refledgers.append(dict(geometry=geometry,cost_pips=cost,**{
+                    k:v for k,v in tr.items() if k not in ('cost_pips',)}))
+        write_csv(OUTS['frozen_reference_ledgers'],refledgers)
+        for geom_i,(geometry,dist) in enumerate(FROZEN_GEOMETRIES):
+            indices=masks[geometry]
+            for j,rr in enumerate(RR_LEVELS):
+                cid=geometry+'_RR'+str(rr).replace('.','p')
+                trials={cost:backtest(candles,indices,rr,cost) for cost in COST_LEVELS}
+                row=metrics_row('FROZEN_ENTRY_RR_STUDY',cid,
+                    dict(geometry=geometry,lookback=60,distance_atr_max=dist,
+                         body_atr_min=1.0,range_atr_min=1.80,
+                         prior_192bar_momentum_min=.50,rr=rr),
+                    indices,trials[2.0],trials[4.0],raw_stats)
+                main.append(row)
+                for cost,ledger in trials.items():
+                    for trade in ledger:
+                        alltrades.append(dict(config_id=cid,geometry=geometry,**trade))
+                    a=pair_rr_ledger_attribution(control[geometry][cost],ledger)
+                    if not a['identity_and_pnl_reconcile']:
+                        raise RuntimeError('RR attribution failed '+cid+'/'+str(cost))
+                    attribution.append(dict(config_id=cid,geometry=geometry,rr=rr,
+                        cost_pips=cost,**a))
+                    rolling.extend(rolling_summary(cid,ledger,cost))
+                    calendar.extend(calendar_years(cid,cost,ledger))
+                write_csv(OUTS['rr_full_and_periods'],main)
+                STATUS.update(progress=47+int(45*(geom_i*len(RR_LEVELS)+j+1)/18),
+                    message=f'Completed {geom_i*9+j+1}/18: {cid}')
+                if j%3==2:
+                    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if len(main)!=18 or len(rolling)!=108 or len(attribution)!=36:
+            raise RuntimeError('Expected 18 RR rows, 108 rolling rows and 36 attribution rows')
+        write_csv(OUTS['rr_full_and_periods'],main)
+        write_csv(OUTS['rr_all_accepted_trades'],alltrades)
+        write_csv(OUTS['rr_rolling_summary'],rolling)
+        write_csv(OUTS['rr_calendar_years'],calendar)
+        write_csv(OUTS['rr_reference_trade_attribution'],attribution)
+        write_csv(OUTS['rr_neighbourhood'],rr_neighbourhood(main))
+        write_csv(OUTS['rr_paired_cost_stress'],paired_stress(main))
+        write_csv(OUTS['study_protocol'],[
+            dict(topic='SCOPE',detail='READ ONLY. No orders, executor, probe, Portfolio27 changes, or strategy selection.'),
+            dict(topic='GEOMETRY',detail='Two predeclared exact bullish engulfing geometries: LB60; previous-low distance <=0.50 or <=0.75 ATR; body>=1.00 ATR; range>=1.80 ATR; previous 192 M15-bar price rise>=0.50 ATR.'),
+            dict(topic='RR_SWEEP',detail=str(RR_LEVELS)+' (2.50 to 4.50 step 0.25), each geometry unchanged.'),
+            dict(topic='PRICE',detail='AUD/JPY 0.01 pip, 0.001 tick. Reference signal close; assumed adverse entry fill +2 or +4 pips; stop=signal low minus 10 ticks; target=reference close+RR*(reference close-stop).'),
+            dict(topic='EXECUTION',detail='Exit starts next M15 candle, closer-to-open same-bar tie, exit-candle reentry, strategy pyramiding zero; RR variation changes accepted signal stream.'),
+            dict(topic='TIME',detail='Prior 192 M15-bar momentum is 48 market hours, not necessarily 48 elapsed hours across market breaks. Splits apply after full chronological replay.'),
+            dict(topic='ROLLING',detail='Monthly-start completed 12/24/36-month windows from archived history with no reinitialised p0.'),
+            dict(topic='SAMPLE',detail='Entire past history repeatedly examined: all backtest comparisons are exploratory in-sample; no historical independent OOS claim.'),
+            dict(topic='COST',detail='2 and 4 pip entries are assumed, NOT measured AUD/JPY historical bid/ask costs. No full 27->28 cost-stressed replay.'),
+            dict(topic='NEXT',detail='After results: inspect RR neighbourhood and weak periods; predeclare standalone freeze, independently reproduce, forward-test then (only if justified) exact portfolio replay. Do not auto-select historical best RR.'),
+        ])
         zip_outputs()
-        STATUS.update(state='complete',progress=100,local_configurations=len(local),
-            momentum_configurations=len(momrows),axis_neighbour_pairs=len(adj),
-            raw_engulf_parity='PASS',anchor_parity='PASS',
-            pass2_controls_parity='PASS',pass3_controls_parity='PASS',
-            pass4_controls_parity='PASS',orders_supported=False,trading_enabled=False,
-            result_path='/audjpy-engulfing-pass5/results',
-            message='Pass5 done: 60 local grid + nine momentum sidecars, no strategy selected.')
-    except Exception as ex:
-        STATUS.update(state='error',message=str(ex),traceback=traceback.format_exc(),
-                      orders_supported=False,trading_enabled=False)
-        try:
-            write_csv(OUTS['errors'],[dict(error=str(ex),traceback=STATUS['traceback'])])
-            zip_outputs()
-        finally:
-            print(STATUS['traceback'],flush=True)
+        STATUS.update(state='complete',progress=100,rr_configurations=len(main),
+            costs_per_configuration=len(COST_LEVELS),raw_parity='PASS',
+            archived_pass5_parity='PASS',orders_supported=False,trading_enabled=False,
+            result_path='/audjpy-engulfing-pass6/results',
+            message='Pass6 completed; two frozen geometries × nine RR; no strategy automatically selected')
+    except Exception as exc:
+        STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
+             orders_supported=False,trading_enabled=False)
+        write_csv(OUTS['errors'],[dict(error=str(exc),traceback=STATUS['traceback'])])
+        zip_outputs()
+        print(STATUS['traceback'],flush=True)
+
 
 @app.route('/')
-def pass5_home():
-    return jsonify(service='AUD/JPY M15 LONG engulfing Pass5, research only',
-       status='/audjpy-engulfing-pass5/status',results='/audjpy-engulfing-pass5/results',
-       orders_supported=False,trading_enabled=False)
+def pass6_home():return jsonify(service='AUD/JPY M15 LONG engulfing Pass6 RR research',
+    status='/audjpy-engulfing-pass6/status',results='/audjpy-engulfing-pass6/results',
+    orders_supported=False,trading_enabled=False)
 
-@app.route('/audjpy-engulfing-pass5/status')
-def pass5_status():return jsonify(STATUS)
+@app.route('/audjpy-engulfing-pass6/status')
+def pass6_status():return jsonify(STATUS)
 
-@app.route('/audjpy-engulfing-pass5/results')
-def pass5_results():return download(BUNDLE)
+@app.route('/audjpy-engulfing-pass6/results')
+def pass6_results():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=run_research,daemon=True,name='audjpy-pass5').start()
+    threading.Thread(target=run_research,daemon=True,name='audjpy-pass6').start()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
             debug=False,use_reloader=False)
