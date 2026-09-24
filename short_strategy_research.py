@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 SHORT — alternative mechanism discovery, independent Pass 1B.
+"""AUD/JPY M15 SHORT — template Pass 3 local plateau & limited interactions.
 
-Research ONLY: no webhook, no OANDA orders, no executor or live strategy mutation.
-After bearish engulfing failed the first structural/cost gate, test SIX
-PREDECLARED distinct causal short-entry families. Do not attempt to rescue the
-failed engulfing branch with ex post filters; do not select winner automatically.
-
-Hard controls: frozen Sep 24 2026 19:00 UTC complete MID source fingerprint;
-JPY tick .001, pip .01; short close reference; stop = signal high + 10
-pricing ticks; target reference minus 3.50 * reference-to-stop risk;
-assumed SELL fills reference minus 2/4 pips, stressed results at BOTH;
-chronological pyramiding zero, exit on next or later M15 candle, tie nearer
-to open (equal STOP); exact exit-candle signal may be eligible.
-
-Existing strategy #28 is not imported and is NEVER touched. All results
-exploratory/in-sample on historically inspected data, not actual bid/ask fills.
+PASS2 source: frozen 546,907 OANDA MID candles to 2026-09-24 19:00 UTC.
+Pass2 range 2.25-2.75 is a plausible stressed region; prior body=1.50 and
+lookback 80 were the old geometry maxima. Predeclare a neighbourhood incl.
+body up to 2.00 and lookback100. No RR, day/session, portfolio optimisation.
+Compare each limited conditional/interaction against its own unchanged
+rally-rejection anchor; candidate-only returns are not the full replay.
+NO ORDERS. Do NOT replace the live Portfolio28 executor or strategy probe.
+2/4p are assumptions, not measured executable OANDA spread or slippage.
 """
 import os
 import csv
@@ -1162,15 +1156,16 @@ def validate_all_mechanisms(candles,f):
 # ============================================================
 # IMPORTANT: do NOT select anchors based on this pass's top row.
 # All history has been repeatedly inspected; never call it unseen OOS.
-OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_PASS2_OUTPUT_DIR','/tmp/audjpy_short_pass2'))
+OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_PASS3_OUTPUT_DIR','/tmp/audjpy_short_pass3'))
 OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
-OUTPUT_NAMES=('coverage','raw_engulf_parity','archived_bearish_control','anchor_parity','anchor_metrics',
-    'anchor_full_ledgers','one_factor_matrix','one_factor_marginal_attribution',
-    'boundary_matrix','boundary_marginal_attribution','boundary_neighbours',
-    'plateau_axis_summary','anchor_rolling','anchor_calendar_years',
-    'worst_rolling_by_configuration','methodology','errors')
-OUTS={name:str(OUTPUT_DIR/f'audjpy_short_pass2_{name}.csv') for name in OUTPUT_NAMES}
-BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_PASS2_CONDITIONAL_AND_BOUNDARIES_RESULTS.zip')
+OUTPUT_NAMES=('coverage','raw_engulf_parity','control_parity','control_metrics','full_control_ledgers',
+    'local_geometry_matrix','geometry_marginal_attribution','full_geometry_ledgers',
+    'geometry_neighbours','plateau_axis_summary','conditional_matrix',
+    'conditional_marginal_attribution','full_conditional_ledgers',
+    'worst_rolling_by_configuration','calendar_years_controls',
+    'full_rolling_controls','methodology','errors')
+OUTS={name:str(OUTPUT_DIR/f'audjpy_short_pass3_{name}.csv') for name in OUTPUT_NAMES}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_PASS3_LOCAL_PLATEAU_AND_INTERACTIONS_RESULTS.zip')
 ANCHORS=(
     ('LB40_B1.25_R2.00',40,1.25,2.00,168,5.3284244540584185),
     ('LB60_B1.00_R2.00',60,1.00,2.00,183,12.512788156428638),
@@ -1307,204 +1302,312 @@ def row_for_candidate(kind,cid,axes,candles,ix,base_2,base_4):
     return row,attr,tr2,tr4
 
 
-def pass2_run():
+
+
+# ============================================================================
+# SHORT PASS 3 — predeclared local geometry & JUSTIFIED limited interactions
+# ============================================================================
+# A frozen full-history OANDA MID dataset is REQUIRED, and controls from Pass2
+# are checked before interpreting any new results. No active strategy or order
+# path exists in this research runner.
+#
+# Pass2 observations (not selection): stressed positive neighbourhood around
+# range 2.25-2.75 ATR; body >=1.50 was old maximum, LB80 old maximum;
+# >3.0 ATR is generally sparse. This pass checks neighbouring levels on both
+# sides of those boundaries. No new indicator family, RR, session optimisation.
+# Do not infer that an improving outer edge establishes a plateau.
+
+LOCAL_LB=(40,60,80,100)
+LOCAL_BODY=(1.00,1.25,1.50,1.75,2.00)
+LOCAL_RANGE=(1.75,2.00,2.25,2.50,2.75,3.00)
+EXPECTED_LOCAL=len(LOCAL_LB)*len(LOCAL_BODY)*len(LOCAL_RANGE)
+
+# Reproduced directly against observed Pass2 4pip count/R. These are distinct
+# neighbourhood controls, NOT pre-approved strategy finalists.
+PASS2_CONTROLS=(
+    ('LB40_B1.50_R2.25',40,1.50,2.25,97,31.825233593369575),
+    ('LB60_B1.50_R2.25',60,1.50,2.25,78,36.02554654285602),
+    ('LB60_B1.00_R2.50',60,1.00,2.50,86,26.83901583113021),
+    ('LB60_B1.25_R2.25',60,1.25,2.25,98,23.814849354173738),
+)
+
+# Four distinct anchors; 5 single-feature contrasts EACH. The prior-bar
+# condition is prompted by Pass2 LB60 B1.00 R2.00; interactions require
+# full chronology, are not assumed additive and are not promoted automatically.
+CONDITIONAL_ANCHORS=PASS2_CONTROLS
+INTERACTION_ANCHORS=('LB60_B1.50_R2.25','LB60_B1.00_R2.50')
+CONDITIONS=(
+    'prior_body_atr_ge_0.75', 'prior_body_atr_ge_1.00',
+    'rise_prior16_atr_ge_1.75','rise_prior16_atr_ge_2.00',
+    'previous_m15_atr_ratio20_le_1.15',
+)
+INTERACTIONS=(
+    ('prior_body_atr_ge_1.00','rise_prior16_atr_ge_1.75'),
+    ('prior_body_atr_ge_1.00','previous_m15_atr_ratio20_le_1.15'),
+)
+EXPECTED_CONDITIONAL=len(CONDITIONAL_ANCHORS)*len(CONDITIONS)+len(INTERACTION_ANCHORS)*len(INTERACTIONS)
+
+
+def conditional_masks(f):
+    """Only prior values for momentum, prior body and prior volatility."""
+    n=f['n']; close=f['close']; o=f['open']; a=f['atr'];
+    ok=np.isfinite(a)&(a>0)
+    body=np.full(n,np.nan)
+    body[1:]=np.divide(np.abs(close[:-1]-o[:-1]),a[1:],
+        out=np.full(n-1,np.nan),where=ok[1:])
+    ma=sma(a,20)
+    ratio=np.divide(a,ma,out=np.full(n,np.nan),
+                    where=np.isfinite(ma)&(ma>0))
+    prior_ratio=np.r_[np.nan,ratio[:-1]]
+    rise=-f['mom4']
+    ret={
+        'prior_body_atr_ge_0.75':np.isfinite(body)&(body>=.75),
+        'prior_body_atr_ge_1.00':np.isfinite(body)&(body>=1.),
+        'rise_prior16_atr_ge_1.75':np.isfinite(rise)&(rise>=1.75),
+        'rise_prior16_atr_ge_2.00':np.isfinite(rise)&(rise>=2.),
+        'previous_m15_atr_ratio20_le_1.15':np.isfinite(prior_ratio)&(prior_ratio<=1.15),
+    }
+    assert set(ret)==set(CONDITIONS)
+    return ret
+
+
+def id_geo(lb,body,rng):
+    return f'RALLY_REJECTION__LB{lb}__B{body:.2f}__R{rng:.2f}'
+
+
+def row_ledger(category,cid,cost,trades):
+    return [dict(category=category,config_id=cid,assumed_fill_pips=cost,
+                 **trade_public(t)) for t in trades]
+
+
+def pass3_run():
     try:
         for path in list(OUTS.values())+[BUNDLE]:
             if os.path.isfile(path):os.remove(path)
-        STATUS.update(state='fetch',progress=1,message='Frozen AUDJPY source and Pass1B fingerprint checks')
+        STATUS.update(state='fetch',progress=1,
+            message='Fetch frozen AUDJPY source through Pass2 cutoff; no orders')
         candles=fetch('M15',START,FIXED_END,35)
         if not candles:raise RuntimeError('No historical candles')
         global HISTORY_FIRST
         HISTORY_FIRST=candles[0]['time']
         cov=hist_coverage('M15',candles)
         fp=midpoint_fingerprint(candles,'M15')
-        verified=(cov['first_utc']==EXPECTED_FIRST and cov['last_utc']==EXPECTED_LAST
-              and cov['count']==EXPECTED_CANDLES and fp['sha256_midpoint_ohlc']==EXPECTED_SHA)
-        write_csv(OUTS['coverage'],[dict(**cov,sha256_midpoint_ohlc=fp['sha256_midpoint_ohlc'],expected_first_utc=EXPECTED_FIRST,
-          expected_last_utc=EXPECTED_LAST,expected_count=EXPECTED_CANDLES,
-          expected_sha256=EXPECTED_SHA,source_parity='PASS' if verified else 'FAIL')])
-        if not verified:raise RuntimeError('FROZEN SOURCE PARITY FAILED, do not interpret results')
-        STATUS.update(state='controls',progress=20,message='Archived bearish baseline and native anchor full-ledger controls')
+        verified=(cov['first_utc']==EXPECTED_FIRST and
+             cov['last_utc']==EXPECTED_LAST and
+             cov['count']==EXPECTED_CANDLES and
+             fp['sha256_midpoint_ohlc']==EXPECTED_SHA)
+        # Avoid the **cov/**fp duplicate timeframe bug from the prior stages.
+        write_csv(OUTS['coverage'],[dict(**cov,
+            sha256_midpoint_ohlc=fp['sha256_midpoint_ohlc'],
+            expected_first_utc=EXPECTED_FIRST,expected_last_utc=EXPECTED_LAST,
+            expected_count=EXPECTED_CANDLES,expected_sha256=EXPECTED_SHA,
+            source_parity='PASS' if verified else 'FAIL')])
+        if not verified:raise RuntimeError('FROZEN SOURCE PARITY FAILED; do not interpret results')
+        STATUS.update(state='controls',progress=21,
+            message='Bearish archive, actual-price independent controls and Pass2 check')
         n=len(candles)
         no_htf={k:np.full(n,np.nan) for k in ('close','ema50','ema100','ema200','atr_ratio50')}
         f=features(candles,no_htf,no_htf,no_htf)
         original=check_native_short_parity(candles,f)
-        write_csv(OUTS['archived_bearish_control'],original)
         if any(x['raw_signal_sha256']!=EXPECTED_BEARISH_RAW_SHA or
-           x['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[x['assumed_adverse_fill_pips']]
-           or x['accepted_trades']!=21136 for x in original):
-            raise RuntimeError('Archived bearish full-ledger parity FAILED')
-        anchor_rows=[];anchor_parity=[];all_anchor_ledgers=[];allroll=[];allyears=[]
-        cached={}
-        for label,lb,body,rng,expected_count,expected_r in ANCHORS:
-            mask=rally_geometry(f,lb,body,rng)
+            x['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[x['assumed_adverse_fill_pips']]
+            or x['accepted_trades']!=21136 for x in original):
+            raise RuntimeError('ARCHIVED BEARISH CONTROL FAILED')
+        write_csv(OUTS['control_parity'],[
+            dict(control_id='ARCHIVED_BEARISH_ENGULF',cost=x['assumed_adverse_fill_pips'],
+                 raw_signal_sha256=x['raw_signal_sha256'],
+                 accepted_ledger_sha256=x['accepted_ledger_sha256'],
+                 accepted_trades=x['accepted_trades'],
+                 raw_native_parity='PASS',full_accepted_native_parity='PASS',
+                 archived_parity='PASS') for x in original])
+
+        controls={};control_rows=[];checks=[];ledger=[];years=[];roll=[]
+        for label,lb,body,rng,expected_count,expected_r in PASS2_CONTROLS:
+            mirror=rally_geometry(f,lb,body,rng)
             native=(family_mask_native(f,'RALLY_REJECTION',lb,.25)
-                & (f['body_atr']>=body)&(f['range_atr']>=rng))
-            ix=np.flatnonzero(mask).tolist(); nix=np.flatnonzero(native).tolist()
-            if ix!=nix:raise RuntimeError(f'NATIVE ANCHOR SIGNAL PARITY FAILED {label}')
-            tr2,tr4=paired(candles,ix)
-            if len(tr4)!=expected_count or abs(stats(tr4)['total_r']-expected_r)>1e-8:
-                raise RuntimeError(f'ARCHIVED PASS1B BASELINE MISMATCH {label}')
-            for cost,tr in ((2,tr2),(4,tr4)):
+                 &(f['body_atr']>=body)&(f['range_atr']>=rng))
+            ix=np.flatnonzero(mirror).tolist()
+            nix=np.flatnonzero(native).tolist()
+            if ix!=nix:raise RuntimeError(f'NATIVE CONTROL SIGNAL MISMATCH {label}')
+            t2,t4=paired(candles,ix)
+            if len(t4)!=expected_count or abs(stats(t4)['total_r']-expected_r)>1e-8:
+                raise RuntimeError(f'ARCHIVED PASS2 BASELINE MISMATCH {label}')
+            cid=id_geo(lb,body,rng)
+            controls[label]=(mirror,ix,t2,t4,cid)
+            control_rows.append(metrics_row('FROZEN_PASS2_CONTROL',cid,
+                dict(control_id=label,lookback=lb,body_atr_min=body,
+                   range_atr_min=rng,prior16_rise_min_atr=1.50),
+                ix,t2,t4,stats(t2)))
+            for cost,tr in ((2,t2),(4,t4)):
                 independent=[];p=0
                 while p<len(nix):
                     item=native_short_outcome(candles,nix[p],RR_FIXED,cost)
                     if item is None:p+=1;continue
                     independent.append(item)
                     p=bisect.bisect_left(nix,item['exit_index'],lo=p+1)
-                fields=('signal_index','exit_index','reference_entry',
-                    'historical_fill','stop','target','result_r','exit_reason')
-                if len(independent)!=len(tr):raise RuntimeError(f'NATIVE COUNT FAILED {label} {cost}')
-                for x,y in zip(tr,independent):
-                    for field in fields:
-                        if field in ('exit_reason','signal_index','exit_index'):
-                            match=x[field]==y[field]
-                        else:match=abs(x[field]-y[field])<=1e-9
-                        if not match:raise RuntimeError(f'NATIVE LEDGER PARITY FAILED {label} {cost} {field}')
-                anchor_parity.append(dict(anchor_id=label,assumed_fill_pips=cost,
-                   raw_signal_sha256=digest_indices(candles,ix),
-                   accepted_ledger_sha256=digest_ledger(tr),
-                   accepted_trades=len(tr),total_r=stats(tr)['total_r'],
-                   native_signal_parity='PASS',native_complete_ledger_parity='PASS',
-                   archived_4pip_parity='PASS' if cost==4 else 'not_applicable'))
-                all_anchor_ledgers.extend(dict(anchor_id=label,assumed_fill_pips=cost,**trade_public(t)) for t in tr)
-                allroll.extend(rolling(label,tr,cost))
-                allyears.extend(annual(label,tr,cost))
-            anchor_rows.append(metrics_row('FROZEN_PASS1B_ANCHOR',label,
-                dict(lookback=lb,body_atr_min=body,range_atr_min=rng,
-                  prior16_rise_min_atr=1.5),ix,tr2,tr4,stats(tr2)))
-            cached[label]=(ix,tr2,tr4)
-        write_csv(OUTS['anchor_parity'],anchor_parity)
-        write_csv(OUTS['anchor_metrics'],anchor_rows)
-        write_csv(OUTS['anchor_full_ledgers'],all_anchor_ledgers)
-        write_csv(OUTS['anchor_rolling'],allroll)
-        write_csv(OUTS['anchor_calendar_years'],allyears)
-        STATUS.update(state='conditional',progress=41,message='Predeclared one factor at a time within 3 immutable Pass1B anchors')
-        filters=conditional_predicates(f)
-        expected_conditional=len(ANCHORS)*len(filters)
-        rows=[];attrib=[];worst=[]
-        for label,lb,body,rng,_,_ in ANCHORS:
-            base_mask=rally_geometry(f,lb,body,rng)
-            _,base2,base4=cached[label]
-            for ident,meta,condition in filters:
-                cid=f'{label}__{ident}'
-                ix=np.flatnonzero(base_mask&condition).tolist()
-                axes=dict(anchor_id=label,lookback=lb,body_atr_min=body,
-                    range_atr_min=rng,prior16_rise_min_atr=1.5,**meta)
-                row,changes,tr2,tr4=row_for_candidate('ONE_FACTOR',cid,axes,
-                    candles,ix,base2,base4)
-                rows.append(row);attrib.extend(changes)
-                for cost,tr in ((2,tr2),(4,tr4)):
-                    worst.extend(rolling_worst(cid,tr,cost))
-                if len(rows)%15==0:
-                    write_csv(OUTS['one_factor_matrix'],rows)
-                    STATUS.update(progress=41+int(28*len(rows)/expected_conditional),
-                         message=f'One factor {len(rows)}/{expected_conditional}')
-                if len(rows)%42==0:
-                    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if len(rows)!=expected_conditional or len({x['config_id'] for x in rows})!=len(rows):
-            raise RuntimeError('Incomplete conditional grid')
-        write_csv(OUTS['one_factor_matrix'],rows)
-        write_csv(OUTS['one_factor_marginal_attribution'],attrib)
-        STATUS.update(state='boundary',progress=70,
-           message='Independent geometry boundary extension 1.50-3.50 ATR, not conditional mixtures')
-        boundary=[];boundary_attr=[];j=0
-        for lb,body in itertools.product(BOUNDARY_LB,BOUNDARY_BODY):
-            base_mask=family_mask_mirror(f,'RALLY_REJECTION',lb,.25)
-            baseix=np.flatnonzero(base_mask).tolist()
-            base2,base4=paired(candles,baseix)
-            for rng in BOUNDARY_RANGE:
-                ix=np.flatnonzero(base_mask&(f['body_atr']>=body)&(f['range_atr']>=rng)).tolist()
-                cid=f'RALLY_REJECTION__LB{lb}__B{body:.2f}__R{rng:.2f}'
-                axes=dict(anchor_id=f'UNFILTERED_RALLY_LB{lb}',lookback=lb,
-                    confirmation=.25,body_atr_min=body,range_atr_min=rng,
-                    prior16_rise_min_atr=1.5,range_beyond_old_max=rng>2.)
-                row,changes,tr2,tr4=row_for_candidate('BOUNDARY_EXTENSION',cid,
-                    axes,candles,ix,base2,base4)
-                boundary.append(row);boundary_attr.extend(changes)
-                for cost,tr in ((2,tr2),(4,tr4)):
-                    worst.extend(rolling_worst(cid,tr,cost))
-                j+=1
-                if j%14==0:
-                    write_csv(OUTS['boundary_matrix'],boundary)
-                    STATUS.update(progress=70+int(24*j/EXPECTED_BOUNDARY),
-                         message=f'Boundary extension {j}/{EXPECTED_BOUNDARY}')
-                if j%42==0:
-                    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if j!=EXPECTED_BOUNDARY:raise RuntimeError('Incomplete boundary extension grid')
-        write_csv(OUTS['boundary_matrix'],boundary)
-        write_csv(OUTS['boundary_marginal_attribution'],boundary_attr)
-        # Every adjacent neighbour, including negative/empty high-boundary rows.
-        keyed={(r['lookback'],r['body_atr_min'],r['range_atr_min']):r for r in boundary}
-        neighbors=[];summary=[]
-        for row in boundary:
-            key=(row['lookback'],row['body_atr_min'],row['range_atr_min'])
-            for j,axis,levels in ((0,'lookback',BOUNDARY_LB),
-                                  (1,'body_atr_min',BOUNDARY_BODY),
-                                  (2,'range_atr_min',BOUNDARY_RANGE)):
-                idx=levels.index(key[j])
-                if idx+1>=len(levels):continue
-                dest=list(key);dest[j]=levels[idx+1];right=keyed[tuple(dest)]
-                neighbors.append(dict(from_id=row['config_id'],to_id=right['config_id'],
-                     axis=axis,from_value=key[j],to_value=dest[j],
-                     from_4pip_trades=row['4pip_trades'],to_4pip_trades=right['4pip_trades'],
-                     from_4pip_total_r=row['4pip_total_r'],to_4pip_total_r=right['4pip_total_r'],
-                     from_4pip_drawdown_r=row['4pip_max_drawdown_r'],
-                     to_4pip_drawdown_r=right['4pip_max_drawdown_r']))
-        for level in BOUNDARY_RANGE:
-            bucket=[r for r in boundary if r['range_atr_min']==level]
-            summary.append(dict(axis='range_atr_min',value=level,configurations=len(bucket),
-                configs_with_50_stressed_trades=sum(x['4pip_trades']>=50 for x in bucket),
-                positive_4pip_with_50=sum(x['4pip_trades']>=50 and x['4pip_total_r']>0 for x in bucket),
-                median_stressed_trades=med([x['4pip_trades'] for x in bucket]),
-                median_stressed_total_r=med([x['4pip_total_r'] for x in bucket]),
-                note='Configurations overlap; not independent discoveries or automated selection'))
-        write_csv(OUTS['boundary_neighbours'],neighbors)
-        write_csv(OUTS['plateau_axis_summary'],summary)
+                if len(independent)!=len(tr):
+                    raise RuntimeError(f'NATIVE CONTROL COUNT MISMATCH {label} {cost}')
+                for a,b in zip(tr,independent):
+                    for field in ('signal_index','exit_index','reference_entry',
+                                  'historical_fill','stop','target','result_r','exit_reason'):
+                        good=(a[field]==b[field] if field in
+                             ('signal_index','exit_index','exit_reason')
+                             else abs(a[field]-b[field])<=1e-9)
+                        if not good:raise RuntimeError(f'NATIVE LEDGER MISMATCH {label} {cost} {field}')
+                checks.append(dict(control_id=label,cost=cost,
+                    accepted_trades=len(tr),total_r=stats(tr)['total_r'],
+                    raw_signal_sha256=digest_indices(candles,ix),
+                    accepted_ledger_sha256=digest_ledger(tr),
+                    raw_native_parity='PASS',full_accepted_native_parity='PASS',
+                    archived_parity='PASS' if cost==4 else 'not_applicable'))
+                ledger.extend(row_ledger('PASS2_CONTROL',cid,cost,tr))
+                years.extend(annual(cid,tr,cost))
+                roll.extend(rolling(cid,tr,cost))
+        write_csv(OUTS['control_parity'],[
+            dict(control_id='ARCHIVED_BEARISH_ENGULF',cost=x['assumed_adverse_fill_pips'],
+                 raw_signal_sha256=x['raw_signal_sha256'],
+                 accepted_ledger_sha256=x['accepted_ledger_sha256'],
+                 accepted_trades=x['accepted_trades'],
+                 raw_native_parity='PASS',full_accepted_native_parity='PASS',
+                 archived_parity='PASS') for x in original]+checks)
+        write_csv(OUTS['control_metrics'],control_rows)
+        write_csv(OUTS['full_control_ledgers'],ledger)
+        write_csv(OUTS['calendar_years_controls'],years)
+        write_csv(OUTS['full_rolling_controls'],roll)
+        STATUS.update(state='local_plateau',progress=44,
+             message=f'Predeclared {EXPECTED_LOCAL} local geometries, no selection')
+        baseline=controls['LB60_B1.50_R2.25']
+        rows=[];attributions=[];all_ledgers=[];worst=[]
+        base_mirror_cache={lb:family_mask_mirror(f,'RALLY_REJECTION',lb,.25) for lb in LOCAL_LB}
+        for j,(lb,body,rng) in enumerate(itertools.product(LOCAL_LB,LOCAL_BODY,LOCAL_RANGE),1):
+            ix=np.flatnonzero(base_mirror_cache[lb]
+                &(f['body_atr']>=body)&(f['range_atr']>=rng)).tolist()
+            cid=id_geo(lb,body,rng)
+            axes=dict(lookback=lb,body_atr_min=body,range_atr_min=rng,
+                      prior16_rise_min_atr=1.50,
+                      beyond_previous_body_boundary=body>1.50,
+                      beyond_previous_lookback_boundary=lb>80,
+                      predeclared_base='LB60_B1.50_R2.25')
+            row,changes,t2,t4=row_for_candidate('LOCAL_GEOMETRY',cid,axes,
+                candles,ix,baseline[2],baseline[3])
+            rows.append(row);attributions.extend(changes)
+            for cost,tr in ((2,t2),(4,t4)):
+                all_ledgers.extend(row_ledger('LOCAL_GEOMETRY',cid,cost,tr))
+                worst.extend(rolling_worst(cid,tr,cost))
+            if j%12==0:
+                write_csv(OUTS['local_geometry_matrix'],rows)
+                STATUS.update(progress=44+int(32*j/EXPECTED_LOCAL),
+                   message=f'Local geometry {j}/{EXPECTED_LOCAL}')
+            if j%40==0:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if len(rows)!=EXPECTED_LOCAL or len({r['config_id'] for r in rows})!=len(rows):
+            raise RuntimeError('INCOMPLETE LOCAL GRID')
+        write_csv(OUTS['local_geometry_matrix'],rows)
+        write_csv(OUTS['geometry_marginal_attribution'],attributions)
+        write_csv(OUTS['full_geometry_ledgers'],all_ledgers)
+        rmap={(r['lookback'],r['body_atr_min'],r['range_atr_min']):r for r in rows}
+        edges=[]
+        for row in rows:
+            k=(row['lookback'],row['body_atr_min'],row['range_atr_min'])
+            for axis,levels,j in (('lookback',LOCAL_LB,0),
+                                  ('body_atr_min',LOCAL_BODY,1),
+                                  ('range_atr_min',LOCAL_RANGE,2)):
+                ix=levels.index(k[j])
+                if ix==len(levels)-1:continue
+                after=list(k);after[j]=levels[ix+1];right=rmap[tuple(after)]
+                edges.append(dict(from_id=row['config_id'],to_id=right['config_id'],
+                    axis=axis,from_value=k[j],to_value=after[j],
+                    from_4pip_trades=row['4pip_trades'],to_4pip_trades=right['4pip_trades'],
+                    from_4pip_total_r=row['4pip_total_r'],to_4pip_total_r=right['4pip_total_r'],
+                    from_4pip_max_drawdown_r=row['4pip_max_drawdown_r'],
+                    to_4pip_max_drawdown_r=right['4pip_max_drawdown_r']))
+        write_csv(OUTS['geometry_neighbours'],edges)
+        axes_summary=[]
+        for axis,levels in (('lookback',LOCAL_LB),('body_atr_min',LOCAL_BODY),
+                            ('range_atr_min',LOCAL_RANGE)):
+            for val in levels:
+                bucket=[r for r in rows if r[axis]==val]
+                eligible=[r for r in bucket if r['4pip_trades']>=50]
+                axes_summary.append(dict(axis=axis,value=val,
+                    configurations=len(bucket),configs_with_50_stressed_trades=len(eligible),
+                    positive_4pip_with_50=sum(r['4pip_total_r']>0 for r in eligible),
+                    median_stressed_trades=med([r['4pip_trades'] for r in bucket]),
+                    median_stressed_total_r=med([r['4pip_total_r'] for r in bucket]),
+                    note='Overlapping settings, not independent successes; sparse outer edges are inconclusive'))
+        write_csv(OUTS['plateau_axis_summary'],axes_summary)
+        STATUS.update(state='limited_interactions',progress=78,
+            message=f'{EXPECTED_CONDITIONAL} predeclared conditional contrasts and tiny two-factor interactions')
+        masks=conditional_masks(f)
+        cond_rows=[];cond_attr=[];cond_ledger=[]
+        jobs=[]
+        for label,*_ in CONDITIONAL_ANCHORS:
+            for name in CONDITIONS:jobs.append((label,(name,)))
+            if label in INTERACTION_ANCHORS:
+                for combination in INTERACTIONS:jobs.append((label,combination))
+        if len(jobs)!=EXPECTED_CONDITIONAL:raise RuntimeError('CONDITIONAL ENUMERATION MISMATCH')
+        for j,(label,names) in enumerate(jobs,1):
+            base_mask,base_ix,b2,b4,geo_id=controls[label]
+            condition=np.ones(n,dtype=bool)
+            for name in names:condition &= masks[name]
+            ix=np.flatnonzero(base_mask&condition).tolist()
+            cid=geo_id+'__'+ '__AND__'.join(names)
+            axes=dict(anchor_id=label,anchor_geometry_id=geo_id,
+                added_conditions=' AND '.join(names),added_condition_count=len(names),
+                prior16_rise_min_atr=1.50,comparison='own unchanged Pass2 anchor')
+            row,changes,t2,t4=row_for_candidate('LIMITED_INTERACTION' if len(names)>1
+                else 'SINGLE_CONDITION_ON_CENTRE',cid,axes,candles,ix,b2,b4)
+            cond_rows.append(row);cond_attr.extend(changes)
+            for cost,tr in ((2,t2),(4,t4)):
+                cond_ledger.extend(row_ledger('CONDITIONAL',cid,cost,tr))
+                worst.extend(rolling_worst(cid,tr,cost))
+            if j%4==0:STATUS.update(progress=78+int(17*j/EXPECTED_CONDITIONAL),
+                  message=f'Limited contrasts {j}/{EXPECTED_CONDITIONAL}')
+        if len(cond_rows)!=EXPECTED_CONDITIONAL:raise RuntimeError('INCOMPLETE CONDITIONAL GRID')
+        write_csv(OUTS['conditional_matrix'],cond_rows)
+        write_csv(OUTS['conditional_marginal_attribution'],cond_attr)
+        write_csv(OUTS['full_conditional_ledgers'],cond_ledger)
         write_csv(OUTS['worst_rolling_by_configuration'],worst)
         write_csv(OUTS['methodology'],[
-         dict(topic='SCOPE',detail='AUDJPY M15 SHORT research only; Portfolio28 and live executor/probe are unchanged; no order path'),
-         dict(topic='SOURCE',detail=f'Frozen {EXPECTED_CANDLES} OANDA MID M15 candles through {EXPECTED_LAST}; expected SHA256 {EXPECTED_SHA}; fail closed'),
-         dict(topic='ARCHIVED_CONTROL',detail='Exact bearish engulf raw signal and complete accepted ledger parity, both costs; 3 rally anchors match 4pip Pass1B count/R'),
-         dict(topic='NATIVE',detail='All three frozen anchors checked actual-price native signal and full accepted trade ledger at 2/4 pip'),
-         dict(topic='ANCHORS',detail=str(ANCHORS)),
-         dict(topic='ONE_FACTOR',detail=f'{len(filters)} predeclared single conditions x three anchors = {expected_conditional}. No combinations of new conditions.'),
-         dict(topic='BOUNDARIES',detail=f'{EXPECTED_BOUNDARY} separately tested geometries. Range 1.50/1.75/2/2.25/2.5/2.75/3/3.25/3.5 ATR; LB40/60/80; body .75/1/1.25/1.5; prior16 rise 1.5 ATR fixed.'),
-         dict(topic='STRESS',detail='2 and 4 assumed adverse SHORT fill pips on frozen historical MID candles; not observed spreads'),
-         dict(topic='EXECUTION',detail='Stop actual signal high + 10 ticks, target reference close minus 3.50 reference risk. Short fill reference minus 2 or 4 pips. Full chronological pyramiding 0, same-bar tie nearer open; exit candle eligible.'),
-         dict(topic='ROLLING',detail='Complete monthly-start 12/24/36-month windows incl zero trade in worst_rolling_by_configuration; full rolling and calendar years for all anchors'),
-         dict(topic='LIMITS',detail='Stressed profitability at R3.5 does not prove plateau. Range3.50 is predeclared outer boundary; if still improving there, report UNRESOLVED not an assumed plateau; do not auto-extend indefinitely'),
-         dict(topic='NO_OOS',detail='History repeatedly inspected, exploratory/in-sample. No strategy selection, RR tuning, live deployment or Portfolio28->29 replay in this pass'),
-         dict(topic='NEXT',detail='Inspect robust conditional families and extended-range count/period/rolling neighbourhood. Only THEN justified limited interactions and final local plateau. Explicitly report whether new outer 3.00 edge unresolved.')
+         dict(topic='SCOPE',detail='RESEARCH ONLY; Portfolio28, executor and probe untouched; no webhook, no order function'),
+         dict(topic='SOURCE',detail=f'{EXPECTED_CANDLES} OANDA MID M15 to {EXPECTED_LAST}, frozen SHA256 {EXPECTED_SHA}; fail-closed'),
+         dict(topic='CONTROLS',detail='Archived bearish raw and full accepted trade digests at 2/4p; 4 Pass2 rally-rejection count/R controls and native independent full-ledger checks both costs'),
+         dict(topic='PLATEAU',detail=f'{EXPECTED_LOCAL} predeclared geometries: lookback {LOCAL_LB}, body {LOCAL_BODY}, range {LOCAL_RANGE}, prior16 actual rise >=1.50 ATR; RR unchanged 3.50'),
+         dict(topic='BOUNDARIES',detail='Pass2 body ceiling 1.50 expands to 2.00; LB80 expands to LB100; range neighbourhood 1.75-3.00, while Pass2 3.25/3.50 sparse remain documented. No automatic freeze at a boundary'),
+         dict(topic='CONDITIONS',detail=f'{len(CONDITIONAL_ANCHORS)} anchors x {len(CONDITIONS)} one-factor conditions plus {len(INTERACTION_ANCHORS)} x {len(INTERACTIONS)} predeclared two-factor interactions; compare each to OWN anchor'),
+         dict(topic='RISK',detail='2/4 pip assumed adverse short fill from reference MID close, NOT observed bid/ask; short stop = signal high+10 ticks; target from reference risk RR3.50'),
+         dict(topic='CHRONOLOGY',detail='Full pyramiding-zero replay per candidate AND cost; exact exit-candle re-entry; near-open same-bar tie with equal STOP; compare marginal eligible/removed trades'),
+         dict(topic='AUDIT',detail='All configured rows and full ledgers at both fills; adjacent neighbours; calendar/rolling control windows and worst completed 12/24/36 month candidate windows including zero-trade counts'),
+         dict(topic='LIMITATIONS',detail='MID historical model, no live spread/slippage; repeated historical inspection means in-sample; 50-trade display gate not permission to ignore weak eras'),
+         dict(topic='NEXT',detail='Inspect entire geometrical neighbourhood, weak years/cost stress; unresolved profitable boundary may justify ONE focused extension before small local confirmation. Freeze entries before RR sweep. No portfolio-based parameter selection')
         ])
         zip_outputs()
         STATUS.update(state='complete',progress=100,source_parity='PASS',
-           archived_control_parity='PASS',native_anchor_ledger_parity='PASS',
-           conditional_rows=len(rows),boundary_rows=len(boundary),
-           factor_definitions=len(filters),result_path='/audjpy-short-pass2/results',
-           orders_supported=False,trading_enabled=False,
-           message='Complete; no automatic strategy freeze or portfolio selection')
+            archived_control_parity='PASS',native_control_ledger_parity='PASS',
+            local_configurations=len(rows),conditional_configurations=len(cond_rows),
+            expected_local=EXPECTED_LOCAL,expected_conditional=EXPECTED_CONDITIONAL,
+            result_path='/audjpy-short-pass3/results',orders_supported=False,
+            trading_enabled=False,message='Complete; no strategy automatically selected')
     except Exception as exc:
         STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
             orders_supported=False,trading_enabled=False)
-        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,error=str(exc),traceback=STATUS['traceback'])])
+        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,
+            error=str(exc),traceback=STATUS['traceback'])])
         zip_outputs()
         print(STATUS['traceback'],flush=True)
 
 
 @app.route('/')
-def pass2_home():
-    return jsonify(service='AUDJPY SHORT Pass2 frozen anchors one factor and expanded boundaries',
-       status='/audjpy-short-pass2/status',results='/audjpy-short-pass2/results',
-       orders_supported=False,trading_enabled=False)
+def pass3_home():
+    return jsonify(service='AUDJPY M15 SHORT Pass3 local plateau and justified interactions',
+         status='/audjpy-short-pass3/status',results='/audjpy-short-pass3/results',
+         orders_supported=False,trading_enabled=False)
 
-@app.route('/audjpy-short-pass2/status')
-def pass2_status():return jsonify(STATUS)
+@app.route('/audjpy-short-pass3/status')
+def pass3_status():return jsonify(STATUS)
 
-@app.route('/audjpy-short-pass2/results')
-def pass2_results():return download(BUNDLE)
+@app.route('/audjpy-short-pass3/results')
+def pass3_results():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=pass2_run,daemon=True).start()
+    threading.Thread(target=pass3_run,daemon=True).start()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
         debug=False,use_reloader=False)
