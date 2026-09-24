@@ -1320,7 +1320,7 @@ def pass2_run():
         fp=midpoint_fingerprint(candles,'M15')
         verified=(cov['first_utc']==EXPECTED_FIRST and cov['last_utc']==EXPECTED_LAST
               and cov['count']==EXPECTED_CANDLES and fp['sha256_midpoint_ohlc']==EXPECTED_SHA)
-        write_csv(OUTS['coverage'],[dict(**cov,**fp,expected_first_utc=EXPECTED_FIRST,
+        write_csv(OUTS['coverage'],[dict(**cov,sha256_midpoint_ohlc=fp['sha256_midpoint_ohlc'],expected_first_utc=EXPECTED_FIRST,
           expected_last_utc=EXPECTED_LAST,expected_count=EXPECTED_CANDLES,
           expected_sha256=EXPECTED_SHA,source_parity='PASS' if verified else 'FAIL')])
         if not verified:raise RuntimeError('FROZEN SOURCE PARITY FAILED, do not interpret results')
