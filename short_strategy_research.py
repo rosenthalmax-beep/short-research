@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
-"""AUD/JPY M15 SHORT — engulfing-first Pass 1; READ-ONLY research service.
+"""AUD/JPY M15 SHORT — alternative mechanism discovery, independent Pass 1B.
 
-Adapted from the saved AUD/JPY M15 LONG Pass 1 research script, NOT from
-an active trading component. Exact bearish engulf: prior candle bullish,
-signal candle bearish, its real body engulfs prior real body, body ratio >= 1.
+Research ONLY: no webhook, no OANDA orders, no executor or live strategy mutation.
+After bearish engulfing failed the first structural/cost gate, test SIX
+PREDECLARED distinct causal short-entry families. Do not attempt to rescue the
+failed engulfing branch with ex post filters; do not select winner automatically.
 
-The research engine uses the mathematically mirrored MIDPOINT OHLC coordinate:
-   open'=-open; high'=-low; low'=-high; close'=-close.
-Thus a bullish pattern and a prior-low distance IN THE INTERNAL ENGINE mean
-bearish engulf and prior-HIGH distance in actual AUD/JPY. All output ledger
-prices are converted back to actual positive AUD/JPY prices; RR is unchanged.
-The short reference is signal close, stop=signal HIGH+10 JPY ticks, target
-reference minus 3.5 times reference-to-stop distance, and assumed adverse
-SELL fill=reference-2/4 pips. Stop/target testing begins NEXT M15 candle;
-closer-to-open tie convention, pyramiding zero, exit-candle reentry.
+Hard controls: frozen Sep 24 2026 19:00 UTC complete MID source fingerprint;
+JPY tick .001, pip .01; short close reference; stop = signal high + 10
+pricing ticks; target reference minus 3.50 * reference-to-stop risk;
+assumed SELL fills reference minus 2/4 pips, stressed results at BOTH;
+chronological pyramiding zero, exit on next or later M15 candle, tie nearer
+to open (equal STOP); exact exit-candle signal may be eligible.
 
-This is a new bearish control: DO NOT compare its raw ledger to the archived
-bullish hash. Cross-check every bearish raw index and full accepted baseline
-ledgers against separate native-SHORT calculations at BOTH costs.
-
-Full-history repeated research is exploratory/in-sample; 2 and 4 pip costs
-are assumptions, NOT actual AUD/JPY bid/ask history. No orders, no webhook,
-no portfolio tuning, no changes to the 28 live strategies or executor.
+Existing strategy #28 is not imported and is NEVER touched. All results
+exploratory/in-sample on historically inspected data, not actual bid/ask fills.
 """
 import os
 import csv
@@ -936,131 +929,389 @@ def anchor_rolling(cid,trades,assumption):
     return rows
 
 
-def run_research():
+
+# ============================================================
+# PREDECLARED NEW PASS: SIX INDEPENDENT MECHANISMS
+# ============================================================
+OUTPUT_DIR=Path(os.getenv('AUDJPY_SHORT_ALT_PASS1_OUTPUT_DIR','/tmp/audjpy_short_alt_pass1'))
+OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+OUTPUT_NAMES=('coverage','raw_engulf_parity','historical_control','mechanism_definitions','native_mechanism_parity',
+    'raw_family_summary','mechanism_matrix','matrix_marginal_attribution','matrix_adjacent_neighbours',
+    'matrix_axis_summary','representative_ledgers','representative_rolling',
+    'representative_calendar_years','methodology','errors')
+OUTS={name:str(OUTPUT_DIR/f'audjpy_short_alt_pass1_{name}.csv') for name in OUTPUT_NAMES}
+BUNDLE=str(OUTPUT_DIR/'AUDJPY_M15_SHORT_ALTERNATIVE_MECHANISMS_PASS1_RESULTS.zip')
+FIXED_END=datetime(2026,9,24,19,15,tzinfo=timezone.utc)  # 19:00 M15 open was fully closed
+EXPECTED_LAST='2026-09-24T19:00:00Z'
+EXPECTED_FIRST='2004-05-31T20:45:00Z'
+EXPECTED_CANDLES=546907
+EXPECTED_SHA='124e81dc0a8302d45433ed1db66e8df75cab7dc7a1237948bcef357a7b65153e'
+EXPECTED_BEARISH_RAW_SHA='81f0d6f3c26e7c4a48d053b33da0ce229dc857faaa08e0613a19438d3ff7102d'
+EXPECTED_BEARISH_LEDGER_SHA={2.0:'37e5d9cd21eebdbea97187477dc1f8688b2cadde3ba5acd7acc13570d46c2a3f',
+    4.0:'ea8d77cf87ef56a2273af87d66fa516304ccc098b42f3ce4c6f9b8b7c3154bb5'}
+# Preserve the date-origin of all last-N-year calculations in output rows.
+NOW=FIXED_END
+MATRIX_LB=(10,20,40,60)
+MATRIX_BODY=(.75,1.00,1.25)
+MATRIX_RANGE=(1.00,1.50,2.00)
+MATRIX_CONFIRM=(0.00,.25)
+FAMILIES=('FAILED_HIGH_BREAKOUT','HIGH_SWEEP_DISPLACEMENT','OUTSIDE_REVERSAL',
+          'COMPRESSION_BREAKDOWN','RALLY_REJECTION','DOWNSIDE_BREAKDOWN')
+EXPECTED_GRID=len(FAMILIES)*len(MATRIX_LB)*len(MATRIX_BODY)*len(MATRIX_RANGE)*len(MATRIX_CONFIRM)
+
+FAMILY_RULES={
+ 'FAILED_HIGH_BREAKOUT':'high > prior N high; close < prior N high minus confirm*ATR; bearish',
+ 'HIGH_SWEEP_DISPLACEMENT':'high > prior N high; close < previous M15 low minus confirm*ATR; bearish',
+ 'OUTSIDE_REVERSAL':'high > prior N high and low < prior N low; close location in bottom 40% (confirm=0) or bottom 20% (confirm=.25); bearish',
+ 'COMPRESSION_BREAKDOWN':'previous ATR14/previous 20-bar ATR average <=1.00 (confirm=0) or <=.80 (confirm=.25); close < prior N low; bearish',
+ 'RALLY_REJECTION':'high > prior N high, close < prior N high; preceding 16 M15-bar actual close rise >= .50 ATR (confirm=0) or 1.50 ATR (confirm=.25); bearish',
+ 'DOWNSIDE_BREAKDOWN':'close < prior N low minus confirm*ATR; bearish',
+}
+
+
+def family_mask_mirror(f,family,lb,confirm):
+    """Arrays in mirrored short-space: prior low = actual prior high."""
+    atr14=f['atr']; lo=f['low']; hi=f['high'];cl=f['close']
+    prev_low=f['prev_low'][lb];prev_high=f['prev_high'][lb]
+    prev_bar_high=np.r_[np.nan,hi[:-1]]  # actual previous candle low negated
+    bearish=f['bullish'] & f['valid_atr']
+    if family=='FAILED_HIGH_BREAKOUT':
+        m=(lo<prev_low)&(cl>prev_low+confirm*atr14)
+    elif family=='HIGH_SWEEP_DISPLACEMENT':
+        m=(lo<prev_low)&(cl>prev_bar_high+confirm*atr14)
+    elif family=='OUTSIDE_REVERSAL':
+        m=(lo<prev_low)&(hi>prev_high)&(f['close_loc']>=.60+.80*confirm)
+    elif family=='COMPRESSION_BREAKDOWN':
+        m=(f['compression']<=1.0-.8*confirm)&(cl>prev_high)
+    elif family=='RALLY_REJECTION':
+        m=(lo<prev_low)&(cl>prev_low)&(f['mom4']<=-(.50+4*confirm))
+    elif family=='DOWNSIDE_BREAKDOWN':
+        m=cl>prev_high+confirm*atr14
+    else:raise ValueError('Unknown family: '+family)
+    ret=np.asarray(bearish&m,dtype=bool)
+    ret[:200]=False
+    return ret
+
+
+def family_mask_native(f,family,lb,confirm):
+    """SEPARATELY assembled actual-price SELL predicates, not mirror function."""
+    high=-f['low'];low=-f['high'];close=-f['close'];op=-f['open'];a=f['atr']
+    prevhi=prev_extreme(high,lb,'max');prevlo=prev_extreme(low,lb,'min')
+    lastlow=np.r_[np.nan,low[:-1]]
+    bearish=(close<op)&np.isfinite(a)&(a>0)
+    if family=='FAILED_HIGH_BREAKOUT':
+        pred=(high>prevhi)&(close<prevhi-confirm*a)
+    elif family=='HIGH_SWEEP_DISPLACEMENT':
+        pred=(high>prevhi)&(close<lastlow-confirm*a)
+    elif family=='OUTSIDE_REVERSAL':
+        cloc=np.divide(close-low,high-low,out=np.full(len(a),np.nan),where=high>low)
+        pred=(high>prevhi)&(low<prevlo)&(cloc<=.40-.80*confirm+1e-12)
+    elif family=='COMPRESSION_BREAKDOWN':
+        pred=(f['compression']<=1-.8*confirm)&(close<prevlo)
+    elif family=='RALLY_REJECTION':
+        priorrise=-f['mom4']
+        pred=(high>prevhi)&(close<prevhi)&(priorrise>=.50+4*confirm)
+    elif family=='DOWNSIDE_BREAKDOWN':
+        pred=close<prevlo-confirm*a
+    else:raise ValueError(family)
+    ans=np.asarray(bearish&pred,dtype=bool)
+    ans[:200]=False
+    return ans
+
+
+def digest_indices(candles,ix):
+    h=hashlib.sha256()
+    for i in ix:h.update((iso(candles[i]['time'])+'\n').encode())
+    return h.hexdigest()
+
+
+def digest_ledger(trades):
+    h=hashlib.sha256()
+    for t in trades:
+        h.update((str(t['signal_index'])+'|'+str(t['exit_index'])+'|'+
+                  repr(t['result_r'])+'\n').encode())
+    return h.hexdigest()
+
+
+def paired(candles,ix):
+    return (backtest(candles,ix,RR_FIXED,PRIMARY_COST),
+            backtest(candles,ix,RR_FIXED,STRESS_COST))
+
+
+def family_parameters(family,lb,confirm):
+    return dict(family=family,lookback=lb,confirmation=confirm,
+                rule=FAMILY_RULES[family])
+
+
+def matrix_id(family,lb,confirm,body,rng):
+    return f'{family}__LB{lb}__C{confirm:.2f}__B{body:.2f}__R{rng:.2f}'
+
+
+def trade_public(t):
+    return {k:v for k,v in t.items() if k not in ('entry_time','exit_time')}
+
+
+def rolling(family,ledger,cost):
+    rows=[]
+    begin=month_floor(HISTORY_FIRST)
+    if begin<HISTORY_FIRST:begin=add_months(begin,1)
+    last_full=month_floor(FIXED_END)
+    for duration in (12,24,36):
+        t=begin
+        while add_months(t,duration)<=last_full:
+            end=add_months(t,duration)
+            sr=stats(subset(ledger,t,end))
+            rows.append(dict(family=family,assumed_adverse_fill_pips=cost,
+                window_months=duration,from_utc=iso(t),to_utc=iso(end),
+                trades=sr['trades'],total_r=sr['total_r'],
+                profit_factor=sr['profit_factor']))
+            t=add_months(t,1)
+    return rows
+
+
+def annual(family,ledger,cost):
+    rows=[]
+    for year in range(HISTORY_FIRST.year,FIXED_END.year+1):
+        left=datetime(year,1,1,tzinfo=timezone.utc)
+        right=datetime(year+1,1,1,tzinfo=timezone.utc)
+        st=stats(subset(ledger,left,right))
+        rows.append(dict(family=family,assumed_adverse_fill_pips=cost,
+             calendar_year=year,partial_year=year in (HISTORY_FIRST.year,FIXED_END.year),
+             trades=st['trades'],total_r=st['total_r'],
+             profit_factor=st['profit_factor']))
+    return rows
+
+
+def matrix_neighbours(rows):
+    keys=('family','lookback','confirmation','body_atr_min','range_atr_min')
+    table={tuple(row[k] for k in keys):row for row in rows}
+    levels=(FAMILIES,MATRIX_LB,MATRIX_CONFIRM,MATRIX_BODY,MATRIX_RANGE)
+    output=[]
+    for row in rows:
+        k=tuple(row[x] for x in keys)
+        for j in (1,2,3,4):
+            lev=levels[j]; n=lev.index(k[j]);
+            if n+1==len(lev):continue
+            neighbor=list(k);neighbor[j]=lev[n+1]
+            b=table.get(tuple(neighbor))
+            if b is None:continue
+            output.append(dict(from_id=row['config_id'],to_id=b['config_id'],axis=keys[j],
+                 from_value=k[j],to_value=neighbor[j],
+                 from_2pip_r=row['2pip_total_r'],to_2pip_r=b['2pip_total_r'],
+                 from_4pip_r=row['4pip_total_r'],to_4pip_r=b['4pip_total_r'],
+                 from_4pip_trades=row['4pip_trades'],to_4pip_trades=b['4pip_trades']))
+    return output
+
+
+def axis_summary(rows):
+    result=[]
+    for axis,levels in (('family',FAMILIES),('lookback',MATRIX_LB),
+                        ('confirmation',MATRIX_CONFIRM),('body_atr_min',MATRIX_BODY),
+                        ('range_atr_min',MATRIX_RANGE)):
+        for level in levels:
+            bucket=[x for x in rows if x[axis]==level]
+            enough=[x for x in bucket if x['4pip_trades']>=50]
+            result.append(dict(axis=axis,value=level,configs=len(bucket),
+                configs_with_50_trades=len(enough),
+                positive_2pip=sum(x['2pip_total_r']>0 for x in enough),
+                positive_4pip=sum(x['4pip_total_r']>0 for x in enough),
+                median_2pip_expectancy=med([x['2pip_expectancy_r'] for x in enough]),
+                median_4pip_expectancy=med([x['4pip_expectancy_r'] for x in enough]),
+                description='Descriptive only: highly overlapping configurations; not independent discoveries'))
+    return result
+
+
+def validate_all_mechanisms(candles,f):
+    rows=[]
+    for family in FAMILIES:
+        for lb,confirm in ((20,0.0),(40,.25)):
+            mirrored=np.flatnonzero(family_mask_mirror(f,family,lb,confirm)).tolist()
+            native=np.flatnonzero(family_mask_native(f,family,lb,confirm)).tolist()
+            if mirrored!=native:raise RuntimeError(f'NATIVE SIGNAL PARITY FAILED: {family} LB{lb} confirm{confirm}')
+            # Independently compute all accepted trades for each primary raw family.
+            for cost in (PRIMARY_COST,STRESS_COST):
+                trades=backtest(candles,mirrored,RR_FIXED,cost)
+                native_ledger=[];p=0
+                while p<len(native):
+                    trade=native_short_outcome(candles,native[p],RR_FIXED,cost)
+                    if trade is None:p+=1;continue
+                    native_ledger.append(trade)
+                    p=bisect.bisect_left(native,trade['exit_index'],lo=p+1)
+                if len(trades)!=len(native_ledger):
+                    raise RuntimeError(f'NATIVE TRADE COUNT PARITY FAILED: {family} {cost}')
+                checks=('signal_index','exit_index','reference_entry',
+                    'historical_fill','stop','target','result_r','exit_reason')
+                for a,b in zip(trades,native_ledger):
+                    for field in checks:
+                        if field in ('exit_reason',):ok=a[field]==b[field]
+                        elif field in ('signal_index','exit_index'):ok=a[field]==b[field]
+                        else:ok=abs(a[field]-b[field])<=1e-9
+                        if not ok:raise RuntimeError(f'NATIVE FULL LEDGER PARITY FAILED: {family} {cost} {field}')
+                rows.append(dict(family=family,lookback=lb,confirmation=confirm,
+                   assumed_adverse_fill_pips=cost,raw_signals=len(mirrored),
+                   accepted_trades=len(trades),raw_sha256=digest_indices(candles,mirrored),
+                   accepted_ledger_sha256=digest_ledger(trades),
+                   independent_native_signal_parity='PASS',
+                   independent_full_accepted_ledger_parity='PASS'))
+    return rows
+
+
+def run_alternatives():
     try:
-        STATUS.update(state='fetch',progress=1,message='Fetching AUD/JPY complete midpoint candles')
-        candles=fetch('M15',START,NOW,35)
-        if len(candles)<5000:raise RuntimeError('M15 history insufficient for a full-history study')
+        # Avoid packaging stale output from an earlier run/restart on the same research service.
+        for path in list(OUTS.values())+[BUNDLE]:
+            if os.path.isfile(path):os.remove(path)
+        STATUS.update(state='fetch',progress=1,message='Frozen AUD/JPY M15 OANDA MID history through 2026-09-24 19:00Z')
+        candles=fetch('M15',START,FIXED_END,35)
+        if len(candles)<5000:raise RuntimeError('History insufficient')
         global HISTORY_FIRST
         HISTORY_FIRST=candles[0]['time']
-        STATUS.update(progress=13,message='Fetching completed H1/H4/D contexts')
-        h1=fetch('H1',WARMUP,NOW,180)
-        h4=fetch('H4',WARMUP,NOW,700)
-        daily=fetch('D',WARMUP,NOW,3500)
-        if not (h1 and h4 and daily):raise RuntimeError('No complete H1/H4/D data')
-        write_csv(OUTS['coverage'],[{**hist_coverage(k,v),**midpoint_fingerprint(v,k)} for k,v in
-            (('M15',candles),('H1',h1),('H4',h4),('D',daily))])
-        STATUS.update(state='features',progress=26,message='Computing past-only indicators')
-        times=[c['time'] for c in candles]
-        f=features(candles,align_htf(times,htf_state(h1)),
-                   align_htf(times,htf_state(h4)),align_htf(times,htf_state(daily)))
-        STATUS.update(state='parity',progress=34,message='Independent native-SHORT control, raw indices and full ledgers at 2/4 pips')
-        check=check_native_short_parity(candles,f)
-        base=engulf_base(f)
-        raw_ix=np.flatnonzero(base).tolist()
-        raw2,raw4=evaluate(candles,raw_ix)
-        st=stats(raw2)
-        write_csv(OUTS['raw_engulf_control'],[
-            metrics_row('RAW','BEAR_ENGULF_BR1',{},raw_ix,raw2,raw4,st)])
-        write_csv(OUTS['raw_engulf_trades'],[
-            {k:v for k,v in tr.items() if k not in ('entry_time','exit_time')}
-            for tr in raw2])
-        STATUS.update(state='single_factor',progress=41,
-             message='Expanded one-factor diagnostics: each factor independently on engulfing')
-        extra=make_extra_features(f)
-        independent=independent_filters(f,extra)
-        factors=[]
-        for j,(group,axis,value,overlay) in enumerate(independent):
-            ix=np.flatnonzero(base&overlay).tolist()
-            tr2,tr4=evaluate(candles,ix)
-            cid='FACTOR__'+group+'__'+axis+'__'+str(value).replace('.','p')
-            row=metrics_row('ONE_FACTOR',cid,
-                dict(factor_group=group,threshold_kind=axis,threshold=value),
-                ix,tr2,tr4,st)
-            factors.append(row)
-            if j%16==15 or j==len(independent)-1:
-                STATUS.update(progress=41+int(18*(j+1)/len(independent)),
-                              message='Engulf-only filter %d/%d'%(j+1,len(independent)))
-                write_csv(OUTS['expanded_single_factors'],factors)
-            if j%36==35:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        STATUS.update(state='matrix',progress=60,
-                      message='Starting 336 predeclared SHORT engulfing prior-HIGH x body x range settings')
-        grid_rows=[];anchors=[];roll=[]
-        seen=set()
-        for j,(kind,lb,d,body,rng,mask) in enumerate(geometries(f,base)):
-            cid=config_id(lb,d,body,rng)
-            if cid in seen:raise RuntimeError('Duplicate config ID '+cid)
-            seen.add(cid)
-            ix=np.flatnonzero(mask).tolist()
-            tr2,tr4=evaluate(candles,ix)
-            r=metrics_row('MATRIX_'+kind,cid,dict(lookback=lb,distance_atr=d,
-                body_atr_min=body,range_atr_min=rng),ix,tr2,tr4,st)
-            grid_rows.append(r)
-            if (lb,d,body,rng) in FIXED_ANCHORS:
-                for assumption,ledger in ((2,tr2),(4,tr4)):
-                    roll.extend(anchor_rolling(cid,ledger,assumption))
-                    anchors.extend(dict(config_id=cid,assumed_fill_pips=assumption,
-                         **{k:v for k,v in t.items() if k not in ('entry_time','exit_time')})
-                         for t in ledger)
-            if j%12==11 or j==N_GEOMETRY-1:
-                STATUS.update(progress=60+int(34*(j+1)/N_GEOMETRY),
-                              message='Engulfing matrix %d/%d'%(j+1,N_GEOMETRY))
-                write_csv(OUTS['engulf_geometry_matrix'],grid_rows)
-            # clear grouped cache occasionally, not once per configuration
-            if j%48==47:OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
-        if len(grid_rows)!=N_GEOMETRY:raise RuntimeError('Incomplete matrix')
-        if sum(x['lookback']==0 for x in grid_rows)!=16:raise RuntimeError('Missing no-structure geometry controls')
-        if sum((r['lookback'],r['distance_atr'],r['body_atr_min'],r['range_atr_min'])
-            in FIXED_ANCHORS for r in grid_rows)!=len(FIXED_ANCHORS):
-            raise RuntimeError('Fixed anchor missing from matrix')
-        write_csv(OUTS['engulf_geometry_matrix'],grid_rows)
-        write_csv(OUTS['matrix_neighbours'],neighbours(grid_rows))
-        write_csv(OUTS['matrix_levels'],matrix_level_summary(grid_rows))
-        write_csv(OUTS['fixed_anchor_ledgers'],anchors)
-        write_csv(OUTS['rolling_fixed_anchors'],roll)
+        cov=hist_coverage('M15',candles)
+        fp=midpoint_fingerprint(candles,'M15')
+        row={**cov,**fp, 'expected_last_utc':EXPECTED_LAST,
+            'expected_midpoint_sha256':EXPECTED_SHA,
+            'source_parity':'PASS' if (cov['first_utc']==EXPECTED_FIRST and
+                cov['last_utc']==EXPECTED_LAST and cov['count']==EXPECTED_CANDLES and
+                fp['sha256_midpoint_ohlc']==EXPECTED_SHA) else 'FAIL',
+            'fixed_requested_to_utc':iso(FIXED_END)}
+        write_csv(OUTS['coverage'],[row])
+        if row['source_parity']!='PASS':
+            raise RuntimeError('OANDA M15 frozen-source parity FAILED: do not interpret any research metrics; inspect coverage.csv')
+        STATUS.update(state='features',progress=20,message='Causal M15 features; no future higher timeframe data')
+        n=len(candles)
+        fake_state={key:np.full(n,np.nan) for key in ('close','ema50','ema100','ema200','atr_ratio50')}
+        f=features(candles,fake_state,fake_state,fake_state)
+        STATUS.update(state='control',progress=31,message='Checking exact archived bearish engulf and independent family mechanisms')
+        control=check_native_short_parity(candles,f)
+        if any(x['raw_signal_sha256']!=EXPECTED_BEARISH_RAW_SHA or
+               x['accepted_ledger_sha256']!=EXPECTED_BEARISH_LEDGER_SHA[x['assumed_adverse_fill_pips']] or
+               x['accepted_trades']!=21136 for x in control):
+            raise RuntimeError('FROZEN bearish engulfing raw and complete-ledger control mismatch')
+        write_csv(OUTS['historical_control'],control)
+        family_checks=validate_all_mechanisms(candles,f)
+        write_csv(OUTS['native_mechanism_parity'],family_checks)
+        write_csv(OUTS['mechanism_definitions'],[
+            dict(family=fam,mechanism=FAMILY_RULES[fam],
+                 lookbacks=str(MATRIX_LB),body_atr_min=str(MATRIX_BODY),
+                 range_atr_min=str(MATRIX_RANGE),confirmation=str(MATRIX_CONFIRM),
+                 rule='Signal candle complete; all prior extrema exclude signal')
+            for fam in FAMILIES])
+        STATUS.update(state='raw_families',progress=42,message='Six stand-alone mechanisms, full chronological replay at 2/4 pips')
+        raw=[];rep=[];roll=[];years=[]
+        for i,fam in enumerate(FAMILIES):
+            ix=np.flatnonzero(family_mask_mirror(f,fam,20,0)).tolist()
+            tr2,tr4=paired(candles,ix)
+            raw.append(metrics_row('RAW_MECHANISM',fam+'__LB20',
+                 family_parameters(fam,20,0),ix,tr2,tr4,stats(tr2)))
+            for cost,trades in ((2,tr2),(4,tr4)):
+                rep.extend(dict(family=fam,assumed_adverse_fill_pips=cost,**trade_public(t)) for t in trades)
+                roll.extend(rolling(fam,trades,cost))
+                years.extend(annual(fam,trades,cost))
+            STATUS.update(progress=42+int(9*(i+1)/len(FAMILIES)),
+                message=f'Raw mechanism {i+1}/{len(FAMILIES)}')
+        write_csv(OUTS['raw_family_summary'],raw)
+        write_csv(OUTS['representative_ledgers'],rep)
+        write_csv(OUTS['representative_rolling'],roll)
+        write_csv(OUTS['representative_calendar_years'],years)
+        STATUS.update(state='mechanism_matrix',progress=52,message=f'Predeclared {EXPECTED_GRID} structural/quality candidates at both assumed costs')
+        rows=[];attrib=[];j=0
+        for fam,lb,confirm in itertools.product(FAMILIES,MATRIX_LB,MATRIX_CONFIRM):
+            family_base=family_mask_mirror(f,fam,lb,confirm)
+            family_base_ix=np.flatnonzero(family_base).tolist()
+            base2,base4=paired(candles,family_base_ix)
+            baseline_by_cost={2:base2,4:base4}
+            for body,rng in itertools.product(MATRIX_BODY,MATRIX_RANGE):
+                candidate=family_base&(f['body_atr']>=body)&(f['range_atr']>=rng)
+                ix=np.flatnonzero(candidate).tolist()
+                tr2,tr4=paired(candles,ix)
+                rid=matrix_id(fam,lb,confirm,body,rng)
+                axes={**family_parameters(fam,lb,confirm),
+                      'body_atr_min':body,'range_atr_min':rng}
+                row=metrics_row('ALTERNATIVE_MECHANISM_MATRIX',rid,axes,
+                    ix,tr2,tr4,stats(tr2))
+                for cost,trades in ((2,tr2),(4,tr4)):
+                    baseline=baseline_by_cost[cost]
+                    accepted_baseline={t['signal_index']:t for t in baseline}
+                    accepted_filtered={t['signal_index']:t for t in trades}
+                    retained=set(accepted_filtered)&set(accepted_baseline)
+                    new=set(accepted_filtered)-set(accepted_baseline)
+                    removed=set(accepted_baseline)-set(accepted_filtered)
+                    prefix=f'{cost}pip_'
+                    row[prefix+'accepted_new_vs_unfiltered']=len(new)
+                    row[prefix+'accepted_removed_vs_unfiltered']=len(removed)
+                    row[prefix+'accepted_retained_vs_unfiltered']=len(retained)
+                    row[prefix+'new_entries_total_r']=sum(accepted_filtered[k]['result_r'] for k in new)
+                    row[prefix+'removed_entries_total_r']=sum(accepted_baseline[k]['result_r'] for k in removed)
+                    attrib.append(dict(config_id=rid,family=fam,lookback=lb,confirmation=confirm,
+                        assumed_adverse_fill_pips=cost,
+                        unfiltered_accepted_trades=len(baseline),
+                        filtered_accepted_trades=len(trades),
+                        new_after_full_replay=len(new),removed_after_full_replay=len(removed),
+                        common_signal_indices=len(retained),
+                        new_entries_total_r=row[prefix+'new_entries_total_r'],
+                        removed_entries_total_r=row[prefix+'removed_entries_total_r'],
+                        unfiltered_total_r=stats(baseline)['total_r'],
+                        filtered_total_r=stats(trades)['total_r'],
+                        interpretation='Pyramiding-zero full replay; candidate-only new entries are NOT an independent tradable sleeve.'))
+                rows.append(row)
+                j+=1
+                if j%12==0 or j==EXPECTED_GRID:
+                    write_csv(OUTS['mechanism_matrix'],rows)
+                    STATUS.update(progress=52+int(42*j/EXPECTED_GRID),
+                         message=f'Mechanism matrix {j}/{EXPECTED_GRID}')
+                if j%48==0:
+                    OUTCOME_CACHE.clear();BACKTEST_CACHE.clear()
+        if j!=EXPECTED_GRID or len({r['config_id'] for r in rows})!=EXPECTED_GRID:
+            raise RuntimeError('INCOMPLETE/duplicate research matrix')
+        write_csv(OUTS['mechanism_matrix'],rows)
+        write_csv(OUTS['matrix_marginal_attribution'],attrib)
+        write_csv(OUTS['matrix_adjacent_neighbours'],matrix_neighbours(rows))
+        write_csv(OUTS['matrix_axis_summary'],axis_summary(rows))
         write_csv(OUTS['methodology'],[
-          dict(topic='SCOPE',detail='READ ONLY, AUD/JPY M15 SHORT exact bearish engulfing; no Portfolio 28 changes or orders'),
-          dict(topic='NATIVE_CONTROL',detail='Independent native bearish raw signals and full accepted ledger parity at 2 and 4 assumed pips; dynamic current-history SHA256, NOT the old bullish frozen ledger'),
-          dict(topic='PARAMETERS',detail='336 predeclared geometry settings: 16 no-structure + 320 prior-high structure x body x range; additional one-factor diagnostics independently'),
-          dict(topic='RR',detail='Fixed RR3.50; do not optimise exits or timing in this pass'),
-          dict(topic='COST',detail='Assumed 2-pip adverse SELL fill and 4-pip stress for all settings; not actual spread history'),
-          dict(topic='CAUSAL',detail='Signal OHLC at completed close; prior-only extrema and momentum; completed HTF through next actual open'),
-          dict(topic='EXECUTION',detail='Target from reference-close risk; actual R from fill; next-bar exit, closer-to-open tie stop fallback, exit-candle signal eligible'),
-          dict(topic='TIMING',detail='NY hours and weekdays only single-factor diagnostics, not combined or candidate selection'),
-          dict(topic='P0',detail='Recompute full chronological pyramiding-zero strategy then slice into eras; no fake boundary re-entry'),
-          dict(topic='OVERFITTING',detail='All eras repeatedly inspected. Broad neighbourhoods, cost cushion, frequency & early/late/recent matter; no automatic promotion'),
-          dict(topic='NEXT',detail='Inspect geometry landscape; test new filters CONDITIONALLY around several defensible representative regions only if warranted')])
+         dict(topic='SCOPE',detail='AUD_JPY M15 SHORT Pass 1B: alternate mechanism search, never deploy into Portfolio28.'),
+         dict(topic='FROZEN_SOURCE',detail=f'M15 OANDA midpoint #{len(candles)} through {EXPECTED_LAST}, SHA256 {EXPECTED_SHA}; fail closed on mismatch.'),
+         dict(topic='CONTROL',detail='Exact archived bearish engulfing raw sha and native full-ledger at two assumed costs; 6 family x 2 representative geometries x both costs native full-ledger check.'),
+         dict(topic='FAMILIES',detail='Six predeclared independently distinct raw mechanisms; see definitions CSV. Bearish engulfing NOT rescued here.'),
+         dict(topic='MATRIX',detail=f'Exactly {EXPECTED_GRID} predeclared combinations: 6 families x 4 lookbacks x 2 confirm x 3 body x 3 range.'),
+         dict(topic='COST',detail='All tests 2/4-pip assumed adverse SELL entry; NOT observed historical executable spread/slippage.'),
+         dict(topic='RR',detail='Reference RR 3.5 fixed; no RR or sessions optimised, all full-history p0 replays.'),
+         dict(topic='STOP_TARGET',detail='Stop=signal actual high + .010 JPY; target=reference close - 3.5 * reference stop distance, not fill-to-stop RR.'),
+         dict(topic='TIE',detail='Next-or-later bar; if both target/stop in M15 candle, nearer to open first; equal STOP; exit candle eligible.'),
+         dict(topic='HTF',detail='Only causal M15 info used in this pass. Later conditional studies may compute H1/H4/D as strictly completed state.'),
+         dict(topic='HISTORY',detail='Previously inspected AUD/JPY period => all results exploratory in-sample. Source cutoff fixed at prior Pass1 for strict comparability.'),
+         dict(topic='REPORT',detail='Rows include raw and accepted counts, period metrics, both fill costs; adjacent neighbours include weak/empty rows. Matrix marginal attribution compares each filtered branch to its own unfiltered mechanism and correctly replayed accepted stream; representative raw-family ledgers include years & zero-trade rolling windows.'),
+         dict(topic='NEXT',detail='Review economic mechanism, robust stressed neighbourhood, frequency and weak eras; freeze only justified branch anchors for separate Pass2 conditional features. No automatic selection, no portfolio tuning.'),
+        ])
         zip_outputs()
-        STATUS.update(state='complete',progress=100,native_short_parity='PASS',
-            full_candles=len(candles),single_factor_rows=len(factors),
-            geometry_rows=len(grid_rows),orders_supported=False,trading_enabled=False,
-            result_path='/audjpy-short-pass1/results',
-            message='Short engulfing-first matrix complete; no live changes')
+        STATUS.update(state='complete',progress=100,source_parity='PASS',
+            bearish_control_parity='PASS',native_mechanism_parity='PASS',
+            families=len(FAMILIES),matrix_rows=len(rows),full_candles=len(candles),
+            result_path='/audjpy-short-alternatives-pass1/results',
+            message='Pass 1B complete: no auto-selected strategy, Portfolio28 untouched',
+            orders_supported=False,trading_enabled=False)
     except Exception as exc:
         STATUS.update(state='error',message=str(exc),traceback=traceback.format_exc(),
             orders_supported=False,trading_enabled=False)
-        try:
-            write_csv(OUTS['errors'],[dict(error=str(exc),traceback=STATUS['traceback'])])
-            zip_outputs()
-        finally:print(STATUS['traceback'],flush=True)
+        write_csv(OUTS['errors'],[dict(error_type=type(exc).__name__,error=str(exc),
+             traceback=STATUS['traceback'])])
+        zip_outputs()
+        print(STATUS['traceback'],flush=True)
 
 
 @app.route('/')
-def root():
-    return jsonify(service='AUD/JPY M15 SHORT engulfing-first research',
-        state=STATUS['state'],status='/audjpy-short-pass1/status',
-        results='/audjpy-short-pass1/results',
-        orders_supported=False,trading_enabled=False)
+def home():
+    return jsonify(service='AUD/JPY SHORT alternative-mechanism discovery PASS 1B',
+                   status='/audjpy-short-alternatives-pass1/status',
+                   results='/audjpy-short-alternatives-pass1/results',
+                   orders_supported=False,trading_enabled=False)
 
+@app.route('/audjpy-short-alternatives-pass1/status')
+def progress():return jsonify(STATUS)
 
-@app.route('/audjpy-short-pass1/status')
-def status_route():return jsonify(STATUS)
-
-
-@app.route('/audjpy-short-pass1/results')
-def results_route():return download(BUNDLE)
-
+@app.route('/audjpy-short-alternatives-pass1/results')
+def results():return download(BUNDLE)
 
 if __name__=='__main__':
-    threading.Thread(target=run_research,daemon=True).start()
-    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),debug=False,use_reloader=False)
+    threading.Thread(target=run_alternatives,daemon=True).start()
+    app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')),
+            debug=False,use_reloader=False)
