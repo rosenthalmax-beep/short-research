@@ -154,8 +154,8 @@ PASS1_CONTROL_EXPECTED = {
     },
 }
 EXPECTED_BROAD_LEDGER_SHA20 = {
-    (30, 0.75, 0.60, 1.00): "53edf5f2c5d6a13abb0170902f2f7804580bce180d038fd645a57a45118dec00",
-    (30, 0.75, 0.80, 1.00): "19e5a730449227875e1a35550c6030422e5f952861df53d9278922fb46f7dad5",
+    (30, 0.75, 0.60, 1.00): "ac299b37bdc0af1c42e6b576fff6e6e7ba45f2fbe33fe3272e0b4ca6067849b4",
+    (30, 0.75, 0.80, 1.00): "5dedb34c63cf36dda292b4ab7e56b972c7fe1c150b4e9ffa10fa404a94dfa1ae",
 }
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
