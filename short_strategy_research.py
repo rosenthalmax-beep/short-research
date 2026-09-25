@@ -158,6 +158,12 @@ EXPECTED_BROAD_LEDGER_SHA20 = {
     (30, 0.75, 0.80, 1.00): "5dedb34c63cf36dda292b4ab7e56b972c7fe1c150b4e9ffa10fa404a94dfa1ae",
 }
 
+# HASHFIX V2: these expected SHA256 values were re-derived directly from
+# Pass 1 diagnostic_screen_accepted_ledgers.csv using Python stdlib csv parsing
+# and the exact accepted_ledger_hash serialization below. No research geometry,
+# costs, replay rules, data cutoff, or selection logic changed.
+PATCH_VERSION = "PASS1B_HASH_REFERENCE_FIX_V2_2026-09-25"
+
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
@@ -201,6 +207,11 @@ STATUS = {
     "tight_grid_rows": TIGHT_GRID_ROWS,
     "grid_rows": EXPECTED_GRID_ROWS,
     "frozen_pass1_cutoff": DATA_END.isoformat().replace("+00:00", "Z"),
+    "patch_version": PATCH_VERSION,
+    "expected_broad_ledger_sha20": {
+        "LB30_D075_B060_R100": EXPECTED_BROAD_LEDGER_SHA20[(30, 0.75, 0.60, 1.00)],
+        "LB30_D075_B080_R100": EXPECTED_BROAD_LEDGER_SHA20[(30, 0.75, 0.80, 1.00)],
+    },
 }
 STATUS_LOCK = threading.Lock()
 RESEARCH_LOCK = threading.Lock()
@@ -1330,6 +1341,12 @@ def launch_once():
 def root():
     return jsonify({
         "service": "AUD/JPY H1 LONG Pass 1B boundary clarification",
+        "patch_version": PATCH_VERSION,
+        "hash_reference_fix": True,
+        "expected_broad_ledger_sha20": {
+            "LB30_D075_B060_R100": EXPECTED_BROAD_LEDGER_SHA20[(30, 0.75, 0.60, 1.00)],
+            "LB30_D075_B080_R100": EXPECTED_BROAD_LEDGER_SHA20[(30, 0.75, 0.80, 1.00)],
+        },
         "research_only": True,
         "orders_supported": False,
         "trading_enabled": False,
