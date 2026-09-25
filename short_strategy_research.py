@@ -1,56 +1,43 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 LONG — Pass 4 final local plateau confirmation
-=========================================================
+AUD/JPY H1 LONG — Pass 5 RR-last sweep
+========================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Pass 1/1B established two frozen exact-bullish-engulf anchors. Pass 2 found a
-cross-anchor H1-volatility effect and a TIGHT prior-fall effect. Pass 3 mapped
-those boundaries and justified one TIGHT two-factor interaction. Pass 4 is the
-final ENTRY-GEOMETRY confirmation before any RR sweep.
+Entry geometry is FROZEN from the clean Pass 4 decision. This runner changes
+ONLY reward:risk and rebuilds the complete signal->trade chronology separately
+for every RR because target duration changes pyramiding-zero eligibility.
 
-It deliberately does NOT reopen discovery. It only maps four local regions:
-1) BROAD H1-volatility cap around the Pass-3 1.15–1.20 plateau;
-2) TIGHT H1-volatility-only cap around roughly 1.20–1.40;
-3) TIGHT prior-fall geometry around LB9–13 and -0.70 to -1.05 ATR;
-4) TIGHT H1-volatility x prior-fall local joint region around vol 1.15–1.35,
-   LB10–13 and fall -0.55 to -0.90 ATR.
+Frozen BROAD CORE
+-----------------
+- exact bullish engulf
+- previous 30-bar low
+- signal low within 0.75 ATR14 of that previous low
+- body >= 0.80 ATR14
+- range >= 1.00 ATR14
+- H1 ATR ratio <= 1.20
 
-Frozen anchors
---------------
-BROAD: LB30, structure distance<=0.75 ATR14, body>=0.80 ATR14,
-       range>=1.00 ATR14.
-TIGHT: LB12, structure distance<=0.15 ATR14, body>=1.00 ATR14,
-       range>=1.75 ATR14.
-
-Frozen execution
-----------------
-- exact bullish body engulfing
-- OANDA completed MID H1 candles
-- ATR14 Wilder/RMA, SMA seeded
-- reference entry = signal close
-- stop = signal low - 10 ticks
-- RR3.50 fixed
-- 10T / 1 pip adverse entry = primary live-parity case
-- 20T / 2 pips = stressed selection case
-- 40T / 4 pips = extreme diagnostic only
-- exits begin next H1 candle
-- p0 within each candidate; exact exit-candle signal remains eligible
-
-Fail-closed controls
+Frozen TIGHT QUALITY
 --------------------
-- exact Pass 1B H1/D1 source fingerprints and raw engulf fingerprint;
-- both frozen anchor complete accepted ledgers at all three costs;
-- four exact Pass 3 checkpoint candidate ledgers at all three costs.
+- exact bullish engulf
+- previous 12-bar low
+- signal low within 0.15 ATR14 of that previous low
+- body >= 1.00 ATR14
+- range >= 1.75 ATR14
+- previous 10 H1-bar price movement <= -0.90 ATR14
 
-No D1 filter, no new feature family, no body/range/structure retuning, no
-weekday/session search, no RR sweep, no three-factor interaction and no
-Portfolio 29 feedback occur here. All history is repeatedly examined and
-in-sample; this is local robustness mapping, not OOS proof.
+RR sweep
+--------
+2.50R through 4.50R in 0.25R increments, separately replayed at each RR.
+Historical fill assumptions remain 10T / 20T / 40T adverse. Entry rules,
+timing, structure, volatility/momentum thresholds and costs are NOT tuned here.
 
-Research template:
-/Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
+Fail-closed parity first reproduces the exact frozen 3.50R BROAD and TIGHT
+accepted ledgers at all three costs plus the frozen H1/D1/raw-signal hashes.
+
+All examined history is in-sample. This is an RR robustness study, not fresh
+out-of-sample evidence and not a live-trading authorisation.
 """
 
 from __future__ import annotations
@@ -88,7 +75,10 @@ D1_WARMUP_START = REQUESTED_START - timedelta(days=900)
 TICK = 0.001
 PIP = 0.01
 STOP_BUFFER_TICKS = 10
-REFERENCE_RR = 3.50
+REFERENCE_RR = 3.50  # parity/control only
+RR_GRID = (2.50, 2.75, 3.00, 3.25, 3.50, 3.75, 4.00, 4.25, 4.50)
+EXPECTED_RR_CONFIGS = 18
+assert len(RR_GRID) * 2 == EXPECTED_RR_CONFIGS
 COST_CASES = (
     ("LIVE_LIMIT_10T", 10, 1.0, "PRIMARY_LIVE_PARITY"),
     ("STRESS_20T", 20, 2.0, "STRESSED_SELECTION"),
@@ -163,33 +153,29 @@ ANCHOR_EXPECTED = {
     },
 }
 
-PASS_VERSION = "AUDJPY_H1_LONG_PASS4_LOCAL_PLATEAU_CONFIRMATION_V1_2026-09-25"
+PASS_VERSION = "AUDJPY_H1_LONG_PASS5_RR_SWEEP_V1_2026-09-25"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS4_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass4"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS5_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass5"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS4_LOCAL_PLATEAU_CONFIRMATION_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS5_RR_SWEEP_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
     "source_fingerprint": OUT_DIR / "source_fingerprint.csv",
     "parity": OUT_DIR / "parity.csv",
-    "anchor_parity": OUT_DIR / "anchor_parity.csv",
-    "anchor_ledgers": OUT_DIR / "anchor_accepted_ledgers.csv",
-    "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
-    "factor_plan": OUT_DIR / "pass4_plan.csv",
-    "pass3_checkpoint_parity": OUT_DIR / "pass3_checkpoint_parity.csv",
-    "conditional_summary": OUT_DIR / "candidate_summary.csv",
-    "delta_vs_anchor": OUT_DIR / "delta_vs_anchor.csv",
-    "family_summary": OUT_DIR / "family_summary_20T.csv",
-    "screen": OUT_DIR / "diagnostic_screen.csv",
-    "screen_ledgers": OUT_DIR / "diagnostic_screen_accepted_ledgers.csv",
-    "periods": OUT_DIR / "diagnostic_periods.csv",
-    "years": OUT_DIR / "diagnostic_calendar_years.csv",
-    "rolling": OUT_DIR / "diagnostic_rolling_12_24_36m.csv",
-    "rolling_summary": OUT_DIR / "diagnostic_rolling_summary.csv",
+    "rr35_parity": OUT_DIR / "rr35_frozen_geometry_parity.csv",
+    "rr_plan": OUT_DIR / "rr_sweep_plan.csv",
+    "summary": OUT_DIR / "rr_summary.csv",
+    "comparison": OUT_DIR / "rr_comparison_vs_3p50.csv",
+    "ledgers": OUT_DIR / "rr_full_accepted_ledgers.csv",
+    "periods": OUT_DIR / "rr_periods.csv",
+    "years": OUT_DIR / "rr_calendar_years.csv",
+    "rolling": OUT_DIR / "rr_rolling_12_24_36m.csv",
+    "rolling_summary": OUT_DIR / "rr_rolling_summary.csv",
+    "overlap": OUT_DIR / "rr_accepted_signal_overlap_vs_3p50.csv",
     "methodology": OUT_DIR / "methodology.csv",
     "errors": OUT_DIR / "error_report.csv",
 }
@@ -197,16 +183,19 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 LONG Pass 4 final local plateau waiting",
+    "message": "AUD/JPY H1 LONG Pass 5 RR sweep waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
     "timeframe": TIMEFRAME,
     "side": SIDE,
-    "rr_fixed": REFERENCE_RR,
+    "rr_grid": list(RR_GRID),
     "pass_version": PASS_VERSION,
-    "anchors": ANCHORS,
-    "candidate_configurations": EXPECTED_CANDIDATES,
+    "frozen_geometries": {
+        "BROAD_CORE": {**ANCHORS["BROAD"], "h1_atr_ratio_max": 1.20},
+        "TIGHT_QUALITY": {**ANCHORS["TIGHT"], "prior_fall_lookback": 10, "prior_fall_max_atr": -0.90},
+    },
+    "rr_configurations": EXPECTED_RR_CONFIGS,
     "frozen_pass1b_cutoff": DATA_END.isoformat().replace("+00:00", "Z"),
 }
 STATUS_LOCK = threading.Lock()
@@ -214,6 +203,7 @@ RESEARCH_LOCK = threading.Lock()
 RESEARCH_STARTED = False
 
 app = Flask(__name__)
+
 
 # ============================================================
 # GENERIC HELPERS
@@ -1208,44 +1198,143 @@ def diagnostics_for_config(records, config_id, accepted, cost_label):
 # MAIN RESEARCH
 # ============================================================
 
+# ============================================================
+# PASS 5 — FROZEN GEOMETRIES + RR-LAST REPLAY
+# ============================================================
+
+FROZEN_GEOMETRIES = {
+    "BROAD_CORE": {
+        "anchor": "BROAD",
+        "description": "LB30 D<=0.75 body>=0.80 range>=1.00 H1_ATR_RATIO<=1.20",
+        "extra": ("h1_atr_ratio_max", 1.20),
+    },
+    "TIGHT_QUALITY": {
+        "anchor": "TIGHT",
+        "description": "LB12 D<=0.15 body>=1.00 range>=1.75 prior10H_move<=-0.90ATR",
+        "extra": ("momentum_10_max", -0.90),
+    },
+}
+
+# Exact clean Pass-4 / Pass-3 checkpoint controls at RR3.50.
+RR35_EXPECTED = {
+    "BROAD_CORE": {
+        "qualified": 637, "accepted": 593,
+        "LIVE_LIMIT_10T": dict(total_r=136.37606147318655, profit_factor=1.321641654417893, max_drawdown_r=-28.208826967563546, ledger_sha256="0ce964ea127cdc1c6ed226759c0bcd700cba6236bf949bc2d2c57fd02f163a2d"),
+        "STRESS_20T": dict(total_r=108.09399479523447, profit_factor=1.2549386669698928, max_drawdown_r=-29.575128601667565, ledger_sha256="1ab7e9720d8a66db5f1cb00b09972faffbb677f6a4dc02bb64e7e3a5f9365926"),
+        "EXTREME_40T": dict(total_r=58.473696740053725, profit_factor=1.1379096621227682, max_drawdown_r=-33.872721831025444, ledger_sha256="0b14bca77a1f30de3a4950b9cb4fa130d227d9525b80574a2fc2fed326e9fc81"),
+    },
+    "TIGHT_QUALITY": {
+        "qualified": 58, "accepted": 55,
+        "LIVE_LIMIT_10T": dict(total_r=41.19459741629266, profit_factor=2.24832113382705, max_drawdown_r=-6.0, ledger_sha256="3115bb85c707a240e6fa9a3d71a9df45cbc4156945d8ef5fb8d48d1d63bdfb09"),
+        "STRESS_20T": dict(total_r=38.565544144106845, profit_factor=2.168652852851723, max_drawdown_r=-6.0, ledger_sha256="51ba7bd7ae106b697a710368b42a8f325e4eaf408498d35929c29e49dec13750"),
+        "EXTREME_40T": dict(total_r=33.76966748261716, profit_factor=2.023323257049005, max_drawdown_r=-6.0, ledger_sha256="fdc20e3f5b230a8a345382d608413e03fce05f8cc55194e09c517259941ea9a5"),
+    },
+}
+
+
+def build_raw_outcomes_rr(features, raw_indices, daily_states, rr):
+    """Build exits and cost-R values from scratch for ONE RR."""
+    records = []
+    censored = 0
+    for k, i in enumerate(raw_indices):
+        if k % 1500 == 0:
+            set_status(message=f"RR{rr:.2f}: raw outcome {k}/{len(raw_indices)}")
+        entry = float(features["close"][i])
+        stop = float(features["low"][i]) - STOP_BUFFER_TICKS * TICK
+        ref_risk = entry - stop
+        if ref_risk <= 0:
+            continue
+        target = entry + rr * ref_risk
+        exit_index, reason = find_exit(features, int(i), stop, target)
+        if exit_index is None:
+            censored += 1
+            continue
+        row = {
+            "raw_position": len(records), "signal_index": int(i), "exit_index": int(exit_index),
+            "signal_time": features["times"][i], "exit_time": features["times"][exit_index],
+            "reference_entry": entry, "stop": stop, "target": target, "exit_reason": reason,
+            "bull_ratio": float(features["bull_ratio"][i]),
+            "body_atr": float(features["body_atr"][i]), "range_atr": float(features["range_atr"][i]),
+            "close_location": float(features["close_location"][i]), "lower_wick_body": float(features["lower_wick_body"][i]),
+            "previous_body_atr": float(features["previous_body_atr"][i]) if math.isfinite(features["previous_body_atr"][i]) else math.nan,
+            "previous_range_atr": float(features["previous_range_atr"][i]) if math.isfinite(features["previous_range_atr"][i]) else math.nan,
+            "previous_close_location": float(features["previous_close_location"][i]) if math.isfinite(features["previous_close_location"][i]) else math.nan,
+            "h1_atr_ratio": float(features["h1_atr_ratio"][i]) if math.isfinite(features["h1_atr_ratio"][i]) else math.nan,
+            "daily_close_gt_ema50": bool(daily_states["close_gt_ema50"][i]),
+            "daily_close_gt_ema100": bool(daily_states["close_gt_ema100"][i]),
+            "daily_close_gt_ema200": bool(daily_states["close_gt_ema200"][i]),
+            "daily_ema50_gt_ema200": bool(daily_states["ema50_gt_ema200"][i]),
+            "daily_atr_ratio": float(daily_states["atr_ratio"][i]) if math.isfinite(daily_states["atr_ratio"][i]) else math.nan,
+            "hour_utc": features["times"][i].hour, "weekday_utc": features["times"][i].weekday(),
+        }
+        for lb in STRUCTURE_LOOKBACKS:
+            structure = features["prev_lows"][lb][i]
+            row[f"structure_dist_{lb}"] = abs(float(features["low"][i]) - float(structure)) / float(features["atr"][i]) if math.isfinite(structure) else math.nan
+        for lb in MOMENTUM_LOOKBACKS:
+            value = features["momentum"][lb][i]
+            row[f"momentum_{lb}"] = float(value) if math.isfinite(value) else math.nan
+        for label, ticks, pips, purpose in COST_CASES:
+            result_r, fill = result_r_for_cost(entry, stop, target, reason, pips)
+            if result_r is None:
+                raise RuntimeError(f"Invalid actual risk for {label} RR{rr:.2f} at {iso(features['times'][i])}")
+            row[f"result_r__{label}"] = float(result_r)
+            row[f"fill__{label}"] = float(fill)
+        records.append(row)
+    return records, censored
+
+
+def execution_parity_sample_rr(features, candles, records, rr, sample_n=100):
+    failures = []
+    for row in records[:sample_n]:
+        i = row["signal_index"]
+        entry = float(candles[i]["close"])
+        stop = float(candles[i]["low"]) - STOP_BUFFER_TICKS * TICK
+        target = entry + rr * (entry - stop)
+        exit_i, reason = scalar_exit_from_candles(candles, i, stop, target)
+        if exit_i != row["exit_index"] or reason != row["exit_reason"]:
+            failures.append(f"exit mismatch {i}")
+            continue
+        for label, ticks, pips, purpose in COST_CASES:
+            got, _ = result_r_for_cost(entry, stop, target, reason, pips)
+            if abs(got - row[f"result_r__{label}"]) > 1e-12:
+                failures.append(f"R mismatch {i} {label}")
+    return failures
+
+
+def frozen_geometry_mask(arr, geometry_id):
+    spec = FROZEN_GEOMETRIES[geometry_id]
+    base = anchor_mask(arr, spec["anchor"])
+    if geometry_id == "BROAD_CORE":
+        x = arr["h1_atr_ratio"]
+        extra = np.isfinite(x) & (x <= 1.20)
+    elif geometry_id == "TIGHT_QUALITY":
+        x = arr["momentum_10"]
+        extra = np.isfinite(x) & (x <= -0.90)
+    else:
+        raise RuntimeError(f"Unknown frozen geometry: {geometry_id}")
+    return base & extra
+
+
+def rr_config_id(geometry_id, rr):
+    return f"{geometry_id}__RR{rr:.2f}"
+
+
+def signal_key(record):
+    return (record["signal_index"], iso(record["signal_time"]))
+
 def run_research():
     try:
-        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass 1B H1/D1 OANDA midpoint history")
+        set_status(state="fetching", progress=2, message="Fetching exact frozen H1/D1 OANDA midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
         d1_fetched = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
-
-        # Freeze D1 to the exact source state used by clean Pass 1B/2/3.
-        #
-        # Why this is necessary:
-        # - DATA_END is an H1 cutoff (2026-09-25 19:00Z).
-        # - OANDA D1 candles are aligned to 17:00 America/New_York.
-        # - The D1 candle opened 2026-09-24 21:00Z is *before* DATA_END but
-        #   did not complete until after DATA_END.
-        # - A later rerun sees that candle as complete=True and would otherwise
-        #   add it retrospectively, changing the frozen D1 source/hash.
-        #
-        # We therefore keep only D1 rows whose OPEN is no later than the exact
-        # last D1 open present in Pass 3, then demand the original row count and
-        # SHA. This does NOT relax parity: any revision inside the frozen prefix
-        # still fails the hash gate.
         d1 = [x for x in d1_fetched if x["time"] <= EXPECTED_D1_LAST_OPEN]
 
         h1_times = [x["time"] for x in h1]
-        d1_fetched_times = [x["time"] for x in d1_fetched]
         d1_times = [x["time"] for x in d1]
-        if h1_times != sorted(set(h1_times)):
-            raise RuntimeError("H1 timestamps are duplicated or non-monotonic")
-        if d1_fetched_times != sorted(set(d1_fetched_times)):
-            raise RuntimeError("Fetched D1 timestamps are duplicated or non-monotonic")
-        if d1_times != sorted(set(d1_times)):
-            raise RuntimeError("Frozen D1 timestamps are duplicated or non-monotonic")
-        if not h1 or not d1 or h1[-1]["time"] >= DATA_END:
+        if h1_times != sorted(set(h1_times)) or d1_times != sorted(set(d1_times)):
+            raise RuntimeError("Frozen timestamps duplicated/non-monotonic")
+        if not h1 or not d1 or h1[-1]["time"] >= DATA_END or d1[-1]["time"] != EXPECTED_D1_LAST_OPEN:
             raise RuntimeError("Frozen source coverage invalid")
-        if d1[-1]["time"] != EXPECTED_D1_LAST_OPEN:
-            raise RuntimeError(
-                f"Frozen D1 last-open mismatch: got {iso(d1[-1]['time'])}, "
-                f"expected {iso(EXPECTED_D1_LAST_OPEN)}"
-            )
 
         h1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in h1)
         d1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in d1)
@@ -1257,7 +1346,6 @@ def run_research():
             {"series":"AUD_JPY_H1_MID_OHLC","sha256":h1_sha,"rows":len(h1)},
             {"series":"AUD_JPY_D1_MID_OHLC","sha256":d1_sha,"rows":len(d1)},
         ])
-
         checks = [
             {"check":"H1_ROW_COUNT","status":"PASS" if len(h1)==EXPECTED_H1_ROWS else "FAIL","actual":len(h1),"expected":EXPECTED_H1_ROWS},
             {"check":"D1_ROW_COUNT","status":"PASS" if len(d1)==EXPECTED_D1_ROWS else "FAIL","actual":len(d1),"expected":EXPECTED_D1_ROWS},
@@ -1266,283 +1354,139 @@ def run_research():
         ]
         if any(x["status"] != "PASS" for x in checks):
             write_csv(OUTPUTS["parity"], checks)
-            raise RuntimeError("Frozen Pass 1B source parity FAILED; do not interpret Pass 4")
+            raise RuntimeError("Frozen source parity FAILED; do not interpret RR sweep")
 
-        set_status(state="features", progress=10, message="Building H1/D1 features and raw-signal parity")
+        set_status(state="features", progress=8, message="Building features and raw-signal parity")
         features = build_h1_features(h1)
         daily_states = build_daily_states(d1, features["times"])
         vec_raw = raw_exact_vector_indices(features)
         scalar_raw = raw_exact_scalar_indices(h1, features["atr"])
         vec_hash = sha_rows(iso(features["times"][i]) for i in vec_raw)
         scalar_hash = sha_rows(iso(features["times"][i]) for i in scalar_raw)
-        raw_ok = (
-            len(vec_raw)==EXPECTED_RAW_SIGNAL_COUNT
-            and len(scalar_raw)==EXPECTED_RAW_SIGNAL_COUNT
-            and np.array_equal(vec_raw,scalar_raw)
-            and vec_hash==scalar_hash==EXPECTED_RAW_SIGNAL_SHA256
-        )
-        checks.append({
-            "check":"RAW_SIGNAL_VECTOR_SCALAR_AND_PASS1B_FINGERPRINT",
-            "status":"PASS" if raw_ok else "FAIL",
-            "vector_count":len(vec_raw),"scalar_count":len(scalar_raw),
-            "vector_sha256":vec_hash,"scalar_sha256":scalar_hash,
-            "expected_count":EXPECTED_RAW_SIGNAL_COUNT,"expected_sha256":EXPECTED_RAW_SIGNAL_SHA256,
-        })
+        raw_ok = len(vec_raw)==EXPECTED_RAW_SIGNAL_COUNT and len(scalar_raw)==EXPECTED_RAW_SIGNAL_COUNT and np.array_equal(vec_raw,scalar_raw) and vec_hash==scalar_hash==EXPECTED_RAW_SIGNAL_SHA256
+        checks.append({"check":"RAW_SIGNAL_VECTOR_SCALAR_AND_FINGERPRINT","status":"PASS" if raw_ok else "FAIL","vector_count":len(vec_raw),"scalar_count":len(scalar_raw),"vector_sha256":vec_hash,"scalar_sha256":scalar_hash,"expected_count":EXPECTED_RAW_SIGNAL_COUNT,"expected_sha256":EXPECTED_RAW_SIGNAL_SHA256})
         if not raw_ok:
             write_csv(OUTPUTS["parity"], checks)
             raise RuntimeError("Raw signal parity/fingerprint FAILED")
 
-        set_status(state="raw_replay", progress=16, message="Replaying frozen raw exact-engulf outcomes")
-        records, censored = build_raw_outcomes(features, vec_raw, daily_states)
-        exec_failures = execution_parity_sample(features, h1, records, sample_n=min(100,len(records)))
-        checks.append({
-            "check":"EXECUTION_SCALAR_RECOMPUTE_FIRST_100",
-            "status":"PASS" if not exec_failures else "FAIL",
-            "sample":min(100,len(records)),"failures":"; ".join(exec_failures[:10]),
-        })
+        # Mandatory bridge: independently rebuild RR3.50 and match both frozen candidate ledgers.
+        set_status(state="rr35_parity", progress=14, message="Reproducing frozen RR3.50 BROAD/TIGHT ledgers at all costs")
+        control_records, control_censored = build_raw_outcomes_rr(features, vec_raw, daily_states, 3.50)
+        exec_failures = execution_parity_sample_rr(features, h1, control_records, 3.50, sample_n=min(100,len(control_records)))
+        checks.append({"check":"RR3P50_EXECUTION_SCALAR_RECOMPUTE_FIRST_100","status":"PASS" if not exec_failures else "FAIL","sample":min(100,len(control_records)),"failures":"; ".join(exec_failures[:10])})
         write_csv(OUTPUTS["parity"], checks)
         if exec_failures:
-            raise RuntimeError("Execution parity FAILED")
+            raise RuntimeError("RR3.50 execution parity FAILED")
 
-        raw_export=[]
-        for r in records:
-            row=dict(r); row["signal_time"]=iso(row["signal_time"]); row["exit_time"]=iso(row["exit_time"]); raw_export.append(row)
-        write_csv(OUTPUTS["raw_signals"], raw_export)
-        arr = all_record_arrays(records)
-
-        set_status(state="anchor_parity", progress=22, message="Reproducing both frozen Pass 1B anchors at all costs")
-        anchor_masks = {name: anchor_mask(arr,name) for name in ANCHORS}
-        anchor_accepted = {}
-        anchor_rows = []
-        anchor_ledger_rows = []
-        parity_rows = []
-        for name in ANCHORS:
-            summary, accepted = summarize_config(records, anchor_masks[name], {
-                "config_id":f"ANCHOR_{name}","anchor":name,"stage":"PASS2_FROZEN_ANCHOR","rr":REFERENCE_RR,**ANCHORS[name],
-            })
-            anchor_accepted[name] = accepted
-            anchor_rows.extend(summary)
-            expected = ANCHOR_EXPECTED[name]
-            qualified_count = int(np.sum(anchor_masks[name]))
-            for row in summary:
-                label=row["cost_label"]
-                exp=expected[label]
-                ledger_sha=accepted_ledger_hash(records, accepted, label)
-                ok=(
-                    qualified_count==expected["qualified_raw_signals"]
-                    and len(accepted)==expected["accepted_trades"]
-                    and abs(float(row["total_r"])-float(exp["total_r"]))<1e-10
-                    and abs(float(row["profit_factor"])-float(exp["profit_factor"]))<1e-10
-                    and abs(float(row["max_drawdown_r"])-float(exp["max_drawdown_r"]))<1e-10
-                    and ledger_sha==exp["ledger_sha256"]
-                )
-                parity_rows.append({
-                    "anchor":name,"cost_label":label,"status":"PASS" if ok else "FAIL",
-                    "qualified_raw_signals":qualified_count,"expected_qualified_raw_signals":expected["qualified_raw_signals"],
-                    "accepted_trades":len(accepted),"expected_accepted_trades":expected["accepted_trades"],
-                    "total_r":row["total_r"],"expected_total_r":exp["total_r"],
-                    "profit_factor":row["profit_factor"],"expected_profit_factor":exp["profit_factor"],
-                    "max_drawdown_r":row["max_drawdown_r"],"expected_max_drawdown_r":exp["max_drawdown_r"],
-                    "ledger_sha256":ledger_sha,"expected_ledger_sha256":exp["ledger_sha256"],
-                })
-                for seq,p in enumerate(accepted,start=1):
-                    r=records[p]
-                    anchor_ledger_rows.append({
-                        "anchor":name,"cost_label":label,"sequence":seq,
-                        "signal_time":iso(r["signal_time"]),"exit_time":iso(r["exit_time"]),
-                        "signal_index":r["signal_index"],"exit_index":r["exit_index"],
-                        "reference_entry":r["reference_entry"],"historical_fill":r[f"fill__{label}"],
-                        "stop":r["stop"],"target":r["target"],"exit_reason":r["exit_reason"],
-                        "result_r":r[f"result_r__{label}"],
-                    })
-        write_csv(OUTPUTS["anchor_parity"], parity_rows)
-        write_csv(OUTPUTS["anchor_ledgers"], anchor_ledger_rows)
-        if any(x["status"] != "PASS" for x in parity_rows):
-            raise RuntimeError("Frozen Pass 1B anchor full-ledger parity FAILED; do not interpret Pass 4")
-
-        # Direct Pass-3 checkpoint bridge: reproduce four exact conditional
-        # candidates before any new Pass-4 local geometry is evaluated.
-        checkpoint_rows = []
-        for checkpoint_id, exp, extra_mask in pass3_checkpoint_plan(arr):
-            anchor = exp["anchor"]
-            cmask = anchor_masks[anchor] & extra_mask
-            rows, accepted = summarize_config(records, cmask, {
-                "config_id": f"CHECKPOINT_{checkpoint_id}",
-                "anchor": anchor,
-                "stage": "PASS3_FROZEN_CHECKPOINT",
-                "rr": REFERENCE_RR,
-                **ANCHORS[anchor],
-            })
-            qualified = int(np.sum(cmask))
-            for row in rows:
-                label = row["cost_label"]
-                target = exp[label]
-                ledger_sha = accepted_ledger_hash(records, accepted, label)
-                # Match the exact Pass-3 metrics plus the complete ledger SHA.
-                # Any mismatch fails closed before the Pass-4 grid is interpreted.
-                ok = (
-                    qualified == exp["qualified"]
-                    and len(accepted) == exp["accepted"]
-                    and abs(float(row["total_r"]) - float(target["total_r"])) < 1e-10
-                    and abs(float(row["profit_factor"]) - float(target["profit_factor"])) < 1e-10
-                    and abs(float(row["max_drawdown_r"]) - float(target["max_drawdown_r"])) < 1e-10
-                    and ledger_sha == target["ledger_sha256"]
-                )
-                checkpoint_rows.append({
-                    "checkpoint_id": checkpoint_id,
-                    "anchor": anchor,
-                    "cost_label": label,
-                    "status": "PASS" if ok else "FAIL",
-                    "qualified_raw_signals": qualified,
-                    "expected_qualified_raw_signals": exp["qualified"],
-                    "accepted_trades": len(accepted),
-                    "expected_accepted_trades": exp["accepted"],
-                    "total_r": row["total_r"],
-                    "expected_total_r": target["total_r"],
-                    "profit_factor": row["profit_factor"],
-                    "expected_profit_factor": target["profit_factor"],
-                    "max_drawdown_r": row["max_drawdown_r"],
-                    "expected_max_drawdown_r": target["max_drawdown_r"],
-                    "ledger_sha256": ledger_sha,
-                    "expected_ledger_sha256": target["ledger_sha256"],
-                })
-        write_csv(OUTPUTS["pass3_checkpoint_parity"], checkpoint_rows)
-        if any(x["status"] != "PASS" for x in checkpoint_rows):
-            raise RuntimeError("Pass 3 checkpoint full-ledger parity FAILED; do not interpret Pass 4")
-
-        candidates = list(pass4_candidate_plan(arr))
-        if len(candidates) != EXPECTED_CANDIDATES:
-            raise RuntimeError(f"Pass 4 plan enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {len(candidates)}")
-        plan_rows=[]
-        for i,c in enumerate(candidates,start=1):
-            plan_rows.append({
-                "candidate_number":i,"candidate_id":c["candidate_id"],"anchor":c["anchor"],
-                "family":c["family"],"description":c["description"],
-                "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
-                "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
-                "application":"PREDECLARED_PASS4_FINAL_LOCAL_PLATEAU",
-            })
-        write_csv(OUTPUTS["factor_plan"], plan_rows)
-
-        set_status(state="candidate_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} final local Pass 4 configurations")
-        summary_rows=[]
-        delta_rows=[]
-        accepted_by_id={}
-        candidate_meta={}
-        candidate_count=0
-        for c in candidates:
-            candidate_count += 1
-            if candidate_count % 20 == 0:
-                set_status(message=f"Pass 4 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
-            anchor=c["anchor"]
-            amask=anchor_masks[anchor]
-            anchor_qualified=int(np.sum(amask))
-            cid=c["candidate_id"]
-            cmask=amask & c["mask"]
-            meta={
-                "config_id":cid,"stage":"PASS4_LOCAL_PLATEAU_CONFIRMATION","anchor":anchor,
-                "factor_id":cid,"factor_family":c["family"],
-                "description":c["description"],
-                "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
-                "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
-                "rr":REFERENCE_RR,**ANCHORS[anchor],
-            }
-            rows,accepted=summarize_config(records,cmask,meta)
-            accepted_by_id[cid]=accepted
-            candidate_meta[cid]=meta
-            candidate_qualified=int(np.sum(cmask))
-            for row in rows:
-                row["anchor_qualified_raw_signals"]=anchor_qualified
-                row["conditional_qualified_raw_signals"]=candidate_qualified
-                row["qualified_signal_retention_pct"]=100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0
-                summary_rows.append(row)
-                comp=compare_to_anchor(records,anchor_accepted[anchor],accepted,row["cost_label"])
-                delta_rows.append({
-                    "config_id":cid,"anchor":anchor,"factor_id":cid,"factor_family":c["family"],
-                    "description":c["description"],
-                    "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
-                    "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
-                    "cost_label":row["cost_label"],
-                    "anchor_qualified_raw_signals":anchor_qualified,"candidate_qualified_raw_signals":candidate_qualified,
-                    "qualified_signal_retention_pct":100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0,
-                    **comp,
-                })
-        if candidate_count != EXPECTED_CANDIDATES:
-            raise RuntimeError(f"Candidate enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {candidate_count}")
-        write_csv(OUTPUTS["conditional_summary"], summary_rows)
-        write_csv(OUTPUTS["delta_vs_anchor"], delta_rows)
-        write_csv(OUTPUTS["family_summary"], family_summary_rows(summary_rows,delta_rows))
-
-        screen_rows=diagnostic_screen_rows(summary_rows,delta_rows)
-        write_csv(OUTPUTS["screen"],screen_rows)
-        diag_ids=sorted({x["config_id"] for x in screen_rows})
-
-        set_status(state="diagnostics", progress=82, message=f"Building periods/rolling diagnostics for {len(diag_ids)} mechanical screen rows plus both anchors")
-        ledger_rows=[]; period_rows=[]; year_rows=[]; rolling_rows=[]; rolling_summary_rows=[]
-        diagnostics=[]
-        for anchor in ANCHORS:
-            diagnostics.append((f"ANCHOR_{anchor}",anchor,anchor_accepted[anchor]))
-        for cid in diag_ids:
-            diagnostics.append((cid,candidate_meta[cid]["anchor"],accepted_by_id[cid]))
-        for config_id,anchor,accepted in diagnostics:
+        carr = all_record_arrays(control_records)
+        rr35_rows=[]
+        for gid in FROZEN_GEOMETRIES:
+            mask=frozen_geometry_mask(carr,gid)
+            qualified=int(np.sum(mask))
+            accepted=replay_positions(control_records,np.flatnonzero(mask).astype(int).tolist())
+            exp=RR35_EXPECTED[gid]
             for label,ticks,pips,purpose in COST_CASES:
-                for seq,p in enumerate(accepted,start=1):
-                    r=records[p]
-                    ledger_rows.append({
-                        "config_id":config_id,"anchor":anchor,"cost_label":label,"sequence":seq,
-                        "signal_time":iso(r["signal_time"]),"exit_time":iso(r["exit_time"]),
-                        "signal_index":r["signal_index"],"exit_index":r["exit_index"],
-                        "reference_entry":r["reference_entry"],"historical_fill":r[f"fill__{label}"],
-                        "stop":r["stop"],"target":r["target"],"exit_reason":r["exit_reason"],
-                        "result_r":r[f"result_r__{label}"],
-                    })
-                p_rows,y_rows,r_rows,rs_rows=diagnostics_for_config(records,config_id,accepted,label)
-                for x in p_rows: x["anchor"]=anchor
-                for x in y_rows: x["anchor"]=anchor
-                for x in r_rows: x["anchor"]=anchor
-                for x in rs_rows: x["anchor"]=anchor
-                period_rows.extend(p_rows); year_rows.extend(y_rows); rolling_rows.extend(r_rows); rolling_summary_rows.extend(rs_rows)
-        write_csv(OUTPUTS["screen_ledgers"],ledger_rows)
+                m=metrics(control_records,accepted,label)
+                ledger_sha=accepted_ledger_hash(control_records,accepted,label)
+                target=exp[label]
+                ok=(qualified==exp["qualified"] and len(accepted)==exp["accepted"] and abs(m["total_r"]-target["total_r"])<1e-10 and abs(m["profit_factor"]-target["profit_factor"])<1e-10 and abs(m["max_drawdown_r"]-target["max_drawdown_r"])<1e-10 and ledger_sha==target["ledger_sha256"])
+                rr35_rows.append({"geometry_id":gid,"rr":3.50,"cost_label":label,"status":"PASS" if ok else "FAIL","qualified_raw_signals":qualified,"expected_qualified_raw_signals":exp["qualified"],"accepted_trades":len(accepted),"expected_accepted_trades":exp["accepted"],"total_r":m["total_r"],"expected_total_r":target["total_r"],"profit_factor":m["profit_factor"],"expected_profit_factor":target["profit_factor"],"max_drawdown_r":m["max_drawdown_r"],"expected_max_drawdown_r":target["max_drawdown_r"],"ledger_sha256":ledger_sha,"expected_ledger_sha256":target["ledger_sha256"]})
+        write_csv(OUTPUTS["rr35_parity"],rr35_rows)
+        if any(x["status"]!="PASS" for x in rr35_rows):
+            raise RuntimeError("Frozen RR3.50 full-ledger parity FAILED; do not interpret RR sweep")
+
+        plan=[]
+        n=0
+        for gid,spec in FROZEN_GEOMETRIES.items():
+            for rr in RR_GRID:
+                n+=1
+                plan.append({"configuration_number":n,"config_id":rr_config_id(gid,rr),"geometry_id":gid,"rr":rr,"description":spec["description"],"application":"FROZEN_ENTRY_GEOMETRY_RR_ONLY"})
+        if n != EXPECTED_RR_CONFIGS:
+            raise RuntimeError(f"RR plan mismatch: {n} vs {EXPECTED_RR_CONFIGS}")
+        write_csv(OUTPUTS["rr_plan"],plan)
+
+        set_status(state="rr_sweep", progress=22, message=f"Running {EXPECTED_RR_CONFIGS} frozen-geometry RR configurations")
+        summary_rows=[]; ledger_rows=[]; period_rows=[]; year_rows=[]; rolling_rows=[]; rolling_summary_rows=[]
+        accepted_signals={}; censored_by_rr={}
+        cache_records={3.50:control_records}
+        for rr_i,rr in enumerate(RR_GRID,start=1):
+            set_status(progress=22+int(60*rr_i/len(RR_GRID)),message=f"RR sweep {rr_i}/{len(RR_GRID)}: RR{rr:.2f}")
+            if rr in cache_records:
+                records=cache_records[rr]
+                censored=control_censored
+            else:
+                records,censored=build_raw_outcomes_rr(features,vec_raw,daily_states,rr)
+            censored_by_rr[rr]=censored
+            if rr in (2.50,4.50):
+                fails=execution_parity_sample_rr(features,h1,records,rr,sample_n=min(50,len(records)))
+                if fails:
+                    raise RuntimeError(f"RR{rr:.2f} scalar execution parity FAILED: {fails[:5]}")
+            arr=all_record_arrays(records)
+            for gid,spec in FROZEN_GEOMETRIES.items():
+                mask=frozen_geometry_mask(arr,gid)
+                qualified=int(np.sum(mask))
+                accepted=replay_positions(records,np.flatnonzero(mask).astype(int).tolist())
+                cid=rr_config_id(gid,rr)
+                accepted_signals[(gid,rr)]={signal_key(records[p]) for p in accepted}
+                anchor=spec["anchor"]
+                for label,ticks,pips,purpose in COST_CASES:
+                    m=metrics(records,accepted,label)
+                    summary_rows.append({"config_id":cid,"geometry_id":gid,"anchor":anchor,"rr":rr,"cost_label":label,"adverse_ticks":ticks,"adverse_pips":pips,"cost_purpose":purpose,"qualified_raw_signals":qualified,"accepted_trades":len(accepted),"raw_outcomes_censored_at_cutoff":censored,**m})
+                    for seq,p in enumerate(accepted,start=1):
+                        r=records[p]
+                        ledger_rows.append({"config_id":cid,"geometry_id":gid,"anchor":anchor,"rr":rr,"cost_label":label,"sequence":seq,"signal_time":iso(r["signal_time"]),"exit_time":iso(r["exit_time"]),"signal_index":r["signal_index"],"exit_index":r["exit_index"],"reference_entry":r["reference_entry"],"historical_fill":r[f"fill__{label}"],"stop":r["stop"],"target":r["target"],"exit_reason":r["exit_reason"],"result_r":r[f"result_r__{label}"]})
+                    p_rows,y_rows,r_rows,rs_rows=diagnostics_for_config(records,cid,accepted,label)
+                    for x in p_rows: x.update({"geometry_id":gid,"anchor":anchor,"rr":rr})
+                    for x in y_rows: x.update({"geometry_id":gid,"anchor":anchor,"rr":rr})
+                    for x in r_rows: x.update({"geometry_id":gid,"anchor":anchor,"rr":rr})
+                    for x in rs_rows: x.update({"geometry_id":gid,"anchor":anchor,"rr":rr})
+                    period_rows.extend(p_rows); year_rows.extend(y_rows); rolling_rows.extend(r_rows); rolling_summary_rows.extend(rs_rows)
+
+        write_csv(OUTPUTS["summary"],summary_rows)
+        write_csv(OUTPUTS["ledgers"],ledger_rows)
         write_csv(OUTPUTS["periods"],period_rows)
         write_csv(OUTPUTS["years"],year_rows)
         write_csv(OUTPUTS["rolling"],rolling_rows)
         write_csv(OUTPUTS["rolling_summary"],rolling_summary_rows)
 
+        # Deltas and chronology overlap relative to RR3.50, descriptive only.
+        control_map={(r["geometry_id"],r["cost_label"]):r for r in summary_rows if abs(float(r["rr"])-3.50)<1e-12}
+        comparison=[]
+        overlap=[]
+        for r in summary_rows:
+            c=control_map[(r["geometry_id"],r["cost_label"])]
+            comparison.append({"config_id":r["config_id"],"geometry_id":r["geometry_id"],"rr":r["rr"],"cost_label":r["cost_label"],"accepted_trades":r["accepted_trades"],"control_rr":3.50,"control_accepted_trades":c["accepted_trades"],"delta_trades":r["accepted_trades"]-c["accepted_trades"],"total_r":r["total_r"],"control_total_r":c["total_r"],"delta_total_r":r["total_r"]-c["total_r"],"expectancy_r":r["expectancy_r"],"control_expectancy_r":c["expectancy_r"],"delta_expectancy_r":r["expectancy_r"]-c["expectancy_r"],"profit_factor":r["profit_factor"],"control_profit_factor":c["profit_factor"],"delta_profit_factor":r["profit_factor"]-c["profit_factor"],"max_drawdown_r":r["max_drawdown_r"],"control_max_drawdown_r":c["max_drawdown_r"],"delta_max_drawdown_r":r["max_drawdown_r"]-c["max_drawdown_r"]})
+        for gid in FROZEN_GEOMETRIES:
+            base=accepted_signals[(gid,3.50)]
+            for rr in RR_GRID:
+                cur=accepted_signals[(gid,rr)]
+                overlap.append({"geometry_id":gid,"rr":rr,"accepted_signals":len(cur),"rr3p50_signals":len(base),"intersection":len(cur & base),"only_this_rr":len(cur-base),"only_rr3p50":len(base-cur),"jaccard_pct":100.0*len(cur&base)/len(cur|base) if cur|base else 100.0,"raw_outcomes_censored_at_cutoff":censored_by_rr[rr]})
+        write_csv(OUTPUTS["comparison"],comparison)
+        write_csv(OUTPUTS["overlap"],overlap)
+
         methodology=[
-            {"topic":"purpose","value":"Pass 4 final local entry-geometry plateau confirmation using only regions justified by clean Pass 3."},
-            {"topic":"broad_anchor","value":json.dumps(ANCHORS["BROAD"],sort_keys=True)},
-            {"topic":"tight_anchor","value":json.dumps(ANCHORS["TIGHT"],sort_keys=True)},
-            {"topic":"parity","value":"Fails closed unless exact Pass 1B H1/D1/raw-signal fingerprints, both full anchor ledgers, and four exact Pass-3 checkpoint ledgers match at 10T/20T/40T."},
-            {"topic":"execution","value":"exact bullish engulf; signal-close reference; stop=signal low-10 ticks; RR3.50 fixed; next-H1 exits; p0; exact exit-candle re-entry eligible."},
-            {"topic":"costs","value":"10T primary live-parity; 20T stressed selection; 40T extreme diagnostic only. Historical MID shifts are assumed costs, not measured executable spreads/slippage."},
-            {"topic":"broad_vol_local","value":"BROAD only: H1 ATR ratio cap 1.10–1.26, concentrated around Pass-3 1.15–1.20 plateau."},
-            {"topic":"tight_vol_local","value":"TIGHT only: H1 ATR ratio cap 1.15–1.45 around Pass-3 1.20–1.40 region."},
-            {"topic":"tight_prior_fall_local","value":"TIGHT only: lookbacks 9–13; prior-fall thresholds -0.70 to -1.05 signal ATR."},
-            {"topic":"tight_vol_x_fall_local","value":"TIGHT only: 5 H1-vol caps x 4 fall lookbacks x 6 fall thresholds = 120 local two-factor cells; no D1 or third factor."},
-            {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay."},
-            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no body/range/structure retuning, no new filters, no three-way interactions, no Portfolio 29 selection feedback."},
-            {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only; it does not freeze a rule. Full neighbourhood/era/rolling evidence must be reviewed."},
-            {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. Recent/era/rolling diagnostics are robustness descriptions, not untouched OOS tests."},
-            {"topic":"next_gate","value":"If a stable local region survives, freeze the entry geometry (one BROAD core and at most one genuinely useful TIGHT alternative) and move to RR-last replay. Do not reopen entry-rule discovery."},
+            {"topic":"purpose","value":"RR-last sweep after Pass 4 froze entry geometry. No entry rule changes."},
+            {"topic":"broad_core","value":json.dumps({**ANCHORS["BROAD"],"h1_atr_ratio_max":1.20},sort_keys=True)},
+            {"topic":"tight_quality","value":json.dumps({**ANCHORS["TIGHT"],"prior_fall_lookback":10,"prior_fall_max_atr":-0.90},sort_keys=True)},
+            {"topic":"rr_grid","value":json.dumps(list(RR_GRID))},
+            {"topic":"parity","value":"Fail closed on exact H1/D1/raw signal source fingerprints and exact RR3.50 BROAD/TIGHT full accepted ledgers at 10T/20T/40T."},
+            {"topic":"execution","value":"For every RR independently: reference entry=signal close; stop=signal low-10 ticks; target=reference entry + RR*reference risk; exits begin next H1 candle; same tie convention; p0 replay rebuilt independently; exit-candle re-entry eligible."},
+            {"topic":"costs","value":"10T primary live-parity, 20T stressed selection, 40T extreme diagnostic. Assumed historical MID entry penalties, not observed historical executable spreads/slippage."},
+            {"topic":"right_censoring","value":"Raw exact signals whose RR-specific target/stop does not resolve before frozen cutoff are right-censored and reported per RR."},
+            {"topic":"selection_rule","value":"Interpret the RR neighbourhood, periods, rolling windows, costs and chronology changes. Do not simply select the largest lifetime R."},
+            {"topic":"not_tested","value":"No entry geometry changes, no new filters, no timing search, no portfolio feedback, no live orders."},
+            {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. This RR sweep is historical robustness evidence, not untouched OOS validation."},
+            {"topic":"next_gate","value":"Freeze RR only after reviewing the full neighbourhood. Then independently reproduce the chosen complete ledger before any Portfolio 29->30 admission test."},
         ]
         write_csv(OUTPUTS["methodology"],methodology)
-
-        if OUTPUTS["errors"].exists():
-            OUTPUTS["errors"].unlink()
+        if OUTPUTS["errors"].exists(): OUTPUTS["errors"].unlink()
         pack_results()
-        set_status(
-            state="complete",progress=100,message="AUD/JPY H1 LONG Pass 4 complete; ZIP ready",
-            parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),raw_closed_outcomes=len(records),
-            candidate_configurations=candidate_count,
-            diagnostic_configurations=len(diag_ids),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE),
-        )
+        set_status(state="complete",progress=100,message="AUD/JPY H1 LONG Pass 5 RR sweep complete; ZIP ready",parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),rr_configurations=EXPECTED_RR_CONFIGS,summary_rows=len(summary_rows),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE))
     except Exception as exc:
         tb=traceback.format_exc()
         write_csv(OUTPUTS["errors"],[{"error_type":type(exc).__name__,"message":str(exc),"traceback":tb}])
-        try:
-            pack_results()
-        except Exception:
-            pass
+        try: pack_results()
+        except Exception: pass
         set_status(state="failed",progress=100,message=f"{type(exc).__name__}: {exc}",parity_passed=False)
 
 # ============================================================
@@ -1555,35 +1499,37 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED=True
-        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass4").start()
+        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass5-rr-sweep").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service":"AUD/JPY H1 LONG Pass 4 final local plateau confirmation",
+        "service":"AUD/JPY H1 LONG Pass 5 RR-last sweep",
         "pass_version":PASS_VERSION,
         "research_only":True,"orders_supported":False,"trading_enabled":False,
-        "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
-        "anchors":ANCHORS,"candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),"d1_source_freeze_patch":D1_SOURCE_FREEZE_PATCH,
+        "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,
+        "rr_grid":list(RR_GRID),"rr_configurations":EXPECTED_RR_CONFIGS,
+        "frozen_geometries":STATUS["frozen_geometries"],
+        "frozen_end_exclusive":iso(DATA_END),"d1_source_freeze_patch":D1_SOURCE_FREEZE_PATCH,
         "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
-        "routes":["/audjpy-h1-long-pass4/start","/audjpy-h1-long-pass4/status","/audjpy-h1-long-pass4/results"],
+        "routes":["/audjpy-h1-long-pass5/start","/audjpy-h1-long-pass5/status","/audjpy-h1-long-pass5/results"],
     })
 
 
-@app.route("/audjpy-h1-long-pass4/start")
+@app.route("/audjpy-h1-long-pass5/start")
 def start_route():
     return jsonify({"started_now":launch_once(),"state":STATUS["state"],"orders_supported":False})
 
 
-@app.route("/audjpy-h1-long-pass4/status")
+@app.route("/audjpy-h1-long-pass5/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-long-pass4/results")
+@app.route("/audjpy-h1-long-pass5/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status":"not_ready","state":STATUS["state"],"message":STATUS["message"]}),404
