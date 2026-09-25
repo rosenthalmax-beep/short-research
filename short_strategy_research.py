@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 LONG — Pass 2 conditional-feature discovery
-======================================================
+AUD/JPY H1 LONG — Pass 3 boundary + justified interactions
+===========================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Pass 1/1B established two frozen exact-bullish-engulf anchors on the identical
-AUD/JPY H1 midpoint history. Pass 2 holds each anchor geometry and RR fixed and
-tests ONE additional conditional feature at a time. No interactions are allowed
-in this pass.
+Pass 1/1B established two frozen exact-bullish-engulf anchors. Pass 2 tested
+one conditional feature at a time and found one cross-anchor effect strong
+enough to carry forward: a cap on current H1 ATR relative to its previous-50
+H1 ATR mean. The TIGHT anchor also showed a coherent prior-fall neighbourhood
+and secondary bearish completed-D1 regimes.
+
+Pass 3 is deliberately bounded. It does NOT reopen the full Pass 2 feature
+search. It only:
+1) maps the H1-volatility cap boundary on BOTH frozen anchors;
+2) maps the TIGHT prior-fall neighbourhood across nearby lookbacks/thresholds;
+3) tests three predeclared TIGHT two-factor interaction families:
+   H1-vol cap x prior fall, H1-vol cap x bearish D1 regime,
+   prior fall x bearish D1 regime.
 
 Frozen anchors
 --------------
@@ -31,19 +40,13 @@ Frozen execution
 - exits begin next H1 candle
 - p0 within each candidate; exact exit-candle signal remains eligible
 
-Conditional families
---------------------
-Each filter is tested separately inside BROAD and separately inside TIGHT:
-engulf body ratio, strong close, lower wick, H1 ATR state, prior H1 movement,
-previous-bar quality, completed-D1 trend/regime, and completed-D1 ATR state.
-No weekday/session search, RR sweep, parameter interactions, or Portfolio 29
-feedback occurs here.
+The source cutoff and exact Pass 1B fingerprints remain frozen. BOTH anchors
+must reproduce complete accepted-ledger SHA256 hashes at all three costs before
+any Pass 3 candidate is evaluated.
 
-The source cutoff and source/raw-signal fingerprints are frozen to the clean
-Pass 1B rerun. Both anchors must reproduce exact full accepted-ledger SHA256
-hashes at all three costs before any Pass 2 candidate is evaluated.
-
-All history is repeatedly examined/in-sample. This is discovery, not OOS proof.
+No RR sweep, weekday/session search, new entry geometry, three-way interaction,
+or Portfolio 29 feedback occurs here. All history is repeatedly examined and
+in-sample; this is robustness mapping, not OOS proof.
 
 Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
@@ -98,42 +101,34 @@ EXTREME_COST_LABEL = "EXTREME_40T"
 # preserve the Pass 1B raw-outcome schema and support exact anchor parity.
 STRUCTURE_LOOKBACKS = (10, 12, 15, 20, 25, 30, 40, 60, 80, 100, 150)
 GRID_LOOKBACKS = (12, 30)
-MOMENTUM_LOOKBACKS = (4, 8, 12, 24, 48)
+MOMENTUM_LOOKBACKS = (4, 8, 10, 12, 14, 16, 24, 48)
 
 ANCHORS = {
     "BROAD": dict(lookback=30, distance_atr_max=0.75, body_atr_min=0.80, range_atr_min=1.00),
     "TIGHT": dict(lookback=12, distance_atr_max=0.15, body_atr_min=1.00, range_atr_min=1.75),
 }
 
-# Pass 2 one-factor levels. These are predeclared and deliberately contain no
-# pairwise interactions. Both >= and <= volatility/momentum states are tested
-# where economically interpretable so directionality is discovered rather than
-# assumed.
-BULL_RATIO_LEVELS = (1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.75, 2.00)
-CLOSE_LOCATION_LEVELS = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
-LOWER_WICK_BODY_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00)
-H1_ATR_RATIO_LEVELS = (0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30, 1.40)
-MOMENTUM_THRESHOLDS = (0.25, 0.50, 0.75, 1.00, 1.50, 2.00)
-D1_ATR_RATIO_LEVELS = (0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.40)
-PREVIOUS_BODY_ATR_MIN_LEVELS = (0.20, 0.40, 0.60, 0.80, 1.00, 1.25)
-PREVIOUS_RANGE_ATR_MIN_LEVELS = (0.50, 0.75, 1.00, 1.25, 1.50, 1.75)
-PREVIOUS_CLOSE_LOCATION_MAX_LEVELS = (0.50, 0.40, 0.30, 0.20, 0.10)
-
-COMMON_FACTOR_ROWS = (
-    len(BULL_RATIO_LEVELS)
-    + len(CLOSE_LOCATION_LEVELS)
-    + len(LOWER_WICK_BODY_LEVELS)
-    + 2 * len(H1_ATR_RATIO_LEVELS)
-    + len(MOMENTUM_LOOKBACKS) * len(MOMENTUM_THRESHOLDS) * 2
-    + 2 * len(D1_ATR_RATIO_LEVELS)
-    + len(PREVIOUS_BODY_ATR_MIN_LEVELS)
-    + len(PREVIOUS_RANGE_ATR_MIN_LEVELS)
-    + len(PREVIOUS_CLOSE_LOCATION_MAX_LEVELS)
-    + 8  # completed-D1 boolean regimes and their complements
+# Pass 3 predeclared boundary and interaction levels. These are intentionally
+# narrow and justified only by the clean Pass 2 findings.
+H1_VOL_CAP_LEVELS = (1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50, 1.55, 1.60)
+TIGHT_FALL_LOOKBACKS = (8, 10, 12, 14, 16)
+TIGHT_FALL_LEVELS = (0.30, 0.40, 0.50, 0.60, 0.75, 0.90, 1.00)
+INTERACTION_VOL_LEVELS = (1.10, 1.20, 1.30, 1.40, 1.50)
+INTERACTION_FALL_LEVELS = (0.40, 0.50, 0.60, 0.75, 0.90)
+BEARISH_D1_REGIMES = (
+    ("D1_CLOSE_LE_EMA50", "close<=ema50"),
+    ("D1_CLOSE_LE_EMA100", "close<=ema100"),
+    ("D1_EMA50_LE_EMA200", "ema50<=ema200"),
 )
-EXPECTED_CANDIDATES = COMMON_FACTOR_ROWS * len(ANCHORS)
-assert COMMON_FACTOR_ROWS == 138
-assert EXPECTED_CANDIDATES == 276
+
+EXPECTED_CANDIDATES = (
+    2 * len(H1_VOL_CAP_LEVELS)
+    + len(TIGHT_FALL_LOOKBACKS) * len(TIGHT_FALL_LEVELS)
+    + len(INTERACTION_VOL_LEVELS) * len(INTERACTION_FALL_LEVELS)
+    + len(INTERACTION_VOL_LEVELS) * len(BEARISH_D1_REGIMES)
+    + len(INTERACTION_FALL_LEVELS) * len(BEARISH_D1_REGIMES)
+)
+assert EXPECTED_CANDIDATES == 116
 
 # Exact clean Pass 1B source/raw-signal fingerprints.
 EXPECTED_H1_ROWS = 137969
@@ -162,14 +157,14 @@ ANCHOR_EXPECTED = {
     },
 }
 
-PASS_VERSION = "AUDJPY_H1_LONG_PASS2_ONE_FACTOR_V1_2026-09-25"
+PASS_VERSION = "AUDJPY_H1_LONG_PASS3_BOUNDARY_INTERACTIONS_V1_2026-09-25"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS2_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass2"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS3_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass3"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS2_CONDITIONAL_FEATURES_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS3_BOUNDARY_INTERACTIONS_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
@@ -178,8 +173,8 @@ OUTPUTS = {
     "anchor_parity": OUT_DIR / "anchor_parity.csv",
     "anchor_ledgers": OUT_DIR / "anchor_accepted_ledgers.csv",
     "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
-    "factor_plan": OUT_DIR / "factor_plan.csv",
-    "conditional_summary": OUT_DIR / "conditional_summary.csv",
+    "factor_plan": OUT_DIR / "pass3_plan.csv",
+    "conditional_summary": OUT_DIR / "candidate_summary.csv",
     "delta_vs_anchor": OUT_DIR / "delta_vs_anchor.csv",
     "family_summary": OUT_DIR / "family_summary_20T.csv",
     "screen": OUT_DIR / "diagnostic_screen.csv",
@@ -195,7 +190,7 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 LONG Pass 2 waiting",
+    "message": "AUD/JPY H1 LONG Pass 3 waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
@@ -204,7 +199,6 @@ STATUS = {
     "rr_fixed": REFERENCE_RR,
     "pass_version": PASS_VERSION,
     "anchors": ANCHORS,
-    "one_factor_rows_per_anchor": COMMON_FACTOR_ROWS,
     "candidate_configurations": EXPECTED_CANDIDATES,
     "frozen_pass1b_cutoff": DATA_END.isoformat().replace("+00:00", "Z"),
 }
@@ -854,7 +848,7 @@ def all_record_arrays(records):
     return out
 
 # ============================================================
-# PASS 2 EXPERIMENT PLAN — ONE CONDITIONAL FEATURE AT A TIME
+# PASS 3 EXPERIMENT PLAN — BOUNDED BOUNDARIES + JUSTIFIED INTERACTIONS
 # ============================================================
 
 def fmt_level(value):
@@ -874,60 +868,90 @@ def anchor_mask(arr, anchor_name):
     )
 
 
-def conditional_factor_plan(arr):
-    """Yield predeclared ONE-factor conditions only. No interactions."""
-    n = len(arr["bull_ratio"])
-    base = np.ones(n, dtype=bool)
+def bearish_daily_regime_masks(arr):
+    return {
+        "D1_CLOSE_LE_EMA50": ~arr["daily_close_gt_ema50"],
+        "D1_CLOSE_LE_EMA100": ~arr["daily_close_gt_ema100"],
+        "D1_EMA50_LE_EMA200": ~arr["daily_ema50_gt_ema200"],
+    }
 
-    for v in BULL_RATIO_LEVELS:
-        yield dict(factor_id=f"BR_MIN_{fmt_level(v)}", family="body_ratio", operator=">=", parameter="bull_ratio", threshold=v, mask=base & (arr["bull_ratio"] >= v))
 
-    for v in CLOSE_LOCATION_LEVELS:
-        yield dict(factor_id=f"CLOSE_LOC_MIN_{fmt_level(v)}", family="strong_close", operator=">=", parameter="close_location", threshold=v, mask=base & (arr["close_location"] >= v))
-
-    for v in LOWER_WICK_BODY_LEVELS:
-        yield dict(factor_id=f"LOWER_WICK_BODY_MIN_{fmt_level(v)}", family="lower_wick", operator=">=", parameter="lower_wick_body", threshold=v, mask=base & (arr["lower_wick_body"] >= v))
-
+def pass3_candidate_plan(arr):
+    """Yield the 116 predeclared Pass 3 candidates. No hidden search."""
     h1v = arr["h1_atr_ratio"]
-    for v in H1_ATR_RATIO_LEVELS:
-        yield dict(factor_id=f"H1_ATR_RATIO_MIN_{fmt_level(v)}", family="h1_volatility", operator=">=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v >= v))
-        yield dict(factor_id=f"H1_ATR_RATIO_MAX_{fmt_level(v)}", family="h1_volatility", operator="<=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v <= v))
+    regimes = bearish_daily_regime_masks(arr)
 
-    for lb in MOMENTUM_LOOKBACKS:
+    # 1) Cross-anchor H1 volatility-cap boundary map.
+    for anchor in ("BROAD", "TIGHT"):
+        for v in H1_VOL_CAP_LEVELS:
+            mask = np.isfinite(h1v) & (h1v <= v)
+            yield dict(
+                anchor=anchor,
+                candidate_id=f"P3_{anchor}__H1_ATR_RATIO_MAX_{fmt_level(v)}",
+                family="h1_vol_boundary",
+                description=f"H1 ATR ratio <= {v}",
+                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=v,
+                parameter_2="", operator_2="", threshold_2="",
+                mask=mask,
+            )
+
+    # 2) TIGHT prior-fall boundary map.
+    for lb in TIGHT_FALL_LOOKBACKS:
         x = arr[f"momentum_{lb}"]
-        for v in MOMENTUM_THRESHOLDS:
-            yield dict(factor_id=f"PRIOR_RISE_LB{lb}_MIN_{fmt_level(v)}", family="prior_momentum", operator=">=", parameter=f"momentum_{lb}", threshold=v, mask=base & np.isfinite(x) & (x >= v))
-            yield dict(factor_id=f"PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(v)}", family="prior_momentum", operator="<=", parameter=f"momentum_{lb}", threshold=-v, mask=base & np.isfinite(x) & (x <= -v))
+        for v in TIGHT_FALL_LEVELS:
+            mask = np.isfinite(x) & (x <= -v)
+            yield dict(
+                anchor="TIGHT",
+                candidate_id=f"P3_TIGHT__PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(v)}",
+                family="tight_prior_fall",
+                description=f"prior {lb} H1 movement <= -{v} ATR",
+                parameter_1=f"momentum_{lb}", operator_1="<=", threshold_1=-v,
+                parameter_2="", operator_2="", threshold_2="",
+                mask=mask,
+            )
 
-    pbody = arr["previous_body_atr"]
-    for v in PREVIOUS_BODY_ATR_MIN_LEVELS:
-        yield dict(factor_id=f"PREV_BODY_ATR_MIN_{fmt_level(v)}", family="previous_bar_body", operator=">=", parameter="previous_body_atr", threshold=v, mask=base & np.isfinite(pbody) & (pbody >= v))
+    # 3a) TIGHT H1-volatility cap x prior-12H fall.
+    x12 = arr["momentum_12"]
+    for vol in INTERACTION_VOL_LEVELS:
+        for fall in INTERACTION_FALL_LEVELS:
+            mask = np.isfinite(h1v) & (h1v <= vol) & np.isfinite(x12) & (x12 <= -fall)
+            yield dict(
+                anchor="TIGHT",
+                candidate_id=f"P3_TIGHT__H1ATR_MAX_{fmt_level(vol)}__FALL_LB12_NEG{fmt_level(fall)}",
+                family="tight_vol_x_fall",
+                description=f"H1 ATR ratio <= {vol} AND prior12 movement <= -{fall} ATR",
+                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=vol,
+                parameter_2="momentum_12", operator_2="<=", threshold_2=-fall,
+                mask=mask,
+            )
 
-    prange = arr["previous_range_atr"]
-    for v in PREVIOUS_RANGE_ATR_MIN_LEVELS:
-        yield dict(factor_id=f"PREV_RANGE_ATR_MIN_{fmt_level(v)}", family="previous_bar_range", operator=">=", parameter="previous_range_atr", threshold=v, mask=base & np.isfinite(prange) & (prange >= v))
+    # 3b) TIGHT H1-volatility cap x one bearish completed-D1 regime.
+    for vol in INTERACTION_VOL_LEVELS:
+        for regime_id, regime_label in BEARISH_D1_REGIMES:
+            mask = np.isfinite(h1v) & (h1v <= vol) & regimes[regime_id]
+            yield dict(
+                anchor="TIGHT",
+                candidate_id=f"P3_TIGHT__H1ATR_MAX_{fmt_level(vol)}__{regime_id}",
+                family="tight_vol_x_daily",
+                description=f"H1 ATR ratio <= {vol} AND {regime_label}",
+                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=vol,
+                parameter_2="daily_regime", operator_2="bool", threshold_2=regime_label,
+                mask=mask,
+            )
 
-    pcl = arr["previous_close_location"]
-    for v in PREVIOUS_CLOSE_LOCATION_MAX_LEVELS:
-        yield dict(factor_id=f"PREV_CLOSE_LOC_MAX_{fmt_level(v)}", family="previous_bar_close", operator="<=", parameter="previous_close_location", threshold=v, mask=base & np.isfinite(pcl) & (pcl <= v))
-
-    regimes = (
-        ("D1_CLOSE_GT_EMA50", "close>ema50", arr["daily_close_gt_ema50"]),
-        ("D1_CLOSE_LE_EMA50", "close<=ema50", ~arr["daily_close_gt_ema50"]),
-        ("D1_CLOSE_GT_EMA100", "close>ema100", arr["daily_close_gt_ema100"]),
-        ("D1_CLOSE_LE_EMA100", "close<=ema100", ~arr["daily_close_gt_ema100"]),
-        ("D1_CLOSE_GT_EMA200", "close>ema200", arr["daily_close_gt_ema200"]),
-        ("D1_CLOSE_LE_EMA200", "close<=ema200", ~arr["daily_close_gt_ema200"]),
-        ("D1_EMA50_GT_EMA200", "ema50>ema200", arr["daily_ema50_gt_ema200"]),
-        ("D1_EMA50_LE_EMA200", "ema50<=ema200", ~arr["daily_ema50_gt_ema200"]),
-    )
-    for fid, label, mask in regimes:
-        yield dict(factor_id=fid, family="daily_regime", operator="bool", parameter="daily_regime", threshold=label, mask=base & mask)
-
-    d1v = arr["daily_atr_ratio"]
-    for v in D1_ATR_RATIO_LEVELS:
-        yield dict(factor_id=f"D1_ATR_RATIO_MIN_{fmt_level(v)}", family="daily_volatility", operator=">=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v >= v))
-        yield dict(factor_id=f"D1_ATR_RATIO_MAX_{fmt_level(v)}", family="daily_volatility", operator="<=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v <= v))
+    # 3c) TIGHT prior-12H fall x one bearish completed-D1 regime.
+    for fall in INTERACTION_FALL_LEVELS:
+        for regime_id, regime_label in BEARISH_D1_REGIMES:
+            mask = np.isfinite(x12) & (x12 <= -fall) & regimes[regime_id]
+            yield dict(
+                anchor="TIGHT",
+                candidate_id=f"P3_TIGHT__FALL_LB12_NEG{fmt_level(fall)}__{regime_id}",
+                family="tight_fall_x_daily",
+                description=f"prior12 movement <= -{fall} ATR AND {regime_label}",
+                parameter_1="momentum_12", operator_1="<=", threshold_1=-fall,
+                parameter_2="daily_regime", operator_2="bool", threshold_2=regime_label,
+                mask=mask,
+            )
 
 
 def accepted_ledger_hash(records, accepted, cost_label):
@@ -1172,7 +1196,7 @@ def run_research():
         ]
         if any(x["status"] != "PASS" for x in checks):
             write_csv(OUTPUTS["parity"], checks)
-            raise RuntimeError("Frozen Pass 1B source parity FAILED; do not interpret Pass 2")
+            raise RuntimeError("Frozen Pass 1B source parity FAILED; do not interpret Pass 3")
 
         set_status(state="features", progress=10, message="Building H1/D1 features and raw-signal parity")
         features = build_h1_features(h1)
@@ -1264,59 +1288,65 @@ def run_research():
         write_csv(OUTPUTS["anchor_parity"], parity_rows)
         write_csv(OUTPUTS["anchor_ledgers"], anchor_ledger_rows)
         if any(x["status"] != "PASS" for x in parity_rows):
-            raise RuntimeError("Frozen Pass 1B anchor full-ledger parity FAILED; do not interpret Pass 2")
+            raise RuntimeError("Frozen Pass 1B anchor full-ledger parity FAILED; do not interpret Pass 3")
 
-        factors = list(conditional_factor_plan(arr))
-        if len(factors) != COMMON_FACTOR_ROWS:
-            raise RuntimeError(f"Factor plan enumeration mismatch: expected {COMMON_FACTOR_ROWS}, got {len(factors)}")
-        factor_plan_rows=[]
-        for i,f in enumerate(factors,start=1):
-            factor_plan_rows.append({
-                "factor_number":i,"factor_id":f["factor_id"],"factor_family":f["family"],
-                "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
-                "application":"ONE_FACTOR_ONLY_WITHIN_EACH_FROZEN_ANCHOR",
+        candidates = list(pass3_candidate_plan(arr))
+        if len(candidates) != EXPECTED_CANDIDATES:
+            raise RuntimeError(f"Pass 3 plan enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {len(candidates)}")
+        plan_rows=[]
+        for i,c in enumerate(candidates,start=1):
+            plan_rows.append({
+                "candidate_number":i,"candidate_id":c["candidate_id"],"anchor":c["anchor"],
+                "family":c["family"],"description":c["description"],
+                "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
+                "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
+                "application":"PREDECLARED_PASS3_BOUNDARY_OR_TWO_FACTOR_INTERACTION",
             })
-        write_csv(OUTPUTS["factor_plan"], factor_plan_rows)
+        write_csv(OUTPUTS["factor_plan"], plan_rows)
 
-        set_status(state="conditional_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} one-factor candidate configurations")
+        set_status(state="candidate_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} bounded Pass 3 configurations")
         summary_rows=[]
         delta_rows=[]
         accepted_by_id={}
         candidate_meta={}
         candidate_count=0
-        for anchor in ANCHORS:
+        for c in candidates:
+            candidate_count += 1
+            if candidate_count % 20 == 0:
+                set_status(message=f"Pass 3 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
+            anchor=c["anchor"]
             amask=anchor_masks[anchor]
             anchor_qualified=int(np.sum(amask))
-            for f in factors:
-                candidate_count += 1
-                if candidate_count % 25 == 0:
-                    set_status(message=f"Pass 2 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
-                cid=f"P2_{anchor}__{f['factor_id']}"
-                cmask=amask & f["mask"]
-                meta={
-                    "config_id":cid,"stage":"PASS2_ONE_FACTOR","anchor":anchor,
-                    "factor_id":f["factor_id"],"factor_family":f["family"],
-                    "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
-                    "rr":REFERENCE_RR,**ANCHORS[anchor],
-                }
-                rows,accepted=summarize_config(records,cmask,meta)
-                accepted_by_id[cid]=accepted
-                candidate_meta[cid]=meta
-                candidate_qualified=int(np.sum(cmask))
-                for row in rows:
-                    row["anchor_qualified_raw_signals"]=anchor_qualified
-                    row["conditional_qualified_raw_signals"]=candidate_qualified
-                    row["qualified_signal_retention_pct"]=100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0
-                    summary_rows.append(row)
-                    comp=compare_to_anchor(records,anchor_accepted[anchor],accepted,row["cost_label"])
-                    delta_rows.append({
-                        "config_id":cid,"anchor":anchor,"factor_id":f["factor_id"],"factor_family":f["family"],
-                        "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
-                        "cost_label":row["cost_label"],
-                        "anchor_qualified_raw_signals":anchor_qualified,"candidate_qualified_raw_signals":candidate_qualified,
-                        "qualified_signal_retention_pct":100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0,
-                        **comp,
-                    })
+            cid=c["candidate_id"]
+            cmask=amask & c["mask"]
+            meta={
+                "config_id":cid,"stage":"PASS3_BOUNDARY_INTERACTION","anchor":anchor,
+                "factor_id":cid,"factor_family":c["family"],
+                "description":c["description"],
+                "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
+                "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
+                "rr":REFERENCE_RR,**ANCHORS[anchor],
+            }
+            rows,accepted=summarize_config(records,cmask,meta)
+            accepted_by_id[cid]=accepted
+            candidate_meta[cid]=meta
+            candidate_qualified=int(np.sum(cmask))
+            for row in rows:
+                row["anchor_qualified_raw_signals"]=anchor_qualified
+                row["conditional_qualified_raw_signals"]=candidate_qualified
+                row["qualified_signal_retention_pct"]=100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0
+                summary_rows.append(row)
+                comp=compare_to_anchor(records,anchor_accepted[anchor],accepted,row["cost_label"])
+                delta_rows.append({
+                    "config_id":cid,"anchor":anchor,"factor_id":cid,"factor_family":c["family"],
+                    "description":c["description"],
+                    "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
+                    "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
+                    "cost_label":row["cost_label"],
+                    "anchor_qualified_raw_signals":anchor_qualified,"candidate_qualified_raw_signals":candidate_qualified,
+                    "qualified_signal_retention_pct":100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0,
+                    **comp,
+                })
         if candidate_count != EXPECTED_CANDIDATES:
             raise RuntimeError(f"Candidate enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {candidate_count}")
         write_csv(OUTPUTS["conditional_summary"], summary_rows)
@@ -1359,19 +1389,21 @@ def run_research():
         write_csv(OUTPUTS["rolling_summary"],rolling_summary_rows)
 
         methodology=[
-            {"topic":"purpose","value":"Pass 2 one conditional feature at a time within two frozen Pass 1B AUD/JPY H1 LONG anchors."},
+            {"topic":"purpose","value":"Pass 3 bounded boundary/interaction study using only effects justified by clean Pass 2."},
             {"topic":"broad_anchor","value":json.dumps(ANCHORS["BROAD"],sort_keys=True)},
             {"topic":"tight_anchor","value":json.dumps(ANCHORS["TIGHT"],sort_keys=True)},
             {"topic":"parity","value":"Fails closed unless exact Pass 1B H1/D1/raw-signal fingerprints and both full anchor ledgers match at 10T/20T/40T."},
             {"topic":"execution","value":"exact bullish engulf; signal-close reference; stop=signal low-10 ticks; RR3.50 fixed; next-H1 exits; p0; exact exit-candle re-entry eligible."},
             {"topic":"costs","value":"10T primary live-parity; 20T stressed selection; 40T extreme diagnostic only. Historical MID shifts are assumed costs, not measured executable spreads/slippage."},
-            {"topic":"one_factor_only","value":"Every Pass 2 candidate is exactly frozen anchor AND one condition. No conditional-feature interactions are tested."},
-            {"topic":"factor_families","value":"body ratio; strong close; lower wick; H1 ATR state; prior H1 movement; previous-bar body/range/close quality; completed-D1 regimes; completed-D1 ATR state."},
-            {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay; simple signal filtering is not treated as equivalent to accepted-trade subtraction."},
-            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no new entry mechanism, no structure/body/range retuning, no Portfolio 29 selection feedback."},
-            {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only. It requires >=50% anchor trade retention and positive 10T/20T R, then surfaces best 20T delta-R and expectancy per family. It does not freeze a rule."},
+            {"topic":"h1_vol_boundary","value":"Both anchors: H1 ATR/current ATR50-prev ratio cap mapped from 1.00 to 1.60 in 0.05 steps."},
+            {"topic":"tight_prior_fall_boundary","value":"TIGHT only: prior H1 movement lookbacks 8/10/12/14/16 with fall thresholds -0.30 to -1.00 signal ATR."},
+            {"topic":"tight_interactions","value":"Only three predeclared two-factor families: H1-vol cap x prior12 fall; H1-vol cap x bearish completed-D1 regime; prior12 fall x bearish completed-D1 regime."},
+            {"topic":"daily_regimes","value":"Only close<=EMA50, close<=EMA100, and EMA50<=EMA200 from Pass 2 bearish-regime evidence."},
+            {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay."},
+            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no body/range/structure retuning, no new filters, no three-way interactions, no Portfolio 29 selection feedback."},
+            {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only; it does not freeze a rule. Full neighbourhood/era/rolling evidence must be reviewed."},
             {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. Recent/era/rolling diagnostics are robustness descriptions, not untouched OOS tests."},
-            {"topic":"next_gate","value":"Only coherent neighbouring conditional effects should enter a limited Pass 3 interaction/boundary study. Do not combine isolated winners."},
+            {"topic":"next_gate","value":"If a stable interior region remains, freeze at most one BROAD and one TIGHT conditional geometry before local confirmation/RR-last stages."},
         ]
         write_csv(OUTPUTS["methodology"],methodology)
 
@@ -1379,9 +1411,9 @@ def run_research():
             OUTPUTS["errors"].unlink()
         pack_results()
         set_status(
-            state="complete",progress=100,message="AUD/JPY H1 LONG Pass 2 complete; ZIP ready",
+            state="complete",progress=100,message="AUD/JPY H1 LONG Pass 3 complete; ZIP ready",
             parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),raw_closed_outcomes=len(records),
-            one_factor_rows_per_anchor=COMMON_FACTOR_ROWS,candidate_configurations=candidate_count,
+            candidate_configurations=candidate_count,
             diagnostic_configurations=len(diag_ids),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE),
         )
     except Exception as exc:
@@ -1403,36 +1435,35 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED=True
-        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass2").start()
+        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass3").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service":"AUD/JPY H1 LONG Pass 2 conditional-feature discovery",
+        "service":"AUD/JPY H1 LONG Pass 3 boundary + justified interactions",
         "pass_version":PASS_VERSION,
         "research_only":True,"orders_supported":False,"trading_enabled":False,
         "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
-        "anchors":ANCHORS,"one_factor_rows_per_anchor":COMMON_FACTOR_ROWS,
-        "candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
+        "anchors":ANCHORS,"candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
         "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
-        "routes":["/audjpy-h1-long-pass2/start","/audjpy-h1-long-pass2/status","/audjpy-h1-long-pass2/results"],
+        "routes":["/audjpy-h1-long-pass3/start","/audjpy-h1-long-pass3/status","/audjpy-h1-long-pass3/results"],
     })
 
 
-@app.route("/audjpy-h1-long-pass2/start")
+@app.route("/audjpy-h1-long-pass3/start")
 def start_route():
     return jsonify({"started_now":launch_once(),"state":STATUS["state"],"orders_supported":False})
 
 
-@app.route("/audjpy-h1-long-pass2/status")
+@app.route("/audjpy-h1-long-pass3/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-long-pass2/results")
+@app.route("/audjpy-h1-long-pass3/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status":"not_ready","state":STATUS["state"],"message":STATUS["message"]}),404
