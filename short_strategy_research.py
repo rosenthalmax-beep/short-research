@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 # ============================================================
-# AUD/JPY M15 SHORT — PASS 8 EXACT PORTFOLIO 28 -> 29
+# AUD/JPY M15 SHORT — PASS 9 FROZEN EXECUTION-COST SENSITIVITY
 # SINGLE-FILE RAILWAY / GITHUB BUILD
 # ============================================================
 # RESEARCH ONLY. This file cannot submit orders.
@@ -12,7 +12,7 @@ from __future__ import annotations
 # Their source is compressed only to keep this single GitHub file manageable;
 # at startup each is executed in an isolated module namespace with __name__
 # deliberately NOT equal to "__main__", so their own Flask servers/runners
-# cannot start. Pass 8 then calls the same frozen functions and constants.
+# cannot start. Pass 9 then calls the same frozen functions and constants.
 
 import base64 as _b64
 import zlib as _zlib
@@ -53,16 +53,21 @@ The proposed SHORT is already frozen BEFORE portfolio feedback:
         RR4.00.
 Both are tested at assumed 2- and 4-pip adverse fills.
 
-Critical implementation point: Portfolio28 already contains AUD/JPY LONG, so
-this runner replays RAW LONG and RAW SHORT signals chronologically under a
-single non-hedging pair gate. It never simply appends the Pass7 pre-accepted
-SHORT ledger. Blocking is half-open [signal_index, exit_index), so an exit-candle
-signal is eligible. If opposite signals occur on the same candle, both
-LONG_FIRST and SHORT_FIRST priority variants are exported as a sensitivity
-check rather than silently selecting one from portfolio performance.
+Critical implementation point: strategy geometry and RR are completely frozen.
+This pass changes ONLY the assumed adverse historical execution from the signal
+reference close: 0, 5, 10, 20 and 40 pricing ticks. For AUD/JPY, one pricing
+tick is 0.001 JPY and one pip is 0.01 JPY, so 10 ticks = 1 pip. The existing
+live executor's maximum adverse entry deviation is 10 ticks; therefore 10T is
+labelled the live-limit parity case, while 20T/40T are stress-only cases.
 
-All history is repeatedly researched in-sample. This is a historical admission
-and implementation test, not unseen OOS evidence and not a forecast.
+Portfolio28 already contains AUD/JPY LONG, so every cost case replays RAW LONG
+and RAW SHORT signals chronologically under the same single non-hedging pair
+gate. It never simply appends a pre-accepted SHORT ledger. Existing Portfolio28
+and its AUD/JPY LONG historical assumptions remain frozen.
+
+All history is repeatedly researched in-sample. This is execution-cost
+sensitivity and implementation validation, not unseen OOS evidence and not a
+forecast.
 """
 import bisect, csv, datetime as dt, math, os, statistics, sys, threading, traceback, zipfile
 from collections import defaultdict
@@ -73,7 +78,14 @@ from flask import Flask, jsonify, send_file
 PORTFOLIO_CUTOFF = L.PORTFOLIO_CUTOFF
 LONG_COST = 4.0
 SHORT_RR = 4.0
-SHORT_COSTS = (2.0, 4.0)
+COST_CASES = (
+    ("REFERENCE_0T", 0, 0.0),
+    ("HALF_LIMIT_5T", 5, 0.5),
+    ("LIVE_LIMIT_10T", 10, 1.0),
+    ("STRESS_20T", 20, 2.0),
+    ("STRESS_40T", 40, 4.0),
+)
+ARCHIVED_PARITY_COSTS = (2.0, 4.0)
 LONG_SID = "AUD_JPY_M15_LONG"
 SHORT_SID = "AUD_JPY_M15_SHORT_PROPOSED29"
 PAIR = "AUD_JPY"
@@ -85,8 +97,8 @@ EXPECTED_BASE28 = {
     "floor_dd": -17.84461250071128,
     "ending_balance": 3053361376.120573,
 }
-OUT = Path(os.getenv("AUDJPY_SHORT_PASS8_OUTPUT_DIR", "/tmp/audjpy_short_pass8"))
-BUNDLE = OUT / "AUDJPY_M15_SHORT_PASS8_PORTFOLIO_28_TO_29_RESULTS.zip"
+OUT = Path(os.getenv("AUDJPY_SHORT_PASS9_OUTPUT_DIR", "/tmp/audjpy_short_pass9"))
+BUNDLE = OUT / "AUDJPY_M15_SHORT_PASS9_COST_SENSITIVITY_RESULTS.zip"
 STATUS = {"state":"idle","progress":0,"message":"Not started",
           "orders_supported":False,"trading_enabled":False,
           "portfolio28_live_unchanged":True}
@@ -333,23 +345,92 @@ def verify_long_reference(prefix,long_ix):
 
 
 def verify_short_reference(bars,atr):
-    ref=S.archival_reference(); raw=[]; ledgers=[]; signal_map={}
-    for geom,lb,body,rng,rise in S.FROZEN_GEOMETRIES:
-        ix=S.independent_signals(bars,atr,lb,body,rng,rise)
-        digest=__import__('hashlib').sha256(''.join(S.iso(bars[i][0])+'\n' for i in ix).encode()).hexdigest()
-        expected={x["raw_signal_sha256"] for x in ref["digests"] if x["geometry"]==geom}
-        if expected!={digest}: raise RuntimeError(geom+" raw signal digest mismatch")
-        raw.append(dict(geometry=geom,raw_signals=len(ix),raw_signal_sha256=digest,parity="PASS"))
-        signal_map[geom]=ix
-        for cost in SHORT_COSTS:
-            got=S.chronological_p0(bars,ix,SHORT_RR,cost)
-            archived=[x for x in ref["accepted_ledgers"] if x["geometry"]==geom and float(x["rr"])==SHORT_RR and float(x["assumed_fill_pips"])==cost]
-            fields=S.verify_ledger(archived,got,f"{geom}|RR4|{cost}P")
-            ledgers.append(dict(side="SHORT",geometry=geom,rr=SHORT_RR,cost_pips=cost,
-                                raw_signals=len(ix),trades=len(got),
-                                total_r=sum(x["result_r"] for x in got),
-                                tested_fields=fields,full_field_parity="PASS"))
-    return raw,ledgers,signal_map
+    """Reproduce the archived CORE raw fingerprint and 2p/4p accepted ledgers.
+
+    These are hard implementation controls only. New 0/0.5/1.0 cost cases are
+    not selected or tuned from history; they are the predeclared execution grid.
+    """
+    ref=S.archival_reference()
+    core=S.FROZEN_GEOMETRIES[0]
+    geom,lb,body,rng,rise=core
+    ix=S.independent_signals(bars,atr,lb,body,rng,rise)
+    digest=__import__('hashlib').sha256(''.join(S.iso(bars[i][0])+'\n' for i in ix).encode()).hexdigest()
+    expected={x["raw_signal_sha256"] for x in ref["digests"] if x["geometry"]==geom}
+    if expected!={digest}:
+        raise RuntimeError(geom+" raw signal digest mismatch")
+    raw=[dict(geometry=geom,raw_signals=len(ix),raw_signal_sha256=digest,parity="PASS")]
+    ledgers=[]
+    for cost in ARCHIVED_PARITY_COSTS:
+        got=S.chronological_p0(bars,ix,SHORT_RR,cost)
+        archived=[x for x in ref["accepted_ledgers"]
+                  if x["geometry"]==geom and float(x["rr"])==SHORT_RR
+                  and float(x["assumed_fill_pips"])==cost]
+        fields=S.verify_ledger(archived,got,f"{geom}|RR4|{cost}P")
+        ledgers.append(dict(side="SHORT",geometry=geom,rr=SHORT_RR,cost_pips=cost,
+                            raw_signals=len(ix),trades=len(got),
+                            total_r=sum(x["result_r"] for x in got),
+                            tested_fields=fields,full_field_parity="PASS"))
+    return raw,ledgers,geom,ix
+
+
+def standalone_stats(label,ticks,cost,ledger):
+    rr=[float(x["result_r"]) for x in ledger]
+    wins=[x for x in rr if x>0]; losses=[x for x in rr if x<0]
+    eq=0.0; peak=0.0; dd=0.0; streak=0; worst_streak=0
+    for r in rr:
+        eq += r; peak=max(peak,eq); dd=min(dd,eq-peak)
+        streak=streak+1 if r<0 else 0; worst_streak=max(worst_streak,streak)
+    return dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                live_limit_case=(ticks==10),stress_only=(ticks>10),
+                accepted_trades=len(rr),wins=len(wins),losses=len(losses),
+                win_rate_pct=(100*len(wins)/len(rr) if rr else 0.0),
+                total_r=sum(rr),expectancy_r=(sum(rr)/len(rr) if rr else 0.0),
+                profit_factor=(sum(wins)/-sum(losses) if losses else None),
+                avg_win_r=(sum(wins)/len(wins) if wins else None),
+                avg_loss_r=(sum(losses)/len(losses) if losses else None),
+                max_closed_drawdown_r=dd,longest_loss_streak=worst_streak)
+
+
+def standalone_calendar(label,ticks,cost,ledger,bars):
+    by=defaultdict(list)
+    for t in ledger:
+        by[when(t["entry_time_utc"]).year].append(float(t["result_r"]))
+    first_year=when(bars[0][0]).year
+    last_year=when(bars[-1][0]).year
+    rows=[]
+    for y in range(first_year,last_year+1):
+        vals=by.get(y,[]); wins=[x for x in vals if x>0]
+        rows.append(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                         year=y,complete_year=(y>first_year and y<last_year),
+                         trades=len(vals),wins=len(wins),losses=len(vals)-len(wins),
+                         win_rate_pct=(100*len(wins)/len(vals) if vals else None),
+                         total_r=sum(vals),blank_year=(len(vals)==0)))
+    return rows
+
+
+PASS8_CORE_EXPECTED = {
+    2.0: dict(trades=3198, short_trades=75, short_r=60.14240286154668,
+              cagr=126.81877919599019, closed_dd=-16.04793616743366,
+              floor_dd=-17.034371778719184),
+    4.0: dict(trades=3198, short_trades=75, short_r=51.695051714284354,
+              cagr=125.98250201873861, closed_dd=-16.047936167433697,
+              floor_dd=-17.034371778719137),
+}
+
+
+def check_pass8_core_parity(cost,row):
+    exp=PASS8_CORE_EXPECTED[cost]
+    actual=dict(trades=int(row["trades"]),short_trades=int(row["short_trades"]),
+                short_r=float(row["short_r"]),cagr=float(row["historical_cagr_pct"]),
+                closed_dd=float(row["max_closed_dd_pct"]),
+                floor_dd=float(row["max_open_risk_floor_dd_pct"]))
+    checks=[]
+    for k,e in exp.items():
+        a=actual[k]
+        ok=(a==e) if k in ("trades","short_trades") else math.isclose(a,e,rel_tol=1e-10,abs_tol=1e-6)
+        checks.append(dict(cost_pips=cost,field=k,expected=e,actual=a,result="PASS" if ok else "FAIL"))
+        if not ok: raise RuntimeError(f"Pass8 CORE parity {cost}p {k}: {a} != {e}")
+    return checks
 
 
 def run():
@@ -363,25 +444,27 @@ def run():
         bars,midsha=S.fetch_archived_candles()
         save_csv("coverage",[dict(candles=len(bars),first_utc=S.iso(bars[0][0]),
                                   last_utc=S.iso(bars[-1][0]),mid_sha256=midsha,
-                                  portfolio_cutoff=PORTFOLIO_CUTOFF)])
+                                  portfolio_cutoff=PORTFOLIO_CUTOFF,
+                                  tick_size_jpy=0.001,pip_size_jpy=0.01,
+                                  live_max_adverse_ticks=10,
+                                  live_max_adverse_pips=1.0)])
         atr=S.atr_wilder(bars)
 
-        update("parity",20,"Reproducing incumbent LONG and proposed SHORT frozen ledgers")
+        update("parity",20,"Reproducing incumbent LONG and frozen SHORT CORE controls")
         prefix=bars[:L.CANDLE_COUNT]
         long_ix_prefix=L.independent_signal_indices(prefix,.50)
         parity=verify_long_reference(prefix,long_ix_prefix)
-        short_raw,short_parity,short_map=verify_short_reference(bars,atr)
+        short_raw,short_parity,core_geom,short_ix=verify_short_reference(bars,atr)
         parity.extend(short_parity)
         save_csv("frozen_ledger_parity",parity)
         save_csv("short_raw_signal_parity",short_raw)
 
-        # Full raw LONG stream on the same source used for pair replay.
+        # Rebuild the exact incumbent Portfolio28 baseline, unchanged from Pass8.
         long_ix=L.independent_signal_indices(bars,.50)
         long_full=L.independent_replay(bars,long_ix,LONG_COST)
         for t in long_full: t.update(side="BUY",sid=LONG_SID)
-
-        # Rebuild exact historical Portfolio28 baseline and hard-check it.
-        long_cut=[t for t in long_full if stamp(when(t["exit_time_utc"])+dt.timedelta(minutes=15))<=PORTFOLIO_CUTOFF]
+        long_cut=[t for t in long_full
+                  if stamp(when(t["exit_time_utc"])+dt.timedelta(minutes=15))<=PORTFOLIO_CUTOFF]
         base28=base27+[portfolio_trade(t,LONG_SID) for t in long_cut]
         sim28=equity(base28)
         actual=dict(count=len(base28),strategies=len({x["sid"] for x in base28}),
@@ -394,61 +477,97 @@ def run():
             if not ok: raise RuntimeError(f"Portfolio28 baseline parity {k}: {a} != {e}")
         save_csv("portfolio28_baseline_parity",parity28)
 
-        update("portfolio",60,"Replaying raw LONG + SHORT signals under same-pair nonhedging")
-        summaries=[summary("BASELINE_28_LONG_CORE_4P",base28,sim28)]
-        periods=period_rows("BASELINE_28_LONG_CORE_4P",sim28)
+        update("cost_grid",45,"Running frozen CORE at 0/5/10/20/40 adverse ticks")
+        standalone=[]; standalone_years=[]; full_ledgers=[]
+        portfolio_summaries=[summary("BASELINE_28_LONG_CORE_4P",base28,sim28)]
         first=min(when(x["entry"]) for x in base27)
+        periods=period_rows("BASELINE_28_LONG_CORE_4P",sim28)
         rolling=rolling_rows("BASELINE_28_LONG_CORE_4P",sim28,first)
         calendars=calendar_rows("BASELINE_28_LONG_CORE_4P",sim28)
-        attr=[]; audit=[]; combined_ledgers=[]; sensitivity=[]
-        for geom,_,_,_,_ in S.FROZEN_GEOMETRIES:
-            simultaneous=len(set(long_ix)&set(short_map[geom]))
-            for cost in SHORT_COSTS:
-                short0=S.chronological_p0(bars,short_map[geom],SHORT_RR,cost)
-                for t in short0: t.update(side="SELL",sid=SHORT_SID,rr=SHORT_RR,cost_pips=cost)
-                seqs={}
-                for priority in ("LONG_FIRST","SHORT_FIRST"):
-                    combined,gate=pair_replay(bars,long_ix,short_map[geom],cost,priority)
-                    label=f"ADD_{geom}_RR4_{int(cost)}P_{priority}"
-                    seqs[priority]=[(x["side"],x["signal_index"],x["exit_index"]) for x in combined]
-                    cutoff=[t for t in combined if stamp(when(t["exit_time_utc"])+dt.timedelta(minutes=15))<=PORTFOLIO_CUTOFF]
-                    portfolio=base27+[portfolio_trade(t,LONG_SID if t["side"]=="BUY" else SHORT_SID) for t in cutoff]
-                    sim=equity(portfolio,focus_sid=SHORT_SID)
-                    summaries.append(summary(label,portfolio,sim))
-                    periods.extend(period_rows(label,sim)); rolling.extend(rolling_rows(label,sim,first)); calendars.extend(calendar_rows(label,sim))
-                    attr.append(attribution(label,combined,long_full,short0))
-                    audit.extend(dict(scenario=label,**x) for x in gate)
-                    combined_ledgers.extend(dict(scenario=label,**x) for x in combined)
-                sensitivity.append(dict(geometry=geom,short_cost_pips=cost,
-                                        simultaneous_opposite_raw_signals=simultaneous,
-                                        accepted_sequence_identical=seqs["LONG_FIRST"]==seqs["SHORT_FIRST"],
-                                        long_first_trades=len(seqs["LONG_FIRST"]),
-                                        short_first_trades=len(seqs["SHORT_FIRST"])))
+        attr=[]; audits=[]; combined_ledgers=[]; priority=[]; pass8_checks=[]
 
-        save_csv("portfolio_28_to_29_summary",summaries)
+        for label,ticks,cost in COST_CASES:
+            ledger=S.chronological_p0(bars,short_ix,SHORT_RR,cost)
+            standalone.append(standalone_stats(label,ticks,cost,ledger))
+            standalone_years.extend(standalone_calendar(label,ticks,cost,ledger,bars))
+            full_ledgers.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,**t)
+                                for t in ledger)
+            short0=[dict(t,side="SELL",sid=SHORT_SID,rr=SHORT_RR,cost_pips=cost) for t in ledger]
+
+            seqs={}; scenario_rows={}
+            simultaneous=len(set(long_ix)&set(short_ix))
+            for order in ("LONG_FIRST","SHORT_FIRST"):
+                combined,gate=pair_replay(bars,long_ix,short_ix,cost,order)
+                scenario=f"ADD_CORE_RR4_{ticks}T_{order}"
+                seqs[order]=[(x["side"],x["signal_index"],x["exit_index"]) for x in combined]
+                cutoff=[t for t in combined
+                        if stamp(when(t["exit_time_utc"])+dt.timedelta(minutes=15))<=PORTFOLIO_CUTOFF]
+                portfolio=base27+[portfolio_trade(t,LONG_SID if t["side"]=="BUY" else SHORT_SID)
+                                  for t in cutoff]
+                sim=equity(portfolio,focus_sid=SHORT_SID)
+                row=summary(scenario,portfolio,sim)
+                row.update(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                           live_limit_case=(ticks==10),stress_only=(ticks>10))
+                portfolio_summaries.append(row); scenario_rows[order]=row
+                periods.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,**x)
+                               for x in period_rows(scenario,sim))
+                rolling.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,**x)
+                               for x in rolling_rows(scenario,sim,first))
+                calendars.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,**x)
+                                 for x in calendar_rows(scenario,sim))
+                a=attribution(scenario,combined,long_full,short0)
+                a.update(cost_case=label,adverse_ticks=ticks,adverse_pips=cost)
+                attr.append(a)
+                audits.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                                   scenario=scenario,**x) for x in gate)
+                combined_ledgers.extend(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                                             scenario=scenario,**x) for x in combined)
+
+            identical=seqs["LONG_FIRST"]==seqs["SHORT_FIRST"]
+            priority.append(dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                                 simultaneous_opposite_raw_signals=simultaneous,
+                                 accepted_sequence_identical=identical,
+                                 long_first_trades=len(seqs["LONG_FIRST"]),
+                                 short_first_trades=len(seqs["SHORT_FIRST"])))
+            if cost in PASS8_CORE_EXPECTED:
+                pass8_checks.extend(check_pass8_core_parity(cost,scenario_rows["LONG_FIRST"]))
+
+        save_csv("pass8_core_portfolio_parity",pass8_checks)
+        save_csv("standalone_cost_sensitivity",standalone)
+        save_csv("standalone_calendar_years_all_costs",standalone_years)
+        save_csv("standalone_full_ledgers_all_costs",full_ledgers)
+        save_csv("portfolio_cost_sensitivity",portfolio_summaries)
         save_csv("portfolio_last_1_2_3_5_10_years",periods)
         save_csv("portfolio_rolling_all_windows",rolling)
         save_csv("portfolio_rolling_12_24_36_summary",rolling_summary(rolling))
         save_csv("portfolio_calendar_years",calendars)
         save_csv("pair_gate_attribution",attr)
-        save_csv("pair_gate_signal_audit",audit)
+        save_csv("pair_gate_signal_audit",audits)
         save_csv("combined_audjpy_accepted_ledgers",combined_ledgers)
-        save_csv("same_candle_priority_sensitivity",sensitivity)
+        save_csv("same_candle_priority_sensitivity",priority)
+        save_csv("cost_grid",[
+            dict(cost_case=label,adverse_ticks=ticks,adverse_pips=cost,
+                 meaning=("NO_ADVERSE_EXECUTION_SHIFT" if ticks==0 else
+                          "HALF_LIVE_LIMIT" if ticks==5 else
+                          "LIVE_EXECUTOR_MAX_ADVERSE_DEVIATION" if ticks==10 else
+                          "STRESS_ONLY"))
+            for label,ticks,cost in COST_CASES
+        ])
         save_csv("methodology",[
-            dict(topic="SCOPE",detail="Research-only exact Portfolio28->29 historical admission. Live Portfolio28 unchanged."),
-            dict(topic="BASELINE",detail="Frozen Portfolio27 + incumbent AUDJPY LONG core RR3.5 at fixed assumed 4-pip adverse fill; Portfolio27 modelled costs unchanged."),
-            dict(topic="CANDIDATE",detail="SHORT CORE LB60/rise1.50 and frequency LB40/rise1.75, both body1.50/range2.25/RR4.00 frozen before portfolio feedback; candidate costs 2/4 assumed adverse pips."),
-            dict(topic="PAIR_GATE",detail="Raw LONG and raw SHORT signals replayed chronologically. One AUDJPY position max. [signal_index,exit_index) blocking; exit-candle signal eligible. Same-candle opposite priority sensitivity exported."),
-            dict(topic="PARITY",detail="Portfolio27 baseline, Portfolio28 baseline, incumbent LONG archived accepted ledgers, SHORT raw hashes and SHORT RR4 archived accepted ledgers must all pass before portfolio metrics."),
-            dict(topic="RISK",detail="1% realised-equity risk per strategy except frozen EUR_JPY_M15_SHORT at 0.75%; exits processed before entries; no global max-position gate."),
-            dict(topic="COST",detail="AUDJPY LONG 4p and SHORT 2/4p are assumed adverse midpoint fills, not measured historic bid/ask execution; existing Portfolio27 assumptions unchanged."),
-            dict(topic="SELECTION",detail="Portfolio is an admission gate, not a parameter-selection objective. Do not reopen filters/RR based on portfolio outcome."),
-            dict(topic="SAMPLE",detail="Repeatedly examined in-sample history; not unseen OOS and not a future-return forecast."),
-            dict(topic="NEXT",detail="Only if historically admissible: read-only live probe and observed spread/execution study before any order-enabled integration."),
+            dict(topic="SCOPE",detail="Research-only frozen execution-cost sensitivity. No entry/RR/risk optimisation and no live order changes."),
+            dict(topic="FROZEN_CANDIDATE",detail="AUDJPY M15 SHORT CORE rally rejection: LB60, body>=1.50 ATR, range>=2.25 ATR, prior16 rise>=1.50 ATR, RR4.00, stop=signal high+10 ticks."),
+            dict(topic="COST_GRID",detail="Adverse historical SHORT fill only: 0T/5T/10T/20T/40T = 0/0.5/1/2/4 pips. AUDJPY tick=.001 JPY; pip=.01 JPY."),
+            dict(topic="LIVE_PARITY",detail="10T/1.0p is the live executor maximum adverse entry deviation from reference close. 20T/40T are stress-only and would be rejected live before order placement."),
+            dict(topic="TARGET_STOP",detail="Changing historical fill does not change frozen reference-close target or stop geometry; realised R uses actual adverse fill-to-stop risk."),
+            dict(topic="BASELINE",detail="Portfolio28 is unchanged: frozen Portfolio27 plus incumbent AUDJPY LONG core RR3.5 at fixed 4-pip historical assumption."),
+            dict(topic="PAIR_GATE",detail="Raw incumbent LONG and frozen SHORT signals replayed chronologically with one AUDJPY position maximum; exit-candle signals eligible; same-candle priority sensitivity exported."),
+            dict(topic="PARITY",detail="Archived LONG ledgers, SHORT CORE raw hash/2p/4p ledgers, Portfolio28 baseline, and Pass8 CORE portfolio results at 2p/4p must all reproduce before new cost conclusions."),
+            dict(topic="SAMPLE",detail="Repeatedly examined historical midpoint data; this is not unseen OOS evidence and assumed costs are not measured historical executable quotes."),
         ])
         package()
-        update("complete",100,"Exact Portfolio28->29 raw-signal admission replay complete",
-               result_path="/audjpy-short-pass8/results",portfolio28_baseline="PASS")
+        update("complete",100,"Frozen 0/5/10/20/40-tick cost sensitivity complete",
+               result_path="/audjpy-short-pass9/results",portfolio28_baseline="PASS",
+               pass8_core_parity="PASS",live_limit_ticks=10)
     except Exception as exc:
         save_csv("error_report",[dict(error_type=type(exc).__name__,message=str(exc),
                                       traceback=traceback.format_exc(),portfolio28_live_unchanged=True)])
@@ -457,15 +576,15 @@ def run():
 
 @app.get("/")
 def home():
-    return jsonify(service="AUD/JPY M15 SHORT Pass8 Portfolio28->29 admission",
-                   status="/audjpy-short-pass8/status",results="/audjpy-short-pass8/results",
+    return jsonify(service="AUD/JPY M15 SHORT Pass9 frozen cost sensitivity",
+                   status="/audjpy-short-pass9/status",results="/audjpy-short-pass9/results",
                    orders_supported=False,trading_enabled=False,portfolio28_live_unchanged=True)
 
-@app.get("/audjpy-short-pass8/status")
+@app.get("/audjpy-short-pass9/status")
 def status_endpoint():
     with LOCK: return jsonify(dict(STATUS))
 
-@app.get("/audjpy-short-pass8/results")
+@app.get("/audjpy-short-pass9/results")
 def results_endpoint():
     if not BUNDLE.exists(): return jsonify(error="Results not ready",status=STATUS),409
     return send_file(BUNDLE,as_attachment=True,download_name=BUNDLE.name)
@@ -474,8 +593,8 @@ if __name__=="__main__":
     if "--offline-self-test" in sys.argv:
         archive,d=L.frozen(); L.check_baseline(archive["baseline"])
         ref=S.archival_reference()
-        print("Portfolio27 frozen parity PASS; short reference specs",len(ref["specs"])); raise SystemExit(0)
+        print("Portfolio27 frozen parity PASS; cost grid", COST_CASES); raise SystemExit(0)
     if "--run-once" in sys.argv:
         run(); raise SystemExit(0 if STATUS["state"]=="complete" else 1)
-    threading.Thread(target=run,daemon=True,name="audjpy-short-pass8").start()
+    threading.Thread(target=run,daemon=True,name="audjpy-short-pass9").start()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","8080")),debug=False,use_reloader=False)
