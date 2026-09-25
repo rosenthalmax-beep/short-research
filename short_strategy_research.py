@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 LONG — Pass 3 boundary + justified interactions
-===========================================================
+AUD/JPY H1 LONG — Pass 4 final local plateau confirmation
+=========================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Pass 1/1B established two frozen exact-bullish-engulf anchors. Pass 2 tested
-one conditional feature at a time and found one cross-anchor effect strong
-enough to carry forward: a cap on current H1 ATR relative to its previous-50
-H1 ATR mean. The TIGHT anchor also showed a coherent prior-fall neighbourhood
-and secondary bearish completed-D1 regimes.
+Pass 1/1B established two frozen exact-bullish-engulf anchors. Pass 2 found a
+cross-anchor H1-volatility effect and a TIGHT prior-fall effect. Pass 3 mapped
+those boundaries and justified one TIGHT two-factor interaction. Pass 4 is the
+final ENTRY-GEOMETRY confirmation before any RR sweep.
 
-Pass 3 is deliberately bounded. It does NOT reopen the full Pass 2 feature
-search. It only:
-1) maps the H1-volatility cap boundary on BOTH frozen anchors;
-2) maps the TIGHT prior-fall neighbourhood across nearby lookbacks/thresholds;
-3) tests three predeclared TIGHT two-factor interaction families:
-   H1-vol cap x prior fall, H1-vol cap x bearish D1 regime,
-   prior fall x bearish D1 regime.
+It deliberately does NOT reopen discovery. It only maps four local regions:
+1) BROAD H1-volatility cap around the Pass-3 1.15–1.20 plateau;
+2) TIGHT H1-volatility-only cap around roughly 1.20–1.40;
+3) TIGHT prior-fall geometry around LB9–13 and -0.70 to -1.05 ATR;
+4) TIGHT H1-volatility x prior-fall local joint region around vol 1.15–1.35,
+   LB10–13 and fall -0.55 to -0.90 ATR.
 
 Frozen anchors
 --------------
@@ -40,13 +38,16 @@ Frozen execution
 - exits begin next H1 candle
 - p0 within each candidate; exact exit-candle signal remains eligible
 
-The source cutoff and exact Pass 1B fingerprints remain frozen. BOTH anchors
-must reproduce complete accepted-ledger SHA256 hashes at all three costs before
-any Pass 3 candidate is evaluated.
+Fail-closed controls
+--------------------
+- exact Pass 1B H1/D1 source fingerprints and raw engulf fingerprint;
+- both frozen anchor complete accepted ledgers at all three costs;
+- four exact Pass 3 checkpoint candidate ledgers at all three costs.
 
-No RR sweep, weekday/session search, new entry geometry, three-way interaction,
-or Portfolio 29 feedback occurs here. All history is repeatedly examined and
-in-sample; this is robustness mapping, not OOS proof.
+No D1 filter, no new feature family, no body/range/structure retuning, no
+weekday/session search, no RR sweep, no three-factor interaction and no
+Portfolio 29 feedback occur here. All history is repeatedly examined and
+in-sample; this is local robustness mapping, not OOS proof.
 
 Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
@@ -101,34 +102,32 @@ EXTREME_COST_LABEL = "EXTREME_40T"
 # preserve the Pass 1B raw-outcome schema and support exact anchor parity.
 STRUCTURE_LOOKBACKS = (10, 12, 15, 20, 25, 30, 40, 60, 80, 100, 150)
 GRID_LOOKBACKS = (12, 30)
-MOMENTUM_LOOKBACKS = (4, 8, 10, 12, 14, 16, 24, 48)
+MOMENTUM_LOOKBACKS = (4, 8, 9, 10, 11, 12, 13, 14, 16, 24, 48)
 
 ANCHORS = {
     "BROAD": dict(lookback=30, distance_atr_max=0.75, body_atr_min=0.80, range_atr_min=1.00),
     "TIGHT": dict(lookback=12, distance_atr_max=0.15, body_atr_min=1.00, range_atr_min=1.75),
 }
 
-# Pass 3 predeclared boundary and interaction levels. These are intentionally
-# narrow and justified only by the clean Pass 2 findings.
-H1_VOL_CAP_LEVELS = (1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50, 1.55, 1.60)
-TIGHT_FALL_LOOKBACKS = (8, 10, 12, 14, 16)
-TIGHT_FALL_LEVELS = (0.30, 0.40, 0.50, 0.60, 0.75, 0.90, 1.00)
-INTERACTION_VOL_LEVELS = (1.10, 1.20, 1.30, 1.40, 1.50)
-INTERACTION_FALL_LEVELS = (0.40, 0.50, 0.60, 0.75, 0.90)
-BEARISH_D1_REGIMES = (
-    ("D1_CLOSE_LE_EMA50", "close<=ema50"),
-    ("D1_CLOSE_LE_EMA100", "close<=ema100"),
-    ("D1_EMA50_LE_EMA200", "ema50<=ema200"),
-)
+# Pass 4 predeclared FINAL LOCAL ENTRY-GEOMETRY confirmation levels.
+# These are deliberately narrow and come only from the clean Pass 3 result.
+BROAD_VOL_LEVELS = (1.10, 1.12, 1.14, 1.16, 1.18, 1.20, 1.22, 1.24, 1.26)
+TIGHT_VOL_LEVELS = (1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45)
+TIGHT_FALL_LOOKBACKS = (9, 10, 11, 12, 13)
+TIGHT_FALL_LEVELS = (0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
+TIGHT_INTERACTION_VOL_LEVELS = (1.15, 1.20, 1.25, 1.30, 1.35)
+TIGHT_INTERACTION_FALL_LOOKBACKS = (10, 11, 12, 13)
+TIGHT_INTERACTION_FALL_LEVELS = (0.55, 0.60, 0.675, 0.75, 0.825, 0.90)
 
 EXPECTED_CANDIDATES = (
-    2 * len(H1_VOL_CAP_LEVELS)
+    len(BROAD_VOL_LEVELS)
+    + len(TIGHT_VOL_LEVELS)
     + len(TIGHT_FALL_LOOKBACKS) * len(TIGHT_FALL_LEVELS)
-    + len(INTERACTION_VOL_LEVELS) * len(INTERACTION_FALL_LEVELS)
-    + len(INTERACTION_VOL_LEVELS) * len(BEARISH_D1_REGIMES)
-    + len(INTERACTION_FALL_LEVELS) * len(BEARISH_D1_REGIMES)
+    + len(TIGHT_INTERACTION_VOL_LEVELS)
+      * len(TIGHT_INTERACTION_FALL_LOOKBACKS)
+      * len(TIGHT_INTERACTION_FALL_LEVELS)
 )
-assert EXPECTED_CANDIDATES == 116
+assert EXPECTED_CANDIDATES == 176
 
 # Exact clean Pass 1B source/raw-signal fingerprints.
 EXPECTED_H1_ROWS = 137969
@@ -157,14 +156,14 @@ ANCHOR_EXPECTED = {
     },
 }
 
-PASS_VERSION = "AUDJPY_H1_LONG_PASS3_BOUNDARY_INTERACTIONS_V1_2026-09-25"
+PASS_VERSION = "AUDJPY_H1_LONG_PASS4_LOCAL_PLATEAU_CONFIRMATION_V1_2026-09-25"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS3_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass3"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_LONG_PASS4_OUTPUT_DIR", "/tmp/audjpy_h1_long_pass4"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS3_BOUNDARY_INTERACTIONS_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_LONG_PASS4_LOCAL_PLATEAU_CONFIRMATION_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
@@ -173,7 +172,8 @@ OUTPUTS = {
     "anchor_parity": OUT_DIR / "anchor_parity.csv",
     "anchor_ledgers": OUT_DIR / "anchor_accepted_ledgers.csv",
     "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
-    "factor_plan": OUT_DIR / "pass3_plan.csv",
+    "factor_plan": OUT_DIR / "pass4_plan.csv",
+    "pass3_checkpoint_parity": OUT_DIR / "pass3_checkpoint_parity.csv",
     "conditional_summary": OUT_DIR / "candidate_summary.csv",
     "delta_vs_anchor": OUT_DIR / "delta_vs_anchor.csv",
     "family_summary": OUT_DIR / "family_summary_20T.csv",
@@ -190,7 +190,7 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 LONG Pass 3 waiting",
+    "message": "AUD/JPY H1 LONG Pass 4 final local plateau waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
@@ -848,7 +848,7 @@ def all_record_arrays(records):
     return out
 
 # ============================================================
-# PASS 3 EXPERIMENT PLAN — BOUNDED BOUNDARIES + JUSTIFIED INTERACTIONS
+# PASS 4 EXPERIMENT PLAN — FINAL LOCAL PLATEAU CONFIRMATION
 # ============================================================
 
 def fmt_level(value):
@@ -868,90 +868,129 @@ def anchor_mask(arr, anchor_name):
     )
 
 
-def bearish_daily_regime_masks(arr):
-    return {
-        "D1_CLOSE_LE_EMA50": ~arr["daily_close_gt_ema50"],
-        "D1_CLOSE_LE_EMA100": ~arr["daily_close_gt_ema100"],
-        "D1_EMA50_LE_EMA200": ~arr["daily_ema50_gt_ema200"],
-    }
-
-
-def pass3_candidate_plan(arr):
-    """Yield the 116 predeclared Pass 3 candidates. No hidden search."""
+def pass4_candidate_plan(arr):
+    """Yield exactly 176 predeclared Pass 4 candidates. No hidden search."""
     h1v = arr["h1_atr_ratio"]
-    regimes = bearish_daily_regime_masks(arr)
 
-    # 1) Cross-anchor H1 volatility-cap boundary map.
-    for anchor in ("BROAD", "TIGHT"):
-        for v in H1_VOL_CAP_LEVELS:
-            mask = np.isfinite(h1v) & (h1v <= v)
-            yield dict(
-                anchor=anchor,
-                candidate_id=f"P3_{anchor}__H1_ATR_RATIO_MAX_{fmt_level(v)}",
-                family="h1_vol_boundary",
-                description=f"H1 ATR ratio <= {v}",
-                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=v,
-                parameter_2="", operator_2="", threshold_2="",
-                mask=mask,
-            )
+    # 1) BROAD volatility-only local plateau around Pass-3 1.15–1.20.
+    for v in BROAD_VOL_LEVELS:
+        mask = np.isfinite(h1v) & (h1v <= v)
+        yield dict(
+            anchor="BROAD",
+            candidate_id=f"P4_BROAD__H1_ATR_RATIO_MAX_{fmt_level(v)}",
+            family="broad_vol_local",
+            description=f"BROAD: H1 ATR ratio <= {v}",
+            parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=v,
+            parameter_2="", operator_2="", threshold_2="",
+            mask=mask,
+        )
 
-    # 2) TIGHT prior-fall boundary map.
+    # 2) TIGHT volatility-only local plateau around 1.20–1.40.
+    for v in TIGHT_VOL_LEVELS:
+        mask = np.isfinite(h1v) & (h1v <= v)
+        yield dict(
+            anchor="TIGHT",
+            candidate_id=f"P4_TIGHT__H1_ATR_RATIO_MAX_{fmt_level(v)}",
+            family="tight_vol_local",
+            description=f"TIGHT: H1 ATR ratio <= {v}",
+            parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=v,
+            parameter_2="", operator_2="", threshold_2="",
+            mask=mask,
+        )
+
+    # 3) TIGHT prior-fall local plateau: LB9–13, -0.70 to -1.05 ATR.
     for lb in TIGHT_FALL_LOOKBACKS:
         x = arr[f"momentum_{lb}"]
-        for v in TIGHT_FALL_LEVELS:
-            mask = np.isfinite(x) & (x <= -v)
+        for fall in TIGHT_FALL_LEVELS:
+            mask = np.isfinite(x) & (x <= -fall)
             yield dict(
                 anchor="TIGHT",
-                candidate_id=f"P3_TIGHT__PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(v)}",
-                family="tight_prior_fall",
-                description=f"prior {lb} H1 movement <= -{v} ATR",
-                parameter_1=f"momentum_{lb}", operator_1="<=", threshold_1=-v,
+                candidate_id=f"P4_TIGHT__PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(fall)}",
+                family="tight_fall_local",
+                description=f"TIGHT: prior {lb} H1 movement <= -{fall} ATR",
+                parameter_1=f"momentum_{lb}", operator_1="<=", threshold_1=-fall,
                 parameter_2="", operator_2="", threshold_2="",
                 mask=mask,
             )
 
-    # 3a) TIGHT H1-volatility cap x prior-12H fall.
-    x12 = arr["momentum_12"]
-    for vol in INTERACTION_VOL_LEVELS:
-        for fall in INTERACTION_FALL_LEVELS:
-            mask = np.isfinite(h1v) & (h1v <= vol) & np.isfinite(x12) & (x12 <= -fall)
-            yield dict(
-                anchor="TIGHT",
-                candidate_id=f"P3_TIGHT__H1ATR_MAX_{fmt_level(vol)}__FALL_LB12_NEG{fmt_level(fall)}",
-                family="tight_vol_x_fall",
-                description=f"H1 ATR ratio <= {vol} AND prior12 movement <= -{fall} ATR",
-                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=vol,
-                parameter_2="momentum_12", operator_2="<=", threshold_2=-fall,
-                mask=mask,
-            )
+    # 4) TIGHT vol x prior-fall local joint plateau. No third factor.
+    for vol in TIGHT_INTERACTION_VOL_LEVELS:
+        for lb in TIGHT_INTERACTION_FALL_LOOKBACKS:
+            x = arr[f"momentum_{lb}"]
+            for fall in TIGHT_INTERACTION_FALL_LEVELS:
+                mask = (
+                    np.isfinite(h1v) & (h1v <= vol)
+                    & np.isfinite(x) & (x <= -fall)
+                )
+                yield dict(
+                    anchor="TIGHT",
+                    candidate_id=(
+                        f"P4_TIGHT__H1ATR_MAX_{fmt_level(vol)}"
+                        f"__FALL_LB{lb}_NEG{fmt_level(fall)}"
+                    ),
+                    family="tight_vol_x_fall_local",
+                    description=(
+                        f"TIGHT: H1 ATR ratio <= {vol} AND "
+                        f"prior {lb} H1 movement <= -{fall} ATR"
+                    ),
+                    parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=vol,
+                    parameter_2=f"momentum_{lb}", operator_2="<=", threshold_2=-fall,
+                    mask=mask,
+                )
 
-    # 3b) TIGHT H1-volatility cap x one bearish completed-D1 regime.
-    for vol in INTERACTION_VOL_LEVELS:
-        for regime_id, regime_label in BEARISH_D1_REGIMES:
-            mask = np.isfinite(h1v) & (h1v <= vol) & regimes[regime_id]
-            yield dict(
-                anchor="TIGHT",
-                candidate_id=f"P3_TIGHT__H1ATR_MAX_{fmt_level(vol)}__{regime_id}",
-                family="tight_vol_x_daily",
-                description=f"H1 ATR ratio <= {vol} AND {regime_label}",
-                parameter_1="h1_atr_ratio", operator_1="<=", threshold_1=vol,
-                parameter_2="daily_regime", operator_2="bool", threshold_2=regime_label,
-                mask=mask,
-            )
 
-    # 3c) TIGHT prior-12H fall x one bearish completed-D1 regime.
-    for fall in INTERACTION_FALL_LEVELS:
-        for regime_id, regime_label in BEARISH_D1_REGIMES:
-            mask = np.isfinite(x12) & (x12 <= -fall) & regimes[regime_id]
-            yield dict(
-                anchor="TIGHT",
-                candidate_id=f"P3_TIGHT__FALL_LB12_NEG{fmt_level(fall)}__{regime_id}",
-                family="tight_fall_x_daily",
-                description=f"prior12 movement <= -{fall} ATR AND {regime_label}",
-                parameter_1="momentum_12", operator_1="<=", threshold_1=-fall,
-                parameter_2="daily_regime", operator_2="bool", threshold_2=regime_label,
-                mask=mask,
-            )
+# Exact Pass-3 diagnostic checkpoints. These are NOT selection targets; they
+# only prove that Pass 4 reproduces the exact Pass-3 conditional semantics and
+# full accepted-trade ledgers before the local scan begins.
+PASS3_CHECKPOINT_EXPECTED = {
+    "BROAD_VOL_1P20": {
+        "anchor":"BROAD", "qualified":637, "accepted":593,
+        "mask_spec":("vol", 1.20, None, None),
+        "LIVE_LIMIT_10T":dict(total_r=136.37606147318655, profit_factor=1.321641654417893, max_drawdown_r=-28.208826967563546, ledger_sha256="0ce964ea127cdc1c6ed226759c0bcd700cba6236bf949bc2d2c57fd02f163a2d"),
+        "STRESS_20T":dict(total_r=108.09399479523447, profit_factor=1.2549386669698928, max_drawdown_r=-29.575128601667565, ledger_sha256="1ab7e9720d8a66db5f1cb00b09972faffbb677f6a4dc02bb64e7e3a5f9365926"),
+        "EXTREME_40T":dict(total_r=58.473696740053725, profit_factor=1.1379096621227682, max_drawdown_r=-33.872721831025444, ledger_sha256="0b14bca77a1f30de3a4950b9cb4fa130d227d9525b80574a2fc2fed326e9fc81"),
+    },
+    "TIGHT_VOL_1P35": {
+        "anchor":"TIGHT", "qualified":75, "accepted":70,
+        "mask_spec":("vol", 1.35, None, None),
+        "LIVE_LIMIT_10T":dict(total_r=39.32147629841921, profit_factor=1.8738105844093158, max_drawdown_r=-5.081312933815639, ledger_sha256="73ffd5004e9db70d33cc155514b7fb7bd3b548ce09db19f5575bbd891fa14e13"),
+        "STRESS_20T":dict(total_r=36.34279459079046, profit_factor=1.8076176575731213, max_drawdown_r=-5.161166944053257, ledger_sha256="51d513ee8c8c7fff58099673365543d21c1c8b6819758be00eb656f303f1e5ec"),
+        "EXTREME_40T":dict(total_r=30.90899408682286, profit_factor=1.6868665352627301, max_drawdown_r=-5.316652766194073, ledger_sha256="016e9403e7284f8a89595f02205eb972a7f472df881efcaa413c9587c77cfa2f"),
+    },
+    "TIGHT_FALL_LB10_0P90": {
+        "anchor":"TIGHT", "qualified":58, "accepted":55,
+        "mask_spec":("fall", 0.90, 10, None),
+        "LIVE_LIMIT_10T":dict(total_r=41.19459741629266, profit_factor=2.24832113382705, max_drawdown_r=-6.0, ledger_sha256="3115bb85c707a240e6fa9a3d71a9df45cbc4156945d8ef5fb8d48d1d63bdfb09"),
+        "STRESS_20T":dict(total_r=38.565544144106845, profit_factor=2.168652852851723, max_drawdown_r=-6.0, ledger_sha256="51ba7bd7ae106b697a710368b42a8f325e4eaf408498d35929c29e49dec13750"),
+        "EXTREME_40T":dict(total_r=33.76966748261716, profit_factor=2.023323257049005, max_drawdown_r=-6.0, ledger_sha256="fdc20e3f5b230a8a345382d608413e03fce05f8cc55194e09c517259941ea9a5"),
+    },
+    "TIGHT_VOL1P20_X_FALL_LB12_0P75": {
+        "anchor":"TIGHT", "qualified":44, "accepted":42,
+        "mask_spec":("vol_fall", 1.20, 12, 0.75),
+        "LIVE_LIMIT_10T":dict(total_r=40.897479624843655, profit_factor=2.7781512880366805, max_drawdown_r=-5.0, ledger_sha256="7cbe03b34203f4b7d9f14de76a4665d82d4c8a8198dd0eb54ac9a634cc111b43"),
+        "STRESS_20T":dict(total_r=38.46665783731872, profit_factor=2.6724633842312486, max_drawdown_r=-5.0, ledger_sha256="cad1f7804766162446da1fb77734eead0056b36e704804c8836d6cbac784fe66"),
+        "EXTREME_40T":dict(total_r=34.052769062660815, profit_factor=2.4805551766374268, max_drawdown_r=-5.0, ledger_sha256="4c01f23d771315d6580d4df5142a2805da0c5e76ec75d2767e0ffb43d9122ae3"),
+    },
+}
+
+
+def pass3_checkpoint_plan(arr):
+    h1v = arr["h1_atr_ratio"]
+    out = []
+    for checkpoint_id, exp in PASS3_CHECKPOINT_EXPECTED.items():
+        kind, a, lb, fall = exp["mask_spec"]
+        if kind == "vol":
+            mask = np.isfinite(h1v) & (h1v <= a)
+        elif kind == "fall":
+            x = arr[f"momentum_{lb}"]
+            mask = np.isfinite(x) & (x <= -a)
+        elif kind == "vol_fall":
+            x = arr[f"momentum_{lb}"]
+            mask = np.isfinite(h1v) & (h1v <= a) & np.isfinite(x) & (x <= -fall)
+        else:
+            raise RuntimeError(f"Unknown checkpoint mask kind: {kind}")
+        out.append((checkpoint_id, exp, mask))
+    return out
 
 
 def accepted_ledger_hash(records, accepted, cost_label):
@@ -1196,7 +1235,7 @@ def run_research():
         ]
         if any(x["status"] != "PASS" for x in checks):
             write_csv(OUTPUTS["parity"], checks)
-            raise RuntimeError("Frozen Pass 1B source parity FAILED; do not interpret Pass 3")
+            raise RuntimeError("Frozen Pass 1B source parity FAILED; do not interpret Pass 4")
 
         set_status(state="features", progress=10, message="Building H1/D1 features and raw-signal parity")
         features = build_h1_features(h1)
@@ -1288,11 +1327,61 @@ def run_research():
         write_csv(OUTPUTS["anchor_parity"], parity_rows)
         write_csv(OUTPUTS["anchor_ledgers"], anchor_ledger_rows)
         if any(x["status"] != "PASS" for x in parity_rows):
-            raise RuntimeError("Frozen Pass 1B anchor full-ledger parity FAILED; do not interpret Pass 3")
+            raise RuntimeError("Frozen Pass 1B anchor full-ledger parity FAILED; do not interpret Pass 4")
 
-        candidates = list(pass3_candidate_plan(arr))
+        # Direct Pass-3 checkpoint bridge: reproduce four exact conditional
+        # candidates before any new Pass-4 local geometry is evaluated.
+        checkpoint_rows = []
+        for checkpoint_id, exp, extra_mask in pass3_checkpoint_plan(arr):
+            anchor = exp["anchor"]
+            cmask = anchor_masks[anchor] & extra_mask
+            rows, accepted = summarize_config(records, cmask, {
+                "config_id": f"CHECKPOINT_{checkpoint_id}",
+                "anchor": anchor,
+                "stage": "PASS3_FROZEN_CHECKPOINT",
+                "rr": REFERENCE_RR,
+                **ANCHORS[anchor],
+            })
+            qualified = int(np.sum(cmask))
+            for row in rows:
+                label = row["cost_label"]
+                target = exp[label]
+                ledger_sha = accepted_ledger_hash(records, accepted, label)
+                # Match the exact Pass-3 metrics plus the complete ledger SHA.
+                # Any mismatch fails closed before the Pass-4 grid is interpreted.
+                ok = (
+                    qualified == exp["qualified"]
+                    and len(accepted) == exp["accepted"]
+                    and abs(float(row["total_r"]) - float(target["total_r"])) < 1e-10
+                    and abs(float(row["profit_factor"]) - float(target["profit_factor"])) < 1e-10
+                    and abs(float(row["max_drawdown_r"]) - float(target["max_drawdown_r"])) < 1e-10
+                    and ledger_sha == target["ledger_sha256"]
+                )
+                checkpoint_rows.append({
+                    "checkpoint_id": checkpoint_id,
+                    "anchor": anchor,
+                    "cost_label": label,
+                    "status": "PASS" if ok else "FAIL",
+                    "qualified_raw_signals": qualified,
+                    "expected_qualified_raw_signals": exp["qualified"],
+                    "accepted_trades": len(accepted),
+                    "expected_accepted_trades": exp["accepted"],
+                    "total_r": row["total_r"],
+                    "expected_total_r": target["total_r"],
+                    "profit_factor": row["profit_factor"],
+                    "expected_profit_factor": target["profit_factor"],
+                    "max_drawdown_r": row["max_drawdown_r"],
+                    "expected_max_drawdown_r": target["max_drawdown_r"],
+                    "ledger_sha256": ledger_sha,
+                    "expected_ledger_sha256": target["ledger_sha256"],
+                })
+        write_csv(OUTPUTS["pass3_checkpoint_parity"], checkpoint_rows)
+        if any(x["status"] != "PASS" for x in checkpoint_rows):
+            raise RuntimeError("Pass 3 checkpoint full-ledger parity FAILED; do not interpret Pass 4")
+
+        candidates = list(pass4_candidate_plan(arr))
         if len(candidates) != EXPECTED_CANDIDATES:
-            raise RuntimeError(f"Pass 3 plan enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {len(candidates)}")
+            raise RuntimeError(f"Pass 4 plan enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {len(candidates)}")
         plan_rows=[]
         for i,c in enumerate(candidates,start=1):
             plan_rows.append({
@@ -1300,11 +1389,11 @@ def run_research():
                 "family":c["family"],"description":c["description"],
                 "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
                 "parameter_2":c["parameter_2"],"operator_2":c["operator_2"],"threshold_2":c["threshold_2"],
-                "application":"PREDECLARED_PASS3_BOUNDARY_OR_TWO_FACTOR_INTERACTION",
+                "application":"PREDECLARED_PASS4_FINAL_LOCAL_PLATEAU",
             })
         write_csv(OUTPUTS["factor_plan"], plan_rows)
 
-        set_status(state="candidate_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} bounded Pass 3 configurations")
+        set_status(state="candidate_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} final local Pass 4 configurations")
         summary_rows=[]
         delta_rows=[]
         accepted_by_id={}
@@ -1313,14 +1402,14 @@ def run_research():
         for c in candidates:
             candidate_count += 1
             if candidate_count % 20 == 0:
-                set_status(message=f"Pass 3 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
+                set_status(message=f"Pass 4 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
             anchor=c["anchor"]
             amask=anchor_masks[anchor]
             anchor_qualified=int(np.sum(amask))
             cid=c["candidate_id"]
             cmask=amask & c["mask"]
             meta={
-                "config_id":cid,"stage":"PASS3_BOUNDARY_INTERACTION","anchor":anchor,
+                "config_id":cid,"stage":"PASS4_LOCAL_PLATEAU_CONFIRMATION","anchor":anchor,
                 "factor_id":cid,"factor_family":c["family"],
                 "description":c["description"],
                 "parameter_1":c["parameter_1"],"operator_1":c["operator_1"],"threshold_1":c["threshold_1"],
@@ -1389,21 +1478,21 @@ def run_research():
         write_csv(OUTPUTS["rolling_summary"],rolling_summary_rows)
 
         methodology=[
-            {"topic":"purpose","value":"Pass 3 bounded boundary/interaction study using only effects justified by clean Pass 2."},
+            {"topic":"purpose","value":"Pass 4 final local entry-geometry plateau confirmation using only regions justified by clean Pass 3."},
             {"topic":"broad_anchor","value":json.dumps(ANCHORS["BROAD"],sort_keys=True)},
             {"topic":"tight_anchor","value":json.dumps(ANCHORS["TIGHT"],sort_keys=True)},
-            {"topic":"parity","value":"Fails closed unless exact Pass 1B H1/D1/raw-signal fingerprints and both full anchor ledgers match at 10T/20T/40T."},
+            {"topic":"parity","value":"Fails closed unless exact Pass 1B H1/D1/raw-signal fingerprints, both full anchor ledgers, and four exact Pass-3 checkpoint ledgers match at 10T/20T/40T."},
             {"topic":"execution","value":"exact bullish engulf; signal-close reference; stop=signal low-10 ticks; RR3.50 fixed; next-H1 exits; p0; exact exit-candle re-entry eligible."},
             {"topic":"costs","value":"10T primary live-parity; 20T stressed selection; 40T extreme diagnostic only. Historical MID shifts are assumed costs, not measured executable spreads/slippage."},
-            {"topic":"h1_vol_boundary","value":"Both anchors: H1 ATR/current ATR50-prev ratio cap mapped from 1.00 to 1.60 in 0.05 steps."},
-            {"topic":"tight_prior_fall_boundary","value":"TIGHT only: prior H1 movement lookbacks 8/10/12/14/16 with fall thresholds -0.30 to -1.00 signal ATR."},
-            {"topic":"tight_interactions","value":"Only three predeclared two-factor families: H1-vol cap x prior12 fall; H1-vol cap x bearish completed-D1 regime; prior12 fall x bearish completed-D1 regime."},
-            {"topic":"daily_regimes","value":"Only close<=EMA50, close<=EMA100, and EMA50<=EMA200 from Pass 2 bearish-regime evidence."},
+            {"topic":"broad_vol_local","value":"BROAD only: H1 ATR ratio cap 1.10–1.26, concentrated around Pass-3 1.15–1.20 plateau."},
+            {"topic":"tight_vol_local","value":"TIGHT only: H1 ATR ratio cap 1.15–1.45 around Pass-3 1.20–1.40 region."},
+            {"topic":"tight_prior_fall_local","value":"TIGHT only: lookbacks 9–13; prior-fall thresholds -0.70 to -1.05 signal ATR."},
+            {"topic":"tight_vol_x_fall_local","value":"TIGHT only: 5 H1-vol caps x 4 fall lookbacks x 6 fall thresholds = 120 local two-factor cells; no D1 or third factor."},
             {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay."},
             {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no body/range/structure retuning, no new filters, no three-way interactions, no Portfolio 29 selection feedback."},
             {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only; it does not freeze a rule. Full neighbourhood/era/rolling evidence must be reviewed."},
             {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. Recent/era/rolling diagnostics are robustness descriptions, not untouched OOS tests."},
-            {"topic":"next_gate","value":"If a stable interior region remains, freeze at most one BROAD and one TIGHT conditional geometry before local confirmation/RR-last stages."},
+            {"topic":"next_gate","value":"If a stable local region survives, freeze the entry geometry (one BROAD core and at most one genuinely useful TIGHT alternative) and move to RR-last replay. Do not reopen entry-rule discovery."},
         ]
         write_csv(OUTPUTS["methodology"],methodology)
 
@@ -1411,7 +1500,7 @@ def run_research():
             OUTPUTS["errors"].unlink()
         pack_results()
         set_status(
-            state="complete",progress=100,message="AUD/JPY H1 LONG Pass 3 complete; ZIP ready",
+            state="complete",progress=100,message="AUD/JPY H1 LONG Pass 4 complete; ZIP ready",
             parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),raw_closed_outcomes=len(records),
             candidate_configurations=candidate_count,
             diagnostic_configurations=len(diag_ids),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE),
@@ -1435,35 +1524,35 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED=True
-        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass3").start()
+        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-long-pass4").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service":"AUD/JPY H1 LONG Pass 3 boundary + justified interactions",
+        "service":"AUD/JPY H1 LONG Pass 4 final local plateau confirmation",
         "pass_version":PASS_VERSION,
         "research_only":True,"orders_supported":False,"trading_enabled":False,
         "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
         "anchors":ANCHORS,"candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
         "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
-        "routes":["/audjpy-h1-long-pass3/start","/audjpy-h1-long-pass3/status","/audjpy-h1-long-pass3/results"],
+        "routes":["/audjpy-h1-long-pass4/start","/audjpy-h1-long-pass4/status","/audjpy-h1-long-pass4/results"],
     })
 
 
-@app.route("/audjpy-h1-long-pass3/start")
+@app.route("/audjpy-h1-long-pass4/start")
 def start_route():
     return jsonify({"started_now":launch_once(),"state":STATUS["state"],"orders_supported":False})
 
 
-@app.route("/audjpy-h1-long-pass3/status")
+@app.route("/audjpy-h1-long-pass4/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-long-pass3/results")
+@app.route("/audjpy-h1-long-pass4/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status":"not_ready","state":STATUS["state"],"message":STATUS["message"]}),404
