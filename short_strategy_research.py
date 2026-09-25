@@ -132,6 +132,13 @@ assert EXPECTED_CANDIDATES == 176
 # Exact clean Pass 1B source/raw-signal fingerprints.
 EXPECTED_H1_ROWS = 137969
 EXPECTED_D1_ROWS = 6473
+# IMPORTANT: OANDA's `complete` flag is evaluated at FETCH TIME. A D1 candle
+# whose open is before DATA_END can become complete later and then appear in
+# the same historical request. Freeze the exact Pass-3 D1 source by its last
+# included D1 open before hashing/replay, rather than trusting today's
+# `complete` flag alone.
+EXPECTED_D1_LAST_OPEN = datetime(2026, 9, 23, 21, 0, tzinfo=timezone.utc)
+D1_SOURCE_FREEZE_PATCH = "PASS4_D1_ASOF_CUTOFF_FIX_2026-09-25"
 EXPECTED_H1_SHA256 = "2ebb773ab6d8bd53b3725265e16b879952436f0e198682142e490ff0e0f5957a"
 EXPECTED_D1_SHA256 = "611c4edf4801888e0be378f36368ce2232fecd86f6c758f14d17fbaa0759688b"
 EXPECTED_RAW_SIGNAL_COUNT = 10624
@@ -1205,22 +1212,46 @@ def run_research():
     try:
         set_status(state="fetching", progress=2, message="Fetching exact frozen Pass 1B H1/D1 OANDA midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
-        d1 = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
+        d1_fetched = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
+
+        # Freeze D1 to the exact source state used by clean Pass 1B/2/3.
+        #
+        # Why this is necessary:
+        # - DATA_END is an H1 cutoff (2026-09-25 19:00Z).
+        # - OANDA D1 candles are aligned to 17:00 America/New_York.
+        # - The D1 candle opened 2026-09-24 21:00Z is *before* DATA_END but
+        #   did not complete until after DATA_END.
+        # - A later rerun sees that candle as complete=True and would otherwise
+        #   add it retrospectively, changing the frozen D1 source/hash.
+        #
+        # We therefore keep only D1 rows whose OPEN is no later than the exact
+        # last D1 open present in Pass 3, then demand the original row count and
+        # SHA. This does NOT relax parity: any revision inside the frozen prefix
+        # still fails the hash gate.
+        d1 = [x for x in d1_fetched if x["time"] <= EXPECTED_D1_LAST_OPEN]
 
         h1_times = [x["time"] for x in h1]
+        d1_fetched_times = [x["time"] for x in d1_fetched]
         d1_times = [x["time"] for x in d1]
         if h1_times != sorted(set(h1_times)):
             raise RuntimeError("H1 timestamps are duplicated or non-monotonic")
+        if d1_fetched_times != sorted(set(d1_fetched_times)):
+            raise RuntimeError("Fetched D1 timestamps are duplicated or non-monotonic")
         if d1_times != sorted(set(d1_times)):
-            raise RuntimeError("D1 timestamps are duplicated or non-monotonic")
+            raise RuntimeError("Frozen D1 timestamps are duplicated or non-monotonic")
         if not h1 or not d1 or h1[-1]["time"] >= DATA_END:
             raise RuntimeError("Frozen source coverage invalid")
+        if d1[-1]["time"] != EXPECTED_D1_LAST_OPEN:
+            raise RuntimeError(
+                f"Frozen D1 last-open mismatch: got {iso(d1[-1]['time'])}, "
+                f"expected {iso(EXPECTED_D1_LAST_OPEN)}"
+            )
 
         h1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in h1)
         d1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in d1)
         write_csv(OUTPUTS["coverage"], [
             {"pair":PAIR,"timeframe":"H1","requested_start":iso(REQUESTED_START),"first_completed_candle":iso(h1[0]["time"]),"last_completed_candle_open":iso(h1[-1]["time"]),"frozen_end_exclusive":iso(DATA_END),"completed_candles":len(h1)},
-            {"pair":PAIR,"timeframe":"D","requested_start":iso(D1_WARMUP_START),"first_completed_candle":iso(d1[0]["time"]),"last_completed_candle_open":iso(d1[-1]["time"]),"frozen_end_exclusive":iso(DATA_END),"completed_candles":len(d1),"daily_alignment":"17:00 America/New_York"},
+            {"pair":PAIR,"timeframe":"D","requested_start":iso(D1_WARMUP_START),"first_completed_candle":iso(d1[0]["time"]),"last_completed_candle_open":iso(d1[-1]["time"]),"frozen_end_exclusive":iso(DATA_END),"completed_candles":len(d1),"daily_alignment":"17:00 America/New_York","fetched_complete_rows":len(d1_fetched),"frozen_rows":len(d1),"source_freeze_patch":D1_SOURCE_FREEZE_PATCH},
         ])
         write_csv(OUTPUTS["source_fingerprint"], [
             {"series":"AUD_JPY_H1_MID_OHLC","sha256":h1_sha,"rows":len(h1)},
@@ -1535,7 +1566,7 @@ def root():
         "pass_version":PASS_VERSION,
         "research_only":True,"orders_supported":False,"trading_enabled":False,
         "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
-        "anchors":ANCHORS,"candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
+        "anchors":ANCHORS,"candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),"d1_source_freeze_patch":D1_SOURCE_FREEZE_PATCH,
         "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
         "routes":["/audjpy-h1-long-pass4/start","/audjpy-h1-long-pass4/status","/audjpy-h1-long-pass4/results"],
     })
