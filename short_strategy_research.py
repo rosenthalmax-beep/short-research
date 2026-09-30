@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 SHORT — Pass 1B boundary clarification
-=================================================
+AUD/JPY H1 SHORT — Pass 1C local body-boundary clarification
+==============================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
 Purpose
 -------
-Pass 1 found a coherent stressed bearish-engulf region but several useful
-dimensions landed on tested boundaries. This pass does NOT add filters. It
-only clarifies the unresolved lookback/distance/body/range boundaries before
-any Pass-2 conditional-feature work.
+Pass 1B resolved the useful structure and range region into an interior plateau:
+roughly LB125-200, previous-high distance 0.075-0.125 ATR, and range 1.00-1.50 ATR.
+The remaining unresolved entry dimension is the LOWER body threshold because
+body>=0.60 ATR was still the minimum body setting in the interaction study.
 
-Frozen source/execution protocol is IDENTICAL to Pass 1:
+This pass does NOT add a filter and does NOT reopen broad discovery. It asks one
+narrow question: inside the already-supported local geometry, do body thresholds
+0.40 or 0.50 ATR improve robustness/frequency enough to displace 0.60, or does
+the edge deteriorate as the body threshold is loosened?
+
+Frozen source/execution protocol is IDENTICAL to Pass 1/1B:
 - AUD_JPY H1 OANDA midpoint completed candles
 - exact bearish body engulfing
 - data end exclusive 2026-09-30T08:00:00Z
@@ -23,18 +28,17 @@ Frozen source/execution protocol is IDENTICAL to Pass 1:
 - pyramiding=0; exact exit-candle signal eligible
 - no weekday/session/RR/portfolio optimisation
 
-Predeclared controlled slices
------------------------------
-A. STRUCTURE_BOUNDARY: body>=0.60 ATR, range>=1.25 ATR;
-   LB 60/80/100/125/150/175/200/250 x distance .025-.20 ATR.
-B. BODY_RANGE_LB100_D010: fixed LB100/D<=.10; body .60-2.00 x range 1.00-2.50.
-C. BODY_RANGE_LB150_D005: fixed LB150/D<=.05; same body/range extension.
-D. JOINT_BOUNDARY_CUBE: LB100/125/150/200 x D .025/.05/.075/.10 x
-   body .60/1.00/1.40/1.75 x range 1.25/1.50/1.75/2.00.
+Predeclared local cube
+----------------------
+- structure lookback: 125 / 150 / 175 / 200 H1 bars
+- previous-high distance: 0.075 / 0.100 / 0.125 ATR14
+- body threshold: 0.40 / 0.50 / 0.60 / 0.80 / 1.00 ATR14
+- range threshold: 1.00 / 1.25 / 1.50 ATR14
 
-Total unique planned configurations by slice = 424. Overlap is intentional:
-it provides cross-slice parity and neighbourhood context, not independent wins.
-No row is auto-approved or frozen.
+Total = 4 x 3 x 5 x 3 = 180 configurations.
+
+Pass-1B parity control before any new result is interpreted:
+LB150 / D0.10 / body>=0.60 / range>=1.25 at RR3.50.
 
 Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
@@ -94,62 +98,49 @@ EXPECTED_D1_SHA256 = "bb43365840ff5d38d8d3ed3260c4d74204a927780e4619074ea3f9e63b
 EXPECTED_RAW_SIGNAL_COUNT = 10465
 EXPECTED_RAW_SIGNAL_SHA256 = "fc53892ad7e01e06b49594108b8b1fe8047ade46ec33e0d3a8d554c84322f3ab"
 
-# Exact Pass-1 control: GRID_LB100_D0.10_B0.60_R1.25.
-# Sequence hash serialises accepted signal_index|exit_index|exit_reason.
-PASS1_CONTROL_SEQUENCE_SHA256 = "94fa6be8ebe02a59a08f4e8a9633aba4b8d367fa230d3eae9946cdad372b4ef4"
-PASS1_CONTROL_ACCEPTED = 124
-PASS1_CONTROL_TOTAL_R = {
-    "LIVE_LIMIT_10T": 44.619138706852425,
-    "STRESS_20T": 38.33994906482319,
-    "EXTREME_40T": 27.263649998417392,
+# Exact Pass-1B frozen control: LB150/D0.10/B0.60/R1.25.
+# Fail closed unless the leading broad Pass-1B geometry reproduces exactly.
+PASS1B_CONTROL_SEQUENCE_SHA256 = "9a3562b34c593c26c9103ac1fdcf2ca251805b507830d4e109265e7e96712e0d"
+PASS1B_CONTROL_ACCEPTED = 104
+PASS1B_CONTROL_TOTAL_R = {
+    "LIVE_LIMIT_10T": 51.69201154748691,
+    "STRESS_20T": 45.92081252128802,
+    "EXTREME_40T": 35.7132347095061,
 }
 
-# Boundary clarification dimensions.
-STRUCTURE_BOUNDARY_LOOKBACKS = (60, 80, 100, 125, 150, 175, 200, 250)
-STRUCTURE_BOUNDARY_DISTANCES = (0.025, 0.05, 0.075, 0.10, 0.125, 0.15, 0.20)
-STRUCTURE_FIXED_BODY = 0.60
-STRUCTURE_FIXED_RANGE = 1.25
+# Pass 1C: one small local cube around the supported Pass-1B plateau.
+LOCAL_LOOKBACKS = (125, 150, 175, 200)
+LOCAL_DISTANCES = (0.075, 0.10, 0.125)
+LOCAL_BODY_LEVELS = (0.40, 0.50, 0.60, 0.80, 1.00)
+LOCAL_RANGE_LEVELS = (1.00, 1.25, 1.50)
 
-BODY_RANGE_BODY_LEVELS = (0.60, 0.80, 1.00, 1.20, 1.40, 1.60, 1.75, 2.00)
-BODY_RANGE_RANGE_LEVELS = (1.00, 1.25, 1.50, 1.75, 2.00, 2.25, 2.50)
-
-JOINT_LOOKBACKS = (100, 125, 150, 200)
-JOINT_DISTANCES = (0.025, 0.05, 0.075, 0.10)
-JOINT_BODY_LEVELS = (0.60, 1.00, 1.40, 1.75)
-JOINT_RANGE_LEVELS = (1.25, 1.50, 1.75, 2.00)
-
-# Names retained because shared Pass-1 feature builders use them. No momentum
-# or new conditional feature is tested in Pass 1B.
-STRUCTURE_LOOKBACKS = tuple(sorted(set(STRUCTURE_BOUNDARY_LOOKBACKS) | set(JOINT_LOOKBACKS)))
+# Names retained because the shared feature builder keys structure by lookback.
+# No momentum or additional conditional features are tested in Pass 1C.
+STRUCTURE_LOOKBACKS = LOCAL_LOOKBACKS
 GRID_LOOKBACKS = STRUCTURE_LOOKBACKS
 MOMENTUM_LOOKBACKS = ()
 
-EXPECTED_STRUCTURE_ROWS = len(STRUCTURE_BOUNDARY_LOOKBACKS) * len(STRUCTURE_BOUNDARY_DISTANCES)
-EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR = len(BODY_RANGE_BODY_LEVELS) * len(BODY_RANGE_RANGE_LEVELS)
-EXPECTED_JOINT_ROWS = len(JOINT_LOOKBACKS) * len(JOINT_DISTANCES) * len(JOINT_BODY_LEVELS) * len(JOINT_RANGE_LEVELS)
-EXPECTED_CONFIGS = EXPECTED_STRUCTURE_ROWS + 2 * EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR + EXPECTED_JOINT_ROWS
-assert EXPECTED_STRUCTURE_ROWS == 56
-assert EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR == 56
-assert EXPECTED_JOINT_ROWS == 256
-assert EXPECTED_CONFIGS == 424
+EXPECTED_CONFIGS = len(LOCAL_LOOKBACKS) * len(LOCAL_DISTANCES) * len(LOCAL_BODY_LEVELS) * len(LOCAL_RANGE_LEVELS)
+assert EXPECTED_CONFIGS == 180
 
-RESEARCH_VERSION = "AUDJPY_H1_SHORT_PASS1B_BOUNDARY_CLARIFICATION_V1_2026_09_30"
+RESEARCH_VERSION = "AUDJPY_H1_SHORT_PASS1C_BODY_BOUNDARY_V1_2026_09_30"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS1B_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass1b"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS1C_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass1c"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS1B_BOUNDARY_CLARIFICATION_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS1C_BODY_BOUNDARY_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
     "source_fingerprint": OUT_DIR / "source_fingerprint.csv",
     "hard_parity": OUT_DIR / "hard_parity.csv",
-    "plan": OUT_DIR / "boundary_plan.csv",
-    "summary": OUT_DIR / "boundary_summary.csv",
+    "plan": OUT_DIR / "body_boundary_plan.csv",
+    "summary": OUT_DIR / "body_boundary_summary.csv",
     "slice_summary": OUT_DIR / "slice_summary.csv",
     "level_summary": OUT_DIR / "level_summary.csv",
+    "body_overlap": OUT_DIR / "body_overlap_vs_b060.csv",
     "screen": OUT_DIR / "diagnostic_screen.csv",
     "screen_ledgers": OUT_DIR / "diagnostic_screen_accepted_ledgers.csv",
     "periods": OUT_DIR / "diagnostic_periods.csv",
@@ -163,7 +154,7 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 SHORT Pass 1B waiting",
+    "message": "AUD/JPY H1 SHORT Pass 1C waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
@@ -803,85 +794,31 @@ def _structure_mask(arr, lb, distance):
 
 
 def boundary_plan(arr):
-    # A) Clarify lookback and tight distance boundary with Pass-1 top row's
-    # body/range geometry held fixed.
-    for lb in STRUCTURE_BOUNDARY_LOOKBACKS:
-        for distance in STRUCTURE_BOUNDARY_DISTANCES:
-            config_id = f"STRUCT_BOUND_LB{lb}_D{distance:.3f}_B0.60_R1.25"
-            mask = (
-                _structure_mask(arr, lb, distance)
-                & (arr["body_atr"] >= STRUCTURE_FIXED_BODY)
-                & (arr["range_atr"] >= STRUCTURE_FIXED_RANGE)
-            )
-            yield {
-                "config_id": config_id,
-                "slice": "STRUCTURE_BOUNDARY",
-                "lookback": lb,
-                "distance_atr_max": distance,
-                "body_atr_min": STRUCTURE_FIXED_BODY,
-                "range_atr_min": STRUCTURE_FIXED_RANGE,
-                "lookback_is_min": lb == min(STRUCTURE_BOUNDARY_LOOKBACKS),
-                "lookback_is_max": lb == max(STRUCTURE_BOUNDARY_LOOKBACKS),
-                "distance_is_min": distance == min(STRUCTURE_BOUNDARY_DISTANCES),
-                "distance_is_max": distance == max(STRUCTURE_BOUNDARY_DISTANCES),
-                "body_is_min": True,
-                "body_is_max": True,
-                "range_is_min": True,
-                "range_is_max": True,
-                "mask": mask,
-            }
-
-    # B/C) Clarify body/range edges at two predeclared structural anchors.
-    for slice_name, lb, distance in (
-        ("BODY_RANGE_LB100_D010", 100, 0.10),
-        ("BODY_RANGE_LB150_D005", 150, 0.05),
-    ):
-        struct = _structure_mask(arr, lb, distance)
-        for body in BODY_RANGE_BODY_LEVELS:
-            for rng in BODY_RANGE_RANGE_LEVELS:
-                config_id = f"{slice_name}_B{body:.2f}_R{rng:.2f}"
-                mask = struct & (arr["body_atr"] >= body) & (arr["range_atr"] >= rng)
-                yield {
-                    "config_id": config_id,
-                    "slice": slice_name,
-                    "lookback": lb,
-                    "distance_atr_max": distance,
-                    "body_atr_min": body,
-                    "range_atr_min": rng,
-                    "lookback_is_min": True,
-                    "lookback_is_max": True,
-                    "distance_is_min": True,
-                    "distance_is_max": True,
-                    "body_is_min": body == min(BODY_RANGE_BODY_LEVELS),
-                    "body_is_max": body == max(BODY_RANGE_BODY_LEVELS),
-                    "range_is_min": rng == min(BODY_RANGE_RANGE_LEVELS),
-                    "range_is_max": rng == max(BODY_RANGE_RANGE_LEVELS),
-                    "mask": mask,
-                }
-
-    # D) Small joint cube to test whether the extended dimensions interact.
-    for lb in JOINT_LOOKBACKS:
-        for distance in JOINT_DISTANCES:
+    # Single predeclared local cube. The lower body boundary is the only new
+    # information being sought; the structure/range axes are neighbourhood
+    # controls inherited from the Pass-1B plateau.
+    for lb in LOCAL_LOOKBACKS:
+        for distance in LOCAL_DISTANCES:
             struct = _structure_mask(arr, lb, distance)
-            for body in JOINT_BODY_LEVELS:
-                for rng in JOINT_RANGE_LEVELS:
-                    config_id = f"JOINT_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
+            for body in LOCAL_BODY_LEVELS:
+                for rng in LOCAL_RANGE_LEVELS:
+                    config_id = f"LOCAL_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
                     mask = struct & (arr["body_atr"] >= body) & (arr["range_atr"] >= rng)
                     yield {
                         "config_id": config_id,
-                        "slice": "JOINT_BOUNDARY_CUBE",
+                        "slice": "LOCAL_BODY_BOUNDARY_CUBE",
                         "lookback": lb,
                         "distance_atr_max": distance,
                         "body_atr_min": body,
                         "range_atr_min": rng,
-                        "lookback_is_min": lb == min(JOINT_LOOKBACKS),
-                        "lookback_is_max": lb == max(JOINT_LOOKBACKS),
-                        "distance_is_min": distance == min(JOINT_DISTANCES),
-                        "distance_is_max": distance == max(JOINT_DISTANCES),
-                        "body_is_min": body == min(JOINT_BODY_LEVELS),
-                        "body_is_max": body == max(JOINT_BODY_LEVELS),
-                        "range_is_min": rng == min(JOINT_RANGE_LEVELS),
-                        "range_is_max": rng == max(JOINT_RANGE_LEVELS),
+                        "lookback_is_min": lb == min(LOCAL_LOOKBACKS),
+                        "lookback_is_max": lb == max(LOCAL_LOOKBACKS),
+                        "distance_is_min": distance == min(LOCAL_DISTANCES),
+                        "distance_is_max": distance == max(LOCAL_DISTANCES),
+                        "body_is_min": body == min(LOCAL_BODY_LEVELS),
+                        "body_is_max": body == max(LOCAL_BODY_LEVELS),
+                        "range_is_min": rng == min(LOCAL_RANGE_LEVELS),
+                        "range_is_max": rng == max(LOCAL_RANGE_LEVELS),
                         "mask": mask,
                     }
 
@@ -894,44 +831,16 @@ def accepted_sequence_hash(records, positions):
 
 
 def build_plan_rows():
-    return [
-        {
-            "slice": "STRUCTURE_BOUNDARY",
-            "purpose": "Extend Pass-1 upper lookback and lower/tighter distance boundaries with B0.60/R1.25 fixed",
-            "lookbacks": json.dumps(STRUCTURE_BOUNDARY_LOOKBACKS),
-            "distances": json.dumps(STRUCTURE_BOUNDARY_DISTANCES),
-            "body_levels": json.dumps((STRUCTURE_FIXED_BODY,)),
-            "range_levels": json.dumps((STRUCTURE_FIXED_RANGE,)),
-            "configurations": EXPECTED_STRUCTURE_ROWS,
-        },
-        {
-            "slice": "BODY_RANGE_LB100_D010",
-            "purpose": "Extend body/range boundaries at Pass-1 leading structural anchor LB100/D0.10",
-            "lookbacks": json.dumps((100,)),
-            "distances": json.dumps((0.10,)),
-            "body_levels": json.dumps(BODY_RANGE_BODY_LEVELS),
-            "range_levels": json.dumps(BODY_RANGE_RANGE_LEVELS),
-            "configurations": EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR,
-        },
-        {
-            "slice": "BODY_RANGE_LB150_D005",
-            "purpose": "Test same body/range extension at longer/tighter structural branch suggested by Pass-1 single-factor scan",
-            "lookbacks": json.dumps((150,)),
-            "distances": json.dumps((0.05,)),
-            "body_levels": json.dumps(BODY_RANGE_BODY_LEVELS),
-            "range_levels": json.dumps(BODY_RANGE_RANGE_LEVELS),
-            "configurations": EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR,
-        },
-        {
-            "slice": "JOINT_BOUNDARY_CUBE",
-            "purpose": "Compact interaction check across extended structure/body/range region; diagnostic only, not an optimisation target",
-            "lookbacks": json.dumps(JOINT_LOOKBACKS),
-            "distances": json.dumps(JOINT_DISTANCES),
-            "body_levels": json.dumps(JOINT_BODY_LEVELS),
-            "range_levels": json.dumps(JOINT_RANGE_LEVELS),
-            "configurations": EXPECTED_JOINT_ROWS,
-        },
-    ]
+    return [{
+        "slice": "LOCAL_BODY_BOUNDARY_CUBE",
+        "purpose": "Resolve only the lower body threshold inside the Pass-1B supported structure/range plateau",
+        "lookbacks": json.dumps(LOCAL_LOOKBACKS),
+        "distances": json.dumps(LOCAL_DISTANCES),
+        "body_levels": json.dumps(LOCAL_BODY_LEVELS),
+        "range_levels": json.dumps(LOCAL_RANGE_LEVELS),
+        "configurations": EXPECTED_CONFIGS,
+        "new_information_axis": "body_atr_min includes 0.40 and 0.50 below the prior 0.60 boundary; other axes are local robustness controls",
+    }]
 
 
 def summarise_slices(summary_rows):
@@ -953,6 +862,60 @@ def summarise_slices(summary_rows):
                 "worst_total_r": min(vals) if vals else 0.0,
                 "median_accepted_trades": float(median([int(r["accepted_trades"]) for r in rows])) if rows else 0.0,
             })
+    return out
+
+
+def body_overlap_vs_b060(records, accepted_by_id, summary_rows):
+    """Matched p0 attribution for each body threshold versus B0.60.
+
+    Loosening a body threshold can introduce an earlier trade that displaces a
+    later accepted trade under pyramiding=0. Therefore simple count/R differences
+    are not enough. This report compares exact accepted raw-record positions within
+    each fixed LB/distance/range geometry.
+    """
+    by_cfg_cost = defaultdict(dict)
+    for row in summary_rows:
+        by_cfg_cost[row["config_id"]][row["cost_label"]] = row
+
+    out = []
+    for lb in LOCAL_LOOKBACKS:
+        for distance in LOCAL_DISTANCES:
+            for rng in LOCAL_RANGE_LEVELS:
+                base_id = f"LOCAL_LB{lb}_D{distance:.3f}_B0.60_R{rng:.2f}"
+                base_positions = accepted_by_id[base_id]
+                base_set = set(base_positions)
+                for body in LOCAL_BODY_LEVELS:
+                    cid = f"LOCAL_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
+                    cand_positions = accepted_by_id[cid]
+                    cand_set = set(cand_positions)
+                    added = sorted(cand_set - base_set)
+                    removed = sorted(base_set - cand_set)
+                    common = cand_set & base_set
+                    for cost_label, ticks, pips, purpose in COST_CASES:
+                        cand_total = float(by_cfg_cost[cid][cost_label]["total_r"])
+                        base_total = float(by_cfg_cost[base_id][cost_label]["total_r"])
+                        added_r = sum(float(records[pos][f"result_r__{cost_label}"]) for pos in added)
+                        removed_r = sum(float(records[pos][f"result_r__{cost_label}"]) for pos in removed)
+                        out.append({
+                            "lookback": lb,
+                            "distance_atr_max": distance,
+                            "range_atr_min": rng,
+                            "body_atr_min": body,
+                            "candidate_config_id": cid,
+                            "baseline_config_id": base_id,
+                            "cost_label": cost_label,
+                            "candidate_accepted": len(cand_positions),
+                            "baseline_b060_accepted": len(base_positions),
+                            "common_accepted_signals": len(common),
+                            "added_accepted_signals_vs_b060": len(added),
+                            "displaced_or_removed_signals_vs_b060": len(removed),
+                            "added_signal_total_r": added_r,
+                            "removed_signal_total_r": removed_r,
+                            "candidate_total_r": cand_total,
+                            "baseline_b060_total_r": base_total,
+                            "total_r_delta_vs_b060": cand_total - base_total,
+                            "set_attribution_delta_check": (added_r - removed_r) - (cand_total - base_total),
+                        })
     return out
 
 
@@ -1072,7 +1035,7 @@ def diagnostics_for_config(records, config_id, accepted, cost_label):
 def run_research():
     try:
         hard_checks = []
-        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass-1 H1/D1 midpoint history")
+        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass-1B H1/D1 midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
         d1 = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
 
@@ -1114,7 +1077,7 @@ def run_research():
             {"series": "AUD_JPY_D1_MID_OHLC", "sha256": d1_sha, "rows": len(d1), "expected_sha256": EXPECTED_D1_SHA256, "parity": "PASS"},
         ])
 
-        set_status(state="features", progress=10, message="Building exact Pass-1 feature/execution state")
+        set_status(state="features", progress=10, message="Building exact frozen feature/execution state")
         features = build_h1_features(h1)
         daily_states = build_daily_states(d1, features["times"])
         vec_raw = raw_exact_vector_indices(features)
@@ -1129,14 +1092,14 @@ def run_research():
             and scalar_hash == EXPECTED_RAW_SIGNAL_SHA256
         )
         hard_checks.append({
-            "check": "raw_exact_bearish_engulf_vector_scalar_and_pass1_hash",
+            "check": "raw_exact_bearish_engulf_vector_scalar_and_frozen_hash",
             "status": "PASS" if raw_ok else "FAIL",
             "actual": f"vector={len(vec_raw)};scalar={len(scalar_raw)};vhash={vec_hash};shash={scalar_hash}",
             "expected": f"count={EXPECTED_RAW_SIGNAL_COUNT};hash={EXPECTED_RAW_SIGNAL_SHA256}",
         })
         if not raw_ok:
             write_csv(OUTPUTS["hard_parity"], hard_checks)
-            raise RuntimeError("Raw exact-signal Pass-1 parity failed")
+            raise RuntimeError("Raw exact-signal frozen parity failed")
 
         set_status(state="raw_replay", progress=16, message=f"Replaying {len(vec_raw)} exact bearish-engulf raw signals")
         records, censored = build_raw_outcomes(features, vec_raw, daily_states)
@@ -1154,51 +1117,51 @@ def run_research():
 
         arr = all_record_arrays(records)
 
-        # Exact Pass-1 control replay before any new boundary result is interpreted.
+        # Exact Pass-1B control replay before any Pass-1C body-boundary result is interpreted.
         control_mask = (
-            _structure_mask(arr, 100, 0.10)
+            _structure_mask(arr, 150, 0.10)
             & (arr["body_atr"] >= 0.60)
             & (arr["range_atr"] >= 1.25)
         )
         control_rows, control_accepted = summarize_config(records, control_mask, {
-            "config_id": "PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25",
-            "stage": "PASS1_CONTROL",
-            "slice": "PASS1_CONTROL",
-            "lookback": 100,
+            "config_id": "PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25",
+            "stage": "PASS1B_CONTROL",
+            "slice": "PASS1B_CONTROL",
+            "lookback": 150,
             "distance_atr_max": 0.10,
             "body_atr_min": 0.60,
             "range_atr_min": 1.25,
             "rr": REFERENCE_RR,
         })
         control_hash = accepted_sequence_hash(records, control_accepted)
-        control_hash_ok = len(control_accepted) == PASS1_CONTROL_ACCEPTED and control_hash == PASS1_CONTROL_SEQUENCE_SHA256
+        control_hash_ok = len(control_accepted) == PASS1B_CONTROL_ACCEPTED and control_hash == PASS1B_CONTROL_SEQUENCE_SHA256
         hard_checks.append({
-            "check": "pass1_control_accepted_sequence",
+            "check": "pass1b_control_accepted_sequence",
             "status": "PASS" if control_hash_ok else "FAIL",
             "actual": f"accepted={len(control_accepted)};hash={control_hash}",
-            "expected": f"accepted={PASS1_CONTROL_ACCEPTED};hash={PASS1_CONTROL_SEQUENCE_SHA256}",
+            "expected": f"accepted={PASS1B_CONTROL_ACCEPTED};hash={PASS1B_CONTROL_SEQUENCE_SHA256}",
         })
         if not control_hash_ok:
             write_csv(OUTPUTS["hard_parity"], hard_checks)
-            raise RuntimeError("Pass-1 control accepted-sequence parity failed")
+            raise RuntimeError("Pass-1B control accepted-sequence parity failed")
 
         for row in control_rows:
-            expected_r = PASS1_CONTROL_TOTAL_R[row["cost_label"]]
+            expected_r = PASS1B_CONTROL_TOTAL_R[row["cost_label"]]
             ok = abs(float(row["total_r"]) - expected_r) <= 1e-9
             hard_checks.append({
-                "check": f"pass1_control_total_r_{row['cost_label']}",
+                "check": f"pass1b_control_total_r_{row['cost_label']}",
                 "status": "PASS" if ok else "FAIL",
                 "actual": row["total_r"],
                 "expected": expected_r,
             })
             if not ok:
                 write_csv(OUTPUTS["hard_parity"], hard_checks)
-                raise RuntimeError(f"Pass-1 control R parity failed at {row['cost_label']}")
+                raise RuntimeError(f"Pass-1B control R parity failed at {row['cost_label']}")
 
         write_csv(OUTPUTS["hard_parity"], hard_checks)
         write_csv(OUTPUTS["plan"], build_plan_rows())
 
-        set_status(state="boundary_grid", progress=25, message=f"Running {EXPECTED_CONFIGS} predeclared boundary configurations")
+        set_status(state="body_boundary_grid", progress=25, message=f"Running {EXPECTED_CONFIGS} predeclared local body-boundary configurations")
         summary_rows = []
         accepted_by_id = {}
         meta_by_id = {}
@@ -1206,26 +1169,39 @@ def run_research():
         for spec in boundary_plan(arr):
             count += 1
             if count % 25 == 0:
-                set_status(message=f"Boundary clarification {count}/{EXPECTED_CONFIGS}", progress=25 + int(45 * count / EXPECTED_CONFIGS))
+                set_status(message=f"Body-boundary clarification {count}/{EXPECTED_CONFIGS}", progress=25 + int(45 * count / EXPECTED_CONFIGS))
             mask = spec.pop("mask")
             config_id = spec["config_id"]
             rows, accepted = summarize_config(records, mask, {
                 **spec,
-                "stage": "PASS1B_BOUNDARY_CLARIFICATION",
+                "stage": "PASS1C_BODY_BOUNDARY_CLARIFICATION",
                 "rr": REFERENCE_RR,
             })
             summary_rows.extend(rows)
             accepted_by_id[config_id] = accepted
             meta_by_id[config_id] = dict(spec)
         if count != EXPECTED_CONFIGS:
-            raise RuntimeError(f"Boundary plan enumeration mismatch: expected {EXPECTED_CONFIGS}, got {count}")
+            raise RuntimeError(f"Body-boundary plan enumeration mismatch: expected {EXPECTED_CONFIGS}, got {count}")
         write_csv(OUTPUTS["summary"], summary_rows)
         write_csv(OUTPUTS["slice_summary"], summarise_slices(summary_rows))
         write_csv(OUTPUTS["level_summary"], summarise_levels(summary_rows))
+        overlap_rows = body_overlap_vs_b060(records, accepted_by_id, summary_rows)
+        write_csv(OUTPUTS["body_overlap"], overlap_rows)
+        max_overlap_attribution_error = max((abs(float(r["set_attribution_delta_check"])) for r in overlap_rows), default=0.0)
+        overlap_ok = max_overlap_attribution_error <= 1e-9
+        hard_checks.append({
+            "check": "body_threshold_p0_set_attribution_vs_b060",
+            "status": "PASS" if overlap_ok else "FAIL",
+            "actual": max_overlap_attribution_error,
+            "expected": "<=1e-9",
+        })
+        write_csv(OUTPUTS["hard_parity"], hard_checks)
+        if not overlap_ok:
+            raise RuntimeError("Body-threshold p0 set-attribution parity failed")
 
         # Mechanical diagnostic screen ONLY. It must not be treated as a frozen
         # selection rule. It simply gives rolling/year ledgers for the strongest
-        # stress-resistant rows plus the exact Pass-1 control.
+        # stress-resistant rows plus the exact Pass-1B control.
         by_cfg = defaultdict(dict)
         for row in summary_rows:
             by_cfg[row["config_id"]][row["cost_label"]] = row
@@ -1274,17 +1250,17 @@ def run_research():
         c40 = next(x for x in control_rows if x["cost_label"] == EXTREME_COST_LABEL)
         screen_rows.insert(0, {
             "diagnostic_rank": 0,
-            "config_id": "PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25",
+            "config_id": "PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25",
             "selection_status": "FROZEN_PARITY_CONTROL_NOT_CANDIDATE_SELECTION",
-            "screen_rule": "Exact Pass-1 leading-row parity control",
-            "slice": "PASS1_CONTROL",
+            "screen_rule": "Exact Pass-1B LB150/D0.10/B0.60/R1.25 parity control",
+            "slice": "PASS1B_CONTROL",
             "live10T_trades": c10["accepted_trades"],
             "live10T_total_r": c10["total_r"],
             "stress20T_total_r": c20["total_r"],
             "stress20T_pf": c20["profit_factor"],
             "extreme40T_total_r": c40["total_r"],
             "extreme40T_pf": c40["profit_factor"],
-            "lookback": 100,
+            "lookback": 150,
             "distance_atr_max": 0.10,
             "body_atr_min": 0.60,
             "range_atr_min": 1.25,
@@ -1298,7 +1274,7 @@ def run_research():
         year_rows = []
         rolling_rows = []
         rolling_summary_rows = []
-        diag_configs = [("PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25", control_accepted)] + [(cid, accepted_by_id[cid]) for cid in selected_ids]
+        diag_configs = [("PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25", control_accepted)] + [(cid, accepted_by_id[cid]) for cid in selected_ids]
         for config_id, accepted in diag_configs:
             for cost_label, ticks, pips, purpose in COST_CASES:
                 for seq, p in enumerate(accepted, start=1):
@@ -1331,19 +1307,21 @@ def run_research():
 
         methodology = [
             {"topic": "research_version", "value": RESEARCH_VERSION},
-            {"topic": "purpose", "value": "Pass 1B boundary clarification only; no new filter hunt and no candidate frozen automatically"},
-            {"topic": "source_parity", "value": "H1/D1 rows and SHA256, raw exact-signal count/hash, scalar/vector parity, execution sample and exact Pass-1 leading-row accepted sequence must all pass before results are produced"},
-            {"topic": "pattern", "value": "exact bearish body engulfing; unchanged from Pass 1"},
+            {"topic": "purpose", "value": "Pass 1C local body-boundary clarification only; no new filter hunt and no candidate frozen automatically"},
+            {"topic": "source_parity", "value": "H1/D1 rows and SHA256, raw exact-signal count/hash, scalar/vector parity, execution sample and exact Pass-1B LB150/D0.10/B0.60/R1.25 accepted sequence must all pass before results are produced"},
+            {"topic": "pattern", "value": "exact bearish body engulfing; unchanged from Pass 1/1B"},
             {"topic": "frozen_cutoff", "value": iso(DATA_END)},
             {"topic": "execution", "value": "reference=signal close; stop=signal high+10 ticks; fixed RR3.50; exits next H1 candle onward; p0; exit-candle signal eligible"},
             {"topic": "costs", "value": "10T/1pip primary; 20T/2pip stressed selection; 40T/4pip extreme diagnostic. Assumed adverse historical fills, not measured historic quotes."},
-            {"topic": "slices", "value": "56 structure-boundary + 56 LB100/D0.10 body-range + 56 LB150/D0.05 body-range + 256 compact joint-boundary cube = 424 planned configurations"},
+            {"topic": "local_cube", "value": "LB125/150/175/200 x distance0.075/0.10/0.125 x body0.40/0.50/0.60/0.80/1.00 x range1.00/1.25/1.50 = 180 configurations"},
+            {"topic": "question", "value": "Does loosening the body threshold below 0.60 ATR to 0.50/0.40 preserve or improve the already-supported local region, or does quality deteriorate?"},
+            {"topic": "p0_attribution", "value": "For every fixed LB/distance/range geometry, exact accepted trades at each body threshold are compared with B0.60. Added and displaced accepted signals and their R contributions are reported so p0 displacement is not mistaken for a simple frequency effect."},
             {"topic": "timing", "value": "No session or weekday optimisation"},
-            {"topic": "rr", "value": "RR3.50 fixed; RR sweep remains a later final entry-stage only"},
+            {"topic": "rr", "value": "RR3.50 fixed; RR sweep remains later, after entry geometry and conditional-feature stages are frozen"},
             {"topic": "portfolio", "value": "Portfolio 30 is not used. Exact portfolio admission occurs only after standalone geometry, RR and independent implementation are frozen."},
-            {"topic": "interpretation", "value": "Inspect stressed neighbourhoods, boundary occupancy, trade count and weak periods. A top row on a new boundary is not permission to freeze it."},
+            {"topic": "interpretation", "value": "Compare body levels across the full local neighbourhood at 20T with 10T/40T stress. Do not pick the single best row. If 0.40 remains best at the new lower boundary, boundary is still unresolved; if 0.50/0.60 form an interior plateau and 0.40 weakens, body boundary is resolved."},
             {"topic": "data_snooping", "value": "All history remains repeatedly examined/in-sample; rolling/recent periods are robustness diagnostics, not unseen OOS."},
-            {"topic": "next_gate", "value": "If an interior/stable region is now intelligible, freeze a small number of distinguishable anchors for Pass 2 one-feature-at-a-time testing; otherwise stop or widen only the still-constraining boundary."},
+            {"topic": "next_gate", "value": "If body boundary resolves, freeze a small number of distinguishable entry anchors for Pass 2 one-conditional-feature-at-a-time testing. Otherwise stop or widen only the still-constraining lower body boundary once more."},
         ]
         write_csv(OUTPUTS["methodology"], methodology)
 
@@ -1353,7 +1331,7 @@ def run_research():
         set_status(
             state="complete",
             progress=100,
-            message="AUD/JPY H1 SHORT Pass 1B boundary clarification complete; ZIP ready",
+            message="AUD/JPY H1 SHORT Pass 1C body-boundary clarification complete; ZIP ready",
             h1_candles=len(h1),
             d1_candles=len(d1),
             raw_exact_signals=len(vec_raw),
@@ -1365,7 +1343,7 @@ def run_research():
             hard_parity_passed=True,
             h1_source_sha256=h1_sha,
             raw_signal_sha256=vec_hash,
-            pass1_control_sequence_sha256=control_hash,
+            pass1b_control_sequence_sha256=control_hash,
             results_zip=str(BUNDLE),
         )
 
@@ -1389,14 +1367,14 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED = True
-        threading.Thread(target=run_research, daemon=True, name="audjpy-h1-short-pass1b").start()
+        threading.Thread(target=run_research, daemon=True, name="audjpy-h1-short-pass1c").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service": "AUD/JPY H1 SHORT Pass 1B boundary clarification",
+        "service": "AUD/JPY H1 SHORT Pass 1C body-boundary clarification",
         "research_only": True,
         "orders_supported": False,
         "trading_enabled": False,
@@ -1406,28 +1384,28 @@ def root():
         "rr_fixed": REFERENCE_RR,
         "planned_configurations": EXPECTED_CONFIGS,
         "frozen_end_exclusive": iso(DATA_END),
-        "pass1_source_hash_required": EXPECTED_H1_SHA256,
-        "pass1_raw_signal_hash_required": EXPECTED_RAW_SIGNAL_SHA256,
+        "frozen_source_hash_required": EXPECTED_H1_SHA256,
+        "frozen_raw_signal_hash_required": EXPECTED_RAW_SIGNAL_SHA256,
         "routes": [
-            "/audjpy-h1-short-pass1b/start",
-            "/audjpy-h1-short-pass1b/status",
-            "/audjpy-h1-short-pass1b/results",
+            "/audjpy-h1-short-pass1c/start",
+            "/audjpy-h1-short-pass1c/status",
+            "/audjpy-h1-short-pass1c/results",
         ],
     })
 
 
-@app.route("/audjpy-h1-short-pass1b/start")
+@app.route("/audjpy-h1-short-pass1c/start")
 def start_route():
     return jsonify({"started_now": launch_once(), "state": STATUS["state"], "orders_supported": False})
 
 
-@app.route("/audjpy-h1-short-pass1b/status")
+@app.route("/audjpy-h1-short-pass1c/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-short-pass1b/results")
+@app.route("/audjpy-h1-short-pass1c/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status": "not_ready", "state": STATUS["state"], "message": STATUS["message"]}), 404
