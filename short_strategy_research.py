@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 SHORT — Pass 2 conditional-feature discovery
-=======================================================
+AUD/JPY H1 SHORT — Pass 3 conditional boundaries + justified interactions
+==========================================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Pass 1/1B/1C resolved and froze one exact-bearish-engulf CORE anchor on the
-identical AUD/JPY H1 midpoint history. Pass 2 holds that geometry and RR fixed
-and tests ONE additional conditional feature at a time. No interactions are
-allowed in this pass.
+Pass 1/1B/1C froze the exact-bearish-engulf CORE geometry. Pass 2 tested 138
+one-factor conditional features against that unchanged anchor. This Pass 3 does
+NOT reopen geometry or hunt new features. It resolves only the boundaries of
+the few Pass 2 effects worth carrying forward and tests a limited, predeclared
+set of plausible interactions.
 
 Frozen CORE anchor
 ------------------
@@ -24,27 +25,33 @@ Frozen execution
 - ATR14 Wilder/RMA, SMA seeded
 - reference entry = signal close
 - stop = signal high + 10 ticks
-- RR3.50 fixed for entry/feature discovery
+- RR3.50 fixed
 - 10T / 1 pip adverse SHORT fill = primary live-parity case
 - 20T / 2 pips = stressed selection case
 - 40T / 4 pips = extreme diagnostic only
 - exits begin next H1 candle
 - p0 within each candidate; exact exit-candle signal remains eligible
 
-Conditional families
---------------------
-Each condition is tested separately inside CORE: bearish engulf body ratio,
-strong bearish close, upper wick, H1 ATR state, prior H1 movement, previous-bar
-body/range/close quality, completed-D1 bearish trend/regime, and completed-D1
-ATR state. No weekday/session search, RR sweep, feature interactions, geometry
-retuning, or portfolio feedback occurs here.
+Predeclared Pass 3 questions
+----------------------------
+1. Previous bullish bar close-location boundary around the Pass 2 >=0.50 lead.
+2. Completed-D1 ATR minimum boundary around >=0.75.
+3. Completed-D1 ATR maximum neighbourhood around <=1.15.
+4. Limited interactions only:
+   - previous close x D1 ATR minimum
+   - previous close x D1 ATR maximum
+   - previous close x prior 24H rise
+   - previous close x D1 EMA50>=EMA200
+   - D1 ATR minimum x D1 EMA50>=EMA200
+   - D1 ATR maximum x D1 EMA50>=EMA200
 
-The source cutoff and source/raw-signal fingerprints are frozen to Pass 1C. The
-CORE anchor must reproduce its full accepted ledger at all three cost cases
-before any Pass 2 candidate is interpreted.
+No weekday/session search, no new conditional family, no geometry retuning, no RR
+sweep, and no portfolio feedback occurs here. Pass 3 fails closed unless the
+exact Pass 1C source/raw fingerprints, CORE accepted ledgers, and the primary
+Pass 2 previous-close>=0.50 accepted ledger reproduce.
 
-All history is repeatedly examined/in-sample. This pass is discovery and
-robustness mapping, not untouched out-of-sample validation.
+All history is repeatedly examined/in-sample. This is controlled robustness
+mapping, not untouched out-of-sample validation.
 
 Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
@@ -104,33 +111,30 @@ ANCHORS = {
     "CORE": dict(lookback=175, distance_atr_max=0.10, body_atr_min=0.60, range_atr_min=1.25),
 }
 
-# Pass 2 one-factor levels. Both sides of volatility/momentum states are
-# intentionally represented where economically meaningful. No interactions.
-BEAR_RATIO_LEVELS = (1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.75, 2.00)
-CLOSE_LOCATION_LEVELS = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45)
-UPPER_WICK_BODY_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00)
-H1_ATR_RATIO_LEVELS = (0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30, 1.40)
-MOMENTUM_THRESHOLDS = (0.25, 0.50, 0.75, 1.00, 1.50, 2.00)
-D1_ATR_RATIO_LEVELS = (0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.40)
-PREVIOUS_BODY_ATR_MIN_LEVELS = (0.20, 0.40, 0.60, 0.80, 1.00, 1.25)
-PREVIOUS_RANGE_ATR_MIN_LEVELS = (0.50, 0.75, 1.00, 1.25, 1.50, 1.75)
-PREVIOUS_CLOSE_LOCATION_MIN_LEVELS = (0.50, 0.60, 0.70, 0.80, 0.90)
+# Pass 3 is deliberately narrow: boundary clarification plus only the justified
+# interactions carried forward from Pass 2. No new factor families.
+PREVIOUS_CLOSE_LOCATION_LEVELS = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
+D1_ATR_MIN_LEVELS = (0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
+D1_ATR_MAX_LEVELS = (1.05, 1.10, 1.15, 1.20, 1.25, 1.30)
+PRIOR_RISE_LB24_LEVELS = (0.25, 0.50, 0.75, 1.00)
 
-COMMON_FACTOR_ROWS = (
-    len(BEAR_RATIO_LEVELS)
-    + len(CLOSE_LOCATION_LEVELS)
-    + len(UPPER_WICK_BODY_LEVELS)
-    + 2 * len(H1_ATR_RATIO_LEVELS)
-    + len(MOMENTUM_LOOKBACKS) * len(MOMENTUM_THRESHOLDS) * 2
-    + 2 * len(D1_ATR_RATIO_LEVELS)
-    + len(PREVIOUS_BODY_ATR_MIN_LEVELS)
-    + len(PREVIOUS_RANGE_ATR_MIN_LEVELS)
-    + len(PREVIOUS_CLOSE_LOCATION_MIN_LEVELS)
-    + 8
+BOUNDARY_ROWS = (
+    len(PREVIOUS_CLOSE_LOCATION_LEVELS)
+    + len(D1_ATR_MIN_LEVELS)
+    + len(D1_ATR_MAX_LEVELS)
 )
-EXPECTED_CANDIDATES = COMMON_FACTOR_ROWS * len(ANCHORS)
-assert COMMON_FACTOR_ROWS == 138
-assert EXPECTED_CANDIDATES == 138
+INTERACTION_ROWS = (
+    len(PREVIOUS_CLOSE_LOCATION_LEVELS) * len(D1_ATR_MIN_LEVELS)
+    + len(PREVIOUS_CLOSE_LOCATION_LEVELS) * len(D1_ATR_MAX_LEVELS)
+    + len(PREVIOUS_CLOSE_LOCATION_LEVELS) * len(PRIOR_RISE_LB24_LEVELS)
+    + len(PREVIOUS_CLOSE_LOCATION_LEVELS)
+    + len(D1_ATR_MIN_LEVELS)
+    + len(D1_ATR_MAX_LEVELS)
+)
+EXPECTED_CANDIDATES = BOUNDARY_ROWS + INTERACTION_ROWS
+assert BOUNDARY_ROWS == 19
+assert INTERACTION_ROWS == 131
+assert EXPECTED_CANDIDATES == 150
 
 # Exact Pass 1C frozen source/raw fingerprints.
 EXPECTED_H1_ROWS = 138030
@@ -152,14 +156,24 @@ ANCHOR_EXPECTED = {
     },
 }
 
-PASS_VERSION = "AUDJPY_H1_SHORT_PASS2_ONE_FACTOR_V1_2026-09-30"
+# Primary Pass 2 lead feature is also a hard reference control before Pass 3.
+# This does NOT freeze it as a final rule; it only proves implementation parity.
+PASS2_LEAD_EXPECTED = {
+    "qualified_raw_signals": 94,
+    "accepted_trades": 91,
+    "LIVE_LIMIT_10T": dict(total_r=56.05130586762477, profit_factor=1.9833562432916625, max_drawdown_r=-8.0, ledger_sha256="5ba356f3be4e25ba7b1573260a87ca82b51af5a6c418b296f83450dcc8bbe207"),
+    "STRESS_20T": dict(total_r=50.61181431915988, profit_factor=1.8879265670028047, max_drawdown_r=-8.133802816901252, ledger_sha256="9c557d21f6ff2a0afe2ac1960f63ea4d178181f794323b57dcc1bed43a8a6409"),
+    "EXTREME_40T": dict(total_r=40.99669387216922, profit_factor=1.7192402433713898, max_drawdown_r=-8.6111111111112, ledger_sha256="b7bd7de7394753482330a310a54c183e7e3979db0fcdf40e2cc3b4384f61d380"),
+}
+
+PASS_VERSION = "AUDJPY_H1_SHORT_PASS3_BOUNDARY_INTERACTIONS_V1_2026-09-30"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS2_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass2"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS3_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass3"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS2_CONDITIONAL_FEATURES_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS3_BOUNDARY_INTERACTIONS_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
@@ -168,10 +182,11 @@ OUTPUTS = {
     "anchor_parity": OUT_DIR / "anchor_parity.csv",
     "anchor_ledgers": OUT_DIR / "anchor_accepted_ledgers.csv",
     "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
-    "factor_plan": OUT_DIR / "factor_plan.csv",
-    "conditional_summary": OUT_DIR / "conditional_summary.csv",
+    "factor_plan": OUT_DIR / "experiment_plan.csv",
+    "conditional_summary": OUT_DIR / "experiment_summary.csv",
     "delta_vs_anchor": OUT_DIR / "delta_vs_anchor.csv",
     "family_summary": OUT_DIR / "family_summary_20T.csv",
+    "pass2_reference_parity": OUT_DIR / "pass2_reference_parity.csv",
     "screen": OUT_DIR / "diagnostic_screen.csv",
     "screen_ledgers": OUT_DIR / "diagnostic_screen_accepted_ledgers.csv",
     "periods": OUT_DIR / "diagnostic_periods.csv",
@@ -185,7 +200,7 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 SHORT Pass 2 waiting",
+    "message": "AUD/JPY H1 SHORT Pass 3 waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
@@ -194,7 +209,8 @@ STATUS = {
     "rr_fixed": REFERENCE_RR,
     "pass_version": PASS_VERSION,
     "anchors": ANCHORS,
-    "one_factor_rows_per_anchor": COMMON_FACTOR_ROWS,
+    "boundary_rows": BOUNDARY_ROWS,
+    "interaction_rows": INTERACTION_ROWS,
     "candidate_configurations": EXPECTED_CANDIDATES,
     "frozen_pass1c_cutoff": DATA_END.isoformat().replace("+00:00", "Z"),
 }
@@ -809,7 +825,7 @@ def all_record_arrays(records):
     return out
 
 # ============================================================
-# PASS 2 EXPERIMENT PLAN — ONE CONDITIONAL FEATURE AT A TIME
+# PASS 3 EXPERIMENT PLAN — BOUNDARIES + JUSTIFIED INTERACTIONS
 # ============================================================
 
 def fmt_level(value):
@@ -829,63 +845,98 @@ def anchor_mask(arr, anchor_name):
     )
 
 
-def conditional_factor_plan(arr):
-    """Yield predeclared ONE-factor conditions only. No interactions."""
-    n = len(arr["bear_ratio"])
+def pass3_experiment_plan(arr):
+    """Yield only predeclared Pass 3 boundary rows and justified interactions."""
+    n = len(arr["previous_close_location"])
     base = np.ones(n, dtype=bool)
-
-    for v in BEAR_RATIO_LEVELS:
-        yield dict(factor_id=f"BR_MIN_{fmt_level(v)}", family="body_ratio", operator=">=", parameter="bear_ratio", threshold=v, mask=base & (arr["bear_ratio"] >= v))
-
-    # Bearish strong close means the close sits near the candle LOW.
-    for v in CLOSE_LOCATION_LEVELS:
-        yield dict(factor_id=f"CLOSE_LOC_MAX_{fmt_level(v)}", family="strong_close", operator="<=", parameter="close_location", threshold=v, mask=base & (arr["close_location"] <= v))
-
-    for v in UPPER_WICK_BODY_LEVELS:
-        yield dict(factor_id=f"UPPER_WICK_BODY_MIN_{fmt_level(v)}", family="upper_wick", operator=">=", parameter="upper_wick_body", threshold=v, mask=base & (arr["upper_wick_body"] >= v))
-
-    h1v = arr["h1_atr_ratio"]
-    for v in H1_ATR_RATIO_LEVELS:
-        yield dict(factor_id=f"H1_ATR_RATIO_MIN_{fmt_level(v)}", family="h1_volatility", operator=">=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v >= v))
-        yield dict(factor_id=f"H1_ATR_RATIO_MAX_{fmt_level(v)}", family="h1_volatility", operator="<=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v <= v))
-
-    for lb in MOMENTUM_LOOKBACKS:
-        x = arr[f"momentum_{lb}"]
-        for v in MOMENTUM_THRESHOLDS:
-            yield dict(factor_id=f"PRIOR_RISE_LB{lb}_MIN_{fmt_level(v)}", family="prior_momentum", operator=">=", parameter=f"momentum_{lb}", threshold=v, mask=base & np.isfinite(x) & (x >= v))
-            yield dict(factor_id=f"PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(v)}", family="prior_momentum", operator="<=", parameter=f"momentum_{lb}", threshold=-v, mask=base & np.isfinite(x) & (x <= -v))
-
-    pbody = arr["previous_body_atr"]
-    for v in PREVIOUS_BODY_ATR_MIN_LEVELS:
-        yield dict(factor_id=f"PREV_BODY_ATR_MIN_{fmt_level(v)}", family="previous_bar_body", operator=">=", parameter="previous_body_atr", threshold=v, mask=base & np.isfinite(pbody) & (pbody >= v))
-
-    prange = arr["previous_range_atr"]
-    for v in PREVIOUS_RANGE_ATR_MIN_LEVELS:
-        yield dict(factor_id=f"PREV_RANGE_ATR_MIN_{fmt_level(v)}", family="previous_bar_range", operator=">=", parameter="previous_range_atr", threshold=v, mask=base & np.isfinite(prange) & (prange >= v))
-
-    # Exact bearish engulf requires a bullish previous candle. A high close-location
-    # is the mirrored previous-bar quality condition.
     pcl = arr["previous_close_location"]
-    for v in PREVIOUS_CLOSE_LOCATION_MIN_LEVELS:
-        yield dict(factor_id=f"PREV_CLOSE_LOC_MIN_{fmt_level(v)}", family="previous_bar_close", operator=">=", parameter="previous_close_location", threshold=v, mask=base & np.isfinite(pcl) & (pcl >= v))
-
-    regimes = (
-        ("D1_CLOSE_LT_EMA50", "close<ema50", arr["daily_close_lt_ema50"]),
-        ("D1_CLOSE_GE_EMA50", "close>=ema50", ~arr["daily_close_lt_ema50"]),
-        ("D1_CLOSE_LT_EMA100", "close<ema100", arr["daily_close_lt_ema100"]),
-        ("D1_CLOSE_GE_EMA100", "close>=ema100", ~arr["daily_close_lt_ema100"]),
-        ("D1_CLOSE_LT_EMA200", "close<ema200", arr["daily_close_lt_ema200"]),
-        ("D1_CLOSE_GE_EMA200", "close>=ema200", ~arr["daily_close_lt_ema200"]),
-        ("D1_EMA50_LT_EMA200", "ema50<ema200", arr["daily_ema50_lt_ema200"]),
-        ("D1_EMA50_GE_EMA200", "ema50>=ema200", ~arr["daily_ema50_lt_ema200"]),
-    )
-    for fid, label, mask in regimes:
-        yield dict(factor_id=fid, family="daily_regime", operator="bool", parameter="daily_regime", threshold=label, mask=base & mask)
-
     d1v = arr["daily_atr_ratio"]
-    for v in D1_ATR_RATIO_LEVELS:
-        yield dict(factor_id=f"D1_ATR_RATIO_MIN_{fmt_level(v)}", family="daily_volatility", operator=">=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v >= v))
-        yield dict(factor_id=f"D1_ATR_RATIO_MAX_{fmt_level(v)}", family="daily_volatility", operator="<=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v <= v))
+    rise24 = arr["momentum_24"]
+    ema_ge = ~arr["daily_ema50_lt_ema200"]
+
+    # A) Pure boundary clarification rows.
+    for v in PREVIOUS_CLOSE_LOCATION_LEVELS:
+        yield dict(
+            factor_id=f"PREV_CLOSE_LOC_MIN_{fmt_level(v)}",
+            family="boundary_previous_close", operator=">=",
+            parameter="previous_close_location", threshold=v,
+            mask=base & np.isfinite(pcl) & (pcl >= v),
+        )
+    for v in D1_ATR_MIN_LEVELS:
+        yield dict(
+            factor_id=f"D1_ATR_RATIO_MIN_{fmt_level(v)}",
+            family="boundary_d1_atr_min", operator=">=",
+            parameter="daily_atr_ratio", threshold=v,
+            mask=base & np.isfinite(d1v) & (d1v >= v),
+        )
+    for v in D1_ATR_MAX_LEVELS:
+        yield dict(
+            factor_id=f"D1_ATR_RATIO_MAX_{fmt_level(v)}",
+            family="boundary_d1_atr_max", operator="<=",
+            parameter="daily_atr_ratio", threshold=v,
+            mask=base & np.isfinite(d1v) & (d1v <= v),
+        )
+
+    # B) Previous close x completed-D1 ATR minimum.
+    for pc in PREVIOUS_CLOSE_LOCATION_LEVELS:
+        for dv in D1_ATR_MIN_LEVELS:
+            yield dict(
+                factor_id=f"PREV_CLOSE_MIN_{fmt_level(pc)}__D1_ATR_MIN_{fmt_level(dv)}",
+                family="interaction_prevclose_x_d1atr_min", operator="AND",
+                parameter="previous_close_location & daily_atr_ratio",
+                threshold=f">={fmt_level(pc)} & >={fmt_level(dv)}",
+                mask=(base & np.isfinite(pcl) & np.isfinite(d1v) & (pcl >= pc) & (d1v >= dv)),
+            )
+
+    # C) Previous close x completed-D1 ATR maximum.
+    for pc in PREVIOUS_CLOSE_LOCATION_LEVELS:
+        for dv in D1_ATR_MAX_LEVELS:
+            yield dict(
+                factor_id=f"PREV_CLOSE_MIN_{fmt_level(pc)}__D1_ATR_MAX_{fmt_level(dv)}",
+                family="interaction_prevclose_x_d1atr_max", operator="AND",
+                parameter="previous_close_location & daily_atr_ratio",
+                threshold=f">={fmt_level(pc)} & <={fmt_level(dv)}",
+                mask=(base & np.isfinite(pcl) & np.isfinite(d1v) & (pcl >= pc) & (d1v <= dv)),
+            )
+
+    # D) Previous close x prior 24-H1-bar rise.
+    for pc in PREVIOUS_CLOSE_LOCATION_LEVELS:
+        for mv in PRIOR_RISE_LB24_LEVELS:
+            yield dict(
+                factor_id=f"PREV_CLOSE_MIN_{fmt_level(pc)}__PRIOR_RISE_LB24_MIN_{fmt_level(mv)}",
+                family="interaction_prevclose_x_priorrise24", operator="AND",
+                parameter="previous_close_location & momentum_24",
+                threshold=f">={fmt_level(pc)} & >={fmt_level(mv)}",
+                mask=(base & np.isfinite(pcl) & np.isfinite(rise24) & (pcl >= pc) & (rise24 >= mv)),
+            )
+
+    # E) Previous close x D1 EMA50>=EMA200 quality regime.
+    for pc in PREVIOUS_CLOSE_LOCATION_LEVELS:
+        yield dict(
+            factor_id=f"PREV_CLOSE_MIN_{fmt_level(pc)}__D1_EMA50_GE_EMA200",
+            family="interaction_prevclose_x_d1ema50ge200", operator="AND",
+            parameter="previous_close_location & d1_ema50_ge_ema200",
+            threshold=f">={fmt_level(pc)} & true",
+            mask=(base & np.isfinite(pcl) & (pcl >= pc) & ema_ge),
+        )
+
+    # F/G) D1 ATR x D1 EMA50>=EMA200 secondary quality interactions.
+    for dv in D1_ATR_MIN_LEVELS:
+        yield dict(
+            factor_id=f"D1_ATR_MIN_{fmt_level(dv)}__D1_EMA50_GE_EMA200",
+            family="interaction_d1atr_min_x_d1ema50ge200", operator="AND",
+            parameter="daily_atr_ratio & d1_ema50_ge_ema200",
+            threshold=f">={fmt_level(dv)} & true",
+            mask=(base & np.isfinite(d1v) & (d1v >= dv) & ema_ge),
+        )
+    for dv in D1_ATR_MAX_LEVELS:
+        yield dict(
+            factor_id=f"D1_ATR_MAX_{fmt_level(dv)}__D1_EMA50_GE_EMA200",
+            family="interaction_d1atr_max_x_d1ema50ge200", operator="AND",
+            parameter="daily_atr_ratio & d1_ema50_ge_ema200",
+            threshold=f"<={fmt_level(dv)} & true",
+            mask=(base & np.isfinite(d1v) & (d1v <= dv) & ema_ge),
+        )
 
 
 def accepted_ledger_hash(records, accepted, cost_label):
@@ -1098,7 +1149,7 @@ def diagnostics_for_config(records, config_id, accepted, cost_label):
 
 def run_research():
     try:
-        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass 1C H1/D1 OANDA midpoint history")
+        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass 1C/Pass 2 H1/D1 OANDA midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
         d1 = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
 
@@ -1130,7 +1181,7 @@ def run_research():
         ]
         if any(x["status"] != "PASS" for x in checks):
             write_csv(OUTPUTS["parity"], checks)
-            raise RuntimeError("Frozen Pass 1C source parity FAILED; do not interpret Pass 2")
+            raise RuntimeError("Frozen source parity FAILED; do not interpret Pass 3")
 
         set_status(state="features", progress=10, message="Building H1/D1 features and raw-signal parity")
         features = build_h1_features(h1)
@@ -1174,7 +1225,7 @@ def run_research():
         write_csv(OUTPUTS["raw_signals"], raw_export)
         arr = all_record_arrays(records)
 
-        set_status(state="anchor_parity", progress=22, message="Reproducing frozen Pass 1C CORE anchor at all costs")
+        set_status(state="anchor_parity", progress=22, message="Reproducing frozen CORE and Pass 2 reference controls")
         anchor_masks = {name: anchor_mask(arr,name) for name in ANCHORS}
         anchor_accepted = {}
         anchor_rows = []
@@ -1182,7 +1233,7 @@ def run_research():
         parity_rows = []
         for name in ANCHORS:
             summary, accepted = summarize_config(records, anchor_masks[name], {
-                "config_id":f"ANCHOR_{name}","anchor":name,"stage":"PASS2_FROZEN_ANCHOR","rr":REFERENCE_RR,**ANCHORS[name],
+                "config_id":f"ANCHOR_{name}","anchor":name,"stage":"PASS3_FROZEN_ANCHOR","rr":REFERENCE_RR,**ANCHORS[name],
             })
             anchor_accepted[name] = accepted
             anchor_rows.extend(summary)
@@ -1222,21 +1273,55 @@ def run_research():
         write_csv(OUTPUTS["anchor_parity"], parity_rows)
         write_csv(OUTPUTS["anchor_ledgers"], anchor_ledger_rows)
         if any(x["status"] != "PASS" for x in parity_rows):
-            raise RuntimeError("Frozen Pass 1C CORE anchor full-ledger parity FAILED; do not interpret Pass 2")
+            raise RuntimeError("Frozen Pass 1C CORE anchor full-ledger parity FAILED; do not interpret Pass 3")
 
-        factors = list(conditional_factor_plan(arr))
-        if len(factors) != COMMON_FACTOR_ROWS:
-            raise RuntimeError(f"Factor plan enumeration mismatch: expected {COMMON_FACTOR_ROWS}, got {len(factors)}")
+        # Hard reproduce the primary Pass 2 lead (previous close location >=0.50).
+        # It remains a research reference, not a frozen final strategy rule.
+        pass2_lead_mask = anchor_masks["CORE"] & np.isfinite(arr["previous_close_location"]) & (arr["previous_close_location"] >= 0.50)
+        lead_rows, lead_accepted = summarize_config(records, pass2_lead_mask, {
+            "config_id":"PASS2_REFERENCE_PREV_CLOSE_MIN_0.5", "anchor":"CORE",
+            "stage":"PASS2_REFERENCE_PARITY", "rr":REFERENCE_RR, **ANCHORS["CORE"],
+        })
+        lead_parity_rows=[]
+        lead_q=int(np.sum(pass2_lead_mask))
+        for row in lead_rows:
+            label=row["cost_label"]; exp=PASS2_LEAD_EXPECTED[label]
+            ledger_sha=accepted_ledger_hash(records,lead_accepted,label)
+            ok=(
+                lead_q==PASS2_LEAD_EXPECTED["qualified_raw_signals"]
+                and len(lead_accepted)==PASS2_LEAD_EXPECTED["accepted_trades"]
+                and abs(float(row["total_r"])-float(exp["total_r"]))<1e-10
+                and abs(float(row["profit_factor"])-float(exp["profit_factor"]))<1e-10
+                and abs(float(row["max_drawdown_r"])-float(exp["max_drawdown_r"]))<1e-10
+                and ledger_sha==exp["ledger_sha256"]
+            )
+            lead_parity_rows.append({
+                "reference":"PASS2_PREV_CLOSE_LOC_MIN_0.50", "cost_label":label,
+                "status":"PASS" if ok else "FAIL",
+                "qualified_raw_signals":lead_q, "expected_qualified_raw_signals":PASS2_LEAD_EXPECTED["qualified_raw_signals"],
+                "accepted_trades":len(lead_accepted), "expected_accepted_trades":PASS2_LEAD_EXPECTED["accepted_trades"],
+                "total_r":row["total_r"], "expected_total_r":exp["total_r"],
+                "profit_factor":row["profit_factor"], "expected_profit_factor":exp["profit_factor"],
+                "max_drawdown_r":row["max_drawdown_r"], "expected_max_drawdown_r":exp["max_drawdown_r"],
+                "ledger_sha256":ledger_sha, "expected_ledger_sha256":exp["ledger_sha256"],
+            })
+        write_csv(OUTPUTS["pass2_reference_parity"],lead_parity_rows)
+        if any(x["status"] != "PASS" for x in lead_parity_rows):
+            raise RuntimeError("Primary Pass 2 lead accepted-ledger parity FAILED; do not interpret Pass 3")
+
+        factors = list(pass3_experiment_plan(arr))
+        if len(factors) != EXPECTED_CANDIDATES:
+            raise RuntimeError(f"Pass 3 plan enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {len(factors)}")
         factor_plan_rows=[]
         for i,f in enumerate(factors,start=1):
             factor_plan_rows.append({
                 "factor_number":i,"factor_id":f["factor_id"],"factor_family":f["family"],
                 "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
-                "application":"ONE_FACTOR_ONLY_WITHIN_FROZEN_CORE_ANCHOR",
+                "application":"PREDECLARED_BOUNDARY_OR_JUSTIFIED_INTERACTION_WITHIN_FROZEN_CORE",
             })
         write_csv(OUTPUTS["factor_plan"], factor_plan_rows)
 
-        set_status(state="conditional_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} one-factor candidate configurations")
+        set_status(state="interaction_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} Pass 3 boundary/interaction configurations")
         summary_rows=[]
         delta_rows=[]
         accepted_by_id={}
@@ -1248,11 +1333,11 @@ def run_research():
             for f in factors:
                 candidate_count += 1
                 if candidate_count % 25 == 0:
-                    set_status(message=f"Pass 2 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
-                cid=f"P2_{anchor}__{f['factor_id']}"
+                    set_status(message=f"Pass 3 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
+                cid=f"P3_{anchor}__{f['factor_id']}"
                 cmask=amask & f["mask"]
                 meta={
-                    "config_id":cid,"stage":"PASS2_ONE_FACTOR","anchor":anchor,
+                    "config_id":cid,"stage":"PASS3_BOUNDARY_INTERACTION","anchor":anchor,
                     "factor_id":f["factor_id"],"factor_family":f["family"],
                     "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
                     "rr":REFERENCE_RR,**ANCHORS[anchor],
@@ -1317,18 +1402,18 @@ def run_research():
         write_csv(OUTPUTS["rolling_summary"],rolling_summary_rows)
 
         methodology=[
-            {"topic":"purpose","value":"Pass 2 one conditional feature at a time within the frozen Pass 1C AUD/JPY H1 SHORT CORE anchor."},
+            {"topic":"purpose","value":"Pass 3 resolves only Pass 2 conditional boundaries and a limited set of justified interactions inside the frozen AUD/JPY H1 SHORT CORE."},
             {"topic":"core_anchor","value":json.dumps(ANCHORS["CORE"],sort_keys=True)},
-            {"topic":"parity","value":"Fails closed unless exact Pass 1C H1/D1/raw-signal fingerprints and the full CORE accepted ledger match at 10T/20T/40T."},
+            {"topic":"parity","value":"Fails closed unless exact source/raw fingerprints, Pass 1C CORE accepted ledgers, and Pass 2 previous-close>=0.50 accepted ledgers reproduce at 10T/20T/40T."},
             {"topic":"execution","value":"exact bearish engulf; signal-close reference; stop=signal high+10 ticks; RR3.50 fixed; next-H1 exits; p0; exact exit-candle re-entry eligible."},
             {"topic":"costs","value":"10T primary live-parity; 20T stressed selection; 40T extreme diagnostic only. Historical MID shifts are assumed costs, not measured executable spreads/slippage."},
-            {"topic":"one_factor_only","value":"Every Pass 2 candidate is exactly frozen CORE anchor AND one condition. No conditional-feature interactions are tested."},
-            {"topic":"factor_families","value":"bearish engulf body ratio; strong bearish close; upper wick; H1 ATR state; prior H1 rise/fall; previous-bar body/range/close quality; completed-D1 bearish regimes; completed-D1 ATR state."},
+            {"topic":"boundary_rows","value":f"{BOUNDARY_ROWS} rows: previous-close 0.30-0.60; D1 ATR minimum 0.65-0.90; D1 ATR maximum 1.05-1.30."},
+            {"topic":"interactions","value":"Only previous-close x D1 ATR min/max, previous-close x prior-rise24, previous-close x D1 EMA50>=EMA200, and D1 ATR min/max x D1 EMA50>=EMA200 are tested."},
             {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay; simple signal filtering is not treated as equivalent to accepted-trade subtraction."},
-            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no new entry mechanism, no structure/body/range retuning, no Portfolio 30 selection feedback."},
+            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no new feature family, no new entry mechanism, no structure/body/range retuning, no Portfolio 30 selection feedback."},
             {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only. It requires >=50% anchor trade retention and positive 10T/20T R, then surfaces best 20T delta-R and expectancy per family. It does not freeze a rule."},
             {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. Recent/era/rolling diagnostics are robustness descriptions, not untouched OOS tests."},
-            {"topic":"next_gate","value":"Only coherent neighbouring conditional effects should enter a limited Pass 3 interaction/boundary study. Do not combine isolated winners."},
+            {"topic":"next_gate","value":"Use Pass 3 to identify coherent interior conditional regions. If resolved, freeze the conditional rule set before the RR-last sweep; do not reopen unrelated filters."},
         ]
         write_csv(OUTPUTS["methodology"],methodology)
 
@@ -1336,9 +1421,9 @@ def run_research():
             OUTPUTS["errors"].unlink()
         pack_results()
         set_status(
-            state="complete",progress=100,message="AUD/JPY H1 SHORT Pass 2 complete; ZIP ready",
+            state="complete",progress=100,message="AUD/JPY H1 SHORT Pass 3 complete; ZIP ready",
             parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),raw_closed_outcomes=len(records),
-            one_factor_rows_per_anchor=COMMON_FACTOR_ROWS,candidate_configurations=candidate_count,
+            boundary_rows=BOUNDARY_ROWS,interaction_rows=INTERACTION_ROWS,candidate_configurations=candidate_count,
             diagnostic_configurations=len(diag_ids),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE),
         )
     except Exception as exc:
@@ -1360,36 +1445,36 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED=True
-        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-short-pass2").start()
+        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-short-pass3").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service":"AUD/JPY H1 SHORT Pass 2 conditional-feature discovery",
+        "service":"AUD/JPY H1 SHORT Pass 3 conditional boundaries + interactions",
         "pass_version":PASS_VERSION,
         "research_only":True,"orders_supported":False,"trading_enabled":False,
         "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
-        "anchors":ANCHORS,"one_factor_rows_per_anchor":COMMON_FACTOR_ROWS,
+        "anchors":ANCHORS,"boundary_rows":BOUNDARY_ROWS,"interaction_rows":INTERACTION_ROWS,
         "candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
         "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
-        "routes":["/audjpy-h1-short-pass2/start","/audjpy-h1-short-pass2/status","/audjpy-h1-short-pass2/results"],
+        "routes":["/audjpy-h1-short-pass3/start","/audjpy-h1-short-pass3/status","/audjpy-h1-short-pass3/results"],
     })
 
 
-@app.route("/audjpy-h1-short-pass2/start")
+@app.route("/audjpy-h1-short-pass3/start")
 def start_route():
     return jsonify({"started_now":launch_once(),"state":STATUS["state"],"orders_supported":False})
 
 
-@app.route("/audjpy-h1-short-pass2/status")
+@app.route("/audjpy-h1-short-pass3/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-short-pass2/results")
+@app.route("/audjpy-h1-short-pass3/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status":"not_ready","state":STATUS["state"],"message":STATUS["message"]}),404
