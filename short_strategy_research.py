@@ -71,7 +71,7 @@ S = _load_embedded("audjpy_h1_short_pass5_reference", _S_PACKED)
 P9 = A.P9
 H6 = A.H6
 
-VERSION = "AUDJPY_H1_SHORT_PASS6_PORTFOLIO30_TO31_ADMISSION_V1_2026-09-30"
+VERSION = "AUDJPY_H1_SHORT_PASS6_PORTFOLIO30_TO31_ADMISSION_V2_EXIT_HASH_FIX_2026-09-30"
 PAIR = "AUD_JPY"
 PORTFOLIO_CUTOFF = A.PORTFOLIO_CUTOFF
 PORTFOLIO_CUTOFF_DT = A.PORTFOLIO_CUTOFF_DT
@@ -334,16 +334,23 @@ def short_source_and_raw_opportunities():
 
 
 def short_sequence_hash(rows):
+    # Independent-confirmation hashes use the H1 EXIT CANDLE OPEN timestamp.
+    # Admission opportunities deliberately store actual exposure release time
+    # at the H1 candle CLOSE (= open + 1 hour) for cross-timeframe pair gating.
+    # Convert only for parity serialization; gate timing remains unchanged.
     return sha_lines(
-        f"{iso(o['signal_open'])}|{o['signal_index']}|{iso(o['exit'])}|{o['exit_index']}|{o['exit_reason']}"
+        f"{iso(o['signal_open'])}|{o['signal_index']}|{iso(o['exit'] - dt.timedelta(hours=1))}|{o['exit_index']}|{o['exit_reason']}"
         for o in rows
     )
 
 
 def short_ledger_hash(rows, cost_label):
+    # Same timestamp normalization as short_sequence_hash above: reproduce the
+    # frozen standalone ledger convention without changing live exposure timing.
     return sha_lines(
         "|".join((
-            iso(o["signal_open"]), iso(o["exit"]), str(o["signal_index"]), str(o["exit_index"]),
+            iso(o["signal_open"]), iso(o["exit"] - dt.timedelta(hours=1)),
+            str(o["signal_index"]), str(o["exit_index"]),
             o["exit_reason"], f'{o["r_by_cost"][cost_label]:.12g}',
         ))
         for o in rows
