@@ -1,44 +1,50 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 SHORT — Pass 1C local body-boundary clarification
-==============================================================
+AUD/JPY H1 SHORT — Pass 2 conditional-feature discovery
+=======================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Purpose
--------
-Pass 1B resolved the useful structure and range region into an interior plateau:
-roughly LB125-200, previous-high distance 0.075-0.125 ATR, and range 1.00-1.50 ATR.
-The remaining unresolved entry dimension is the LOWER body threshold because
-body>=0.60 ATR was still the minimum body setting in the interaction study.
+Pass 1/1B/1C resolved and froze one exact-bearish-engulf CORE anchor on the
+identical AUD/JPY H1 midpoint history. Pass 2 holds that geometry and RR fixed
+and tests ONE additional conditional feature at a time. No interactions are
+allowed in this pass.
 
-This pass does NOT add a filter and does NOT reopen broad discovery. It asks one
-narrow question: inside the already-supported local geometry, do body thresholds
-0.40 or 0.50 ATR improve robustness/frequency enough to displace 0.60, or does
-the edge deteriorate as the body threshold is loosened?
+Frozen CORE anchor
+------------------
+- exact bearish body engulf
+- previous 175 H1-bar high
+- ABS(signal high - previous 175-bar high) <= 0.10 ATR14
+- bearish body >= 0.60 ATR14
+- signal range >= 1.25 ATR14
 
-Frozen source/execution protocol is IDENTICAL to Pass 1/1B:
-- AUD_JPY H1 OANDA midpoint completed candles
-- exact bearish body engulfing
-- data end exclusive 2026-09-30T08:00:00Z
-- reference RR3.50
+Frozen execution
+----------------
+- OANDA completed MID H1 candles
+- ATR14 Wilder/RMA, SMA seeded
+- reference entry = signal close
 - stop = signal high + 10 ticks
-- historical adverse SHORT fills: 10T primary, 20T stressed, 40T extreme
-- exits start next H1 candle
-- pyramiding=0; exact exit-candle signal eligible
-- no weekday/session/RR/portfolio optimisation
+- RR3.50 fixed for entry/feature discovery
+- 10T / 1 pip adverse SHORT fill = primary live-parity case
+- 20T / 2 pips = stressed selection case
+- 40T / 4 pips = extreme diagnostic only
+- exits begin next H1 candle
+- p0 within each candidate; exact exit-candle signal remains eligible
 
-Predeclared local cube
-----------------------
-- structure lookback: 125 / 150 / 175 / 200 H1 bars
-- previous-high distance: 0.075 / 0.100 / 0.125 ATR14
-- body threshold: 0.40 / 0.50 / 0.60 / 0.80 / 1.00 ATR14
-- range threshold: 1.00 / 1.25 / 1.50 ATR14
+Conditional families
+--------------------
+Each condition is tested separately inside CORE: bearish engulf body ratio,
+strong bearish close, upper wick, H1 ATR state, prior H1 movement, previous-bar
+body/range/close quality, completed-D1 bearish trend/regime, and completed-D1
+ATR state. No weekday/session search, RR sweep, feature interactions, geometry
+retuning, or portfolio feedback occurs here.
 
-Total = 4 x 3 x 5 x 3 = 180 configurations.
+The source cutoff and source/raw-signal fingerprints are frozen to Pass 1C. The
+CORE anchor must reproduce its full accepted ledger at all three cost cases
+before any Pass 2 candidate is interpreted.
 
-Pass-1B parity control before any new result is interpreted:
-LB150 / D0.10 / body>=0.60 / range>=1.25 at RR3.50.
+All history is repeatedly examined/in-sample. This pass is discovery and
+robustness mapping, not untouched out-of-sample validation.
 
 Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
@@ -66,14 +72,14 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# FROZEN PROTOCOL + PASS-1 PARITY REFERENCES
+# FROZEN PROTOCOL
 # ============================================================
 
 PAIR = "AUD_JPY"
 TIMEFRAME = "H1"
 SIDE = "SHORT"
 REQUESTED_START = datetime(2002, 5, 6, 20, 0, tzinfo=timezone.utc)
-DATA_END = datetime(2026, 9, 30, 8, 0, tzinfo=timezone.utc)  # exclusive
+DATA_END = datetime(2026, 9, 30, 8, 0, tzinfo=timezone.utc)  # exclusive; exact Pass 1C cutoff
 D1_WARMUP_START = REQUESTED_START - timedelta(days=900)
 
 TICK = 0.001
@@ -89,58 +95,83 @@ PRIMARY_COST_LABEL = "LIVE_LIMIT_10T"
 STRESS_COST_LABEL = "STRESS_20T"
 EXTREME_COST_LABEL = "EXTREME_40T"
 
-# Exact Pass-1 frozen source/raw fingerprints. Fail closed if OANDA history at
-# the frozen cutoff no longer reproduces them.
+# Feature preparation. Structure/body/range themselves are frozen in Pass 2.
+STRUCTURE_LOOKBACKS = (175,)
+GRID_LOOKBACKS = (175,)
+MOMENTUM_LOOKBACKS = (4, 8, 12, 24, 48)
+
+ANCHORS = {
+    "CORE": dict(lookback=175, distance_atr_max=0.10, body_atr_min=0.60, range_atr_min=1.25),
+}
+
+# Pass 2 one-factor levels. Both sides of volatility/momentum states are
+# intentionally represented where economically meaningful. No interactions.
+BEAR_RATIO_LEVELS = (1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.75, 2.00)
+CLOSE_LOCATION_LEVELS = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45)
+UPPER_WICK_BODY_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00)
+H1_ATR_RATIO_LEVELS = (0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30, 1.40)
+MOMENTUM_THRESHOLDS = (0.25, 0.50, 0.75, 1.00, 1.50, 2.00)
+D1_ATR_RATIO_LEVELS = (0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.40)
+PREVIOUS_BODY_ATR_MIN_LEVELS = (0.20, 0.40, 0.60, 0.80, 1.00, 1.25)
+PREVIOUS_RANGE_ATR_MIN_LEVELS = (0.50, 0.75, 1.00, 1.25, 1.50, 1.75)
+PREVIOUS_CLOSE_LOCATION_MIN_LEVELS = (0.50, 0.60, 0.70, 0.80, 0.90)
+
+COMMON_FACTOR_ROWS = (
+    len(BEAR_RATIO_LEVELS)
+    + len(CLOSE_LOCATION_LEVELS)
+    + len(UPPER_WICK_BODY_LEVELS)
+    + 2 * len(H1_ATR_RATIO_LEVELS)
+    + len(MOMENTUM_LOOKBACKS) * len(MOMENTUM_THRESHOLDS) * 2
+    + 2 * len(D1_ATR_RATIO_LEVELS)
+    + len(PREVIOUS_BODY_ATR_MIN_LEVELS)
+    + len(PREVIOUS_RANGE_ATR_MIN_LEVELS)
+    + len(PREVIOUS_CLOSE_LOCATION_MIN_LEVELS)
+    + 8
+)
+EXPECTED_CANDIDATES = COMMON_FACTOR_ROWS * len(ANCHORS)
+assert COMMON_FACTOR_ROWS == 138
+assert EXPECTED_CANDIDATES == 138
+
+# Exact Pass 1C frozen source/raw fingerprints.
 EXPECTED_H1_ROWS = 138030
-EXPECTED_H1_SHA256 = "5b844d2f79af6ae49e7f36586f68c366d4884859f897792bdb09ebe4e7bfcdfe"
 EXPECTED_D1_ROWS = 6476
+EXPECTED_H1_SHA256 = "5b844d2f79af6ae49e7f36586f68c366d4884859f897792bdb09ebe4e7bfcdfe"
 EXPECTED_D1_SHA256 = "bb43365840ff5d38d8d3ed3260c4d74204a927780e4619074ea3f9e63bcaba59"
 EXPECTED_RAW_SIGNAL_COUNT = 10465
 EXPECTED_RAW_SIGNAL_SHA256 = "fc53892ad7e01e06b49594108b8b1fe8047ade46ec33e0d3a8d554c84322f3ab"
 
-# Exact Pass-1B frozen control: LB150/D0.10/B0.60/R1.25.
-# Fail closed unless the leading broad Pass-1B geometry reproduces exactly.
-PASS1B_CONTROL_SEQUENCE_SHA256 = "9a3562b34c593c26c9103ac1fdcf2ca251805b507830d4e109265e7e96712e0d"
-PASS1B_CONTROL_ACCEPTED = 104
-PASS1B_CONTROL_TOTAL_R = {
-    "LIVE_LIMIT_10T": 51.69201154748691,
-    "STRESS_20T": 45.92081252128802,
-    "EXTREME_40T": 35.7132347095061,
+# Frozen Pass 1C CORE anchor controls. Full accepted-ledger parity is checked
+# at all costs before any conditional candidate is evaluated.
+ANCHOR_EXPECTED = {
+    "CORE": {
+        "qualified_raw_signals": 100,
+        "accepted_trades": 96,
+        "LIVE_LIMIT_10T": dict(total_r=51.05130586762477, profit_factor=1.823408159155238, max_drawdown_r=-9.709302325581533, ledger_sha256="ee0eb7148549d252b1155e7404e9770fd677b790684a56cd122c3a334a34bdf9"),
+        "STRESS_20T": dict(total_r=45.61181431915988, profit_factor=1.7356744245025788, max_drawdown_r=-9.899999999999965, ledger_sha256="4a9b7f9873cbc860f9e9ee11f83e97c827045be3b3f6b0f67ad7ec86015b7865"),
+        "EXTREME_40T": dict(total_r=35.99669387216922, profit_factor=1.5805918366478906, max_drawdown_r=-10.234693877551152, ledger_sha256="ec44209e9db2d06c0a66ae9d81a34b96bc10a5e193f13e9e5798ce87ab03aba3"),
+    },
 }
 
-# Pass 1C: one small local cube around the supported Pass-1B plateau.
-LOCAL_LOOKBACKS = (125, 150, 175, 200)
-LOCAL_DISTANCES = (0.075, 0.10, 0.125)
-LOCAL_BODY_LEVELS = (0.40, 0.50, 0.60, 0.80, 1.00)
-LOCAL_RANGE_LEVELS = (1.00, 1.25, 1.50)
-
-# Names retained because the shared feature builder keys structure by lookback.
-# No momentum or additional conditional features are tested in Pass 1C.
-STRUCTURE_LOOKBACKS = LOCAL_LOOKBACKS
-GRID_LOOKBACKS = STRUCTURE_LOOKBACKS
-MOMENTUM_LOOKBACKS = ()
-
-EXPECTED_CONFIGS = len(LOCAL_LOOKBACKS) * len(LOCAL_DISTANCES) * len(LOCAL_BODY_LEVELS) * len(LOCAL_RANGE_LEVELS)
-assert EXPECTED_CONFIGS == 180
-
-RESEARCH_VERSION = "AUDJPY_H1_SHORT_PASS1C_BODY_BOUNDARY_V1_2026_09_30"
+PASS_VERSION = "AUDJPY_H1_SHORT_PASS2_ONE_FACTOR_V1_2026-09-30"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS1C_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass1c"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS2_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass2"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS1C_BODY_BOUNDARY_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS2_CONDITIONAL_FEATURES_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
     "source_fingerprint": OUT_DIR / "source_fingerprint.csv",
-    "hard_parity": OUT_DIR / "hard_parity.csv",
-    "plan": OUT_DIR / "body_boundary_plan.csv",
-    "summary": OUT_DIR / "body_boundary_summary.csv",
-    "slice_summary": OUT_DIR / "slice_summary.csv",
-    "level_summary": OUT_DIR / "level_summary.csv",
-    "body_overlap": OUT_DIR / "body_overlap_vs_b060.csv",
+    "parity": OUT_DIR / "parity.csv",
+    "anchor_parity": OUT_DIR / "anchor_parity.csv",
+    "anchor_ledgers": OUT_DIR / "anchor_accepted_ledgers.csv",
+    "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
+    "factor_plan": OUT_DIR / "factor_plan.csv",
+    "conditional_summary": OUT_DIR / "conditional_summary.csv",
+    "delta_vs_anchor": OUT_DIR / "delta_vs_anchor.csv",
+    "family_summary": OUT_DIR / "family_summary_20T.csv",
     "screen": OUT_DIR / "diagnostic_screen.csv",
     "screen_ledgers": OUT_DIR / "diagnostic_screen_accepted_ledgers.csv",
     "periods": OUT_DIR / "diagnostic_periods.csv",
@@ -154,16 +185,18 @@ OUTPUTS = {
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 SHORT Pass 1C waiting",
+    "message": "AUD/JPY H1 SHORT Pass 2 waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
     "timeframe": TIMEFRAME,
     "side": SIDE,
-    "rr": REFERENCE_RR,
-    "cost_cases": [x[0] for x in COST_CASES],
-    "planned_configurations": EXPECTED_CONFIGS,
-    "research_version": RESEARCH_VERSION,
+    "rr_fixed": REFERENCE_RR,
+    "pass_version": PASS_VERSION,
+    "anchors": ANCHORS,
+    "one_factor_rows_per_anchor": COMMON_FACTOR_ROWS,
+    "candidate_configurations": EXPECTED_CANDIDATES,
+    "frozen_pass1c_cutoff": DATA_END.isoformat().replace("+00:00", "Z"),
 }
 STATUS_LOCK = threading.Lock()
 RESEARCH_LOCK = threading.Lock()
@@ -421,38 +454,49 @@ def build_h1_features(candles):
 
     po = np.full(len(candles), np.nan)
     pc = np.full(len(candles), np.nan)
+    ph = np.full(len(candles), np.nan)
+    pl = np.full(len(candles), np.nan)
     if len(candles) > 1:
         po[1:] = opens[:-1]
         pc[1:] = closes[:-1]
+        ph[1:] = highs[:-1]
+        pl[1:] = lows[:-1]
+
     previous_body = np.abs(pc - po)
+    previous_range = ph - pl
+    previous_body_atr = np.divide(
+        previous_body, atr, out=np.full(len(candles), np.nan),
+        where=np.isfinite(previous_body) & np.isfinite(atr) & (atr > 0),
+    )
+    previous_range_atr = np.divide(
+        previous_range, atr, out=np.full(len(candles), np.nan),
+        where=np.isfinite(previous_range) & np.isfinite(atr) & (atr > 0),
+    )
+    previous_close_location = np.divide(
+        pc - pl, previous_range, out=np.full(len(candles), np.nan),
+        where=np.isfinite(previous_range) & (previous_range > 0),
+    )
+
     bearish_body = opens - closes
     candle_range = highs - lows
     upper_wick = highs - np.maximum(opens, closes)
-
     body_atr = np.divide(
-        bearish_body, atr,
-        out=np.zeros_like(closes),
+        bearish_body, atr, out=np.zeros_like(closes),
         where=(bearish_body > 0) & np.isfinite(atr) & (atr > 0),
     )
     range_atr = np.divide(
-        candle_range, atr,
-        out=np.zeros_like(closes),
+        candle_range, atr, out=np.zeros_like(closes),
         where=np.isfinite(atr) & (atr > 0),
     )
     bear_ratio = np.divide(
-        bearish_body, previous_body,
-        out=np.zeros_like(closes),
+        bearish_body, previous_body, out=np.zeros_like(closes),
         where=(bearish_body > 0) & (previous_body > 0),
     )
     close_location = np.divide(
-        closes - lows, candle_range,
-        out=np.zeros_like(closes),
-        where=candle_range > 0,
+        closes - lows, candle_range, out=np.zeros_like(closes), where=candle_range > 0,
     )
     upper_wick_body = np.divide(
-        upper_wick, bearish_body,
-        out=np.zeros_like(closes),
-        where=bearish_body > 0,
+        upper_wick, bearish_body, out=np.zeros_like(closes), where=bearish_body > 0,
     )
     exact_bear = (
         (pc > po)
@@ -465,36 +509,25 @@ def build_h1_features(candles):
     prev_highs = {lb: rolling_previous_extreme(highs, lb, want_max=True) for lb in needed_lbs}
     atr50_prev = rolling_previous_mean(atr, 50)
     h1_atr_ratio = np.divide(
-        atr, atr50_prev,
-        out=np.full(len(candles), np.nan),
+        atr, atr50_prev, out=np.full(len(candles), np.nan),
         where=np.isfinite(atr50_prev) & (atr50_prev > 0),
     )
 
     momentum = {}
     for lb in MOMENTUM_LOOKBACKS:
         arr = np.full(len(candles), np.nan)
-        # Prior movement only: previous completed H1 close versus the close lb bars earlier.
         for i in range(lb + 1, len(candles)):
             if math.isfinite(atr[i]) and atr[i] > 0:
                 arr[i] = (closes[i - 1] - closes[i - 1 - lb]) / atr[i]
         momentum[lb] = arr
 
     return {
-        "times": times,
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "atr": atr,
-        "exact_bear": exact_bear,
-        "bear_ratio": bear_ratio,
-        "body_atr": body_atr,
-        "range_atr": range_atr,
-        "close_location": close_location,
-        "upper_wick_body": upper_wick_body,
-        "prev_highs": prev_highs,
-        "h1_atr_ratio": h1_atr_ratio,
-        "momentum": momentum,
+        "times": times, "open": opens, "high": highs, "low": lows, "close": closes, "atr": atr,
+        "exact_bear": exact_bear, "bear_ratio": bear_ratio, "body_atr": body_atr,
+        "range_atr": range_atr, "close_location": close_location, "upper_wick_body": upper_wick_body,
+        "previous_body_atr": previous_body_atr, "previous_range_atr": previous_range_atr,
+        "previous_close_location": previous_close_location, "prev_highs": prev_highs,
+        "h1_atr_ratio": h1_atr_ratio, "momentum": momentum,
     }
 
 
@@ -506,12 +539,10 @@ def build_daily_states(daily, h1_times):
     d_ema200 = ema(d_close, 200)
     d_atr50_prev = rolling_previous_mean(d_atr, 50)
     d_atr_ratio = np.divide(
-        d_atr, d_atr50_prev,
-        out=np.full(len(daily), np.nan),
+        d_atr, d_atr50_prev, out=np.full(len(daily), np.nan),
         where=np.isfinite(d_atr50_prev) & (d_atr50_prev > 0),
     )
 
-    # OANDA daily candle j is considered completed at the OPEN of daily candle j+1.
     completion_times = [daily[i + 1]["time"] for i in range(len(daily) - 1)]
     mapped = {
         "close_lt_ema50": np.zeros(len(h1_times), dtype=bool),
@@ -573,7 +604,6 @@ def find_exit(features, signal_index, stop, target):
         if not s and not t:
             continue
         if s and t:
-            # SHORT tie convention: whichever barrier side is closer to candle open.
             reason = "TARGET" if abs(opn[i] - low[i]) < abs(high[i] - opn[i]) else "STOP"
         else:
             reason = "STOP" if s else "TARGET"
@@ -582,7 +612,6 @@ def find_exit(features, signal_index, stop, target):
 
 
 def result_r_for_cost(reference_entry, stop, target, reason, cost_pips):
-    # Adverse SHORT fill is below the signal close.
     fill = reference_entry - cost_pips * PIP
     actual_risk = stop - fill
     if actual_risk <= 0:
@@ -596,7 +625,7 @@ def build_raw_outcomes(features, raw_indices, daily_states):
     censored = 0
     for k, i in enumerate(raw_indices):
         if k % 1000 == 0:
-            set_status(message=f"Building raw exact-engulf outcomes {k}/{len(raw_indices)}")
+            set_status(message=f"Building raw exact-bearish-engulf outcomes {k}/{len(raw_indices)}")
         entry = float(features["close"][i])
         stop = float(features["high"][i]) + STOP_BUFFER_TICKS * TICK
         ref_risk = stop - entry
@@ -609,28 +638,24 @@ def build_raw_outcomes(features, raw_indices, daily_states):
             continue
 
         row = {
-            "raw_position": len(records),
-            "signal_index": int(i),
-            "exit_index": int(exit_index),
-            "signal_time": features["times"][i],
-            "exit_time": features["times"][exit_index],
-            "reference_entry": entry,
-            "stop": stop,
-            "target": target,
-            "exit_reason": reason,
+            "raw_position": len(records), "signal_index": int(i), "exit_index": int(exit_index),
+            "signal_time": features["times"][i], "exit_time": features["times"][exit_index],
+            "reference_entry": entry, "stop": stop, "target": target, "exit_reason": reason,
             "bear_ratio": float(features["bear_ratio"][i]),
             "body_atr": float(features["body_atr"][i]),
             "range_atr": float(features["range_atr"][i]),
             "close_location": float(features["close_location"][i]),
             "upper_wick_body": float(features["upper_wick_body"][i]),
+            "previous_body_atr": float(features["previous_body_atr"][i]) if math.isfinite(features["previous_body_atr"][i]) else math.nan,
+            "previous_range_atr": float(features["previous_range_atr"][i]) if math.isfinite(features["previous_range_atr"][i]) else math.nan,
+            "previous_close_location": float(features["previous_close_location"][i]) if math.isfinite(features["previous_close_location"][i]) else math.nan,
             "h1_atr_ratio": float(features["h1_atr_ratio"][i]) if math.isfinite(features["h1_atr_ratio"][i]) else math.nan,
             "daily_close_lt_ema50": bool(daily_states["close_lt_ema50"][i]),
             "daily_close_lt_ema100": bool(daily_states["close_lt_ema100"][i]),
             "daily_close_lt_ema200": bool(daily_states["close_lt_ema200"][i]),
             "daily_ema50_lt_ema200": bool(daily_states["ema50_lt_ema200"][i]),
             "daily_atr_ratio": float(daily_states["atr_ratio"][i]) if math.isfinite(daily_states["atr_ratio"][i]) else math.nan,
-            "hour_utc": features["times"][i].hour,
-            "weekday_utc": features["times"][i].weekday(),
+            "hour_utc": features["times"][i].hour, "weekday_utc": features["times"][i].weekday(),
         }
         for lb in STRUCTURE_LOOKBACKS:
             structure = features["prev_highs"][lb][i]
@@ -652,7 +677,6 @@ def build_raw_outcomes(features, raw_indices, daily_states):
 
 
 def scalar_exit_from_candles(candles, signal_index, stop, target):
-    """Independent plain-Python exit scan used only for parity checking."""
     for j in range(signal_index + 1, len(candles)):
         candle = candles[j]
         stop_touched = candle["high"] >= stop
@@ -668,13 +692,12 @@ def scalar_exit_from_candles(candles, signal_index, stop, target):
 
 
 def execution_parity_sample(features, candles, records, sample_n=100):
-    # Independent scalar recomputation from original candle dictionaries.
     failures = []
     for row in records[:sample_n]:
         i = row["signal_index"]
         entry = float(candles[i]["close"])
-        stop = float(candles[i]["high"]) + 10 * 0.001
-        target = entry - 3.5 * (stop - entry)
+        stop = float(candles[i]["high"]) + STOP_BUFFER_TICKS * TICK
+        target = entry - REFERENCE_RR * (stop - entry)
         exit_i, reason = scalar_exit_from_candles(candles, i, stop, target)
         if exit_i != row["exit_index"] or reason != row["exit_reason"]:
             failures.append(f"exit mismatch {i}")
@@ -771,7 +794,8 @@ def summarize_config(records, mask, config_meta):
 def all_record_arrays(records):
     keys = [
         "bear_ratio", "body_atr", "range_atr", "close_location",
-        "upper_wick_body", "h1_atr_ratio", "daily_atr_ratio",
+        "upper_wick_body", "previous_body_atr", "previous_range_atr",
+        "previous_close_location", "h1_atr_ratio", "daily_atr_ratio",
     ]
     out = {k: np.array([r[k] for r in records], dtype=float) for k in keys}
     out["daily_close_lt_ema50"] = np.array([r["daily_close_lt_ema50"] for r in records], dtype=bool)
@@ -785,168 +809,208 @@ def all_record_arrays(records):
     return out
 
 # ============================================================
-# PASS-1B CONTROLLED BOUNDARY PLAN
+# PASS 2 EXPERIMENT PLAN — ONE CONDITIONAL FEATURE AT A TIME
 # ============================================================
 
-def _structure_mask(arr, lb, distance):
-    d = arr[f"structure_dist_{lb}"]
-    return np.isfinite(d) & (d <= distance)
+def fmt_level(value):
+    if isinstance(value, int):
+        return str(value)
+    return f"{float(value):.3f}".rstrip("0").rstrip(".")
 
 
-def boundary_plan(arr):
-    # Single predeclared local cube. The lower body boundary is the only new
-    # information being sought; the structure/range axes are neighbourhood
-    # controls inherited from the Pass-1B plateau.
-    for lb in LOCAL_LOOKBACKS:
-        for distance in LOCAL_DISTANCES:
-            struct = _structure_mask(arr, lb, distance)
-            for body in LOCAL_BODY_LEVELS:
-                for rng in LOCAL_RANGE_LEVELS:
-                    config_id = f"LOCAL_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
-                    mask = struct & (arr["body_atr"] >= body) & (arr["range_atr"] >= rng)
-                    yield {
-                        "config_id": config_id,
-                        "slice": "LOCAL_BODY_BOUNDARY_CUBE",
-                        "lookback": lb,
-                        "distance_atr_max": distance,
-                        "body_atr_min": body,
-                        "range_atr_min": rng,
-                        "lookback_is_min": lb == min(LOCAL_LOOKBACKS),
-                        "lookback_is_max": lb == max(LOCAL_LOOKBACKS),
-                        "distance_is_min": distance == min(LOCAL_DISTANCES),
-                        "distance_is_max": distance == max(LOCAL_DISTANCES),
-                        "body_is_min": body == min(LOCAL_BODY_LEVELS),
-                        "body_is_max": body == max(LOCAL_BODY_LEVELS),
-                        "range_is_min": rng == min(LOCAL_RANGE_LEVELS),
-                        "range_is_max": rng == max(LOCAL_RANGE_LEVELS),
-                        "mask": mask,
-                    }
-
-
-def accepted_sequence_hash(records, positions):
-    return sha_rows(
-        f"{records[p]['signal_index']}|{records[p]['exit_index']}|{records[p]['exit_reason']}"
-        for p in positions
+def anchor_mask(arr, anchor_name):
+    p = ANCHORS[anchor_name]
+    d = arr[f"structure_dist_{p['lookback']}"]
+    return (
+        np.isfinite(d)
+        & (d <= p["distance_atr_max"])
+        & (arr["body_atr"] >= p["body_atr_min"])
+        & (arr["range_atr"] >= p["range_atr_min"])
     )
 
 
-def build_plan_rows():
-    return [{
-        "slice": "LOCAL_BODY_BOUNDARY_CUBE",
-        "purpose": "Resolve only the lower body threshold inside the Pass-1B supported structure/range plateau",
-        "lookbacks": json.dumps(LOCAL_LOOKBACKS),
-        "distances": json.dumps(LOCAL_DISTANCES),
-        "body_levels": json.dumps(LOCAL_BODY_LEVELS),
-        "range_levels": json.dumps(LOCAL_RANGE_LEVELS),
-        "configurations": EXPECTED_CONFIGS,
-        "new_information_axis": "body_atr_min includes 0.40 and 0.50 below the prior 0.60 boundary; other axes are local robustness controls",
-    }]
+def conditional_factor_plan(arr):
+    """Yield predeclared ONE-factor conditions only. No interactions."""
+    n = len(arr["bear_ratio"])
+    base = np.ones(n, dtype=bool)
+
+    for v in BEAR_RATIO_LEVELS:
+        yield dict(factor_id=f"BR_MIN_{fmt_level(v)}", family="body_ratio", operator=">=", parameter="bear_ratio", threshold=v, mask=base & (arr["bear_ratio"] >= v))
+
+    # Bearish strong close means the close sits near the candle LOW.
+    for v in CLOSE_LOCATION_LEVELS:
+        yield dict(factor_id=f"CLOSE_LOC_MAX_{fmt_level(v)}", family="strong_close", operator="<=", parameter="close_location", threshold=v, mask=base & (arr["close_location"] <= v))
+
+    for v in UPPER_WICK_BODY_LEVELS:
+        yield dict(factor_id=f"UPPER_WICK_BODY_MIN_{fmt_level(v)}", family="upper_wick", operator=">=", parameter="upper_wick_body", threshold=v, mask=base & (arr["upper_wick_body"] >= v))
+
+    h1v = arr["h1_atr_ratio"]
+    for v in H1_ATR_RATIO_LEVELS:
+        yield dict(factor_id=f"H1_ATR_RATIO_MIN_{fmt_level(v)}", family="h1_volatility", operator=">=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v >= v))
+        yield dict(factor_id=f"H1_ATR_RATIO_MAX_{fmt_level(v)}", family="h1_volatility", operator="<=", parameter="h1_atr_ratio", threshold=v, mask=base & np.isfinite(h1v) & (h1v <= v))
+
+    for lb in MOMENTUM_LOOKBACKS:
+        x = arr[f"momentum_{lb}"]
+        for v in MOMENTUM_THRESHOLDS:
+            yield dict(factor_id=f"PRIOR_RISE_LB{lb}_MIN_{fmt_level(v)}", family="prior_momentum", operator=">=", parameter=f"momentum_{lb}", threshold=v, mask=base & np.isfinite(x) & (x >= v))
+            yield dict(factor_id=f"PRIOR_FALL_LB{lb}_MAX_NEG{fmt_level(v)}", family="prior_momentum", operator="<=", parameter=f"momentum_{lb}", threshold=-v, mask=base & np.isfinite(x) & (x <= -v))
+
+    pbody = arr["previous_body_atr"]
+    for v in PREVIOUS_BODY_ATR_MIN_LEVELS:
+        yield dict(factor_id=f"PREV_BODY_ATR_MIN_{fmt_level(v)}", family="previous_bar_body", operator=">=", parameter="previous_body_atr", threshold=v, mask=base & np.isfinite(pbody) & (pbody >= v))
+
+    prange = arr["previous_range_atr"]
+    for v in PREVIOUS_RANGE_ATR_MIN_LEVELS:
+        yield dict(factor_id=f"PREV_RANGE_ATR_MIN_{fmt_level(v)}", family="previous_bar_range", operator=">=", parameter="previous_range_atr", threshold=v, mask=base & np.isfinite(prange) & (prange >= v))
+
+    # Exact bearish engulf requires a bullish previous candle. A high close-location
+    # is the mirrored previous-bar quality condition.
+    pcl = arr["previous_close_location"]
+    for v in PREVIOUS_CLOSE_LOCATION_MIN_LEVELS:
+        yield dict(factor_id=f"PREV_CLOSE_LOC_MIN_{fmt_level(v)}", family="previous_bar_close", operator=">=", parameter="previous_close_location", threshold=v, mask=base & np.isfinite(pcl) & (pcl >= v))
+
+    regimes = (
+        ("D1_CLOSE_LT_EMA50", "close<ema50", arr["daily_close_lt_ema50"]),
+        ("D1_CLOSE_GE_EMA50", "close>=ema50", ~arr["daily_close_lt_ema50"]),
+        ("D1_CLOSE_LT_EMA100", "close<ema100", arr["daily_close_lt_ema100"]),
+        ("D1_CLOSE_GE_EMA100", "close>=ema100", ~arr["daily_close_lt_ema100"]),
+        ("D1_CLOSE_LT_EMA200", "close<ema200", arr["daily_close_lt_ema200"]),
+        ("D1_CLOSE_GE_EMA200", "close>=ema200", ~arr["daily_close_lt_ema200"]),
+        ("D1_EMA50_LT_EMA200", "ema50<ema200", arr["daily_ema50_lt_ema200"]),
+        ("D1_EMA50_GE_EMA200", "ema50>=ema200", ~arr["daily_ema50_lt_ema200"]),
+    )
+    for fid, label, mask in regimes:
+        yield dict(factor_id=fid, family="daily_regime", operator="bool", parameter="daily_regime", threshold=label, mask=base & mask)
+
+    d1v = arr["daily_atr_ratio"]
+    for v in D1_ATR_RATIO_LEVELS:
+        yield dict(factor_id=f"D1_ATR_RATIO_MIN_{fmt_level(v)}", family="daily_volatility", operator=">=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v >= v))
+        yield dict(factor_id=f"D1_ATR_RATIO_MAX_{fmt_level(v)}", family="daily_volatility", operator="<=", parameter="daily_atr_ratio", threshold=v, mask=base & np.isfinite(d1v) & (d1v <= v))
 
 
-def summarise_slices(summary_rows):
+def accepted_ledger_hash(records, accepted, cost_label):
+    return sha_rows(
+        "|".join((
+            iso(records[p]["signal_time"]),
+            iso(records[p]["exit_time"]),
+            str(records[p]["signal_index"]),
+            str(records[p]["exit_index"]),
+            records[p]["exit_reason"],
+            f'{records[p][f"result_r__{cost_label}"]:.15g}',
+        ))
+        for p in accepted
+    )
+
+
+def compare_to_anchor(records, anchor_accepted, candidate_accepted, cost_label):
+    a = set(anchor_accepted)
+    c = set(candidate_accepted)
+    retained = a & c
+    removed = a - c
+    newly = c - a
+    am = metrics(records, anchor_accepted, cost_label)
+    cm = metrics(records, candidate_accepted, cost_label)
+    return {
+        "anchor_accepted_trades": len(anchor_accepted),
+        "candidate_accepted_trades": len(candidate_accepted),
+        "accepted_trade_retention_pct": 100.0 * len(candidate_accepted) / len(anchor_accepted) if anchor_accepted else 0.0,
+        "retained_anchor_accepted": len(retained),
+        "removed_anchor_accepted": len(removed),
+        "newly_accepted_due_to_p0_replay": len(newly),
+        "removed_anchor_r": sum(float(records[p][f"result_r__{cost_label}"]) for p in removed),
+        "newly_accepted_r": sum(float(records[p][f"result_r__{cost_label}"]) for p in newly),
+        "anchor_total_r": am["total_r"],
+        "candidate_total_r": cm["total_r"],
+        "delta_total_r": cm["total_r"] - am["total_r"],
+        "anchor_expectancy_r": am["expectancy_r"],
+        "candidate_expectancy_r": cm["expectancy_r"],
+        "delta_expectancy_r": cm["expectancy_r"] - am["expectancy_r"],
+        "anchor_profit_factor": am["profit_factor"],
+        "candidate_profit_factor": cm["profit_factor"],
+        "delta_profit_factor": cm["profit_factor"] - am["profit_factor"],
+        "anchor_max_drawdown_r": am["max_drawdown_r"],
+        "candidate_max_drawdown_r": cm["max_drawdown_r"],
+        "delta_max_drawdown_r": cm["max_drawdown_r"] - am["max_drawdown_r"],
+    }
+
+
+def family_summary_rows(summary_rows, delta_rows):
+    # Stress-case description only; this does not select/freeze a candidate.
+    stress_summ = {r["config_id"]: r for r in summary_rows if r["cost_label"] == STRESS_COST_LABEL}
+    stress_delta = {r["config_id"]: r for r in delta_rows if r["cost_label"] == STRESS_COST_LABEL}
     out = []
-    slices = sorted(set(r["slice"] for r in summary_rows))
-    for slice_name in slices:
-        for cost_label, _, _, _ in COST_CASES:
-            rows = [r for r in summary_rows if r["slice"] == slice_name and r["cost_label"] == cost_label]
-            vals = [float(r["total_r"]) for r in rows]
-            out.append({
-                "slice": slice_name,
-                "cost_label": cost_label,
-                "configurations": len(rows),
-                "positive_total_r": sum(v > 0 for v in vals),
-                "positive_pf": sum(float(r["profit_factor"]) > 1.0 for r in rows),
-                "positive_with_30plus_trades": sum(float(r["total_r"]) > 0 and int(r["accepted_trades"]) >= 30 for r in rows),
-                "median_total_r": float(median(vals)) if vals else 0.0,
-                "best_total_r": max(vals) if vals else 0.0,
-                "worst_total_r": min(vals) if vals else 0.0,
-                "median_accepted_trades": float(median([int(r["accepted_trades"]) for r in rows])) if rows else 0.0,
-            })
+    keys = sorted({(r["anchor"], r["factor_family"]) for r in summary_rows})
+    for anchor, family in keys:
+        ids = sorted({r["config_id"] for r in summary_rows if r["anchor"] == anchor and r["factor_family"] == family})
+        rows = [stress_summ[x] for x in ids]
+        dels = [stress_delta[x] for x in ids]
+        best_delta = max(dels, key=lambda x: x["delta_total_r"])
+        best_exp = max(dels, key=lambda x: x["candidate_expectancy_r"])
+        out.append({
+            "anchor": anchor,
+            "factor_family": family,
+            "configurations": len(ids),
+            "positive_total_r_configs": sum(float(x["total_r"]) > 0 for x in rows),
+            "improved_total_r_vs_anchor": sum(float(x["delta_total_r"]) > 0 for x in dels),
+            "improved_expectancy_vs_anchor": sum(float(x["delta_expectancy_r"]) > 0 for x in dels),
+            "median_trade_retention_pct": float(median(float(x["accepted_trade_retention_pct"]) for x in dels)),
+            "median_delta_total_r": float(median(float(x["delta_total_r"]) for x in dels)),
+            "best_delta_total_r_config": best_delta["config_id"],
+            "best_delta_total_r": best_delta["delta_total_r"],
+            "best_expectancy_config": best_exp["config_id"],
+            "best_expectancy_r": best_exp["candidate_expectancy_r"],
+        })
     return out
 
 
-def body_overlap_vs_b060(records, accepted_by_id, summary_rows):
-    """Matched p0 attribution for each body threshold versus B0.60.
-
-    Loosening a body threshold can introduce an earlier trade that displaces a
-    later accepted trade under pyramiding=0. Therefore simple count/R differences
-    are not enough. This report compares exact accepted raw-record positions within
-    each fixed LB/distance/range geometry.
-    """
-    by_cfg_cost = defaultdict(dict)
-    for row in summary_rows:
-        by_cfg_cost[row["config_id"]][row["cost_label"]] = row
-
+def diagnostic_screen_rows(summary_rows, delta_rows):
+    """Mechanical diagnostics only: up to two non-duplicate rows per family/anchor."""
+    by_cost = defaultdict(dict)
+    for r in summary_rows:
+        by_cost[r["config_id"]][r["cost_label"]] = r
+    stress_delta = {r["config_id"]: r for r in delta_rows if r["cost_label"] == STRESS_COST_LABEL}
     out = []
-    for lb in LOCAL_LOOKBACKS:
-        for distance in LOCAL_DISTANCES:
-            for rng in LOCAL_RANGE_LEVELS:
-                base_id = f"LOCAL_LB{lb}_D{distance:.3f}_B0.60_R{rng:.2f}"
-                base_positions = accepted_by_id[base_id]
-                base_set = set(base_positions)
-                for body in LOCAL_BODY_LEVELS:
-                    cid = f"LOCAL_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
-                    cand_positions = accepted_by_id[cid]
-                    cand_set = set(cand_positions)
-                    added = sorted(cand_set - base_set)
-                    removed = sorted(base_set - cand_set)
-                    common = cand_set & base_set
-                    for cost_label, ticks, pips, purpose in COST_CASES:
-                        cand_total = float(by_cfg_cost[cid][cost_label]["total_r"])
-                        base_total = float(by_cfg_cost[base_id][cost_label]["total_r"])
-                        added_r = sum(float(records[pos][f"result_r__{cost_label}"]) for pos in added)
-                        removed_r = sum(float(records[pos][f"result_r__{cost_label}"]) for pos in removed)
-                        out.append({
-                            "lookback": lb,
-                            "distance_atr_max": distance,
-                            "range_atr_min": rng,
-                            "body_atr_min": body,
-                            "candidate_config_id": cid,
-                            "baseline_config_id": base_id,
-                            "cost_label": cost_label,
-                            "candidate_accepted": len(cand_positions),
-                            "baseline_b060_accepted": len(base_positions),
-                            "common_accepted_signals": len(common),
-                            "added_accepted_signals_vs_b060": len(added),
-                            "displaced_or_removed_signals_vs_b060": len(removed),
-                            "added_signal_total_r": added_r,
-                            "removed_signal_total_r": removed_r,
-                            "candidate_total_r": cand_total,
-                            "baseline_b060_total_r": base_total,
-                            "total_r_delta_vs_b060": cand_total - base_total,
-                            "set_attribution_delta_check": (added_r - removed_r) - (cand_total - base_total),
-                        })
-    return out
-
-
-def summarise_levels(summary_rows):
-    out = []
-    param_map = [
-        ("lookback", "lookback"),
-        ("distance_atr_max", "distance_atr_max"),
-        ("body_atr_min", "body_atr_min"),
-        ("range_atr_min", "range_atr_min"),
-    ]
-    for slice_name in sorted(set(r["slice"] for r in summary_rows)):
-        stress_rows = [r for r in summary_rows if r["slice"] == slice_name and r["cost_label"] == STRESS_COST_LABEL]
-        for param_name, key in param_map:
-            values = sorted(set(r[key] for r in stress_rows))
-            if len(values) <= 1:
+    for anchor in ANCHORS:
+        families = sorted({r["factor_family"] for r in summary_rows if r["anchor"] == anchor})
+        for family in families:
+            ids = sorted({r["config_id"] for r in summary_rows if r["anchor"] == anchor and r["factor_family"] == family})
+            eligible = []
+            for cid in ids:
+                live = by_cost[cid].get(PRIMARY_COST_LABEL)
+                stress = by_cost[cid].get(STRESS_COST_LABEL)
+                d = stress_delta[cid]
+                if not live or not stress:
+                    continue
+                if float(live["total_r"]) <= 0 or float(stress["total_r"]) <= 0:
+                    continue
+                if float(d["accepted_trade_retention_pct"]) < 50.0:
+                    continue
+                eligible.append(cid)
+            if not eligible:
                 continue
-            for value in values:
-                rows = [r for r in stress_rows if r[key] == value]
-                rs = [float(r["total_r"]) for r in rows]
+            picks = []
+            picks.append(max(eligible, key=lambda cid: float(stress_delta[cid]["delta_total_r"])))
+            picks.append(max(eligible, key=lambda cid: float(stress_delta[cid]["candidate_expectancy_r"])))
+            seen = set()
+            for reason, cid in zip(("BEST_STRESS_DELTA_R_WITH_GE50PCT_RETENTION", "BEST_STRESS_EXPECTANCY_WITH_GE50PCT_RETENTION"), picks):
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                s = by_cost[cid][STRESS_COST_LABEL]
+                d = stress_delta[cid]
                 out.append({
-                    "slice": slice_name,
-                    "cost_label": STRESS_COST_LABEL,
-                    "parameter": param_name,
-                    "level": value,
-                    "configurations": len(rows),
-                    "positive_total_r": sum(x > 0 for x in rs),
-                    "median_total_r": float(median(rs)) if rs else 0.0,
-                    "best_total_r": max(rs) if rs else 0.0,
-                    "worst_total_r": min(rs) if rs else 0.0,
-                    "median_accepted_trades": float(median([int(r["accepted_trades"]) for r in rows])) if rows else 0.0,
+                    "anchor": anchor,
+                    "factor_family": family,
+                    "config_id": cid,
+                    "diagnostic_reason": reason,
+                    "selection_status": "DIAGNOSTIC_ONLY_NOT_FROZEN",
+                    "stress20T_trades": s["accepted_trades"],
+                    "stress20T_total_r": s["total_r"],
+                    "stress20T_pf": s["profit_factor"],
+                    "stress20T_expectancy_r": s["expectancy_r"],
+                    "trade_retention_pct": d["accepted_trade_retention_pct"],
+                    "delta_total_r_vs_anchor": d["delta_total_r"],
+                    "delta_expectancy_vs_anchor": d["delta_expectancy_r"],
                 })
     return out
 
@@ -1034,8 +1098,7 @@ def diagnostics_for_config(records, config_id, accepted, cost_label):
 
 def run_research():
     try:
-        hard_checks = []
-        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass-1B H1/D1 midpoint history")
+        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass 1C H1/D1 OANDA midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
         d1 = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
 
@@ -1045,39 +1108,31 @@ def run_research():
             raise RuntimeError("H1 timestamps are duplicated or non-monotonic")
         if d1_times != sorted(set(d1_times)):
             raise RuntimeError("D1 timestamps are duplicated or non-monotonic")
-        if not h1 or h1[-1]["time"] >= DATA_END:
-            raise RuntimeError("H1 source violates frozen cutoff")
+        if not h1 or not d1 or h1[-1]["time"] >= DATA_END:
+            raise RuntimeError("Frozen source coverage invalid")
 
-        h1_sha = sha_rows(
-            f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}"
-            for x in h1
-        )
-        d1_sha = sha_rows(
-            f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}"
-            for x in d1
-        )
-        for check, actual, expected in (
-            ("h1_rows", len(h1), EXPECTED_H1_ROWS),
-            ("h1_sha256", h1_sha, EXPECTED_H1_SHA256),
-            ("d1_rows", len(d1), EXPECTED_D1_ROWS),
-            ("d1_sha256", d1_sha, EXPECTED_D1_SHA256),
-        ):
-            ok = actual == expected
-            hard_checks.append({"check": check, "status": "PASS" if ok else "FAIL", "actual": actual, "expected": expected})
-            if not ok:
-                write_csv(OUTPUTS["hard_parity"], hard_checks)
-                raise RuntimeError(f"Frozen source parity failed: {check}")
-
+        h1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in h1)
+        d1_sha = sha_rows(f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}" for x in d1)
         write_csv(OUTPUTS["coverage"], [
-            {"pair": PAIR, "timeframe": "H1", "requested_start": iso(REQUESTED_START), "first_completed_candle": iso(h1[0]["time"]), "last_completed_candle_open": iso(h1[-1]["time"]), "frozen_end_exclusive": iso(DATA_END), "completed_candles": len(h1)},
-            {"pair": PAIR, "timeframe": "D", "requested_start": iso(D1_WARMUP_START), "first_completed_candle": iso(d1[0]["time"]), "last_completed_candle_open": iso(d1[-1]["time"]), "frozen_end_exclusive": iso(DATA_END), "completed_candles": len(d1), "daily_alignment": "17:00 America/New_York"},
+            {"pair":PAIR,"timeframe":"H1","requested_start":iso(REQUESTED_START),"first_completed_candle":iso(h1[0]["time"]),"last_completed_candle_open":iso(h1[-1]["time"]),"frozen_end_exclusive":iso(DATA_END),"completed_candles":len(h1)},
+            {"pair":PAIR,"timeframe":"D","requested_start":iso(D1_WARMUP_START),"first_completed_candle":iso(d1[0]["time"]),"last_completed_candle_open":iso(d1[-1]["time"]),"frozen_end_exclusive":iso(DATA_END),"completed_candles":len(d1),"daily_alignment":"17:00 America/New_York"},
         ])
         write_csv(OUTPUTS["source_fingerprint"], [
-            {"series": "AUD_JPY_H1_MID_OHLC", "sha256": h1_sha, "rows": len(h1), "expected_sha256": EXPECTED_H1_SHA256, "parity": "PASS"},
-            {"series": "AUD_JPY_D1_MID_OHLC", "sha256": d1_sha, "rows": len(d1), "expected_sha256": EXPECTED_D1_SHA256, "parity": "PASS"},
+            {"series":"AUD_JPY_H1_MID_OHLC","sha256":h1_sha,"rows":len(h1)},
+            {"series":"AUD_JPY_D1_MID_OHLC","sha256":d1_sha,"rows":len(d1)},
         ])
 
-        set_status(state="features", progress=10, message="Building exact frozen feature/execution state")
+        checks = [
+            {"check":"H1_ROW_COUNT","status":"PASS" if len(h1)==EXPECTED_H1_ROWS else "FAIL","actual":len(h1),"expected":EXPECTED_H1_ROWS},
+            {"check":"D1_ROW_COUNT","status":"PASS" if len(d1)==EXPECTED_D1_ROWS else "FAIL","actual":len(d1),"expected":EXPECTED_D1_ROWS},
+            {"check":"H1_SOURCE_SHA256","status":"PASS" if h1_sha==EXPECTED_H1_SHA256 else "FAIL","actual":h1_sha,"expected":EXPECTED_H1_SHA256},
+            {"check":"D1_SOURCE_SHA256","status":"PASS" if d1_sha==EXPECTED_D1_SHA256 else "FAIL","actual":d1_sha,"expected":EXPECTED_D1_SHA256},
+        ]
+        if any(x["status"] != "PASS" for x in checks):
+            write_csv(OUTPUTS["parity"], checks)
+            raise RuntimeError("Frozen Pass 1C source parity FAILED; do not interpret Pass 2")
+
+        set_status(state="features", progress=10, message="Building H1/D1 features and raw-signal parity")
         features = build_h1_features(h1)
         daily_states = build_daily_states(d1, features["times"])
         vec_raw = raw_exact_vector_indices(features)
@@ -1085,277 +1140,215 @@ def run_research():
         vec_hash = sha_rows(iso(features["times"][i]) for i in vec_raw)
         scalar_hash = sha_rows(iso(features["times"][i]) for i in scalar_raw)
         raw_ok = (
-            len(vec_raw) == EXPECTED_RAW_SIGNAL_COUNT
-            and len(scalar_raw) == EXPECTED_RAW_SIGNAL_COUNT
-            and np.array_equal(vec_raw, scalar_raw)
-            and vec_hash == EXPECTED_RAW_SIGNAL_SHA256
-            and scalar_hash == EXPECTED_RAW_SIGNAL_SHA256
+            len(vec_raw)==EXPECTED_RAW_SIGNAL_COUNT
+            and len(scalar_raw)==EXPECTED_RAW_SIGNAL_COUNT
+            and np.array_equal(vec_raw,scalar_raw)
+            and vec_hash==scalar_hash==EXPECTED_RAW_SIGNAL_SHA256
         )
-        hard_checks.append({
-            "check": "raw_exact_bearish_engulf_vector_scalar_and_frozen_hash",
-            "status": "PASS" if raw_ok else "FAIL",
-            "actual": f"vector={len(vec_raw)};scalar={len(scalar_raw)};vhash={vec_hash};shash={scalar_hash}",
-            "expected": f"count={EXPECTED_RAW_SIGNAL_COUNT};hash={EXPECTED_RAW_SIGNAL_SHA256}",
+        checks.append({
+            "check":"RAW_SIGNAL_VECTOR_SCALAR_AND_PASS1C_FINGERPRINT",
+            "status":"PASS" if raw_ok else "FAIL",
+            "vector_count":len(vec_raw),"scalar_count":len(scalar_raw),
+            "vector_sha256":vec_hash,"scalar_sha256":scalar_hash,
+            "expected_count":EXPECTED_RAW_SIGNAL_COUNT,"expected_sha256":EXPECTED_RAW_SIGNAL_SHA256,
         })
         if not raw_ok:
-            write_csv(OUTPUTS["hard_parity"], hard_checks)
-            raise RuntimeError("Raw exact-signal frozen parity failed")
+            write_csv(OUTPUTS["parity"], checks)
+            raise RuntimeError("Raw signal parity/fingerprint FAILED")
 
-        set_status(state="raw_replay", progress=16, message=f"Replaying {len(vec_raw)} exact bearish-engulf raw signals")
+        set_status(state="raw_replay", progress=16, message="Replaying frozen raw exact-engulf outcomes")
         records, censored = build_raw_outcomes(features, vec_raw, daily_states)
-        exec_failures = execution_parity_sample(features, h1, records, sample_n=min(100, len(records)))
-        exec_ok = not exec_failures
-        hard_checks.append({
-            "check": "execution_scalar_recompute_first_100_closed_raw_signals",
-            "status": "PASS" if exec_ok else "FAIL",
-            "actual": "; ".join(exec_failures[:10]) if exec_failures else "100 matched",
-            "expected": "all matched",
+        exec_failures = execution_parity_sample(features, h1, records, sample_n=min(100,len(records)))
+        checks.append({
+            "check":"EXECUTION_SCALAR_RECOMPUTE_FIRST_100",
+            "status":"PASS" if not exec_failures else "FAIL",
+            "sample":min(100,len(records)),"failures":"; ".join(exec_failures[:10]),
         })
-        if not exec_ok:
-            write_csv(OUTPUTS["hard_parity"], hard_checks)
-            raise RuntimeError("Execution parity failed")
+        write_csv(OUTPUTS["parity"], checks)
+        if exec_failures:
+            raise RuntimeError("Execution parity FAILED")
 
+        raw_export=[]
+        for r in records:
+            row=dict(r); row["signal_time"]=iso(row["signal_time"]); row["exit_time"]=iso(row["exit_time"]); raw_export.append(row)
+        write_csv(OUTPUTS["raw_signals"], raw_export)
         arr = all_record_arrays(records)
 
-        # Exact Pass-1B control replay before any Pass-1C body-boundary result is interpreted.
-        control_mask = (
-            _structure_mask(arr, 150, 0.10)
-            & (arr["body_atr"] >= 0.60)
-            & (arr["range_atr"] >= 1.25)
-        )
-        control_rows, control_accepted = summarize_config(records, control_mask, {
-            "config_id": "PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25",
-            "stage": "PASS1B_CONTROL",
-            "slice": "PASS1B_CONTROL",
-            "lookback": 150,
-            "distance_atr_max": 0.10,
-            "body_atr_min": 0.60,
-            "range_atr_min": 1.25,
-            "rr": REFERENCE_RR,
-        })
-        control_hash = accepted_sequence_hash(records, control_accepted)
-        control_hash_ok = len(control_accepted) == PASS1B_CONTROL_ACCEPTED and control_hash == PASS1B_CONTROL_SEQUENCE_SHA256
-        hard_checks.append({
-            "check": "pass1b_control_accepted_sequence",
-            "status": "PASS" if control_hash_ok else "FAIL",
-            "actual": f"accepted={len(control_accepted)};hash={control_hash}",
-            "expected": f"accepted={PASS1B_CONTROL_ACCEPTED};hash={PASS1B_CONTROL_SEQUENCE_SHA256}",
-        })
-        if not control_hash_ok:
-            write_csv(OUTPUTS["hard_parity"], hard_checks)
-            raise RuntimeError("Pass-1B control accepted-sequence parity failed")
-
-        for row in control_rows:
-            expected_r = PASS1B_CONTROL_TOTAL_R[row["cost_label"]]
-            ok = abs(float(row["total_r"]) - expected_r) <= 1e-9
-            hard_checks.append({
-                "check": f"pass1b_control_total_r_{row['cost_label']}",
-                "status": "PASS" if ok else "FAIL",
-                "actual": row["total_r"],
-                "expected": expected_r,
+        set_status(state="anchor_parity", progress=22, message="Reproducing frozen Pass 1C CORE anchor at all costs")
+        anchor_masks = {name: anchor_mask(arr,name) for name in ANCHORS}
+        anchor_accepted = {}
+        anchor_rows = []
+        anchor_ledger_rows = []
+        parity_rows = []
+        for name in ANCHORS:
+            summary, accepted = summarize_config(records, anchor_masks[name], {
+                "config_id":f"ANCHOR_{name}","anchor":name,"stage":"PASS2_FROZEN_ANCHOR","rr":REFERENCE_RR,**ANCHORS[name],
             })
-            if not ok:
-                write_csv(OUTPUTS["hard_parity"], hard_checks)
-                raise RuntimeError(f"Pass-1B control R parity failed at {row['cost_label']}")
-
-        write_csv(OUTPUTS["hard_parity"], hard_checks)
-        write_csv(OUTPUTS["plan"], build_plan_rows())
-
-        set_status(state="body_boundary_grid", progress=25, message=f"Running {EXPECTED_CONFIGS} predeclared local body-boundary configurations")
-        summary_rows = []
-        accepted_by_id = {}
-        meta_by_id = {}
-        count = 0
-        for spec in boundary_plan(arr):
-            count += 1
-            if count % 25 == 0:
-                set_status(message=f"Body-boundary clarification {count}/{EXPECTED_CONFIGS}", progress=25 + int(45 * count / EXPECTED_CONFIGS))
-            mask = spec.pop("mask")
-            config_id = spec["config_id"]
-            rows, accepted = summarize_config(records, mask, {
-                **spec,
-                "stage": "PASS1C_BODY_BOUNDARY_CLARIFICATION",
-                "rr": REFERENCE_RR,
-            })
-            summary_rows.extend(rows)
-            accepted_by_id[config_id] = accepted
-            meta_by_id[config_id] = dict(spec)
-        if count != EXPECTED_CONFIGS:
-            raise RuntimeError(f"Body-boundary plan enumeration mismatch: expected {EXPECTED_CONFIGS}, got {count}")
-        write_csv(OUTPUTS["summary"], summary_rows)
-        write_csv(OUTPUTS["slice_summary"], summarise_slices(summary_rows))
-        write_csv(OUTPUTS["level_summary"], summarise_levels(summary_rows))
-        overlap_rows = body_overlap_vs_b060(records, accepted_by_id, summary_rows)
-        write_csv(OUTPUTS["body_overlap"], overlap_rows)
-        max_overlap_attribution_error = max((abs(float(r["set_attribution_delta_check"])) for r in overlap_rows), default=0.0)
-        overlap_ok = max_overlap_attribution_error <= 1e-9
-        hard_checks.append({
-            "check": "body_threshold_p0_set_attribution_vs_b060",
-            "status": "PASS" if overlap_ok else "FAIL",
-            "actual": max_overlap_attribution_error,
-            "expected": "<=1e-9",
-        })
-        write_csv(OUTPUTS["hard_parity"], hard_checks)
-        if not overlap_ok:
-            raise RuntimeError("Body-threshold p0 set-attribution parity failed")
-
-        # Mechanical diagnostic screen ONLY. It must not be treated as a frozen
-        # selection rule. It simply gives rolling/year ledgers for the strongest
-        # stress-resistant rows plus the exact Pass-1B control.
-        by_cfg = defaultdict(dict)
-        for row in summary_rows:
-            by_cfg[row["config_id"]][row["cost_label"]] = row
-        eligible = []
-        for config_id, costs in by_cfg.items():
-            if not all(x in costs for x in (PRIMARY_COST_LABEL, STRESS_COST_LABEL, EXTREME_COST_LABEL)):
-                continue
-            live = costs[PRIMARY_COST_LABEL]
-            stress = costs[STRESS_COST_LABEL]
-            extreme = costs[EXTREME_COST_LABEL]
-            if int(stress["accepted_trades"]) >= 30 and float(live["total_r"]) > 0 and float(stress["total_r"]) > 0 and float(extreme["total_r"]) > 0:
-                eligible.append((float(stress["total_r"]), config_id))
-        eligible.sort(reverse=True)
-        selected_ids = [cid for _, cid in eligible[:12]]
-
-        screen_rows = []
-        for rank, cid in enumerate(selected_ids, start=1):
-            costs = by_cfg[cid]
-            stress = costs[STRESS_COST_LABEL]
-            screen_rows.append({
-                "diagnostic_rank": rank,
-                "config_id": cid,
-                "selection_status": "DIAGNOSTIC_ONLY_NOT_FROZEN",
-                "screen_rule": "20T trades>=30; totalR positive at 10T/20T/40T; ranked by 20T totalR",
-                "slice": stress["slice"],
-                "live10T_trades": costs[PRIMARY_COST_LABEL]["accepted_trades"],
-                "live10T_total_r": costs[PRIMARY_COST_LABEL]["total_r"],
-                "stress20T_total_r": stress["total_r"],
-                "stress20T_pf": stress["profit_factor"],
-                "extreme40T_total_r": costs[EXTREME_COST_LABEL]["total_r"],
-                "extreme40T_pf": costs[EXTREME_COST_LABEL]["profit_factor"],
-                "lookback": stress["lookback"],
-                "distance_atr_max": stress["distance_atr_max"],
-                "body_atr_min": stress["body_atr_min"],
-                "range_atr_min": stress["range_atr_min"],
-                "any_tested_boundary": bool(
-                    stress.get("lookback_is_min") or stress.get("lookback_is_max")
-                    or stress.get("distance_is_min") or stress.get("distance_is_max")
-                    or stress.get("body_is_min") or stress.get("body_is_max")
-                    or stress.get("range_is_min") or stress.get("range_is_max")
-                ),
-            })
-        # Explicit control row at rank 0 for side-by-side diagnostics.
-        c10 = next(x for x in control_rows if x["cost_label"] == PRIMARY_COST_LABEL)
-        c20 = next(x for x in control_rows if x["cost_label"] == STRESS_COST_LABEL)
-        c40 = next(x for x in control_rows if x["cost_label"] == EXTREME_COST_LABEL)
-        screen_rows.insert(0, {
-            "diagnostic_rank": 0,
-            "config_id": "PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25",
-            "selection_status": "FROZEN_PARITY_CONTROL_NOT_CANDIDATE_SELECTION",
-            "screen_rule": "Exact Pass-1B LB150/D0.10/B0.60/R1.25 parity control",
-            "slice": "PASS1B_CONTROL",
-            "live10T_trades": c10["accepted_trades"],
-            "live10T_total_r": c10["total_r"],
-            "stress20T_total_r": c20["total_r"],
-            "stress20T_pf": c20["profit_factor"],
-            "extreme40T_total_r": c40["total_r"],
-            "extreme40T_pf": c40["profit_factor"],
-            "lookback": 150,
-            "distance_atr_max": 0.10,
-            "body_atr_min": 0.60,
-            "range_atr_min": 1.25,
-            "any_tested_boundary": False,
-        })
-        write_csv(OUTPUTS["screen"], screen_rows)
-
-        set_status(state="diagnostics", progress=82, message="Building diagnostic ledgers, eras, years and rolling windows")
-        ledger_rows = []
-        period_rows = []
-        year_rows = []
-        rolling_rows = []
-        rolling_summary_rows = []
-        diag_configs = [("PASS1B_CONTROL_LB150_D0.10_B0.60_R1.25", control_accepted)] + [(cid, accepted_by_id[cid]) for cid in selected_ids]
-        for config_id, accepted in diag_configs:
-            for cost_label, ticks, pips, purpose in COST_CASES:
-                for seq, p in enumerate(accepted, start=1):
-                    r = records[p]
-                    ledger_rows.append({
-                        "config_id": config_id,
-                        "cost_label": cost_label,
-                        "sequence": seq,
-                        "signal_time": iso(r["signal_time"]),
-                        "exit_time": iso(r["exit_time"]),
-                        "signal_index": r["signal_index"],
-                        "exit_index": r["exit_index"],
-                        "reference_entry": r["reference_entry"],
-                        "historical_fill": r[f"fill__{cost_label}"],
-                        "stop": r["stop"],
-                        "target": r["target"],
-                        "exit_reason": r["exit_reason"],
-                        "result_r": r[f"result_r__{cost_label}"],
+            anchor_accepted[name] = accepted
+            anchor_rows.extend(summary)
+            expected = ANCHOR_EXPECTED[name]
+            qualified_count = int(np.sum(anchor_masks[name]))
+            for row in summary:
+                label=row["cost_label"]
+                exp=expected[label]
+                ledger_sha=accepted_ledger_hash(records, accepted, label)
+                ok=(
+                    qualified_count==expected["qualified_raw_signals"]
+                    and len(accepted)==expected["accepted_trades"]
+                    and abs(float(row["total_r"])-float(exp["total_r"]))<1e-10
+                    and abs(float(row["profit_factor"])-float(exp["profit_factor"]))<1e-10
+                    and abs(float(row["max_drawdown_r"])-float(exp["max_drawdown_r"]))<1e-10
+                    and ledger_sha==exp["ledger_sha256"]
+                )
+                parity_rows.append({
+                    "anchor":name,"cost_label":label,"status":"PASS" if ok else "FAIL",
+                    "qualified_raw_signals":qualified_count,"expected_qualified_raw_signals":expected["qualified_raw_signals"],
+                    "accepted_trades":len(accepted),"expected_accepted_trades":expected["accepted_trades"],
+                    "total_r":row["total_r"],"expected_total_r":exp["total_r"],
+                    "profit_factor":row["profit_factor"],"expected_profit_factor":exp["profit_factor"],
+                    "max_drawdown_r":row["max_drawdown_r"],"expected_max_drawdown_r":exp["max_drawdown_r"],
+                    "ledger_sha256":ledger_sha,"expected_ledger_sha256":exp["ledger_sha256"],
+                })
+                for seq,p in enumerate(accepted,start=1):
+                    r=records[p]
+                    anchor_ledger_rows.append({
+                        "anchor":name,"cost_label":label,"sequence":seq,
+                        "signal_time":iso(r["signal_time"]),"exit_time":iso(r["exit_time"]),
+                        "signal_index":r["signal_index"],"exit_index":r["exit_index"],
+                        "reference_entry":r["reference_entry"],"historical_fill":r[f"fill__{label}"],
+                        "stop":r["stop"],"target":r["target"],"exit_reason":r["exit_reason"],
+                        "result_r":r[f"result_r__{label}"],
                     })
-                p_rows, y_rows, r_rows, rs_rows = diagnostics_for_config(records, config_id, accepted, cost_label)
-                period_rows.extend(p_rows)
-                year_rows.extend(y_rows)
-                rolling_rows.extend(r_rows)
-                rolling_summary_rows.extend(rs_rows)
-        write_csv(OUTPUTS["screen_ledgers"], ledger_rows)
-        write_csv(OUTPUTS["periods"], period_rows)
-        write_csv(OUTPUTS["years"], year_rows)
-        write_csv(OUTPUTS["rolling"], rolling_rows)
-        write_csv(OUTPUTS["rolling_summary"], rolling_summary_rows)
+        write_csv(OUTPUTS["anchor_parity"], parity_rows)
+        write_csv(OUTPUTS["anchor_ledgers"], anchor_ledger_rows)
+        if any(x["status"] != "PASS" for x in parity_rows):
+            raise RuntimeError("Frozen Pass 1C CORE anchor full-ledger parity FAILED; do not interpret Pass 2")
 
-        methodology = [
-            {"topic": "research_version", "value": RESEARCH_VERSION},
-            {"topic": "purpose", "value": "Pass 1C local body-boundary clarification only; no new filter hunt and no candidate frozen automatically"},
-            {"topic": "source_parity", "value": "H1/D1 rows and SHA256, raw exact-signal count/hash, scalar/vector parity, execution sample and exact Pass-1B LB150/D0.10/B0.60/R1.25 accepted sequence must all pass before results are produced"},
-            {"topic": "pattern", "value": "exact bearish body engulfing; unchanged from Pass 1/1B"},
-            {"topic": "frozen_cutoff", "value": iso(DATA_END)},
-            {"topic": "execution", "value": "reference=signal close; stop=signal high+10 ticks; fixed RR3.50; exits next H1 candle onward; p0; exit-candle signal eligible"},
-            {"topic": "costs", "value": "10T/1pip primary; 20T/2pip stressed selection; 40T/4pip extreme diagnostic. Assumed adverse historical fills, not measured historic quotes."},
-            {"topic": "local_cube", "value": "LB125/150/175/200 x distance0.075/0.10/0.125 x body0.40/0.50/0.60/0.80/1.00 x range1.00/1.25/1.50 = 180 configurations"},
-            {"topic": "question", "value": "Does loosening the body threshold below 0.60 ATR to 0.50/0.40 preserve or improve the already-supported local region, or does quality deteriorate?"},
-            {"topic": "p0_attribution", "value": "For every fixed LB/distance/range geometry, exact accepted trades at each body threshold are compared with B0.60. Added and displaced accepted signals and their R contributions are reported so p0 displacement is not mistaken for a simple frequency effect."},
-            {"topic": "timing", "value": "No session or weekday optimisation"},
-            {"topic": "rr", "value": "RR3.50 fixed; RR sweep remains later, after entry geometry and conditional-feature stages are frozen"},
-            {"topic": "portfolio", "value": "Portfolio 30 is not used. Exact portfolio admission occurs only after standalone geometry, RR and independent implementation are frozen."},
-            {"topic": "interpretation", "value": "Compare body levels across the full local neighbourhood at 20T with 10T/40T stress. Do not pick the single best row. If 0.40 remains best at the new lower boundary, boundary is still unresolved; if 0.50/0.60 form an interior plateau and 0.40 weakens, body boundary is resolved."},
-            {"topic": "data_snooping", "value": "All history remains repeatedly examined/in-sample; rolling/recent periods are robustness diagnostics, not unseen OOS."},
-            {"topic": "next_gate", "value": "If body boundary resolves, freeze a small number of distinguishable entry anchors for Pass 2 one-conditional-feature-at-a-time testing. Otherwise stop or widen only the still-constraining lower body boundary once more."},
+        factors = list(conditional_factor_plan(arr))
+        if len(factors) != COMMON_FACTOR_ROWS:
+            raise RuntimeError(f"Factor plan enumeration mismatch: expected {COMMON_FACTOR_ROWS}, got {len(factors)}")
+        factor_plan_rows=[]
+        for i,f in enumerate(factors,start=1):
+            factor_plan_rows.append({
+                "factor_number":i,"factor_id":f["factor_id"],"factor_family":f["family"],
+                "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
+                "application":"ONE_FACTOR_ONLY_WITHIN_FROZEN_CORE_ANCHOR",
+            })
+        write_csv(OUTPUTS["factor_plan"], factor_plan_rows)
+
+        set_status(state="conditional_scan", progress=30, message=f"Running {EXPECTED_CANDIDATES} one-factor candidate configurations")
+        summary_rows=[]
+        delta_rows=[]
+        accepted_by_id={}
+        candidate_meta={}
+        candidate_count=0
+        for anchor in ANCHORS:
+            amask=anchor_masks[anchor]
+            anchor_qualified=int(np.sum(amask))
+            for f in factors:
+                candidate_count += 1
+                if candidate_count % 25 == 0:
+                    set_status(message=f"Pass 2 candidate {candidate_count}/{EXPECTED_CANDIDATES}")
+                cid=f"P2_{anchor}__{f['factor_id']}"
+                cmask=amask & f["mask"]
+                meta={
+                    "config_id":cid,"stage":"PASS2_ONE_FACTOR","anchor":anchor,
+                    "factor_id":f["factor_id"],"factor_family":f["family"],
+                    "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
+                    "rr":REFERENCE_RR,**ANCHORS[anchor],
+                }
+                rows,accepted=summarize_config(records,cmask,meta)
+                accepted_by_id[cid]=accepted
+                candidate_meta[cid]=meta
+                candidate_qualified=int(np.sum(cmask))
+                for row in rows:
+                    row["anchor_qualified_raw_signals"]=anchor_qualified
+                    row["conditional_qualified_raw_signals"]=candidate_qualified
+                    row["qualified_signal_retention_pct"]=100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0
+                    summary_rows.append(row)
+                    comp=compare_to_anchor(records,anchor_accepted[anchor],accepted,row["cost_label"])
+                    delta_rows.append({
+                        "config_id":cid,"anchor":anchor,"factor_id":f["factor_id"],"factor_family":f["family"],
+                        "operator":f["operator"],"parameter":f["parameter"],"threshold":f["threshold"],
+                        "cost_label":row["cost_label"],
+                        "anchor_qualified_raw_signals":anchor_qualified,"candidate_qualified_raw_signals":candidate_qualified,
+                        "qualified_signal_retention_pct":100.0*candidate_qualified/anchor_qualified if anchor_qualified else 0.0,
+                        **comp,
+                    })
+        if candidate_count != EXPECTED_CANDIDATES:
+            raise RuntimeError(f"Candidate enumeration mismatch: expected {EXPECTED_CANDIDATES}, got {candidate_count}")
+        write_csv(OUTPUTS["conditional_summary"], summary_rows)
+        write_csv(OUTPUTS["delta_vs_anchor"], delta_rows)
+        write_csv(OUTPUTS["family_summary"], family_summary_rows(summary_rows,delta_rows))
+
+        screen_rows=diagnostic_screen_rows(summary_rows,delta_rows)
+        write_csv(OUTPUTS["screen"],screen_rows)
+        diag_ids=sorted({x["config_id"] for x in screen_rows})
+
+        set_status(state="diagnostics", progress=82, message=f"Building periods/rolling diagnostics for {len(diag_ids)} mechanical screen rows plus frozen CORE anchor")
+        ledger_rows=[]; period_rows=[]; year_rows=[]; rolling_rows=[]; rolling_summary_rows=[]
+        diagnostics=[]
+        for anchor in ANCHORS:
+            diagnostics.append((f"ANCHOR_{anchor}",anchor,anchor_accepted[anchor]))
+        for cid in diag_ids:
+            diagnostics.append((cid,candidate_meta[cid]["anchor"],accepted_by_id[cid]))
+        for config_id,anchor,accepted in diagnostics:
+            for label,ticks,pips,purpose in COST_CASES:
+                for seq,p in enumerate(accepted,start=1):
+                    r=records[p]
+                    ledger_rows.append({
+                        "config_id":config_id,"anchor":anchor,"cost_label":label,"sequence":seq,
+                        "signal_time":iso(r["signal_time"]),"exit_time":iso(r["exit_time"]),
+                        "signal_index":r["signal_index"],"exit_index":r["exit_index"],
+                        "reference_entry":r["reference_entry"],"historical_fill":r[f"fill__{label}"],
+                        "stop":r["stop"],"target":r["target"],"exit_reason":r["exit_reason"],
+                        "result_r":r[f"result_r__{label}"],
+                    })
+                p_rows,y_rows,r_rows,rs_rows=diagnostics_for_config(records,config_id,accepted,label)
+                for x in p_rows: x["anchor"]=anchor
+                for x in y_rows: x["anchor"]=anchor
+                for x in r_rows: x["anchor"]=anchor
+                for x in rs_rows: x["anchor"]=anchor
+                period_rows.extend(p_rows); year_rows.extend(y_rows); rolling_rows.extend(r_rows); rolling_summary_rows.extend(rs_rows)
+        write_csv(OUTPUTS["screen_ledgers"],ledger_rows)
+        write_csv(OUTPUTS["periods"],period_rows)
+        write_csv(OUTPUTS["years"],year_rows)
+        write_csv(OUTPUTS["rolling"],rolling_rows)
+        write_csv(OUTPUTS["rolling_summary"],rolling_summary_rows)
+
+        methodology=[
+            {"topic":"purpose","value":"Pass 2 one conditional feature at a time within the frozen Pass 1C AUD/JPY H1 SHORT CORE anchor."},
+            {"topic":"core_anchor","value":json.dumps(ANCHORS["CORE"],sort_keys=True)},
+            {"topic":"parity","value":"Fails closed unless exact Pass 1C H1/D1/raw-signal fingerprints and the full CORE accepted ledger match at 10T/20T/40T."},
+            {"topic":"execution","value":"exact bearish engulf; signal-close reference; stop=signal high+10 ticks; RR3.50 fixed; next-H1 exits; p0; exact exit-candle re-entry eligible."},
+            {"topic":"costs","value":"10T primary live-parity; 20T stressed selection; 40T extreme diagnostic only. Historical MID shifts are assumed costs, not measured executable spreads/slippage."},
+            {"topic":"one_factor_only","value":"Every Pass 2 candidate is exactly frozen CORE anchor AND one condition. No conditional-feature interactions are tested."},
+            {"topic":"factor_families","value":"bearish engulf body ratio; strong bearish close; upper wick; H1 ATR state; prior H1 rise/fall; previous-bar body/range/close quality; completed-D1 bearish regimes; completed-D1 ATR state."},
+            {"topic":"p0_attribution","value":"delta_vs_anchor reports removed anchor trades and newly accepted later signals after full chronological replay; simple signal filtering is not treated as equivalent to accepted-trade subtraction."},
+            {"topic":"not_tested","value":"No RR sweep, no weekday/session search, no new entry mechanism, no structure/body/range retuning, no Portfolio 30 selection feedback."},
+            {"topic":"diagnostic_screen","value":"Mechanical screen is reporting only. It requires >=50% anchor trade retention and positive 10T/20T R, then surfaces best 20T delta-R and expectancy per family. It does not freeze a rule."},
+            {"topic":"data_snooping","value":"All history has been repeatedly examined and is in-sample. Recent/era/rolling diagnostics are robustness descriptions, not untouched OOS tests."},
+            {"topic":"next_gate","value":"Only coherent neighbouring conditional effects should enter a limited Pass 3 interaction/boundary study. Do not combine isolated winners."},
         ]
-        write_csv(OUTPUTS["methodology"], methodology)
+        write_csv(OUTPUTS["methodology"],methodology)
 
         if OUTPUTS["errors"].exists():
             OUTPUTS["errors"].unlink()
         pack_results()
         set_status(
-            state="complete",
-            progress=100,
-            message="AUD/JPY H1 SHORT Pass 1C body-boundary clarification complete; ZIP ready",
-            h1_candles=len(h1),
-            d1_candles=len(d1),
-            raw_exact_signals=len(vec_raw),
-            raw_closed_outcomes=len(records),
-            right_censored_raw_signals=censored,
-            planned_configurations=EXPECTED_CONFIGS,
-            completed_configurations=count,
-            diagnostic_screen_count=len(selected_ids),
-            hard_parity_passed=True,
-            h1_source_sha256=h1_sha,
-            raw_signal_sha256=vec_hash,
-            pass1b_control_sequence_sha256=control_hash,
-            results_zip=str(BUNDLE),
+            state="complete",progress=100,message="AUD/JPY H1 SHORT Pass 2 complete; ZIP ready",
+            parity_passed=True,h1_candles=len(h1),d1_candles=len(d1),raw_exact_signals=len(vec_raw),raw_closed_outcomes=len(records),
+            one_factor_rows_per_anchor=COMMON_FACTOR_ROWS,candidate_configurations=candidate_count,
+            diagnostic_configurations=len(diag_ids),h1_source_sha256=h1_sha,raw_signal_sha256=vec_hash,results_zip=str(BUNDLE),
         )
-
     except Exception as exc:
-        tb = traceback.format_exc()
-        write_csv(OUTPUTS["errors"], [{"error_type": type(exc).__name__, "message": str(exc), "traceback": tb}])
+        tb=traceback.format_exc()
+        write_csv(OUTPUTS["errors"],[{"error_type":type(exc).__name__,"message":str(exc),"traceback":tb}])
         try:
             pack_results()
         except Exception:
             pass
-        set_status(state="failed", progress=100, message=f"{type(exc).__name__}: {exc}", hard_parity_passed=False)
-
+        set_status(state="failed",progress=100,message=f"{type(exc).__name__}: {exc}",parity_passed=False)
 
 # ============================================================
 # FLASK ROUTES
@@ -1366,52 +1359,43 @@ def launch_once():
     with RESEARCH_LOCK:
         if RESEARCH_STARTED:
             return False
-        RESEARCH_STARTED = True
-        threading.Thread(target=run_research, daemon=True, name="audjpy-h1-short-pass1c").start()
+        RESEARCH_STARTED=True
+        threading.Thread(target=run_research,daemon=True,name="audjpy-h1-short-pass2").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service": "AUD/JPY H1 SHORT Pass 1C body-boundary clarification",
-        "research_only": True,
-        "orders_supported": False,
-        "trading_enabled": False,
-        "pair": PAIR,
-        "timeframe": TIMEFRAME,
-        "side": SIDE,
-        "rr_fixed": REFERENCE_RR,
-        "planned_configurations": EXPECTED_CONFIGS,
-        "frozen_end_exclusive": iso(DATA_END),
-        "frozen_source_hash_required": EXPECTED_H1_SHA256,
-        "frozen_raw_signal_hash_required": EXPECTED_RAW_SIGNAL_SHA256,
-        "routes": [
-            "/audjpy-h1-short-pass1c/start",
-            "/audjpy-h1-short-pass1c/status",
-            "/audjpy-h1-short-pass1c/results",
-        ],
+        "service":"AUD/JPY H1 SHORT Pass 2 conditional-feature discovery",
+        "pass_version":PASS_VERSION,
+        "research_only":True,"orders_supported":False,"trading_enabled":False,
+        "pair":PAIR,"timeframe":TIMEFRAME,"side":SIDE,"rr_fixed":REFERENCE_RR,
+        "anchors":ANCHORS,"one_factor_rows_per_anchor":COMMON_FACTOR_ROWS,
+        "candidate_configurations":EXPECTED_CANDIDATES,"frozen_end_exclusive":iso(DATA_END),
+        "cost_cases":[{"label":a,"ticks":b,"pips":c,"purpose":d} for a,b,c,d in COST_CASES],
+        "routes":["/audjpy-h1-short-pass2/start","/audjpy-h1-short-pass2/status","/audjpy-h1-short-pass2/results"],
     })
 
 
-@app.route("/audjpy-h1-short-pass1c/start")
+@app.route("/audjpy-h1-short-pass2/start")
 def start_route():
-    return jsonify({"started_now": launch_once(), "state": STATUS["state"], "orders_supported": False})
+    return jsonify({"started_now":launch_once(),"state":STATUS["state"],"orders_supported":False})
 
 
-@app.route("/audjpy-h1-short-pass1c/status")
+@app.route("/audjpy-h1-short-pass2/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-short-pass1c/results")
+@app.route("/audjpy-h1-short-pass2/results")
 def results_route():
     if not BUNDLE.exists():
-        return jsonify({"status": "not_ready", "state": STATUS["state"], "message": STATUS["message"]}), 404
-    return send_file(str(BUNDLE.resolve()), as_attachment=True, download_name=BUNDLE.name)
+        return jsonify({"status":"not_ready","state":STATUS["state"],"message":STATUS["message"]}),404
+    return send_file(str(BUNDLE.resolve()),as_attachment=True,download_name=BUNDLE.name)
 
 
 if __name__ == "__main__":
     launch_once()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
