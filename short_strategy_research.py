@@ -1,36 +1,42 @@
 #!/usr/bin/env python3
 """
-AUD/JPY H1 SHORT — Pass 1 broad controlled engulfing-first discovery
-==================================================================
+AUD/JPY H1 SHORT — Pass 1B boundary clarification
+=================================================
 
 RESEARCH ONLY. READ ONLY. NEVER PLACES ORDERS OR MODIFIES THE LIVE EXECUTOR.
 
-Frozen Pass-1 protocol (predeclared before seeing results)
-----------------------------------------------------------
-Instrument: AUD_JPY
-Timeframe:  H1
-Direction:  SHORT
-Price data: OANDA midpoint completed candles
-History:    requested 2002-05-06T20:00:00Z -> 2026-09-30T08:00:00Z
-Pattern:    exact bearish body engulfing
-ATR:        Wilder/RMA ATR14, SMA seeded
-Reference entry: completed signal close
-Stop:       signal high + 10 JPY pricing ticks (0.010 JPY = 1 pip)
-Target:     fixed RR3.50 from REFERENCE entry risk
-Primary historical adverse entry: -10 ticks = -1 pip
-Stress historical adverse entry:  -20 ticks = -2 pips
-Extreme diagnostic only:          -40 ticks = -4 pips
-Exit testing: starts NEXT H1 candle
-Same-candle stop/target tie: barrier whose side of the candle is closer to open;
-  for SHORT, target if open-low < high-open, otherwise stop
-Pyramiding: 0; exact exit-candle signal is eligible
+Purpose
+-------
+Pass 1 found a coherent stressed bearish-engulf region but several useful
+dimensions landed on tested boundaries. This pass does NOT add filters. It
+only clarifies the unresolved lookback/distance/body/range boundaries before
+any Pass-2 conditional-feature work.
 
-Pass 1 does NOT optimise RR, weekdays, sessions, or the incumbent Portfolio 30.
-It establishes raw-signal/source fingerprints, independent raw/parity controls,
-broad single-factor behaviour, and a controlled structure x body x range grid.
-The entire historical sample is exploratory/in-sample. No row is auto-approved.
+Frozen source/execution protocol is IDENTICAL to Pass 1:
+- AUD_JPY H1 OANDA midpoint completed candles
+- exact bearish body engulfing
+- data end exclusive 2026-09-30T08:00:00Z
+- reference RR3.50
+- stop = signal high + 10 ticks
+- historical adverse SHORT fills: 10T primary, 20T stressed, 40T extreme
+- exits start next H1 candle
+- pyramiding=0; exact exit-candle signal eligible
+- no weekday/session/RR/portfolio optimisation
 
-Research template followed:
+Predeclared controlled slices
+-----------------------------
+A. STRUCTURE_BOUNDARY: body>=0.60 ATR, range>=1.25 ATR;
+   LB 60/80/100/125/150/175/200/250 x distance .025-.20 ATR.
+B. BODY_RANGE_LB100_D010: fixed LB100/D<=.10; body .60-2.00 x range 1.00-2.50.
+C. BODY_RANGE_LB150_D005: fixed LB150/D<=.05; same body/range extension.
+D. JOINT_BOUNDARY_CUBE: LB100/125/150/200 x D .025/.05/.075/.10 x
+   body .60/1.00/1.40/1.75 x range 1.25/1.50/1.75/2.00.
+
+Total unique planned configurations by slice = 424. Overlap is intentional:
+it provides cross-slice parity and neighbourhood context, not independent wins.
+No row is auto-approved or frozen.
+
+Research template:
 /Trading Strategies/FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md
 """
 
@@ -56,7 +62,7 @@ import requests
 from flask import Flask, jsonify, send_file
 
 # ============================================================
-# FROZEN PROTOCOL
+# FROZEN PROTOCOL + PASS-1 PARITY REFERENCES
 # ============================================================
 
 PAIR = "AUD_JPY"
@@ -79,81 +85,85 @@ PRIMARY_COST_LABEL = "LIVE_LIMIT_10T"
 STRESS_COST_LABEL = "STRESS_20T"
 EXTREME_COST_LABEL = "EXTREME_40T"
 
-# Controlled Pass-1 matrix. Boundaries are intentionally broad; if a promising
-# region lands on an edge, a later pass must widen that edge before freezing it.
-GRID_LOOKBACKS = (15, 30, 60, 100)
-GRID_DISTANCES = (0.10, 0.20, 0.35, 0.50, 0.75, 1.00)
-GRID_BODY_ATR = (0.60, 0.80, 1.00, 1.20)
-GRID_RANGE_ATR = (1.00, 1.25, 1.50, 1.75)
-EXPECTED_GRID_ROWS = (
-    len(GRID_LOOKBACKS)
-    * len(GRID_DISTANCES)
-    * len(GRID_BODY_ATR)
-    * len(GRID_RANGE_ATR)
-)
-assert EXPECTED_GRID_ROWS == 384
+# Exact Pass-1 frozen source/raw fingerprints. Fail closed if OANDA history at
+# the frozen cutoff no longer reproduces them.
+EXPECTED_H1_ROWS = 138030
+EXPECTED_H1_SHA256 = "5b844d2f79af6ae49e7f36586f68c366d4884859f897792bdb09ebe4e7bfcdfe"
+EXPECTED_D1_ROWS = 6476
+EXPECTED_D1_SHA256 = "bb43365840ff5d38d8d3ed3260c4d74204a927780e4619074ea3f9e63bcaba59"
+EXPECTED_RAW_SIGNAL_COUNT = 10465
+EXPECTED_RAW_SIGNAL_SHA256 = "fc53892ad7e01e06b49594108b8b1fe8047ade46ec33e0d3a8d554c84322f3ab"
 
-# Single-factor levels. Each is applied to the unchanged raw exact-engulf stream.
-BR_LEVELS = (1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.75, 2.00)
-BODY_ATR_LEVELS = (0.40, 0.50, 0.60, 0.75, 0.90, 1.00, 1.25, 1.50, 1.75)
-RANGE_ATR_LEVELS = (0.80, 1.00, 1.20, 1.40, 1.60, 1.80, 2.00, 2.25)
-CLOSE_LOCATION_LEVELS = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45)
-UPPER_WICK_BODY_LEVELS = (0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00)
-STRUCTURE_LOOKBACKS = (10, 15, 20, 30, 40, 60, 80, 100, 150)
-STRUCTURE_DISTANCES = (0.05, 0.10, 0.15, 0.20, 0.30, 0.50, 0.75, 1.00)
-H1_ATR_RATIO_MIN_LEVELS = (0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30)
-MOMENTUM_LOOKBACKS = (4, 8, 12, 24, 48)
-MOMENTUM_THRESHOLDS = (0.50, 1.00, 1.50, 2.00)
-DAILY_ATR_RATIO_MIN_LEVELS = (0.80, 0.90, 1.00, 1.10, 1.20)
+# Exact Pass-1 control: GRID_LB100_D0.10_B0.60_R1.25.
+# Sequence hash serialises accepted signal_index|exit_index|exit_reason.
+PASS1_CONTROL_SEQUENCE_SHA256 = "94fa6be8ebe02a59a08f4e8a9633aba4b8d367fa230d3eae9946cdad372b4ef4"
+PASS1_CONTROL_ACCEPTED = 124
+PASS1_CONTROL_TOTAL_R = {
+    "LIVE_LIMIT_10T": 44.619138706852425,
+    "STRESS_20T": 38.33994906482319,
+    "EXTREME_40T": 27.263649998417392,
+}
 
-EXPECTED_SINGLE_FACTOR_CONFIGS = (
-    len(BR_LEVELS)
-    + len(BODY_ATR_LEVELS)
-    + len(RANGE_ATR_LEVELS)
-    + len(CLOSE_LOCATION_LEVELS)
-    + len(UPPER_WICK_BODY_LEVELS)
-    + len(STRUCTURE_LOOKBACKS) * len(STRUCTURE_DISTANCES)
-    + len(H1_ATR_RATIO_MIN_LEVELS)
-    + len(MOMENTUM_LOOKBACKS) * len(MOMENTUM_THRESHOLDS) * 2
-    + 4
-    + len(DAILY_ATR_RATIO_MIN_LEVELS)
-)
-assert EXPECTED_SINGLE_FACTOR_CONFIGS == 168
+# Boundary clarification dimensions.
+STRUCTURE_BOUNDARY_LOOKBACKS = (60, 80, 100, 125, 150, 175, 200, 250)
+STRUCTURE_BOUNDARY_DISTANCES = (0.025, 0.05, 0.075, 0.10, 0.125, 0.15, 0.20)
+STRUCTURE_FIXED_BODY = 0.60
+STRUCTURE_FIXED_RANGE = 1.25
 
-RESEARCH_VERSION = "AUDJPY_H1_SHORT_PASS1_ENGULFING_DISCOVERY_V1_2026_09_30"
+BODY_RANGE_BODY_LEVELS = (0.60, 0.80, 1.00, 1.20, 1.40, 1.60, 1.75, 2.00)
+BODY_RANGE_RANGE_LEVELS = (1.00, 1.25, 1.50, 1.75, 2.00, 2.25, 2.50)
+
+JOINT_LOOKBACKS = (100, 125, 150, 200)
+JOINT_DISTANCES = (0.025, 0.05, 0.075, 0.10)
+JOINT_BODY_LEVELS = (0.60, 1.00, 1.40, 1.75)
+JOINT_RANGE_LEVELS = (1.25, 1.50, 1.75, 2.00)
+
+# Names retained because shared Pass-1 feature builders use them. No momentum
+# or new conditional feature is tested in Pass 1B.
+STRUCTURE_LOOKBACKS = tuple(sorted(set(STRUCTURE_BOUNDARY_LOOKBACKS) | set(JOINT_LOOKBACKS)))
+GRID_LOOKBACKS = STRUCTURE_LOOKBACKS
+MOMENTUM_LOOKBACKS = ()
+
+EXPECTED_STRUCTURE_ROWS = len(STRUCTURE_BOUNDARY_LOOKBACKS) * len(STRUCTURE_BOUNDARY_DISTANCES)
+EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR = len(BODY_RANGE_BODY_LEVELS) * len(BODY_RANGE_RANGE_LEVELS)
+EXPECTED_JOINT_ROWS = len(JOINT_LOOKBACKS) * len(JOINT_DISTANCES) * len(JOINT_BODY_LEVELS) * len(JOINT_RANGE_LEVELS)
+EXPECTED_CONFIGS = EXPECTED_STRUCTURE_ROWS + 2 * EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR + EXPECTED_JOINT_ROWS
+assert EXPECTED_STRUCTURE_ROWS == 56
+assert EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR == 56
+assert EXPECTED_JOINT_ROWS == 256
+assert EXPECTED_CONFIGS == 424
+
+RESEARCH_VERSION = "AUDJPY_H1_SHORT_PASS1B_BOUNDARY_CLARIFICATION_V1_2026_09_30"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
 
-OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS1_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass1"))
+OUT_DIR = Path(os.getenv("AUDJPY_H1_SHORT_PASS1B_OUTPUT_DIR", "/tmp/audjpy_h1_short_pass1b"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS1_ENGULFING_DISCOVERY_RESULTS.zip"
+BUNDLE = OUT_DIR / "AUDJPY_H1_SHORT_PASS1B_BOUNDARY_CLARIFICATION_RESULTS.zip"
 
 OUTPUTS = {
     "coverage": OUT_DIR / "coverage.csv",
     "source_fingerprint": OUT_DIR / "source_fingerprint.csv",
-    "parity": OUT_DIR / "parity.csv",
-    "raw_baseline": OUT_DIR / "raw_baseline_summary.csv",
-    "raw_signals": OUT_DIR / "raw_signal_outcomes.csv",
-    "single_factors": OUT_DIR / "single_factor_summary.csv",
-    "grid": OUT_DIR / "controlled_grid_summary.csv",
-    "levels": OUT_DIR / "levels_and_boundaries.csv",
+    "hard_parity": OUT_DIR / "hard_parity.csv",
+    "plan": OUT_DIR / "boundary_plan.csv",
+    "summary": OUT_DIR / "boundary_summary.csv",
+    "slice_summary": OUT_DIR / "slice_summary.csv",
+    "level_summary": OUT_DIR / "level_summary.csv",
     "screen": OUT_DIR / "diagnostic_screen.csv",
     "screen_ledgers": OUT_DIR / "diagnostic_screen_accepted_ledgers.csv",
     "periods": OUT_DIR / "diagnostic_periods.csv",
     "years": OUT_DIR / "diagnostic_calendar_years.csv",
     "rolling": OUT_DIR / "diagnostic_rolling_12_24_36m.csv",
     "rolling_summary": OUT_DIR / "diagnostic_rolling_summary.csv",
-    "timing": OUT_DIR / "raw_timing_diagnostics.csv",
     "methodology": OUT_DIR / "methodology.csv",
-    "mechanisms": OUT_DIR / "mechanism_inventory.csv",
     "errors": OUT_DIR / "error_report.csv",
 }
 
 STATUS = {
     "state": "not_started",
     "progress": 0,
-    "message": "AUD/JPY H1 SHORT Pass 1 waiting",
+    "message": "AUD/JPY H1 SHORT Pass 1B waiting",
     "orders_supported": False,
     "trading_enabled": False,
     "pair": PAIR,
@@ -161,8 +171,7 @@ STATUS = {
     "side": SIDE,
     "rr": REFERENCE_RR,
     "cost_cases": [x[0] for x in COST_CASES],
-    "grid_rows": EXPECTED_GRID_ROWS,
-    "single_factor_configs": EXPECTED_SINGLE_FACTOR_CONFIGS,
+    "planned_configurations": EXPECTED_CONFIGS,
     "research_version": RESEARCH_VERSION,
 }
 STATUS_LOCK = threading.Lock()
@@ -785,65 +794,198 @@ def all_record_arrays(records):
     return out
 
 # ============================================================
-# EXPERIMENT PLAN
+# PASS-1B CONTROLLED BOUNDARY PLAN
 # ============================================================
 
-def single_factor_plan(arr):
-    n = len(arr["bear_ratio"])
-    base = np.ones(n, dtype=bool)
+def _structure_mask(arr, lb, distance):
+    d = arr[f"structure_dist_{lb}"]
+    return np.isfinite(d) & (d <= distance)
 
-    for v in BR_LEVELS:
-        yield f"BR_MIN_{v:.2f}", "body_ratio", ">=", v, base & (arr["bear_ratio"] >= v)
-    for v in BODY_ATR_LEVELS:
-        yield f"BODY_ATR_MIN_{v:.2f}", "body_atr", ">=", v, base & (arr["body_atr"] >= v)
-    for v in RANGE_ATR_LEVELS:
-        yield f"RANGE_ATR_MIN_{v:.2f}", "range_atr", ">=", v, base & (arr["range_atr"] >= v)
-    for v in CLOSE_LOCATION_LEVELS:
-        yield f"CLOSE_LOC_MAX_{v:.2f}", "close_location", "<=", v, base & (arr["close_location"] <= v)
-    for v in UPPER_WICK_BODY_LEVELS:
-        yield f"UPPER_WICK_BODY_MIN_{v:.2f}", "upper_wick_body", ">=", v, base & (arr["upper_wick_body"] >= v)
 
-    for lb in STRUCTURE_LOOKBACKS:
-        d = arr[f"structure_dist_{lb}"]
-        for v in STRUCTURE_DISTANCES:
-            yield (
-                f"STRUCT_LB{lb}_DIST_MAX_{v:.2f}",
-                "structure_distance",
-                "<=",
-                f"lb={lb};dist={v}",
-                base & np.isfinite(d) & (d <= v),
+def boundary_plan(arr):
+    # A) Clarify lookback and tight distance boundary with Pass-1 top row's
+    # body/range geometry held fixed.
+    for lb in STRUCTURE_BOUNDARY_LOOKBACKS:
+        for distance in STRUCTURE_BOUNDARY_DISTANCES:
+            config_id = f"STRUCT_BOUND_LB{lb}_D{distance:.3f}_B0.60_R1.25"
+            mask = (
+                _structure_mask(arr, lb, distance)
+                & (arr["body_atr"] >= STRUCTURE_FIXED_BODY)
+                & (arr["range_atr"] >= STRUCTURE_FIXED_RANGE)
             )
+            yield {
+                "config_id": config_id,
+                "slice": "STRUCTURE_BOUNDARY",
+                "lookback": lb,
+                "distance_atr_max": distance,
+                "body_atr_min": STRUCTURE_FIXED_BODY,
+                "range_atr_min": STRUCTURE_FIXED_RANGE,
+                "lookback_is_min": lb == min(STRUCTURE_BOUNDARY_LOOKBACKS),
+                "lookback_is_max": lb == max(STRUCTURE_BOUNDARY_LOOKBACKS),
+                "distance_is_min": distance == min(STRUCTURE_BOUNDARY_DISTANCES),
+                "distance_is_max": distance == max(STRUCTURE_BOUNDARY_DISTANCES),
+                "body_is_min": True,
+                "body_is_max": True,
+                "range_is_min": True,
+                "range_is_max": True,
+                "mask": mask,
+            }
 
-    for v in H1_ATR_RATIO_MIN_LEVELS:
-        x = arr["h1_atr_ratio"]
-        yield f"H1_ATR_RATIO_MIN_{v:.2f}", "h1_atr_ratio", ">=", v, base & np.isfinite(x) & (x >= v)
+    # B/C) Clarify body/range edges at two predeclared structural anchors.
+    for slice_name, lb, distance in (
+        ("BODY_RANGE_LB100_D010", 100, 0.10),
+        ("BODY_RANGE_LB150_D005", 150, 0.05),
+    ):
+        struct = _structure_mask(arr, lb, distance)
+        for body in BODY_RANGE_BODY_LEVELS:
+            for rng in BODY_RANGE_RANGE_LEVELS:
+                config_id = f"{slice_name}_B{body:.2f}_R{rng:.2f}"
+                mask = struct & (arr["body_atr"] >= body) & (arr["range_atr"] >= rng)
+                yield {
+                    "config_id": config_id,
+                    "slice": slice_name,
+                    "lookback": lb,
+                    "distance_atr_max": distance,
+                    "body_atr_min": body,
+                    "range_atr_min": rng,
+                    "lookback_is_min": True,
+                    "lookback_is_max": True,
+                    "distance_is_min": True,
+                    "distance_is_max": True,
+                    "body_is_min": body == min(BODY_RANGE_BODY_LEVELS),
+                    "body_is_max": body == max(BODY_RANGE_BODY_LEVELS),
+                    "range_is_min": rng == min(BODY_RANGE_RANGE_LEVELS),
+                    "range_is_max": rng == max(BODY_RANGE_RANGE_LEVELS),
+                    "mask": mask,
+                }
 
-    for lb in MOMENTUM_LOOKBACKS:
-        x = arr[f"momentum_{lb}"]
-        for v in MOMENTUM_THRESHOLDS:
-            yield f"PRIOR_RISE_{lb}_MIN_{v:.2f}", "prior_momentum", ">=", f"lb={lb};rise={v}", base & np.isfinite(x) & (x >= v)
-            yield f"PRIOR_FALL_{lb}_MAX_NEG{v:.2f}", "prior_momentum", "<=", f"lb={lb};fall=-{v}", base & np.isfinite(x) & (x <= -v)
+    # D) Small joint cube to test whether the extended dimensions interact.
+    for lb in JOINT_LOOKBACKS:
+        for distance in JOINT_DISTANCES:
+            struct = _structure_mask(arr, lb, distance)
+            for body in JOINT_BODY_LEVELS:
+                for rng in JOINT_RANGE_LEVELS:
+                    config_id = f"JOINT_LB{lb}_D{distance:.3f}_B{body:.2f}_R{rng:.2f}"
+                    mask = struct & (arr["body_atr"] >= body) & (arr["range_atr"] >= rng)
+                    yield {
+                        "config_id": config_id,
+                        "slice": "JOINT_BOUNDARY_CUBE",
+                        "lookback": lb,
+                        "distance_atr_max": distance,
+                        "body_atr_min": body,
+                        "range_atr_min": rng,
+                        "lookback_is_min": lb == min(JOINT_LOOKBACKS),
+                        "lookback_is_max": lb == max(JOINT_LOOKBACKS),
+                        "distance_is_min": distance == min(JOINT_DISTANCES),
+                        "distance_is_max": distance == max(JOINT_DISTANCES),
+                        "body_is_min": body == min(JOINT_BODY_LEVELS),
+                        "body_is_max": body == max(JOINT_BODY_LEVELS),
+                        "range_is_min": rng == min(JOINT_RANGE_LEVELS),
+                        "range_is_max": rng == max(JOINT_RANGE_LEVELS),
+                        "mask": mask,
+                    }
 
-    yield "D1_CLOSE_LT_EMA50", "daily_regime", "bool", "close<ema50", base & arr["daily_close_lt_ema50"]
-    yield "D1_CLOSE_LT_EMA100", "daily_regime", "bool", "close<ema100", base & arr["daily_close_lt_ema100"]
-    yield "D1_CLOSE_LT_EMA200", "daily_regime", "bool", "close<ema200", base & arr["daily_close_lt_ema200"]
-    yield "D1_EMA50_LT_EMA200", "daily_regime", "bool", "ema50<ema200", base & arr["daily_ema50_lt_ema200"]
-    for v in DAILY_ATR_RATIO_MIN_LEVELS:
-        x = arr["daily_atr_ratio"]
-        yield f"D1_ATR_RATIO_MIN_{v:.2f}", "daily_atr_ratio", ">=", v, base & np.isfinite(x) & (x >= v)
+
+def accepted_sequence_hash(records, positions):
+    return sha_rows(
+        f"{records[p]['signal_index']}|{records[p]['exit_index']}|{records[p]['exit_reason']}"
+        for p in positions
+    )
 
 
-def grid_plan(arr):
-    for lb in GRID_LOOKBACKS:
-        d = arr[f"structure_dist_{lb}"]
-        for distance in GRID_DISTANCES:
-            structure_mask = np.isfinite(d) & (d <= distance)
-            for body in GRID_BODY_ATR:
-                body_mask = arr["body_atr"] >= body
-                for rng in GRID_RANGE_ATR:
-                    config_id = f"GRID_LB{lb}_D{distance:.2f}_B{body:.2f}_R{rng:.2f}"
-                    mask = structure_mask & body_mask & (arr["range_atr"] >= rng)
-                    yield config_id, lb, distance, body, rng, mask
+def build_plan_rows():
+    return [
+        {
+            "slice": "STRUCTURE_BOUNDARY",
+            "purpose": "Extend Pass-1 upper lookback and lower/tighter distance boundaries with B0.60/R1.25 fixed",
+            "lookbacks": json.dumps(STRUCTURE_BOUNDARY_LOOKBACKS),
+            "distances": json.dumps(STRUCTURE_BOUNDARY_DISTANCES),
+            "body_levels": json.dumps((STRUCTURE_FIXED_BODY,)),
+            "range_levels": json.dumps((STRUCTURE_FIXED_RANGE,)),
+            "configurations": EXPECTED_STRUCTURE_ROWS,
+        },
+        {
+            "slice": "BODY_RANGE_LB100_D010",
+            "purpose": "Extend body/range boundaries at Pass-1 leading structural anchor LB100/D0.10",
+            "lookbacks": json.dumps((100,)),
+            "distances": json.dumps((0.10,)),
+            "body_levels": json.dumps(BODY_RANGE_BODY_LEVELS),
+            "range_levels": json.dumps(BODY_RANGE_RANGE_LEVELS),
+            "configurations": EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR,
+        },
+        {
+            "slice": "BODY_RANGE_LB150_D005",
+            "purpose": "Test same body/range extension at longer/tighter structural branch suggested by Pass-1 single-factor scan",
+            "lookbacks": json.dumps((150,)),
+            "distances": json.dumps((0.05,)),
+            "body_levels": json.dumps(BODY_RANGE_BODY_LEVELS),
+            "range_levels": json.dumps(BODY_RANGE_RANGE_LEVELS),
+            "configurations": EXPECTED_BODY_RANGE_ROWS_PER_ANCHOR,
+        },
+        {
+            "slice": "JOINT_BOUNDARY_CUBE",
+            "purpose": "Compact interaction check across extended structure/body/range region; diagnostic only, not an optimisation target",
+            "lookbacks": json.dumps(JOINT_LOOKBACKS),
+            "distances": json.dumps(JOINT_DISTANCES),
+            "body_levels": json.dumps(JOINT_BODY_LEVELS),
+            "range_levels": json.dumps(JOINT_RANGE_LEVELS),
+            "configurations": EXPECTED_JOINT_ROWS,
+        },
+    ]
+
+
+def summarise_slices(summary_rows):
+    out = []
+    slices = sorted(set(r["slice"] for r in summary_rows))
+    for slice_name in slices:
+        for cost_label, _, _, _ in COST_CASES:
+            rows = [r for r in summary_rows if r["slice"] == slice_name and r["cost_label"] == cost_label]
+            vals = [float(r["total_r"]) for r in rows]
+            out.append({
+                "slice": slice_name,
+                "cost_label": cost_label,
+                "configurations": len(rows),
+                "positive_total_r": sum(v > 0 for v in vals),
+                "positive_pf": sum(float(r["profit_factor"]) > 1.0 for r in rows),
+                "positive_with_30plus_trades": sum(float(r["total_r"]) > 0 and int(r["accepted_trades"]) >= 30 for r in rows),
+                "median_total_r": float(median(vals)) if vals else 0.0,
+                "best_total_r": max(vals) if vals else 0.0,
+                "worst_total_r": min(vals) if vals else 0.0,
+                "median_accepted_trades": float(median([int(r["accepted_trades"]) for r in rows])) if rows else 0.0,
+            })
+    return out
+
+
+def summarise_levels(summary_rows):
+    out = []
+    param_map = [
+        ("lookback", "lookback"),
+        ("distance_atr_max", "distance_atr_max"),
+        ("body_atr_min", "body_atr_min"),
+        ("range_atr_min", "range_atr_min"),
+    ]
+    for slice_name in sorted(set(r["slice"] for r in summary_rows)):
+        stress_rows = [r for r in summary_rows if r["slice"] == slice_name and r["cost_label"] == STRESS_COST_LABEL]
+        for param_name, key in param_map:
+            values = sorted(set(r[key] for r in stress_rows))
+            if len(values) <= 1:
+                continue
+            for value in values:
+                rows = [r for r in stress_rows if r[key] == value]
+                rs = [float(r["total_r"]) for r in rows]
+                out.append({
+                    "slice": slice_name,
+                    "cost_label": STRESS_COST_LABEL,
+                    "parameter": param_name,
+                    "level": value,
+                    "configurations": len(rows),
+                    "positive_total_r": sum(x > 0 for x in rs),
+                    "median_total_r": float(median(rs)) if rs else 0.0,
+                    "best_total_r": max(rs) if rs else 0.0,
+                    "worst_total_r": min(rs) if rs else 0.0,
+                    "median_accepted_trades": float(median([int(r["accepted_trades"]) for r in rows])) if rows else 0.0,
+                })
+    return out
 
 # ============================================================
 # PERIOD / ROLLING DIAGNOSTICS FOR PREDECLARED MECHANICAL SCREEN
@@ -929,19 +1071,19 @@ def diagnostics_for_config(records, config_id, accepted, cost_label):
 
 def run_research():
     try:
-        set_status(state="fetching", progress=2, message="Fetching frozen H1/D1 OANDA midpoint history")
+        hard_checks = []
+        set_status(state="fetching", progress=2, message="Fetching exact frozen Pass-1 H1/D1 midpoint history")
         h1 = fetch_history("H1", REQUESTED_START, DATA_END, 180)
         d1 = fetch_history("D", D1_WARMUP_START, DATA_END, 1200)
 
-        # Hard source sanity.
         h1_times = [x["time"] for x in h1]
+        d1_times = [x["time"] for x in d1]
         if h1_times != sorted(set(h1_times)):
             raise RuntimeError("H1 timestamps are duplicated or non-monotonic")
-        d1_times = [x["time"] for x in d1]
         if d1_times != sorted(set(d1_times)):
             raise RuntimeError("D1 timestamps are duplicated or non-monotonic")
-        if h1[-1]["time"] >= DATA_END:
-            raise RuntimeError("H1 source contains candle at/after frozen end")
+        if not h1 or h1[-1]["time"] >= DATA_END:
+            raise RuntimeError("H1 source violates frozen cutoff")
 
         h1_sha = sha_rows(
             f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}"
@@ -951,241 +1093,213 @@ def run_research():
             f"{iso(x['time'])}|{x['open']:.6f}|{x['high']:.6f}|{x['low']:.6f}|{x['close']:.6f}"
             for x in d1
         )
+        for check, actual, expected in (
+            ("h1_rows", len(h1), EXPECTED_H1_ROWS),
+            ("h1_sha256", h1_sha, EXPECTED_H1_SHA256),
+            ("d1_rows", len(d1), EXPECTED_D1_ROWS),
+            ("d1_sha256", d1_sha, EXPECTED_D1_SHA256),
+        ):
+            ok = actual == expected
+            hard_checks.append({"check": check, "status": "PASS" if ok else "FAIL", "actual": actual, "expected": expected})
+            if not ok:
+                write_csv(OUTPUTS["hard_parity"], hard_checks)
+                raise RuntimeError(f"Frozen source parity failed: {check}")
 
         write_csv(OUTPUTS["coverage"], [
-            {
-                "pair": PAIR,
-                "timeframe": "H1",
-                "requested_start": iso(REQUESTED_START),
-                "first_completed_candle": iso(h1[0]["time"]),
-                "last_completed_candle_open": iso(h1[-1]["time"]),
-                "frozen_end_exclusive": iso(DATA_END),
-                "completed_candles": len(h1),
-            },
-            {
-                "pair": PAIR,
-                "timeframe": "D",
-                "requested_start": iso(D1_WARMUP_START),
-                "first_completed_candle": iso(d1[0]["time"]),
-                "last_completed_candle_open": iso(d1[-1]["time"]),
-                "frozen_end_exclusive": iso(DATA_END),
-                "completed_candles": len(d1),
-                "daily_alignment": "17:00 America/New_York",
-            },
+            {"pair": PAIR, "timeframe": "H1", "requested_start": iso(REQUESTED_START), "first_completed_candle": iso(h1[0]["time"]), "last_completed_candle_open": iso(h1[-1]["time"]), "frozen_end_exclusive": iso(DATA_END), "completed_candles": len(h1)},
+            {"pair": PAIR, "timeframe": "D", "requested_start": iso(D1_WARMUP_START), "first_completed_candle": iso(d1[0]["time"]), "last_completed_candle_open": iso(d1[-1]["time"]), "frozen_end_exclusive": iso(DATA_END), "completed_candles": len(d1), "daily_alignment": "17:00 America/New_York"},
         ])
         write_csv(OUTPUTS["source_fingerprint"], [
-            {"series": "AUD_JPY_H1_MID_OHLC", "sha256": h1_sha, "rows": len(h1)},
-            {"series": "AUD_JPY_D1_MID_OHLC", "sha256": d1_sha, "rows": len(d1)},
+            {"series": "AUD_JPY_H1_MID_OHLC", "sha256": h1_sha, "rows": len(h1), "expected_sha256": EXPECTED_H1_SHA256, "parity": "PASS"},
+            {"series": "AUD_JPY_D1_MID_OHLC", "sha256": d1_sha, "rows": len(d1), "expected_sha256": EXPECTED_D1_SHA256, "parity": "PASS"},
         ])
 
-        set_status(state="features", progress=12, message="Building H1 and completed-D1 features")
+        set_status(state="features", progress=10, message="Building exact Pass-1 feature/execution state")
         features = build_h1_features(h1)
         daily_states = build_daily_states(d1, features["times"])
-
         vec_raw = raw_exact_vector_indices(features)
         scalar_raw = raw_exact_scalar_indices(h1, features["atr"])
         vec_hash = sha_rows(iso(features["times"][i]) for i in vec_raw)
         scalar_hash = sha_rows(iso(features["times"][i]) for i in scalar_raw)
-        raw_parity = len(vec_raw) == len(scalar_raw) and np.array_equal(vec_raw, scalar_raw) and vec_hash == scalar_hash
-        if not raw_parity:
-            write_csv(OUTPUTS["parity"], [{
-                "check": "raw_exact_signal_vector_vs_scalar",
-                "status": "FAIL",
-                "vector_count": len(vec_raw),
-                "scalar_count": len(scalar_raw),
-                "vector_sha256": vec_hash,
-                "scalar_sha256": scalar_hash,
-            }])
-            raise RuntimeError("Raw exact-engulf signal parity FAILED")
+        raw_ok = (
+            len(vec_raw) == EXPECTED_RAW_SIGNAL_COUNT
+            and len(scalar_raw) == EXPECTED_RAW_SIGNAL_COUNT
+            and np.array_equal(vec_raw, scalar_raw)
+            and vec_hash == EXPECTED_RAW_SIGNAL_SHA256
+            and scalar_hash == EXPECTED_RAW_SIGNAL_SHA256
+        )
+        hard_checks.append({
+            "check": "raw_exact_bearish_engulf_vector_scalar_and_pass1_hash",
+            "status": "PASS" if raw_ok else "FAIL",
+            "actual": f"vector={len(vec_raw)};scalar={len(scalar_raw)};vhash={vec_hash};shash={scalar_hash}",
+            "expected": f"count={EXPECTED_RAW_SIGNAL_COUNT};hash={EXPECTED_RAW_SIGNAL_SHA256}",
+        })
+        if not raw_ok:
+            write_csv(OUTPUTS["hard_parity"], hard_checks)
+            raise RuntimeError("Raw exact-signal Pass-1 parity failed")
 
-        set_status(state="raw_replay", progress=18, message=f"Raw exact bearish engulf signals: {len(vec_raw)}; building outcomes")
+        set_status(state="raw_replay", progress=16, message=f"Replaying {len(vec_raw)} exact bearish-engulf raw signals")
         records, censored = build_raw_outcomes(features, vec_raw, daily_states)
         exec_failures = execution_parity_sample(features, h1, records, sample_n=min(100, len(records)))
-        if exec_failures:
-            write_csv(OUTPUTS["parity"], [
-                {
-                    "check": "raw_exact_signal_vector_vs_scalar",
-                    "status": "PASS",
-                    "vector_count": len(vec_raw),
-                    "scalar_count": len(scalar_raw),
-                    "vector_sha256": vec_hash,
-                    "scalar_sha256": scalar_hash,
-                },
-                {
-                    "check": "execution_scalar_recompute_first_100_closed_raw_signals",
-                    "status": "FAIL",
-                    "failures": "; ".join(exec_failures[:10]),
-                },
-            ])
-            raise RuntimeError("Execution parity FAILED")
-
-        write_csv(OUTPUTS["parity"], [
-            {
-                "check": "raw_exact_signal_vector_vs_scalar",
-                "status": "PASS",
-                "vector_count": len(vec_raw),
-                "scalar_count": len(scalar_raw),
-                "vector_sha256": vec_hash,
-                "scalar_sha256": scalar_hash,
-            },
-            {
-                "check": "execution_scalar_recompute_first_100_closed_raw_signals",
-                "status": "PASS",
-                "sample": min(100, len(records)),
-            },
-        ])
-
-        # Full raw signal export.
-        raw_export = []
-        for r in records:
-            row = dict(r)
-            row["signal_time"] = iso(row["signal_time"])
-            row["exit_time"] = iso(row["exit_time"])
-            raw_export.append(row)
-        write_csv(OUTPUTS["raw_signals"], raw_export)
+        exec_ok = not exec_failures
+        hard_checks.append({
+            "check": "execution_scalar_recompute_first_100_closed_raw_signals",
+            "status": "PASS" if exec_ok else "FAIL",
+            "actual": "; ".join(exec_failures[:10]) if exec_failures else "100 matched",
+            "expected": "all matched",
+        })
+        if not exec_ok:
+            write_csv(OUTPUTS["hard_parity"], hard_checks)
+            raise RuntimeError("Execution parity failed")
 
         arr = all_record_arrays(records)
-        raw_mask = np.ones(len(records), dtype=bool)
-        raw_summary, raw_accepted = summarize_config(records, raw_mask, {
-            "config_id": "RAW_EXACT_BEARISH_ENGULF",
-            "stage": "RAW_BASELINE",
+
+        # Exact Pass-1 control replay before any new boundary result is interpreted.
+        control_mask = (
+            _structure_mask(arr, 100, 0.10)
+            & (arr["body_atr"] >= 0.60)
+            & (arr["range_atr"] >= 1.25)
+        )
+        control_rows, control_accepted = summarize_config(records, control_mask, {
+            "config_id": "PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25",
+            "stage": "PASS1_CONTROL",
+            "slice": "PASS1_CONTROL",
+            "lookback": 100,
+            "distance_atr_max": 0.10,
+            "body_atr_min": 0.60,
+            "range_atr_min": 1.25,
             "rr": REFERENCE_RR,
-            "rule": "exact bearish engulf only",
         })
-        for row in raw_summary:
-            row["raw_exact_total_signals"] = len(vec_raw)
-            row["right_censored_raw_signals"] = censored
-            row["raw_signal_sha256"] = vec_hash
-        write_csv(OUTPUTS["raw_baseline"], raw_summary)
+        control_hash = accepted_sequence_hash(records, control_accepted)
+        control_hash_ok = len(control_accepted) == PASS1_CONTROL_ACCEPTED and control_hash == PASS1_CONTROL_SEQUENCE_SHA256
+        hard_checks.append({
+            "check": "pass1_control_accepted_sequence",
+            "status": "PASS" if control_hash_ok else "FAIL",
+            "actual": f"accepted={len(control_accepted)};hash={control_hash}",
+            "expected": f"accepted={PASS1_CONTROL_ACCEPTED};hash={PASS1_CONTROL_SEQUENCE_SHA256}",
+        })
+        if not control_hash_ok:
+            write_csv(OUTPUTS["hard_parity"], hard_checks)
+            raise RuntimeError("Pass-1 control accepted-sequence parity failed")
 
-        # Raw timing diagnostics are descriptive only; they are NOT Pass-1 selection filters.
-        timing_rows = []
-        for cost_label, ticks, pips, purpose in COST_CASES:
-            for field, values in (
-                ("hour_utc", range(24)),
-                ("weekday_utc", range(7)),
-            ):
-                for value in values:
-                    subset = [p for p in raw_accepted if records[p][field] == value]
-                    timing_rows.append({
-                        "cost_label": cost_label,
-                        "diagnostic_only": True,
-                        "group_field": field,
-                        "group_value": value,
-                        **metrics(records, subset, cost_label),
-                    })
-        write_csv(OUTPUTS["timing"], timing_rows)
-
-        set_status(state="single_factors", progress=28, message="Running broad single-factor discovery")
-        single_rows = []
-        single_count = 0
-        for n, (config_id, family, operator, value, mask) in enumerate(single_factor_plan(arr), start=1):
-            single_count = n
-            if n % 20 == 0:
-                set_status(message=f"Single-factor configuration {n}/{EXPECTED_SINGLE_FACTOR_CONFIGS}")
-            rows, _ = summarize_config(records, mask, {
-                "config_id": config_id,
-                "stage": "SINGLE_FACTOR",
-                "factor_family": family,
-                "operator": operator,
-                "factor_value": value,
-                "rr": REFERENCE_RR,
+        for row in control_rows:
+            expected_r = PASS1_CONTROL_TOTAL_R[row["cost_label"]]
+            ok = abs(float(row["total_r"]) - expected_r) <= 1e-9
+            hard_checks.append({
+                "check": f"pass1_control_total_r_{row['cost_label']}",
+                "status": "PASS" if ok else "FAIL",
+                "actual": row["total_r"],
+                "expected": expected_r,
             })
-            single_rows.extend(rows)
-        if single_count != EXPECTED_SINGLE_FACTOR_CONFIGS:
-            raise RuntimeError(
-                f"Single-factor enumeration mismatch: expected {EXPECTED_SINGLE_FACTOR_CONFIGS}, got {single_count}"
-            )
-        write_csv(OUTPUTS["single_factors"], single_rows)
+            if not ok:
+                write_csv(OUTPUTS["hard_parity"], hard_checks)
+                raise RuntimeError(f"Pass-1 control R parity failed at {row['cost_label']}")
 
-        set_status(state="controlled_grid", progress=50, message=f"Running {EXPECTED_GRID_ROWS}-row structure/body/range grid")
-        grid_rows = []
-        grid_accepted_by_id = {}
-        grid_count = 0
-        for config_id, lb, distance, body, rng, mask in grid_plan(arr):
-            grid_count += 1
-            if grid_count % 40 == 0:
-                set_status(message=f"Controlled grid {grid_count}/{EXPECTED_GRID_ROWS}")
+        write_csv(OUTPUTS["hard_parity"], hard_checks)
+        write_csv(OUTPUTS["plan"], build_plan_rows())
+
+        set_status(state="boundary_grid", progress=25, message=f"Running {EXPECTED_CONFIGS} predeclared boundary configurations")
+        summary_rows = []
+        accepted_by_id = {}
+        meta_by_id = {}
+        count = 0
+        for spec in boundary_plan(arr):
+            count += 1
+            if count % 25 == 0:
+                set_status(message=f"Boundary clarification {count}/{EXPECTED_CONFIGS}", progress=25 + int(45 * count / EXPECTED_CONFIGS))
+            mask = spec.pop("mask")
+            config_id = spec["config_id"]
             rows, accepted = summarize_config(records, mask, {
-                "config_id": config_id,
-                "stage": "CONTROLLED_GRID",
-                "lookback": lb,
-                "distance_atr_max": distance,
-                "body_atr_min": body,
-                "range_atr_min": rng,
+                **spec,
+                "stage": "PASS1B_BOUNDARY_CLARIFICATION",
                 "rr": REFERENCE_RR,
             })
-            grid_rows.extend(rows)
-            grid_accepted_by_id[config_id] = accepted
-        if grid_count != EXPECTED_GRID_ROWS:
-            raise RuntimeError(f"Grid enumeration mismatch: expected {EXPECTED_GRID_ROWS}, got {grid_count}")
-        write_csv(OUTPUTS["grid"], grid_rows)
+            summary_rows.extend(rows)
+            accepted_by_id[config_id] = accepted
+            meta_by_id[config_id] = dict(spec)
+        if count != EXPECTED_CONFIGS:
+            raise RuntimeError(f"Boundary plan enumeration mismatch: expected {EXPECTED_CONFIGS}, got {count}")
+        write_csv(OUTPUTS["summary"], summary_rows)
+        write_csv(OUTPUTS["slice_summary"], summarise_slices(summary_rows))
+        write_csv(OUTPUTS["level_summary"], summarise_levels(summary_rows))
 
-        # Enumerate levels/boundaries explicitly so a later pass can see when a
-        # promising region sits on the tested edge.
-        level_rows = [
-            {"stage": "CONTROLLED_GRID", "parameter": "lookback", "levels": json.dumps(GRID_LOOKBACKS), "lower_boundary": min(GRID_LOOKBACKS), "upper_boundary": max(GRID_LOOKBACKS)},
-            {"stage": "CONTROLLED_GRID", "parameter": "distance_atr_max", "levels": json.dumps(GRID_DISTANCES), "lower_boundary": min(GRID_DISTANCES), "upper_boundary": max(GRID_DISTANCES)},
-            {"stage": "CONTROLLED_GRID", "parameter": "body_atr_min", "levels": json.dumps(GRID_BODY_ATR), "lower_boundary": min(GRID_BODY_ATR), "upper_boundary": max(GRID_BODY_ATR)},
-            {"stage": "CONTROLLED_GRID", "parameter": "range_atr_min", "levels": json.dumps(GRID_RANGE_ATR), "lower_boundary": min(GRID_RANGE_ATR), "upper_boundary": max(GRID_RANGE_ATR)},
-            {"stage": "SINGLE_FACTOR", "parameter": "body_ratio_min", "levels": json.dumps(BR_LEVELS)},
-            {"stage": "SINGLE_FACTOR", "parameter": "close_location_max", "levels": json.dumps(CLOSE_LOCATION_LEVELS)},
-            {"stage": "SINGLE_FACTOR", "parameter": "upper_wick_body_min", "levels": json.dumps(UPPER_WICK_BODY_LEVELS)},
-            {"stage": "SINGLE_FACTOR", "parameter": "structure_lookbacks", "levels": json.dumps(STRUCTURE_LOOKBACKS)},
-            {"stage": "SINGLE_FACTOR", "parameter": "structure_distances", "levels": json.dumps(STRUCTURE_DISTANCES)},
-            {"stage": "SINGLE_FACTOR", "parameter": "momentum_lookbacks", "levels": json.dumps(MOMENTUM_LOOKBACKS)},
-            {"stage": "SINGLE_FACTOR", "parameter": "momentum_thresholds", "levels": json.dumps(MOMENTUM_THRESHOLDS)},
-        ]
-        write_csv(OUTPUTS["levels"], level_rows)
-
-        # Mechanical diagnostic screen ONLY. This is not a frozen-anchor choice.
-        # We screen using the predeclared stressed 20T row and never use portfolio data.
-        grid_by_id = defaultdict(dict)
-        for row in grid_rows:
-            grid_by_id[row["config_id"]][row["cost_label"]] = row
+        # Mechanical diagnostic screen ONLY. It must not be treated as a frozen
+        # selection rule. It simply gives rolling/year ledgers for the strongest
+        # stress-resistant rows plus the exact Pass-1 control.
+        by_cfg = defaultdict(dict)
+        for row in summary_rows:
+            by_cfg[row["config_id"]][row["cost_label"]] = row
         eligible = []
-        for config_id, by_cost in grid_by_id.items():
-            live = by_cost.get(PRIMARY_COST_LABEL)
-            stress = by_cost.get(STRESS_COST_LABEL)
-            extreme = by_cost.get(EXTREME_COST_LABEL)
-            if not live or not stress or not extreme:
+        for config_id, costs in by_cfg.items():
+            if not all(x in costs for x in (PRIMARY_COST_LABEL, STRESS_COST_LABEL, EXTREME_COST_LABEL)):
                 continue
-            if stress["accepted_trades"] >= 40 and live["total_r"] > 0 and stress["total_r"] > 0:
-                eligible.append((stress["total_r"], config_id, live, stress, extreme))
-        eligible.sort(reverse=True, key=lambda x: x[0])
-        selected = eligible[:12]
+            live = costs[PRIMARY_COST_LABEL]
+            stress = costs[STRESS_COST_LABEL]
+            extreme = costs[EXTREME_COST_LABEL]
+            if int(stress["accepted_trades"]) >= 30 and float(live["total_r"]) > 0 and float(stress["total_r"]) > 0 and float(extreme["total_r"]) > 0:
+                eligible.append((float(stress["total_r"]), config_id))
+        eligible.sort(reverse=True)
+        selected_ids = [cid for _, cid in eligible[:12]]
+
         screen_rows = []
-        for rank, (_, config_id, live, stress, extreme) in enumerate(selected, start=1):
+        for rank, cid in enumerate(selected_ids, start=1):
+            costs = by_cfg[cid]
+            stress = costs[STRESS_COST_LABEL]
             screen_rows.append({
                 "diagnostic_rank": rank,
-                "config_id": config_id,
+                "config_id": cid,
                 "selection_status": "DIAGNOSTIC_ONLY_NOT_FROZEN",
-                "screen_rule": "stress20T trades>=40 AND live10T totalR>0 AND stress20T totalR>0; ranked by stress20T totalR",
-                "live10T_trades": live["accepted_trades"],
-                "live10T_total_r": live["total_r"],
-                "live10T_pf": live["profit_factor"],
+                "screen_rule": "20T trades>=30; totalR positive at 10T/20T/40T; ranked by 20T totalR",
+                "slice": stress["slice"],
+                "live10T_trades": costs[PRIMARY_COST_LABEL]["accepted_trades"],
+                "live10T_total_r": costs[PRIMARY_COST_LABEL]["total_r"],
                 "stress20T_total_r": stress["total_r"],
                 "stress20T_pf": stress["profit_factor"],
-                "extreme40T_total_r": extreme["total_r"],
-                "extreme40T_pf": extreme["profit_factor"],
+                "extreme40T_total_r": costs[EXTREME_COST_LABEL]["total_r"],
+                "extreme40T_pf": costs[EXTREME_COST_LABEL]["profit_factor"],
                 "lookback": stress["lookback"],
                 "distance_atr_max": stress["distance_atr_max"],
                 "body_atr_min": stress["body_atr_min"],
                 "range_atr_min": stress["range_atr_min"],
+                "any_tested_boundary": bool(
+                    stress.get("lookback_is_min") or stress.get("lookback_is_max")
+                    or stress.get("distance_is_min") or stress.get("distance_is_max")
+                    or stress.get("body_is_min") or stress.get("body_is_max")
+                    or stress.get("range_is_min") or stress.get("range_is_max")
+                ),
             })
+        # Explicit control row at rank 0 for side-by-side diagnostics.
+        c10 = next(x for x in control_rows if x["cost_label"] == PRIMARY_COST_LABEL)
+        c20 = next(x for x in control_rows if x["cost_label"] == STRESS_COST_LABEL)
+        c40 = next(x for x in control_rows if x["cost_label"] == EXTREME_COST_LABEL)
+        screen_rows.insert(0, {
+            "diagnostic_rank": 0,
+            "config_id": "PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25",
+            "selection_status": "FROZEN_PARITY_CONTROL_NOT_CANDIDATE_SELECTION",
+            "screen_rule": "Exact Pass-1 leading-row parity control",
+            "slice": "PASS1_CONTROL",
+            "live10T_trades": c10["accepted_trades"],
+            "live10T_total_r": c10["total_r"],
+            "stress20T_total_r": c20["total_r"],
+            "stress20T_pf": c20["profit_factor"],
+            "extreme40T_total_r": c40["total_r"],
+            "extreme40T_pf": c40["profit_factor"],
+            "lookback": 100,
+            "distance_atr_max": 0.10,
+            "body_atr_min": 0.60,
+            "range_atr_min": 1.25,
+            "any_tested_boundary": False,
+        })
         write_csv(OUTPUTS["screen"], screen_rows)
 
-        set_status(state="diagnostics", progress=82, message="Building diagnostic ledgers, years and rolling windows")
+        set_status(state="diagnostics", progress=82, message="Building diagnostic ledgers, eras, years and rolling windows")
         ledger_rows = []
         period_rows = []
         year_rows = []
         rolling_rows = []
         rolling_summary_rows = []
-
-        diagnostic_configs = [("RAW_EXACT_BEARISH_ENGULF", raw_accepted)] + [
-            (config_id, grid_accepted_by_id[config_id]) for _, config_id, *_ in selected
-        ]
-        for config_id, accepted in diagnostic_configs:
+        diag_configs = [("PASS1_CONTROL_GRID_LB100_D0.10_B0.60_R1.25", control_accepted)] + [(cid, accepted_by_id[cid]) for cid in selected_ids]
+        for config_id, accepted in diag_configs:
             for cost_label, ticks, pips, purpose in COST_CASES:
                 for seq, p in enumerate(accepted, start=1):
                     r = records[p]
@@ -1209,56 +1323,27 @@ def run_research():
                 year_rows.extend(y_rows)
                 rolling_rows.extend(r_rows)
                 rolling_summary_rows.extend(rs_rows)
-
         write_csv(OUTPUTS["screen_ledgers"], ledger_rows)
         write_csv(OUTPUTS["periods"], period_rows)
         write_csv(OUTPUTS["years"], year_rows)
         write_csv(OUTPUTS["rolling"], rolling_rows)
         write_csv(OUTPUTS["rolling_summary"], rolling_summary_rows)
 
-        mechanism_inventory = [
-            {
-                "mechanism": "EXACT_BEARISH_BODY_ENGULF",
-                "status_pass1": "TESTED_CORE",
-                "definition": "previous H1 candle bullish; current H1 candle bearish; current body fully engulfs previous body",
-                "reason": "predeclared engulfing-first core required by the saved research template",
-            },
-            {
-                "mechanism": "HIGH_SWEEP_REJECTION",
-                "status_pass1": "DEFERRED_NOT_TESTED",
-                "definition": "bearish rejection after taking a prior H1 high",
-                "reason": "competing short mechanism inventoried so a weak engulf result is not misreported as pair/direction exhaustion",
-            },
-            {
-                "mechanism": "BEARISH_OUTSIDE_REVERSAL",
-                "status_pass1": "DEFERRED_NOT_TESTED",
-                "definition": "bearish outside candle / reversal family",
-                "reason": "separate mechanism; only test later if justified rather than mixing families inside the engulfing grid",
-            },
-            {
-                "mechanism": "DISPLACEMENT_BREAKDOWN",
-                "status_pass1": "DEFERRED_NOT_TESTED",
-                "definition": "bearish displacement/breakdown family",
-                "reason": "separate mechanism; inventoried, not searched in this pass",
-            },
-        ]
-        write_csv(OUTPUTS["mechanisms"], mechanism_inventory)
-
         methodology = [
             {"topic": "research_version", "value": RESEARCH_VERSION},
-            {"topic": "purpose", "value": "Pass 1 broad controlled AUD/JPY H1 SHORT engulfing-first discovery; no live orders"},
-            {"topic": "pattern", "value": "exact bearish body engulfing (previous candle bullish; current bearish body fully engulfs previous body)"},
-            {"topic": "data", "value": "OANDA midpoint completed H1; completed D1 aligned 17:00 America/New_York for single-factor diagnostics"},
+            {"topic": "purpose", "value": "Pass 1B boundary clarification only; no new filter hunt and no candidate frozen automatically"},
+            {"topic": "source_parity", "value": "H1/D1 rows and SHA256, raw exact-signal count/hash, scalar/vector parity, execution sample and exact Pass-1 leading-row accepted sequence must all pass before results are produced"},
+            {"topic": "pattern", "value": "exact bearish body engulfing; unchanged from Pass 1"},
             {"topic": "frozen_cutoff", "value": iso(DATA_END)},
-            {"topic": "execution", "value": "reference=signal close; stop=signal high+10 ticks; RR3.50 target below reference entry from reference risk; exits start next H1 candle; p0; exit-candle signal eligible"},
-            {"topic": "costs", "value": "10 ticks/1 pip primary live-parity; 20 ticks/2 pips stressed selection; 40 ticks/4 pips extreme diagnostic only. These are assumed historical adverse fills, not measured bid/ask."},
-            {"topic": "rr", "value": "RR3.50 fixed for entry discovery. No RR optimisation in Pass 1."},
-            {"topic": "timing", "value": "No weekday/session optimisation. Raw hour/weekday output is descriptive only and cannot qualify a Pass-1 candidate."},
-            {"topic": "mechanism_scope", "value": "Pass 1 tests exact bearish engulfing only. High-sweep rejection, bearish outside reversal and displacement breakdown are inventoried but explicitly deferred, so failure of engulfing would not prove AUD/JPY H1 SHORT is exhausted."},
-            {"topic": "portfolio", "value": "Portfolio 30 is NOT used in Pass 1. Portfolio admission occurs only after standalone entry geometry and RR are frozen."},
-            {"topic": "screen", "value": "diagnostic_screen is mechanical reporting only; it does not freeze or approve anchors. Full single-factor and grid files must be inspected for coherent neighbourhoods and boundaries."},
-            {"topic": "data_snooping", "value": "All history is exploratory/in-sample; recent eras and rolling windows are robustness diagnostics, not untouched OOS evidence."},
-            {"topic": "next_gate", "value": "If coherent stressed regions exist, freeze a few distinguishable anchors and run one conditional feature at a time; widen any constraining boundaries before plateau confirmation."},
+            {"topic": "execution", "value": "reference=signal close; stop=signal high+10 ticks; fixed RR3.50; exits next H1 candle onward; p0; exit-candle signal eligible"},
+            {"topic": "costs", "value": "10T/1pip primary; 20T/2pip stressed selection; 40T/4pip extreme diagnostic. Assumed adverse historical fills, not measured historic quotes."},
+            {"topic": "slices", "value": "56 structure-boundary + 56 LB100/D0.10 body-range + 56 LB150/D0.05 body-range + 256 compact joint-boundary cube = 424 planned configurations"},
+            {"topic": "timing", "value": "No session or weekday optimisation"},
+            {"topic": "rr", "value": "RR3.50 fixed; RR sweep remains a later final entry-stage only"},
+            {"topic": "portfolio", "value": "Portfolio 30 is not used. Exact portfolio admission occurs only after standalone geometry, RR and independent implementation are frozen."},
+            {"topic": "interpretation", "value": "Inspect stressed neighbourhoods, boundary occupancy, trade count and weak periods. A top row on a new boundary is not permission to freeze it."},
+            {"topic": "data_snooping", "value": "All history remains repeatedly examined/in-sample; rolling/recent periods are robustness diagnostics, not unseen OOS."},
+            {"topic": "next_gate", "value": "If an interior/stable region is now intelligible, freeze a small number of distinguishable anchors for Pass 2 one-feature-at-a-time testing; otherwise stop or widen only the still-constraining boundary."},
         ]
         write_csv(OUTPUTS["methodology"], methodology)
 
@@ -1268,33 +1353,31 @@ def run_research():
         set_status(
             state="complete",
             progress=100,
-            message="AUD/JPY H1 SHORT Pass 1 complete; ZIP ready",
+            message="AUD/JPY H1 SHORT Pass 1B boundary clarification complete; ZIP ready",
             h1_candles=len(h1),
             d1_candles=len(d1),
             raw_exact_signals=len(vec_raw),
             raw_closed_outcomes=len(records),
             right_censored_raw_signals=censored,
-            single_factor_configurations=single_count,
-            controlled_grid_configurations=grid_count,
-            diagnostic_screen_count=len(selected),
-            parity_passed=True,
+            planned_configurations=EXPECTED_CONFIGS,
+            completed_configurations=count,
+            diagnostic_screen_count=len(selected_ids),
+            hard_parity_passed=True,
             h1_source_sha256=h1_sha,
             raw_signal_sha256=vec_hash,
+            pass1_control_sequence_sha256=control_hash,
             results_zip=str(BUNDLE),
         )
 
     except Exception as exc:
         tb = traceback.format_exc()
-        write_csv(OUTPUTS["errors"], [{
-            "error_type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": tb,
-        }])
+        write_csv(OUTPUTS["errors"], [{"error_type": type(exc).__name__, "message": str(exc), "traceback": tb}])
         try:
             pack_results()
         except Exception:
             pass
-        set_status(state="failed", progress=100, message=f"{type(exc).__name__}: {exc}", parity_passed=False)
+        set_status(state="failed", progress=100, message=f"{type(exc).__name__}: {exc}", hard_parity_passed=False)
+
 
 # ============================================================
 # FLASK ROUTES
@@ -1306,14 +1389,14 @@ def launch_once():
         if RESEARCH_STARTED:
             return False
         RESEARCH_STARTED = True
-        threading.Thread(target=run_research, daemon=True, name="audjpy-h1-short-pass1").start()
+        threading.Thread(target=run_research, daemon=True, name="audjpy-h1-short-pass1b").start()
         return True
 
 
 @app.route("/")
 def root():
     return jsonify({
-        "service": "AUD/JPY H1 SHORT Pass 1 engulfing-first discovery",
+        "service": "AUD/JPY H1 SHORT Pass 1B boundary clarification",
         "research_only": True,
         "orders_supported": False,
         "trading_enabled": False,
@@ -1321,34 +1404,30 @@ def root():
         "timeframe": TIMEFRAME,
         "side": SIDE,
         "rr_fixed": REFERENCE_RR,
-        "cost_cases": [
-            {"label": label, "ticks": ticks, "pips": pips, "purpose": purpose}
-            for label, ticks, pips, purpose in COST_CASES
-        ],
-        "research_version": RESEARCH_VERSION,
-        "single_factor_configurations": EXPECTED_SINGLE_FACTOR_CONFIGS,
-        "controlled_grid_rows": EXPECTED_GRID_ROWS,
+        "planned_configurations": EXPECTED_CONFIGS,
         "frozen_end_exclusive": iso(DATA_END),
+        "pass1_source_hash_required": EXPECTED_H1_SHA256,
+        "pass1_raw_signal_hash_required": EXPECTED_RAW_SIGNAL_SHA256,
         "routes": [
-            "/audjpy-h1-short-pass1/start",
-            "/audjpy-h1-short-pass1/status",
-            "/audjpy-h1-short-pass1/results",
+            "/audjpy-h1-short-pass1b/start",
+            "/audjpy-h1-short-pass1b/status",
+            "/audjpy-h1-short-pass1b/results",
         ],
     })
 
 
-@app.route("/audjpy-h1-short-pass1/start")
+@app.route("/audjpy-h1-short-pass1b/start")
 def start_route():
     return jsonify({"started_now": launch_once(), "state": STATUS["state"], "orders_supported": False})
 
 
-@app.route("/audjpy-h1-short-pass1/status")
+@app.route("/audjpy-h1-short-pass1b/status")
 def status_route():
     with STATUS_LOCK:
         return jsonify(dict(STATUS))
 
 
-@app.route("/audjpy-h1-short-pass1/results")
+@app.route("/audjpy-h1-short-pass1b/results")
 def results_route():
     if not BUNDLE.exists():
         return jsonify({"status": "not_ready", "state": STATUS["state"], "message": STATUS["message"]}), 404
