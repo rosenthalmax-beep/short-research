@@ -39,6 +39,10 @@ Execution model
 - frozen cutoff 2026-09-30 08:00 UTC exclusive
 - D1 source frozen through the exact completed D1 open 2026-09-28 21:00 UTC
 
+Full-ledger hashes canonicalise per-trade R to 12 significant digits so harmless
+Python/NumPy binary-float representation noise cannot create a false parity failure;
+signal/exit indices, timestamps and exit reasons remain hashed exactly.
+
 This is implementation parity on repeatedly examined historical data, not fresh
 out-of-sample evidence and not live-trading authorisation.
 """
@@ -110,7 +114,7 @@ EXPECTED = {
             "profit_factor": 2.0226930109,
             "max_drawdown_r": -8.0719696970,
             "longest_losing_streak": 8,
-            "ledger_sha256": "2723d577e8fd6b224cce3d9ce0b48a99551468b800875ea83e4cb6c7734a761e",
+            "ledger_sha256": "9c6a2787a98f6f0f7ecaac89d55ce0a6e1de1b8e741067ede98045a03a8162e8",
         },
         "STRESS_20T": {
             "winners": 36, "losers": 55,
@@ -118,7 +122,7 @@ EXPECTED = {
             "profit_factor": 1.9269491599,
             "max_drawdown_r": -8.3485915493,
             "longest_losing_streak": 8,
-            "ledger_sha256": "8f0095bb318c0914b38e30a4071d3b7b99404524f70bafa5220cbd194310df13",
+            "ledger_sha256": "80e4b5f92e61109a4ee4c546c0f8acfdbeb021daf0916ad10bdbcdb905c9dbe7",
         },
         "EXTREME_40T": {
             "winners": 36, "losers": 55,
@@ -126,7 +130,7 @@ EXPECTED = {
             "profit_factor": 1.7574177999,
             "max_drawdown_r": -8.7993827160,
             "longest_losing_streak": 8,
-            "ledger_sha256": "21a29d35ea90da9362b75544ad76a4a853445749d5e2dd028cb5ae559ad891cb",
+            "ledger_sha256": "8a8ea764a659a139c0c1abb0125c7e43e787762342cc5c6c56a95c1d4edc2fcf",
         },
     },
     "QUALITY": {
@@ -140,7 +144,7 @@ EXPECTED = {
             "profit_factor": 2.2602885427,
             "max_drawdown_r": -5.0719696970,
             "longest_losing_streak": 5,
-            "ledger_sha256": "19598e7b0c18582a454c4f3485937b1a4d8cdc278021476dfd3d2a3d546eeeee",
+            "ledger_sha256": "2e7e891df7192be623a1e86353225b6ef5c3fd2ed055e8c3985238229bd5fab8",
         },
         "STRESS_20T": {
             "winners": 33, "losers": 45,
@@ -148,7 +152,7 @@ EXPECTED = {
             "profit_factor": 2.1478726992,
             "max_drawdown_r": -5.3485915493,
             "longest_losing_streak": 5,
-            "ledger_sha256": "708c7342960ddc565bcea0453be84b17d6f07172b3be97ac93da1fbbbd54ec79",
+            "ledger_sha256": "b4729c829bac1bc4a6e577b9fd15ffb2978050c75622a99143af72ca955cf847",
         },
         "EXTREME_40T": {
             "winners": 33, "losers": 45,
@@ -156,12 +160,12 @@ EXPECTED = {
             "profit_factor": 1.9494028875,
             "max_drawdown_r": -5.7993827160,
             "longest_losing_streak": 5,
-            "ledger_sha256": "aa9a827d01315caf3d4b9a29f8c42134756792ba79f7b08554faeeb017c2caa2",
+            "ledger_sha256": "1566395fef1ced2a6a42235e6b4c90e116177e8947a9590ab2d68fd7039c0b77",
         },
     },
 }
 
-PASS_VERSION = "AUDJPY_H1_SHORT_PASS5_INDEPENDENT_CONFIRMATION_V1_2026-09-30"
+PASS_VERSION = "AUDJPY_H1_SHORT_PASS5_INDEPENDENT_CONFIRMATION_V2_FLOAT_CANONICAL_2026-09-30"
 
 API = os.getenv("OANDA_API_URL", "https://api-fxtrade.oanda.com").rstrip("/")
 TOKEN = os.getenv("OANDA_TOKEN", "")
@@ -551,7 +555,7 @@ def accepted_ledger_hash(records, cost_label):
         "|".join((
             iso(r["signal_time"]), iso(r["exit_time"]),
             str(r["signal_index"]), str(r["exit_index"]), r["exit_reason"],
-            f'{r[f"result_r__{cost_label}"]:.15g}',
+            f'{r[f"result_r__{cost_label}"]:.12g}',
         ))
         for r in records
     )
