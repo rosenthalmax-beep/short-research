@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
-"""EUR/CHF H1 SHORT — Pass 1B structure/distance boundary study, 2026-10-01.
+"""EUR/CHF H1 SHORT — Pass 2 one-factor conditional research, 2026-10-02.
 
-Single file; Python 3.10+ standard library only; no orders/account endpoints.
-Run: python app.py                 (HTTP service + automatic research run)
-     python app.py --run           (one research run, no HTTP server)
-     python app.py --self-test     (synthetic software checks, no network)
-Also exposes a WSGI `app`: gunicorn --workers 1 --threads 4 app:app
+Standalone Python 3.10+ standard library. Default source: exact embedded verified
+Pass 1 candles; no token, broker download or companion files needed.
+Run: python app.py                 (HTTP service + automatic study)
+     python app.py --run           (one study, no HTTP)
+     python app.py --self-test     (synthetic checks only)
+WSGI: gunicorn --workers 1 --threads 4 app:app
+Routes: /, /health, /start, /status, /results and /eurchf-h1-short-pass2/*.
+Env: PORT=8080, EURCHF_PASS2_OUTPUT_DIR=/tmp/eurchf_h1_short_pass2,
+EURCHF_PASS2_AUTOSTART=1. Optional EURCHF_PASS2_DATA_SOURCE=oanda requires
+OANDA_TOKEN and official OANDA_API_URL; identical historical source is mandatory.
 
-Default data: embedded verified Pass 1 candles; no broker token required.
-Optional EURCHF_PASS1B_DATA_SOURCE=oanda requires OANDA_TOKEN and
-OANDA_API_URL=https://api-fxtrade.oanda.com or https://api-fxpractice.oanda.com,
-PORT=8080, EURCHF_PASS1B_OUTPUT_DIR=/tmp/eurchf_h1_short_pass1b.
-Routes: /, /health, /start, /status, /results; descriptive route aliases too.
-
-Guide: FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md. The user clarified
-that this is a successful research guide, not rigid pair-independent rules.
-This pass resolves the distance boundary before conditional features, retaining
-CHF diagnostics and both existing exit models. RR stays 3.0; no portfolio tuning here.
-65 unique geometries; 10/20/40 assumed adverse ticks; two exit assumptions.
-The screen and all A/B/C parent ledgers must reproduce before evaluation.
-
-All history is exploratory/in-sample. MID candles/assumed costs are not real
-fills. Full normalized accepted ledgers and source candles are in the ZIP.
+Our forex research template: fixed A/C anchors, one conditional feature at a
+time, RR3 unchanged, 100 rule settings / 600 cost/model cases. Study neighbouring
+thresholds, sample size, weak periods, marginal frequency, equivalent streams
+and winner influence; no automatic max-row selection, combinations or orders.
+User instruction: find plateaus, not spikes, and avoid overfitting/curvefitting.
+All previously inspected history remains exploratory/in-sample.
 """
 from __future__ import annotations
 
@@ -52,7 +48,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, make_server
 
-VERSION = 'EURCHF_H1_SHORT_PASS1B_STRUCTURE_DISTANCE_BOUNDARY_V1_2026_10_01'
+VERSION = 'EURCHF_H1_SHORT_PASS2_CONDITIONAL_FEATURES_V1_2026_10_02'
 PAIR, SIDE, TIMEFRAME = 'EUR_CHF', 'SELL', 'H1'
 UTC = timezone.utc
 START = datetime(2005, 1, 1, tzinfo=UTC)
@@ -61,10 +57,10 @@ HOUR = timedelta(hours=1)
 TICK, PIP, RR, WARMUP = 0.00001, 0.0001, 3.0, 200
 COSTS = (10, 20, 40)
 MODELS = ('SCREEN_PARITY', 'STOP_FIRST_GAP_STRESS')
-LOOKBACKS = (20, 30, 40, 50, 60, 80, 100)
-DISTANCES = (0.0, 0.025, 0.05, 0.075, 0.10, 0.125, 0.15, 0.20, 0.25)
-BODIES = (0.75,)
-RANGES = (1.25,)
+LOOKBACKS = (40, 50, 60)
+
+
+
 EXPECTED_SOURCE_SHA256 = '9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac'
 EXPECTED_SIGNAL_SHA256 = '9a36cfad51d6b376841bd4bbe8b174bd42b22e4dbfebd0b80e1766f4900b0da4'
 EXPECTED_CANDLES, EXPECTED_RAW, EXPECTED_ACCEPTED = 137819, 243, 240
@@ -72,8 +68,8 @@ REFERENCE_B85 = 'c-pkRP0u|$Zs7M_yq-417m-qSSp-=oNP3kl1_Q@4F*2|N+lvW;eD_GDdd?}4VyX
 REFERENCE_SHA256 = '83cb2474f77f8f6ba7ccbffd5311b656e23f3b103942be25f564bb0271e98b23'
 
 # Immutable Pass 1 source snapshot; no token or network is used in default mode.
-PARENT_ZIP_SHA256 = '5de45d96baf5a3b1d40a735c1d254fe1c38c14e4b5b1f5a787ad4b7459de0de7'
-CONTROL_CONFIG_IDS = ('RAW_ENGULF', 'SCREEN_CONTROL', 'M_L060_D010_B075_R125', 'M_L040_D010_B075_R125', 'M_L060_D010_B075_R100')
+PARENT_ZIP_SHA256 = '12d758cd671294de08bca6f200a61952c293745fad51646613e0dc02daefbc36'
+CONTROL_CONFIG_IDS = ('RAW_ENGULF', 'SCREEN_CONTROL', 'M_L060_D010_B075_R125', 'M_L060_D010_B075_R100', 'M_L040_D010_B075_R125', 'M_L050_D010_B075_R125')
 SOURCE_CSV_SHA256 = '862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196'
 SOURCE_CSV_BYTES = 7324607
 EMBEDDED_SOURCE_B85 = (
@@ -15354,12 +15350,12 @@ EMBEDDED_SOURCE_B85 = (
     '&QZv@q{-+OYTR9lK>0~m7Ia4j<vX>ed9#;z&#~|94)FWjg%qR+jOQwQJnq)xf!zN-i2_^bW?L0`kn^?)u5&Aa$vXA7WN+T=W!?qp;+aKio5hP!>YH?z*1x3('
     '%^SXCp91M2`JJG0ZmZBB=cgS;OM2c+dVX?a32Mi31<^uA$bYip{{p4rA3O'
 )
-PARENT_EXPECTATIONS_SHA256 = '29fdac3eca679f26f7720fa7d2300cdfb12bf7fe5e7d8e27098c78b13566a7ca'
-PARENT_EXPECTATIONS_B85 = 'c-qC9ZI2wq6@~xHes)%MU+UJqd?N%95&>j8ilQhQ)hk(Hc9FdVq$vMArxy%19-Bey-jOA1G~3hl_S8M+RQEssdr^Cz-`&n}cs9q^^ZDV$zbj|E_~1fItxd;jrH>w~%sRT5RG*~5Qn-#%qN??lym?<;m1d$^q?xE+Ji6%5ZeHNdx6kXCFD^dF6oD^quGiJqhpT}$9)I}v!^dBI`nS(N*{;5MaeKJE>fhi}N{=q)kF$S&dv$Yt`1WSZXSn>yM~^@L_>03=A3px<=|Av`tLy*NXIJC!{dIeG)4xGe^ZNGr)z%h%kH%kYA2o?Qy7;#Kc=)+LV;r7eeDEhq%$IB!39+Z*RDQY&7hPR{eRy&EeAaI+K45%(^WD5Y)Z4?Tw-s%m>-6a2yL5Qj?2D_fuj{j|Ej0}ByXQCS>h`c|zr8_A>9VM0&Mc<IJqs>*UVr%cSHI5qsLe2+QZswzO1(8JWeu-FeF>&_rCJtMDkC!GDQ?s&&rH;?Bp0vV7M%&(I&*t-i$>ly;2*B8x9KLc|2=vK44r5Z^+~;Zo4{Z?kC7{TZ6n;O$yj7rmCLB1&LKWR3woY(mV3d#4*`RCTw+|}_&`ZqcZ0!l&WYGO8(AuJCK!$k_(T{Iqia5E9*v6ioY7D38J$@?RPtn3)2J4cQfnZfmuS6^v6*;13WJ{rgWeYgdJP6X3IpcvGKD!RUCtW2p@5Q*lrUM?IK{%wgu)xcJrRV`1{$tSBBEyW35wA(7h$VxtD<WvyfC~XF{o?9ga?n=C9T|f4~cmC<yVJKK70J+>EY84zdAg5`uO7~PyR@Ch~rXW>C%}KbPWviOKkR#3h|60YEh(=ocvr;@#cVkfg-&ViY7BpRnIhKYg!3VcyCl$rL_{iav{`=A*0(=DGAkNDX#(ijQ5a=eV|atsaesIO0bd2ev+X<uw14>j^5~*pg1z%6QL+9GqB~S!A1tR-s|F;%UGeI)Jf7X=?%Swsf4{)ky;e!3CV~w_K=J}4#n%z;m4&z<I-V!;I0w{(SF)Np52@a%$(b~ka%;rClb+3RwayKmbPY;RtD^Y)mDs|8)wg{^*LO!Wib!q-b4^Da_Ti5F%i72^Q%DoYzjX5@{6aBzx;g1gh8f9Stys{DM3<E^ssULc!3~2217aygS<fkU2X`VGTbddev5~QD%MvWnT9n~5?5+NTbm9Kr}&5|=cxm00a0(BCaj$;jg(p%ReuWtZ=3%Y4pc7{KC%P|P{Pu^#Gw3+lU#6xB~3VkjL+6BP#1FHrKQWLbxDI=;559KW{8-8eG2=)a7rEbg@7Lbg1BT2$Y?}?4e}`aKtLAc+t$h0x_71d;W6NHmvl90fCiWtJ&}V_Mv6tFuF6$fwhs4`cspyL;;0jmWH`LSnt3&`hLSMMdgp|lWpZB*bbk&Yok>&CD26(V|99dbC358MY)IuOnrA5o=~4(oO{6FV$d(8>CxU>G;6uw$1V@Kan7Or1ie(?zMJ0RVzEWNi3m-_j&&5C{ZNj80c2b3V`Nwms14uwVk3uA2+0Ud8k|bwNisnT5L>#;)n==|L%*fngBy9c8)1{W~wZ?!eMgr9iNZcBL=tCS7k<YQ}PWrG54iBai@YmRtjFs5nJCjc2l5;lTaQDwn<N+IBQ%Av{vV8h5hRSSdvo&!94Am5~SQ1nRpEGmuZm_x>t$`NWNhkK;;o<Zm!NY@!?feN_^E`S%IXk6nuno2qEIHLUq}l^<06b8dZFz!av{a@xU%A2|pfA1k><YgS$PZFurnC@lxTW+a5O>z;RUrO)_#6vy_)DU6_;V`x@R&I77$$;_mIu1@wDrFPvb1hTg-2+JKLA5I0s|I6;ovZX6vFg2t<XLOb{ut)*%NzfG*ja?5hGElqfcJb&9>rQ6^S3~YRGZWagJ4f3j@6dL#9jQNkkbh1%l7NJfz6{P88rcQViHbxZg5+EnYLwME;#N3)MLxK-fr*TQ)*ZvT$?64U=RDyYC4F-X8_NL{-=*NGN{fFApN#GYhK4i#iGXJf_Od!GfksI9W@cHX1iJPlN$egUpzscSES?PRs@AVe8)7OvJ?B7hs^RM`<$;YfN<22X_WI?+FIo9|kxpM&BIC8!*5*>;eO4-ge{`FU|R_DzPgJP{i%95K4iqi@nY#ve08{=j_=26Ux$QpwU)@V|!Q$FXR(7Vha>nb6+FR+6WianMvj`6Zt+h;$Gh2yjp=(V5I#l4m#{iT9I>d)08~YE9XwXgM^_1fMaBZDYJH|BT~;s9Z91$#HH1F^$rWO6^w>xF-8v7kr7U3oBL|T9!NZtW^7(nA>YEK1f5AU0D`gP?IbzkR3;E8u+lUL?XF@AfqX=rfB~eB>_bHX4ZH*daV1#uS?8!0wM8?p`%1<hOgxlyq_izw$}ngt^O>ZhKsnf0OTg{rQ=uqZ9--Ktoa9`Z=8kj%Ptj)r7%?o*5rboL^0E>)R0nqx8MGuuKL$m-35C55#ZS3puY6(0pK!mf8Tl=7Gu>A;C=BHkwX{g4x4Ft~(Wm#dc%?NgwU(z~(}4ilzM0t8VS{xuB}mB`3Lk=qS1Zz9?QhcX>Qk%jkrkG;z~L6ng@1)X-U&n0z^3m=l_kx&xJhvDwJM53R-I+E$Oyl<>!?%nupSLK)QSArxxObDcz+mB$whLKa8%L=%lp8fiHb<dB{`ADIam;fkufQP!hjM%swcu=!$w*$E7#16R)c>SnbvSd+SKigx*8AhG;&SK-Z7;-MpfkiFYgHk-5&<NL_LUv>fiytw-XDz#rMJ?TkenT^z-3ipsg^FY!5CB5>$$v2!j;Mm5@`tF04L+X7yAD(&Z?#)TJ;F3{>WpVMksFv%DPjp=V5M-B~8?=N-;07X}!R!!UNCkTc0eNpQ8>IfSL{eW(+ufCUydBcK#Il~(DU!%`*KmN}`07m5kZ(B4w2og3^Wq@xh@qVT?Yu?H0oq#F|O57=zkVe@i1lWs^L`9@;dUQv-#ndq747%NF0i#n_=qlYv1+E4&3!ALf%Hl_qtGFo^n3yn31=Bj01+1P`LhmsE@7-T*d!JayodK5OjdyIh%p6FC2N=u`(4jd+DBF!S(+b!ruZ?<H6y9c1ut@3OSJEEd+<ciM4Ahc*lm|*{1CU$*@;YSmvpK>nc_ap&96V(CPFco-;x4jRQsin1ga2ktC^HByi9`LAyt=SYajL)5A)RJ?BefKVXd-_;nVpqO_!ZzctN=7QE?y^-W@n1>M^6qzMAqy}Jz@SN2Z;R@(l~FX-gt6!X38KF8<ib;%sG=(<7B-h*X2*LXfp;e%P7;dyqM*1tVLu|au@yN72@=Q`0jY4=Ue3$OPDBCPfL3*dNsECL(LGsZ<`I1<BuCoP+Fcj^UJAo6kT=wkhD>Ec-V+MCI|{IpCkVuSQDEHK9HqzZ4z16^0t<|!5fqBuATV(v3Wo6Dwpa}s!DA-$%~xvEav%6n@yNMQA7o201Xzi>opz~4Lz3}*_2FKg;jB8b9T6w&BzU;k4uQ^~6BsExhvp1Ri#ySYMEDxwD>St_4Be>9gJ2Y8Rl!ik*dCJw$ISTFIafi-Xa%-2P=$PFo!Ehhhti8I+j~hAXoSm|^a6uaBBToV*f_ODpq#YI+j~43PzmTAZoqK6wN%Vp)Z#ruQfO!^wM=E;FIs&&z-I3I%Eb;uJd|uCPU-G(GiLE^Z_Dj28$gni63ooqGuKy`_}Bjdl*aK('
+PARENT_EXPECTATIONS_SHA256 = 'cc46e34b1d340713969c94ecc2bd4aba5df08e5421976e19e56f990619010db8'
+PARENT_EXPECTATIONS_B85 = 'c-qCBTaO$^a)tlPJj;!U$cV@cy~%6sVgXqaC>e%f7>&Hj193@#ob@hX_`mxkR}x8aNVYJnX%HY9&FZSWd>QAQtSbKJ|K8Nz=TCQYoS)9|!+ddm`QKH{Z$7`#Tx-*@TJEFA%CnB1Jk>H;LsFJHa*nFr8<kf2>Z&}6YfjCRmYdIR`qSqxapt=hb<CGHpBqQu%jeJ5?GNYMfonYZ;@{6-e*LF^`|6MT=;tr*&Ud%{M;yxZ+0Fd>?0>zxeg5qHm*-<X#o^!m;mMa@etrJ-izk2n{y*@G+h_k%pWcr1U!S$7&-;(K)O>dL;&xvPzsJR2?vF|-eRlJg`uFqC?HS|z;^y;zViGxtqbDqda^d`sqj1pevmeec?_SLM<IU%Sub=-kpPlR7dDOd#YoO`;+09RM{^hbSZ-01JpYCg^ql-Vic)o7$&a3vj=eQD`vbu>$a?Pb!!XYo}-+unp>k%KdImR<plVVc2x8^yoQEKA85{7qC&5JAN5ym!Caqd;7F*i)f&6}r1W5Rc1?w;S_BJb<)-)^7n;b!;$`|JZSbmqm}C-+|31O~In7*?g!Hlld-G#0z5N**<|NTf1CGg?kM^MhcJ$ABS~IH6yu-~&@CdKe6DX2jyfoSiaX35I(*d?5@ZXj+-oM&s<=4DBr4(3mAdlT9h=8r5SmwFUxuj@C1~xTjL@g`r#sgFX}nehUV<7Y2;qiNXsiotegAD4-;eG6o9^CwusnP<W@i7lM%6z=dl|5m60of?{-&oW!g6s%V-fS?FF)F}Q2PfQO9P6D{j<ghYJ*&9~=2{`tvw-=F{V#kc40zJK!Nci;V<>Jax!h102s5OfU;%P-g*Ar+|@il|3UIUAL0NyWPz{uK)PAQUZ4o2tclrhRE;Kv8<*Dw<l$QI=&!%@}EPpPDkEnk<zyfS=0|QgI9v3ORMpnkk1kYdTIcG#Hl4HE}^}^h!|N)8PxD$dYDY$xnxk3~9aBCDrm+p`qM4(eTt8S_@MNd$EFAWatT}5j2jFjNcE%+tN|)mky0nf$f32A`a%`w1bNkFOp&AieC$fce{Hb5#7_Oj6TfV){NZpfPL`VvWrL)D@Lu)QIfeOFX7T#N{AOmz0y4<LiRkr3B=E);1Az?{r!_~zB({ru<N}n<Wnj{kW>^sEZlN`fndE42D%@H^bQGp+6bUByqW-ekB5kwystWphc{G`qTGhIHVZtQ;v<G!rVh*nM7<T7uy(#Qh#HNmzXd_|;{TNc)sw<U<^Tc8n7Usu$RBZ%3$8HJgflRF_U?hYU|E*to<^-JHP{8AQF?BUhzZzdk}}YpT*pHpkVk+ZPND%BjmWS;CGs&4um_jDbPP-PRcU^F3?#owx=I?L0VYN-<RIrkv3S%~rKV=y;eJT=UIXWXIuVpcfmc}5R!iPc5{7&4LReXz9?F3p&jF;9l(I&4)LHy}5C=qDkh{&1%2710QV!^p7+ob+lmcW+gq#aOKu9P<^H2oG0;4dkwa$uZA6P}%N|V0GR*HoWoO+o{fDCP6(iI1(!h`(dwbcP6AfHEOPT^Lrqz{RbnULagN##NuN++K)8Z68(X)y>(zsoGC=3Z)z0auI!svVFNZvdi?R6r4zIaWPL9}dCc(R2d-8mm$;6C1uO>4ar7bKvmmk6*|G7QRwP!JlcBS%wQ#W~a^8QbE8_rI^_%p*oZ~O>*fDt1HnOXyJo&;s_odPcH}_9#ri8CoIkD=mnb<CUe*Z-vujOY8-I(+@J(~3Ve@RO4}F;A|>o%+QztNt$P!rN3Q`0id7I3gR{853j_@2+d%y5`73fd{|hml|CzF#pRm}0VWRMTIFwVNK>W#pD6M;^@E#b-?_h!MVZq4)GvkS}pr`Ng4#thv>H$~2BtxcQ-kNis6;f{v-p}y43;a74c`aQ^Pkk@k9J59FEeo$k{IyiXi6Dp>#~0ARzmlN&!`n_eXT~3~mb#XPOuKxUbX#*xqzR{j$ZJzFKy8S=Xo`>Nb2&zKd?FI$a1!FADH)|G1tt%Qeh3PRvols?WEIcp8YHARp@S)`q@8Px{6ZAC@2kQMdV*yrG<qSgh(;s&LQb{RmeyVr=`wPbo`p+89YHNiKGG*bK@UfPVYD?+V*`Fc+>Sv(aB3806!e6WX;)!E(kYX3LJNv>d3}%KBPh5g{9wUhKqF*KLfgusHr@Kbk8%mK%zZG#3SFp;YN&~7G=^(FRv#YZ8?LGok}M;!SP<y2tLOxJ8ewXdVxNgGB%&+?gcVAy4o5TUD#5Y#Ze&7N#=!JL1!Ee%En+pzu$IT7Kou$n>%;*>JeFQq+LoRJ7unm}SJ4Y}QW0}etRlyyH3H?NRoNC;11bT%!wDqMf?$b}i;56okQ9dDMcAAwz&~j%Hb;o`W98xiA|6XNNQgkiu1D_;nup5<kQ7penXxTj7c!Bl?z}+AnM|{-LUqAGV)9#AR=sy*oZh+>9qzl}rW%uIH4xE=?qOmlp5HQ|kC-dseirx=!H5U4fMBOt9V5t*V7A^9GPRF^B+osi*+~iv*`y{7FyPm4Z&TJR?t4?H>O=uA2rK5gro_tcu<%yMG(P3T99(kFR^-=*pG-bn9tZ>vTMh9t&yH$P4UxBbMRv$s=LFsG$pxoujFwoER_a0-fn#a$iBOQ^QIL~vJB-C8*|_|2gYy%!pqfio1Upky2k~pLpmajKMIxk4<7V?h7%()1L=nCFsH+zi$(q(~-rAd!6aT&d1Me2m-jrNpqN!yFDp$2n1cM$AgPt%nx}ObWz+gEY0)v?B6}fL)d6D<-J{<~!$Z0=>V5kYN)JiU7p~uuNNT+5qO6ojt(Uz0MehAWwm5Ca$Z&YZtzJ|@(7zb2X%QWxXoc@#=@gU!DU9ET})NuBxfDXTsR+v$7B`QI0+|T|95{?Q0j{8V6!L_71g1R~PR<*XGzPha5Gx9VFM$_VB>@Bxp1KQH&v08Bi5|5=Bdk<V8-!SGm_)3}q5PT<J7eVyAkcm|$W|{}%x-0uaY#vc3U;ya@iBgjS8h8l^;v&ju*c{cPwrF1Jv668F6OSbwM0@hcV9?0qO45<{c9DzbfZMZ6p~(9_2giOQ%PcpwE*|g{eG<Tk;X7Lni78a_B59}&rFcq%SBi08=G6FT=KM!4IVxZHd$Q(Rnqlv`jYSVt4Gu>+MJ>$<iSIqCu_t|&zLqRn!>Ki!35yN{r2WmrvJM}j+mtBnTZ=ssB3`XXd$qqyL%e<K0&@gIs5z@;c@0DQAPi9hi@qaOW}0(JOCi12swfVoI`e2@)R0?r)TuVSM*|LZB7b(Np9lsy9tOT>FY3WCC~;1S_7){`iEFTs3XF`WoKP50B3Si87<~Ak6|+h;S-cwj!!TZ>2-2qRXJ4wzNQH(~QYjrnDq~bt3GniXV9?`XkV|%<9?XL5_?{)w&ixVj8ZhuK44n1@Q4R^p*)N14Ww*-6siiK=K7wW~R0q=K$TQcaFb@J$=FYIg7Q(Eog8I-6!&(oPiHCWIE6arg2IMgGJ#nNf$wel(+Px3qv>#EpkP2AfB<>89LZ|Y|y-PS%hHaUXYn03}p&8m6QSH)TFCiV7p%+<>)r%vjcqH9O0snx-W(79S@|AQW1(I)&r2Xi7x|E4-GRIhyY%K1uwt^N;>$RZ(I>AUbuRdl9%w)7Eu{<=^V4kbyV`bwACLT*ZkYJGcN=jH$*HVuxuCE@C!U8A0lnKNyv4&6??3%T@R|p`nRT1_oW35q3gT+Lk?F$&Rm|JkjO_=Yi6Z<`|-!fs3`EXRa-c9eM&ajiP_{e1Zo~_E39hEnGEsWrg!4E7tgW@aZSwKLF-j+9uwkECAOWSW_SBpiZYI_HTJ>swTrR3yU_A?OK5IfTw_p{=IC?HmhgubMiXPpaYuzjZr)nKV7s+LwCJP<@pf|QX<2js(%G>|u{e<Bp*a1<WrZZ~QI%>8~XNt|E3I{o-8sDOGR#9ecARm+7akZ6gNo5BsSz%uqhTv6tfU>UT-U96evYOt7!2CAh=!clsu*=qenDCprRJkD+I{oYj&yQ`qPp09y|IGR!R8(8>_m)G0XA3*_g`|1U&<&|I-ux3`Q=|Cg5T5}_)SkHaZ<PmwotL}IHN9$#w*Ncx8h=)D-a804u9B3eRLbN4aNhoxCSt`)-c;iu+4+BvI)&(v>TZ2I$8O8fDG{X=kI+~Jrr6ET9zkNtLkvh>N_t__kVO__{!~sA&mRyKwcJy{{hv#d_g+to+|MfwLj&Z4T=+Ff(_?-{seSa&>y5HI^s=8mf5T*&6fUg^mxkBcoGRMR<*iuW!%EbXlJeF+i$6=81;Ovc4xsq(K??<y_KZ~Jn-1!C*|MmaMxVQ%'
 
-RESULT_NAME = 'EURCHF_H1_SHORT_PASS1B_STRUCTURE_DISTANCE_BOUNDARY_RESULTS.zip'
-OUT = Path(os.getenv('EURCHF_PASS1B_OUTPUT_DIR', '/tmp/eurchf_h1_short_pass1b')).resolve()
-PREFIX = '/eurchf-h1-short-pass1b'
+RESULT_NAME = 'EURCHF_H1_SHORT_PASS2_CONDITIONAL_FEATURES_RESULTS.zip'
+OUT = Path(os.getenv('EURCHF_PASS2_OUTPUT_DIR', '/tmp/eurchf_h1_short_pass2')).resolve()
+PREFIX = '/eurchf-h1-short-pass2'
 LOCK = threading.RLock()
 STARTED = False
 JOB_LOCK = None
@@ -15448,37 +15444,50 @@ def read_status():
 
 
 def config_key(config):
-    return tuple(config[k] for k in ('lookback', 'distance_atr', 'body_min_atr', 'range_min_atr', 'close_max'))
+    return tuple(config[k] for k in ('lookback','distance_atr','body_min_atr','range_min_atr','close_max',
+                                    'feature_name','feature_operator','feature_lookback','feature_threshold'))
 
 
-def distance_label(distance):
-    units = round(distance * 1000)
-    return f'D{units//10:03d}' if units % 10 == 0 else f'D{units:04d}'
+
+
+
+ANCHOR_IDS = ('M_L060_D010_B075_R125','M_L060_D010_B075_R100')
+ANCHOR_LABELS = dict(zip(ANCHOR_IDS,('A_CORE','C_FREQUENCY_RESEARCH')))
+FEATURE_SPECS = (
+    ('signal_close_location','le',0,(.10,.20,.30,.40,.50)),
+    ('previous_body_atr','ge',0,(.10,.25,.50,.75,1.00)),
+    ('previous_close_location','ge',0,(.50,.60,.70,.80,.90)),
+    *[('preceding_rise_atr','ge',n,(0.,.50,1.,1.50,2.)) for n in (6,12,24,48)],
+    ('prior_atr_ratio_096','ge',0,(.75,1.,1.25,1.50)),
+    ('prior_atr_ratio_096','le',0,(.75,1.,1.25)),
+    ('reference_stop_pips','ge',0,(10.,15.,20.,25.,30.)),
+)
 
 
 def make_configs():
-    configs, by_key, membership = [], {}, []
-    def add(label, role, lookback=0, distance=None, body=0., candle_range=0., close_max=None):
-        row = dict(config_id=label, lookback=lookback, distance_atr=distance,
-                   body_min_atr=body, range_min_atr=candle_range, close_max=close_max)
-        key = config_key(row)
-        if key not in by_key:
-            by_key[key] = row
-            configs.append(row)
-        row = by_key[key]
-        membership.append(dict(requested_label=label, stage_group=role, config_id=row['config_id']))
-    add('RAW_ENGULF', 'CONTROL_RAW')
-    add('SCREEN_CONTROL', 'CONTROL_ARCHIVED', 60, .25, .75, 1.25)
-    add('M_L060_D010_B075_R125', 'CONTROL_PASS1_A', 60, .10, .75, 1.25)
-    add('M_L040_D010_B075_R125', 'CONTROL_PASS1_B', 40, .10, .75, 1.25)
-    add('M_L060_D010_B075_R100', 'CONTROL_FIXED_FREQUENCY_C', 60, .10, .75, 1.00)
-    for lb in LOOKBACKS:
-        for distance in DISTANCES:
-            add(f'M_L{lb:03d}_{distance_label(distance)}_B075_R125',
-                'STRUCTURE_DISTANCE_BOUNDARY_MATRIX', lb, distance, .75, 1.25)
-    assert len(configs) == 65 and len({c['config_id'] for c in configs}) == 65
-    assert len(membership) == 68
-    return configs, membership
+    configs,members = [],[]
+    def add(cid,role,lb=0,distance=None,body=0.,candle_range=0.,anchor=None,feature='NONE',op='',n=0,level=None):
+        row=dict(config_id=cid,lookback=lb,distance_atr=distance,body_min_atr=body,range_min_atr=candle_range,
+                 close_max=None,anchor_id=anchor,branch=ANCHOR_LABELS.get(anchor,'CONTROL'),
+                 feature_name=feature,feature_operator=op,feature_lookback=n,feature_threshold=level)
+        configs.append(row)
+        members.append(dict(requested_label=cid,stage_group=role,config_id=cid))
+    add('RAW_ENGULF','CONTROL_RAW')
+    add('SCREEN_CONTROL','CONTROL_ARCHIVED',60,.25,.75,1.25)
+    add(ANCHOR_IDS[0],'ANCHOR_A_CORE',60,.10,.75,1.25,ANCHOR_IDS[0])
+    add(ANCHOR_IDS[1],'ANCHOR_C_FREQUENCY_RESEARCH',60,.10,.75,1.00,ANCHOR_IDS[1])
+    add('M_L040_D010_B075_R125','CONTROL_40_BAR',40,.10,.75,1.25)
+    add('M_L050_D010_B075_R125','CONTROL_50_BAR',50,.10,.75,1.25)
+    for anchor in ANCHOR_IDS:
+        label='A' if anchor==ANCHOR_IDS[0] else 'C'
+        candle_range=1.25 if label=='A' else 1.00
+        for feature,op,n,levels in FEATURE_SPECS:
+            for level in levels:
+                cid=f'{label}__{feature.upper()}__{op.upper()}__N{n:03d}__T{round(level*100):04d}'
+                add(cid,'CONDITIONAL_ONE_FACTOR',60,.10,.75,candle_range,anchor,feature,op,n,level)
+    assert len(configs)==100 and len({c['config_id'] for c in configs})==100
+    assert len({config_key(c) for c in configs})==100
+    return configs,members
 
 def atr14(bars):
     out = [None] * len(bars)
@@ -15513,7 +15522,7 @@ def bearish_engulf(bars, i):
     return pc > po and cl < op and op >= pc and cl <= po
 
 
-def make_features(bars):
+def base_make_features(bars):
     atr = atr14(bars)
     prev = {lb: previous_high([b[2] for b in bars], lb) for lb in LOOKBACKS}
     raw = {}
@@ -15532,7 +15541,23 @@ def make_features(bars):
     return raw
 
 
-def selected_indices(config, features):
+def make_features(bars):
+    raw=base_make_features(bars)
+    atr=atr14(bars)
+    for i,row in raw.items():
+        prev=bars[i-1];previous_atr=atr[i-1]
+        prior_values=atr[i-97:i-1]  # 96 completed ATR values BEFORE the numerator
+        if len(prior_values)!=96 or any(v is None or v<=0 for v in prior_values) or previous_atr is None or previous_atr<=0:
+            raise RuntimeError('Conditional feature unavailable after frozen warmup.')
+        row['previous_body_atr']=abs(prev[4]-prev[1])/previous_atr
+        row['previous_close_location']=(prev[4]-prev[3])/(prev[2]-prev[3])
+        row['prior_atr_ratio_096']=previous_atr/statistics.fmean(prior_values)
+        for n in (6,12,24,48):
+            row[f'preceding_rise_atr_{n:03d}']=(prev[4]-bars[i-1-n][4])/previous_atr
+    return raw
+
+
+def base_selected_indices(config, features):
     result = []
     for i, row in features.items():
         if row['body_atr'] < config['body_min_atr'] or row['range_atr'] < config['range_min_atr']:
@@ -15542,6 +15567,24 @@ def selected_indices(config, features):
         if config['close_max'] is not None and row['close_location'] > config['close_max']:
             continue
         result.append(i)
+    return result
+
+
+def selected_indices(config, features):
+    indices=base_selected_indices(config,features)
+    name=config.get('feature_name','NONE')
+    if name=='NONE':return indices
+    key=('close_location' if name=='signal_close_location' else
+         f"preceding_rise_atr_{config['feature_lookback']:03d}" if name=='preceding_rise_atr' else name)
+    op,level=config['feature_operator'],config['feature_threshold']
+    if op not in ('ge','le') or level is None:
+        raise RuntimeError('Invalid conditional specification.')
+    result=[]
+    for i in indices:
+        value=features[i].get(key)
+        if value is None or not math.isfinite(value):
+            raise RuntimeError('Missing/nonfinite completed-candle feature: '+key)
+        if (value>=level if op=='ge' else value<=level):result.append(i)
     return result
 
 
@@ -15687,11 +15730,11 @@ def fetch_history():
 
 
 def load_history():
-    mode = os.getenv('EURCHF_PASS1B_DATA_SOURCE', 'embedded').strip().lower()
+    mode = os.getenv('EURCHF_PASS2_DATA_SOURCE', 'embedded').strip().lower()
     if mode == 'oanda':
         return fetch_history(), 'HISTORICAL_OANDA_MID_REFETCH'
     if mode != 'embedded':
-        raise RuntimeError('EURCHF_PASS1B_DATA_SOURCE must be embedded or oanda.')
+        raise RuntimeError('EURCHF_PASS2_DATA_SOURCE must be embedded or oanda.')
     raw = zlib.decompress(base64.b85decode(EMBEDDED_SOURCE_B85))
     if len(raw) != SOURCE_CSV_BYTES or sha(raw) != SOURCE_CSV_SHA256:
         raise RuntimeError('Embedded Pass 1 candle CSV failed integrity; research stopped.')
@@ -15723,11 +15766,11 @@ def parent_controls(bars, features, paths, configs):
     def check(name, actual, expected, tolerance=None):
         passed = actual == expected if tolerance is None else abs(actual-expected) <= tolerance
         rows.append(dict(check=name,status='PASS' if passed else 'FAIL',actual=actual,expected=expected))
-    check('pass1b_unique_geometries',len(configs),65)
+    check('pass2_unique_rule_settings',len(configs),100)
     check('raw_exact_engulf_count',len(features),9669)
     for expected in parent_expectations():
         cid,model,cost = (expected[k] for k in ('config_id','execution_model','cost_ticks'))
-        prefix = f'pass1_parent_{cid}_{model}_{cost}T_'
+        prefix = f'pass1b_parent_{cid}_{model}_{cost}T_'
         indices = selected_indices(by_id[cid],features)
         accepted, invalid, blocked = replay(indices,paths,model,cost)
         digest = hashlib.sha256()
@@ -15872,138 +15915,9 @@ def period_definitions():
 PERIODS = period_definitions()
 
 
-PROTOCOL = """# EUR/CHF H1 SHORT Pass 1B — predeclared design
+DECISION_GUIDE = '# Reviewing plateaus and avoiding curvefitting\n\nUse complete validated outputs only. Hold both anchors and scope fixed for\nthis pass. Compare a feature with its own anchor, across neighbouring thresholds\nand movement windows, both costs/exits, eras, recent years and rolling losses.\nRead counts/inactivity before celebrating return. An isolated winner, a sparse\nsurvivor or an untested edge is insufficient. Identical trade streams across\nseveral settings provide no independent confirmation. Winner-influence values\nare descriptive and not an executable trade-deletion backtest.\n\nNo single automatic score decides that a plateau exists. A long lifetime-positive\nrun can coexist with worse drawdown, low counts and weak recent/policy periods.\nLook for an interpretable family that remains useful without selecting its peak.\nRetain the minimum complexity supported by the whole evidence; several filters\nmust not be combined just because they work separately. Declare any later\nlimited follow-up before inspecting results. Stop if neither branch supports\ncontinued research; do not indefinitely rescue or fit the latest losing year.\n\nThis is the same examined history. Never relabel a split as untouched holdout,\nclaim multiplicity-free significance or a guarantee against overfitting. Final\nentry freeze precedes RR, independent confirmation and exact P31 admission.\nPortfolio feedback must not become a parameter tuning target.\n'
 
-## Purpose and guide
-Use the 24 September AUD/JPY research template as a guide to disciplined
-discovery, with the user's 1 October clarification that justified adaptations
-are welcome. Resolve the structure/distance band for the promising exact bearish
-engulf family after costs. Do not freeze the largest backtest row as a strategy.
-
-Pass 1B is the predeclared follow-up to reviewed Pass 1, before conditional
-features. The strongest family was at the smallest tested distance (0.10 ATR),
-so map that unresolved boundary before freezing an anchor. This is the user's
-authorised flexible use of the template, not a new mechanism/filter search.
-
-Lookbacks: 20,30,40,50,60,80,100 observed H1 bars.
-Absolute distance maxima: 0,0.025,0.05,0.075,0.10,0.125,0.15,0.20,0.25 ATR14.
-Body >=0.75 ATR and range >=1.25 ATR are fixed in all 63 matrix geometries.
-Add raw engulf and fixed C (LB60/D0.10/B0.75/range1.00): 65 unique geometries,
-68 memberships, 390 model/cost cases. Screen and A/B belong to the matrix.
-No body/range/RR/session/calendar/conditional-feature sweep is introduced.
-Structure uses ABSOLUTE distance of signal high to the maximum of PREVIOUS L
-H1 candles, current excluded. Zero distance requires exact high equality;
-there is no snapping/rounding tolerance. Treat it as a tick-resolution diagnostic.
-
-Default data are the exact embedded verified Pass 1 source candle CSV. No
-network/token is needed. EURCHF_PASS1B_DATA_SOURCE=oanda optionally re-fetches
-through the unchanged official candle-only route, requiring OANDA_TOKEN and
-the identical source hash. Any changed history fails closed, without replacing
-references. The fixed cutoff does not advance with deployment date.
-
-All 30 parent cases (raw, screen, A/B/C x 2 models x 3 costs) must match raw
-signal hashes, COMPLETE accepted-ledger canonical hashes (including open rows,
-time, fill, stop/target, exit price/reason/R), counts, occupancy and summary
-metrics. parent_controls.csv and parent_expected_cases.json expose the gates.
-The archived 240-trade screen field-by-field gate is retained separately.
-
-## Frozen execution and data
-OANDA completed unsmoothed MID H1; EUR_CHF short only; 2005-01-01 through
-2026-10-01 exclusive. The first 200 observed candles warm all entry studies.
-ATR14 is Wilder recursion, seeded with TR[1:15]; the signal's completed ATR is
-used. Exact bearish engulf: previous close>open, current close<open,
-current open>=previous close, current close<=previous open. No session, weekday,
-daily-trend, policy-date exclusion or RR search. One standalone configuration
-at a time; no currency conversion, NAV compounding or portfolio admission here.
-
-Signal timestamp = candle start; reference entry = its close, timestamped one
-hour later. Stop = signal high + 0.00010 (10 ticks = 1 pip). Target = reference
-close - 3*(stop-reference close). Assumed short fill = reference close minus
-10/20/40 ticks (1/2/4 pips); target/stop stay at reference geometry. Risk
-denominator = stop minus assumed fill. An invalid nonpositive target or target
-at/above assumed fill is rejected BEFORE p0, and is exported. Entry at/after
-the frozen cutoff is also ineligible. This matters for small raw candles.
-Cost assumptions are scenarios, not measured quotes or a maximum realized loss.
-
-p0 is replayed for EVERY geometry/model/cost; open-at-cutoff trades occupy the
-strategy and block later signals. Exit-candle signals may enter at that candle's
-close. Fixed price barriers permit cached first-touch paths; rejected fill
-geometry and occupancy are still recomputed independently at each assumed cost.
-Completed ledgers alone are never obtained by filtering an earlier p0 ledger.
-
-SCREEN_PARITY retains the old screen: next-candle onward OHLC barrier test;
-if both barriers touch, nearest-to-open extreme is assumed first, tie stop-first;
-barrier fills and exit-candle-end timestamps. It must match the full archived
-240-trade screen at all three costs, as well as source/raw-signal fingerprints.
-Any changed source/history/control stops the run before discovery results.
-
-STOP_FIRST_GAP_STRESS uses the same signals/entry assumptions: opening price
-at/above stop exits at max(open,stop), opening at/below target fills at target
-(no favorable improvement), otherwise dual-touch bars lose. Known opening-gap
-exits are timestamped at that candle's start; other exits at its end. This is a
-sensitivity model, NOT a worst-case bound: MID H1 cannot reveal intrabar jump
-execution, spread blowouts, actual quotes, financing, or fills during closure.
-Both models disclose next observed open and any delay after assumed entry.
-
-## Pair-specific adaptation
-Add pre-floor, floor-period, 15 January 2015 and post-event diagnostics and
-identify every accepted trade exposed during that day. All dates are retained
-in full-history results. These are event/cohort summaries, NOT counterfactual
-trade deletions or date filters. The SNB introduced the minimum EUR/CHF rate on
-6 September 2011 and discontinued it on 15 January 2015. Day-level boundaries
-do not claim the precise intraday announcement time.
-Primary sources:
-https://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906
-https://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115
-API candle-parameter reference: https://developer.oanda.com/rest-live-v20/pricing-ep/
-The candle-only request route is retained from the successfully run Pair #9 code.
-
-## Reporting definitions
-Full accepted ledgers are normalized for a small results ZIP. Join
-accepted_trades.csv to signal_trade_paths.csv on (signal_index, execution_model).
-Each accepted row supplies config_id, cost, actual assumed fill, risk and R;
-the path supplies signal/entry/exit times, stop, target, reason and exit price.
-Open accepted trades remain in the table with blank exit/R, not a zero result.
-control_accepted_ledgers.csv additionally contains denormalized raw and archived
-control ledgers, now including A/B/C. Source candles, features and raw signal membership are exported.
-
-Candidate-only figures treat qualifying signals in isolation and can overlap;
-they are NOT executable strategy/portfolio results. Accepted metrics use full
-p0 chronology. Trade comparisons to RAW, SCREEN and A/B/C use actual accepted signal
-sets at the same cost/model; adds and removals are descriptive full-replay
-differences, not marginal trades assumed independent of displacement.
-
-Entry cohorts use [period start, period end); their eventual R is not realized
-period return. Exit cash uses (period start, period end], including a final
-completed candle's close at the cutoff. Both are reported. Monthly data and
-all rolling 12/24/36-month realized-R windows include zero-trade months;
-incomplete 2026 is labeled. Rolling R is additive R, not compounded percent.
-No realized R is invented for open trades, and no mark-to-market is inferred.
-Last 1/2/3/5/10 years end at the fixed cutoff. Eras are 2005-09, 2010-15,
-2016-21 and 2022-cutoff. They are descriptive, previously inspected history,
-not pristine out-of-sample tests. Source gaps are reported, never interpolated.
-
-## Boundary reporting and next decision
-boundary_trade_comparisons.csv compares adjacent lookback or distance cells
-using complete per-case chronological replay. Added/removed accepted trades
-include displacement, and open rows remain explicit. These are descriptive
-same-path R differences, not independent trading strategies.
-matrix_region_summary.csv reports positive/zero/negative counts by distance,
-with count ranges and median/minimum R. The zero-distance group is diagnostic.
-Neighbourhoods vary only lookback/distance; fixed body/range are not boundaries.
-All cells are reported. No automatic best row, anchor freeze or portfolio
-ranking occurs. Assess contiguous interior support, sample size, inactivity and
-marginal frequency before deciding whether to move into conditional research.
-If support is confined to sparse unstable points, record failure honestly.
-Review stressed-cost coherence, neighbours, frequency, era and recent weakness,
-execution sensitivity and policy-event concentration. Freeze only a few
-distinguishable anchors if justified; then test conditional features. A weak
-screen does not exhaust a pair; broad unsupported discovery is not a reason
-for unlimited searching. Entry geometry should become intelligible and freeze
-before later RR work, independent ledger confirmation and exact P31 admission.
-No order endpoints, live executor mutations, automatic strategy selection,
-portfolio rankings or claims of prospective profitability are in this runner.
-"""
+PROTOCOL = "# EUR/CHF H1 SHORT Pass 2 — predeclared one-factor conditional research\n\nPrepared 2 October 2026, before inspecting this pass's conditional outcomes.\nUse FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md as a guide. Standing\nuser instruction: seek plateaus, not isolated spikes; avoid overfitting/curvefitting.\nThe entire repeatedly inspected historical sample is exploratory/in-sample.\nThis runner does not manufacture an unseen holdout or eliminate selection bias.\n\n## Fixed anchors and bounded scope\nA_CORE: previous 60-bar high, absolute high distance<=0.10 ATR14, body>=0.75\nATR14, range>=1.25 ATR14, exact bearish engulf.\nC_FREQUENCY_RESEARCH: same, with fixed range>=1.00 ATR14. This is a frequency\nresearch branch, not a second independent portfolio strategy. Their unfiltered\ntrade streams overlap heavily. Retain both unchanged as controls at all costs.\nOther controls: raw engulf, archived screen, 40-bar and 50-bar neighbours.\nNo body/range/structure/RR/timing/date search or filter combinations in this pass.\n\n47 individual feature settings per branch, plus six unfiltered controls:\n100 rule settings / 600 model-cost cases. Reject missing cases. All levels,\nincluding weak/empty cases, are reported in declaration order. No best-row sort,\nscore, ranking, automatic plateau classification or winner is used.\n\n## Added features: ONE at a time\nSignal close location (close-low)/(high-low) maximum: .10,.20,.30,.40,.50.\nPrevious completed bullish body/its ATR14 minimum: .10,.25,.50,.75,1.00.\nPrevious completed bullish close location minimum: .50,.60,.70,.80,.90.\nPreceding rise (close[i-1]-close[i-1-N])/ATR[i-1], N=6,12,24,48 observed H1\nbars, minimum=0,.50,1,1.50,2. The signal candle is excluded from prior movement.\nPrior H1 ATR ratio ATR[i-1]/mean(ATR[i-97:i-1]): denominator is 96 preceding\ncompleted ATR values excluding numerator. Separate minimum .75,1,1.25,1.50\nand maximum .75,1,1.25 tests; they are not combined into fitted bands.\nReference stop size (signal high+.00010-signal close)/.00010 in pips:\nminimum 10,15,20,25,30. This studies available price distance relative to assumed\nfriction, not observed spread. All features use data completed by signal close.\nSignal quality itself may use the completed signal; previous context ends i-1.\nWarmup remains 200 observed bars across ALL cases. No forward filling/interpolation.\n\n## Reproducible source and parent gates\nDefault source is the exact embedded 137,819-candle CSV from Pass 1/Pass 1B.\nNo token/network or companion file is needed. EURCHF_PASS2_DATA_SOURCE=oanda\noptionally re-fetches through the existing official candle-only route, requiring\nOANDA_TOKEN and the identical source hash. The end stays 2026-10-01T00:00Z.\nAll 36 parent control cases must reproduce full raw/accepted-ledger hashes,\nincluding open rows, prices, times, outcomes/R, counts, occupancy and summaries.\nThe original 21 screen/source checks remain. Any failure publishes an error ZIP\nwithout partial/stale performance. The embedded source and expectations have\nseparate integrity checks. Parent expectations are exported for review.\n\n## Frozen execution and data\nOANDA completed unsmoothed MID H1; EUR_CHF short only; 2005-01-01 through\n2026-10-01 exclusive. The first 200 observed candles warm all entry studies.\nATR14 is Wilder recursion, seeded with TR[1:15]; the signal's completed ATR is\nused. Exact bearish engulf: previous close>open, current close<open,\ncurrent open>=previous close, current close<=previous open. No session, weekday,\ndaily-trend, policy-date exclusion or RR search. One standalone configuration\nat a time; no currency conversion, NAV compounding or portfolio admission here.\n\nSignal timestamp = candle start; reference entry = its close, timestamped one\nhour later. Stop = signal high + 0.00010 (10 ticks = 1 pip). Target = reference\nclose - 3*(stop-reference close). Assumed short fill = reference close minus\n10/20/40 ticks (1/2/4 pips); target/stop stay at reference geometry. Risk\ndenominator = stop minus assumed fill. An invalid nonpositive target or target\nat/above assumed fill is rejected BEFORE p0, and is exported. Entry at/after\nthe frozen cutoff is also ineligible. This matters for small raw candles.\nCost assumptions are scenarios, not measured quotes or a maximum realized loss.\n\np0 is replayed for EVERY geometry/model/cost; open-at-cutoff trades occupy the\nstrategy and block later signals. Exit-candle signals may enter at that candle's\nclose. Fixed price barriers permit cached first-touch paths; rejected fill\ngeometry and occupancy are still recomputed independently at each assumed cost.\nCompleted ledgers alone are never obtained by filtering an earlier p0 ledger.\n\nSCREEN_PARITY retains the old screen: next-candle onward OHLC barrier test;\nif both barriers touch, nearest-to-open extreme is assumed first, tie stop-first;\nbarrier fills and exit-candle-end timestamps. It must match the full archived\n240-trade screen at all three costs, as well as source/raw-signal fingerprints.\nAny changed source/history/control stops the run before discovery results.\n\nSTOP_FIRST_GAP_STRESS uses the same signals/entry assumptions: opening price\nat/above stop exits at max(open,stop), opening at/below target fills at target\n(no favorable improvement), otherwise dual-touch bars lose. Known opening-gap\nexits are timestamped at that candle's start; other exits at its end. This is a\nsensitivity model, NOT a worst-case bound: MID H1 cannot reveal intrabar jump\nexecution, spread blowouts, actual quotes, financing, or fills during closure.\nBoth models disclose next observed open and any delay after assumed entry.\n\n## Pair-specific adaptation\nAdd pre-floor, floor-period, 15 January 2015 and post-event diagnostics and\nidentify every accepted trade exposed during that day. All dates are retained\nin full-history results. These are event/cohort summaries, NOT counterfactual\ntrade deletions or date filters. The SNB introduced the minimum EUR/CHF rate on\n6 September 2011 and discontinued it on 15 January 2015. Day-level boundaries\ndo not claim the precise intraday announcement time.\nPrimary sources:\nhttps://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906\nhttps://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115\nAPI candle-parameter reference: https://developer.oanda.com/rest-live-v20/pricing-ep/\nThe candle-only request route is retained from the successfully run Pair #9 code.\n\n## Reporting definitions\nFull accepted ledgers are normalized for a small results ZIP. Join\naccepted_trades.csv to signal_trade_paths.csv on (signal_index, execution_model).\nEach accepted row supplies config_id, cost, actual assumed fill, risk and R;\nthe path supplies signal/entry/exit times, stop, target, reason and exit price.\nOpen accepted trades remain in the table with blank exit/R, not a zero result.\ncontrol_accepted_ledgers.csv additionally contains denormalized raw and archived\ncontrol ledgers, now including A/B/C and the 50-bar control. Source candles, features and raw signal membership are exported.\n\nCandidate-only figures treat qualifying signals in isolation and can overlap;\nthey are NOT executable strategy/portfolio results. Accepted metrics use full\np0 chronology. Trade comparisons to raw, screen and all four numerical/branch controls use actual accepted signal\nsets at the same cost/model; adds and removals are descriptive full-replay\ndifferences, not marginal trades assumed independent of displacement.\n\nEntry cohorts use [period start, period end); their eventual R is not realized\nperiod return. Exit cash uses (period start, period end], including a final\ncompleted candle's close at the cutoff. Both are reported. Monthly data and\nall rolling 12/24/36-month realized-R windows include zero-trade months;\nincomplete 2026 is labeled. Rolling R is additive R, not compounded percent.\nNo realized R is invented for open trades, and no mark-to-market is inferred.\nLast 1/2/3/5/10 years end at the fixed cutoff. Eras are 2005-09, 2010-15,\n2016-21 and 2022-cutoff. They are descriptive, previously inspected history,\nnot pristine out-of-sample tests. Source gaps are reported, never interpolated.\n\n\n## Plateau evidence and decision discipline\nRead conditional_review_table.csv and conditional_family_summary.csv BEFORE\nconsidering a row. Review contiguous neighbouring thresholds and, for rise,\nnearby observation windows, stressed fills/exits, trade counts/frequency and\nminimum era/recent/rolling outcomes. A positive lifetime run alone is NOT a\nvalidated plateau. Above-anchor return counts must be weighed against DD,\nweak periods, retained frequency and trades, and marginal add/remove evidence.\nDo not select a spike whose neighbours fail or merely chase the largest R.\nAn edge at the final tested boundary remains unresolved; justify and declare\nany later limited extension before examining its new outcome, not by auto-rescue.\n\nneighbourhood_summary.csv compares adjacent thresholds within the SAME branch,\nfeature, operator and movement window. Movement-window neighbours are separately\nidentified. Minimum/median R, counts, era/recent weakness, threshold boundaries\nand accepted-set Jaccard expose stability, sparse survivors and dependence.\nSignal-equivalence files disclose identical raw/accepted streams. Several\nthresholds selecting the same trades are not independent corroboration.\nconditional_review_table.csv reports descriptive influence of the largest three\ncompleted winners. Subtracting those R values is NOT a counterfactual deletion\nstrategy or occupancy replay. It must not justify adding date exclusions.\n\nFull per-case p0 can make a qualifying filter admit later previously blocked\nsignals. Compare each condition to its OWN fixed anchor using actual replay,\nnot by deleting from an old accepted ledger. Adjacent threshold comparisons\nalso use replayed sets and disclose unfinished positions. No portfolio feedback\nis used to tune entry rules, and no automatic parameter admission is performed.\n\nOnly a few interpretable conditional families with neighbouring support may\njustify later combinations/local confirmation. Stop honestly if neither branch\nsupports a credible family. Do not fix a weak latest year through calendar\nfilters. Entries freeze before RR last, independent complete-ledger confirmation,\nexact P31 admission and prospective read-only execution observations. No orders.\n"
 
 
 def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind):
@@ -16019,7 +15933,8 @@ def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind
                     interpretation='Includes ordinary market closures; not automatically missing broker data')
                for a,b in zip(bars,bars[1:]) if b[0]-a[0] > HOUR],
               ['previous_candle','next_candle','missing_wall_clock_hours','interpretation'])
-    feature_fields = ['signal_index','signal','entry','atr14','body_atr','range_atr','close_location','reference_stop_pips']
+    feature_fields = ['previous_body_atr','previous_close_location','prior_atr_ratio_096',
+                      *[f'preceding_rise_atr_{n:03d}' for n in (6,12,24,48)],'signal_index','signal','entry','atr14','body_atr','range_atr','close_location','reference_stop_pips']
     feature_fields += [k for lb in LOOKBACKS for k in (f'previous_high_{lb}',f'signed_distance_atr_{lb}',f'abs_distance_atr_{lb}')]
     write_csv(work/'raw_signal_features.csv', features.values(), feature_fields)
     write_csv(work/'configuration_grid.csv', configs)
@@ -16031,6 +15946,10 @@ def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind
     write_csv(work/'period_definitions.csv', [dict(period=label,period_type=kind,start=iso(a),end=iso(b),
               entry_interval='[start,end)',exit_cash_interval='(start,end]',partial_calendar_year=int(kind=='calendar' and b==END and END.month!=1))
               for label,kind,a,b in PERIODS])
+    write_csv(work/'feature_family_definitions.csv',
+        [dict(anchor_id=anchor,branch=ANCHOR_LABELS[anchor],feature_name=f,feature_operator=op,
+              feature_lookback=n,thresholds=';'.join(str(v) for v in levels))
+         for anchor in ANCHOR_IDS for f,op,n,levels in FEATURE_SPECS])
 
 
 STAT_FIELDS = list(stats([]))
@@ -16238,98 +16157,158 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
     finally:
         for sink in sinks.values():
             sink.close()
-    write_neighbours(work,configs,summaries)
     counts = {name:sink.count for name,sink in sinks.items()}
     write_json(work/'output_row_counts.json',counts)
     return summaries,counts
 
 
-def write_neighbours(work, configs, summaries):
-    axes = {'lookback':LOOKBACKS,'distance_atr':DISTANCES}
-    grid = {config_key(c):c for c in configs if c['lookback'] in LOOKBACKS and c['close_max'] is None
-            and c['body_min_atr'] in BODIES and c['range_min_atr'] in RANGES and c['distance_atr'] in DISTANCES}
-    rows = []
-    for config in grid.values():
-        neighbours,edges = set(),[]
-        for name,levels in axes.items():
-            index = levels.index(config[name])
-            if index in (0,len(levels)-1):
-                edges.append(name+('=LOWER' if index==0 else '=UPPER'))
-            for adjacent in (index-1,index+1):
-                if 0 <= adjacent < len(levels):
-                    other = dict(config,**{name:levels[adjacent]})
-                    if config_key(other) in grid:
-                        neighbours.add(grid[config_key(other)]['config_id'])
-        for model in MODELS:
-            for cost in COSTS:
-                values = [summaries[(cid,model,cost)] for cid in sorted(neighbours)]
-                rows.append(dict(config_id=config['config_id'],execution_model=model,cost_ticks=cost,
-                    tested_boundaries=';'.join(edges),adjacent_configurations=len(values),
-                    positive_total_r_neighbours=sum(r['total_r'] > 0 for r in values),
-                    median_neighbour_total_r=quantile([r['total_r'] for r in values],.5),
-                    minimum_neighbour_total_r=min((r['total_r'] for r in values),default=None),
-                    minimum_neighbour_closed_trades=min((r['closed_trades'] for r in values),default=None),
-                    neighbour_ids=';'.join(sorted(neighbours))))
-    write_csv(work/'neighbourhood_summary.csv',rows,
-              CASE+['tested_boundaries','adjacent_configurations','positive_total_r_neighbours',
-                    'median_neighbour_total_r','minimum_neighbour_total_r','minimum_neighbour_closed_trades','neighbour_ids'])
 
 
-def write_boundary_reports(work, bars, features, paths, configs, summaries):
-    grid = {(c['lookback'],c['distance_atr']):c for c in configs
-            if c['lookback'] in LOOKBACKS and c['distance_atr'] in DISTANCES
-            and c['body_min_atr']==.75 and c['range_min_atr']==1.25 and c['close_max'] is None}
-    accepted = {}
-    for c in grid.values():
-        indices = selected_indices(c,features)
+
+def longest_run(flags):
+    current=longest=0
+    for flag in flags:
+        current=current+1 if flag else 0
+        longest=max(longest,current)
+    return longest
+
+
+def write_conditional_reports(work, bars, features, paths, configs, summaries):
+    """Descriptive plateau evidence; no ranking, acceptance score or automatic selection."""
+    accepted={};raw_ids={};raw_digest={}
+    for c in configs:
+        cid=c['config_id'];indices=selected_indices(c,features)
+        raw_ids[cid]=set(indices);raw_digest[cid]=signal_hash(indices,bars)
+        for model in MODELS:
+            for cost in COSTS:accepted[(cid,model,cost)]=set(replay(indices,paths,model,cost)[0])
+    periods={}
+    with (work/'period_results.csv').open(newline='') as stream:
+        for r in csv.DictReader(stream):
+            periods[(r['config_id'],r['execution_model'],int(r['cost_ticks']),r['period'])]=r
+    def period(key,name):return float(periods[(*key,name)]['entry_cohort_eventual_r'])
+    def era_min(key):return min(period(key,name) for name in ('ERA_2005_2009','ERA_2010_2015','ERA_2016_2021','ERA_2022_2026'))
+    raw_groups=defaultdict(list)
+    for c in configs:raw_groups[raw_digest[c['config_id']]].append(c['config_id'])
+    write_csv(work/'raw_signal_equivalence_groups.csv',
+        [dict(raw_signal_sha256=d,configurations=len(ids),raw_signals=len(raw_ids[ids[0]]),config_ids=';'.join(ids))
+         for d,ids in sorted(raw_groups.items())])
+    accepted_groups=defaultdict(list);accepted_digest={}
+    for key,ids in accepted.items():
+        d=sha(','.join(str(i) for i in sorted(ids)).encode())
+        accepted_digest[key]=d;accepted_groups[(key[1],key[2],d)].append(key[0])
+    write_csv(work/'accepted_signal_equivalence_groups.csv',
+        [dict(execution_model=key[0],cost_ticks=key[1],accepted_signal_set_sha256=key[2],configurations=len(ids),
+              accepted_entries=len(accepted[(ids[0],key[0],key[1])]),config_ids=';'.join(ids))
+         for key,ids in sorted(accepted_groups.items())])
+    lookup={(c['anchor_id'],c['feature_name'],c['feature_operator'],c['feature_lookback'],c['feature_threshold']):c
+            for c in configs if c['feature_name']!='NONE'}
+    definitions={(f,op,n):levels for f,op,n,levels in FEATURE_SPECS}
+    rows=[];near=[]
+    for c in configs:
+        cid=c['config_id'];anchor=c['anchor_id'];f,op,n,level=[c[k] for k in ('feature_name','feature_operator','feature_lookback','feature_threshold')]
+        threshold_neighbours=[];lookback_neighbours=[];edges=[]
+        if f!='NONE':
+            levels=definitions[(f,op,n)];pos=levels.index(level)
+            if pos in (0,len(levels)-1):edges.append('threshold='+('LOWER' if pos==0 else 'UPPER'))
+            threshold_neighbours=[lookup[(anchor,f,op,n,levels[j])]['config_id'] for j in (pos-1,pos+1) if 0<=j<len(levels)]
+            if f=='preceding_rise_atr':
+                windows=(6,12,24,48);posn=windows.index(n)
+                if posn in (0,len(windows)-1):edges.append('feature_lookback='+('LOWER' if posn==0 else 'UPPER'))
+                lookback_neighbours=[lookup[(anchor,f,op,windows[j],level)]['config_id'] for j in (posn-1,posn+1) if 0<=j<len(windows)]
+        neighbours=threshold_neighbours+lookback_neighbours
         for model in MODELS:
             for cost in COSTS:
-                accepted[(c['config_id'],model,cost)] = set(replay(indices,paths,model,cost)[0])
-    pairs = []
-    for lb in LOOKBACKS:
-        pairs.extend(('distance_atr',grid[(lb,a)],grid[(lb,b)]) for a,b in zip(DISTANCES,DISTANCES[1:]))
-    for d in DISTANCES:
-        pairs.extend(('lookback',grid[(a,d)],grid[(b,d)]) for a,b in zip(LOOKBACKS,LOOKBACKS[1:]))
-    sink = CSVFile(work/'boundary_trade_comparisons.csv',
-        ['comparison_axis','reference_config','candidate_config','execution_model','cost_ticks',
-         'reference_level','candidate_level','common_entries','added_entries','removed_entries',
-         'added_completed_r','removed_completed_r','delta_completed_r','reference_closed_trades',
-         'candidate_closed_trades','reference_open_count','candidate_open_count',
-         'reference_max_closed_dd_r','candidate_max_closed_dd_r'])
-    try:
-        for axis,a,b in pairs:
+                key=(cid,model,cost);row=summaries[key];ours=accepted[key]
+                control=summaries[(anchor,model,cost)] if anchor else None
+                theirs=accepted[(anchor,model,cost)] if anchor else None
+                rs=sorted((r_value(paths[i][model],cost) for i in ours if paths[i][model]['exit'] is not None),reverse=True)
+                winners=[v for v in rs if v>0];top3=sum(winners[:3])
+                details=dict(row,branch=c['branch'],anchor_id=anchor,feature_name=f,feature_operator=op,
+                    feature_lookback=n,feature_threshold=level,tested_boundaries=';'.join(edges),
+                    accepted_signal_set_sha256=accepted_digest[key],raw_equivalent_configurations=len(raw_groups[raw_digest[cid]]),
+                    accepted_equivalent_configurations=len(accepted_groups[(model,cost,accepted_digest[key])]),
+                    latest_1y_entry_r=period(key,'LATEST_1Y'),latest_2y_entry_r=period(key,'LATEST_2Y'),
+                    latest_5y_entry_r=period(key,'LATEST_5Y'),minimum_era_entry_r=era_min(key),
+                    floor_period_entry_r=period(key,'CHF_FLOOR_PERIOD'),
+                    largest_completed_winner_r=max(winners,default=0.),top3_completed_winners_r=top3,
+                    descriptive_total_r_less_top3_winners=row['total_r']-top3,
+                    top3_share_gross_winning_r=top3/sum(winners) if winners else None,
+                    delta_total_r=row['total_r']-control['total_r'] if control else None,
+                    delta_max_closed_dd_r=row['max_closed_dd_r']-control['max_closed_dd_r'] if control else None,
+                    accepted_fraction_of_anchor=len(ours)/len(theirs) if theirs else None,
+                    added_accepted_entries=len(ours-theirs) if theirs is not None else None,
+                    removed_accepted_entries=len(theirs-ours) if theirs is not None else None,
+                    same_raw_stream_as_anchor=int(raw_ids[cid]==raw_ids[anchor]) if anchor else None,
+                    same_accepted_stream_as_anchor=int(ours==theirs) if theirs is not None else None)
+                rows.append(details)
+                if f!='NONE':
+                    ns=[summaries[(other,model,cost)] for other in neighbours]
+                    def overlap(other):
+                        other_ids=accepted[(other,model,cost)];union=ours|other_ids
+                        return len(ours&other_ids)/len(union) if union else None
+                    ov=[x for other in neighbours if (x:=overlap(other)) is not None]
+                    near.append(dict(config_id=cid,branch=c['branch'],anchor_id=anchor,execution_model=model,cost_ticks=cost,
+                        feature_name=f,feature_operator=op,feature_lookback=n,feature_threshold=level,
+                        tested_boundaries=';'.join(edges),threshold_neighbour_ids=';'.join(threshold_neighbours),
+                        lookback_neighbour_ids=';'.join(lookback_neighbours),neighbour_ids=';'.join(neighbours),
+                        adjacent_configurations=len(ns),positive_total_r_neighbours=sum(r['total_r']>0 for r in ns),
+                        above_anchor_total_r_neighbours=sum(r['total_r']>control['total_r'] for r in ns),
+                        no_worse_closed_dd_neighbours=sum(r['max_closed_dd_r']>=control['max_closed_dd_r'] for r in ns),
+                        median_neighbour_total_r=statistics.median(r['total_r'] for r in ns),
+                        minimum_neighbour_total_r=min(r['total_r'] for r in ns),
+                        minimum_neighbour_closed_trades=min(r['closed_trades'] for r in ns),
+                        minimum_neighbour_era_r=min(era_min((other,model,cost)) for other in neighbours),
+                        minimum_neighbour_latest_2y_r=min(period((other,model,cost),'LATEST_2Y') for other in neighbours),
+                        minimum_accepted_jaccard=min(ov) if ov else None,
+                        maximum_accepted_jaccard=max(ov) if ov else None,
+                        identical_raw_stream_neighbours=sum(raw_ids[cid]==raw_ids[other] for other in neighbours),
+                        identical_accepted_stream_neighbours=sum(ours==accepted[(other,model,cost)] for other in neighbours)))
+    write_csv(work/'conditional_review_table.csv',rows)
+    write_csv(work/'neighbourhood_summary.csv',near)
+    by_key={(r['config_id'],r['execution_model'],r['cost_ticks']):r for r in rows}
+    family=[];adjacent=[]
+    for anchor in ANCHOR_IDS:
+        for f,op,n,levels in FEATURE_SPECS:
+            cells=[lookup[(anchor,f,op,n,level)] for level in levels]
             for model in MODELS:
                 for cost in COSTS:
-                    ka,kb = (a['config_id'],model,cost),(b['config_id'],model,cost)
-                    ours,theirs = accepted[kb],accepted[ka]
-                    def total(ids):
-                        return sum(r_value(paths[i][model],cost) for i in sorted(ids) if paths[i][model]['exit'] is not None)
-                    added,removed = total(ours-theirs),total(theirs-ours)
-                    delta = summaries[kb]['total_r']-summaries[ka]['total_r']
-                    if abs(added-removed-delta)>1e-8:
-                        raise RuntimeError('Adjacent full-replay trade attribution failed.')
-                    sink.add(dict(comparison_axis=axis,reference_config=a['config_id'],candidate_config=b['config_id'],
-                        execution_model=model,cost_ticks=cost,reference_level=a[axis],candidate_level=b[axis],
-                        common_entries=len(ours&theirs),added_entries=len(ours-theirs),removed_entries=len(theirs-ours),
-                        added_completed_r=added,removed_completed_r=removed,delta_completed_r=delta,
-                        reference_closed_trades=summaries[ka]['closed_trades'],candidate_closed_trades=summaries[kb]['closed_trades'],
-                        reference_open_count=summaries[ka]['open_at_data_end'],candidate_open_count=summaries[kb]['open_at_data_end'],
-                        reference_max_closed_dd_r=summaries[ka]['max_closed_dd_r'],candidate_max_closed_dd_r=summaries[kb]['max_closed_dd_r']))
-    finally:
-        sink.close()
-    groups = []
-    for model in MODELS:
-        for cost in COSTS:
-            for d in DISTANCES:
-                values = [summaries[(grid[(lb,d)]['config_id'],model,cost)] for lb in LOOKBACKS]
-                groups.append(dict(execution_model=model,cost_ticks=cost,distance_atr=d,
-                    diagnostic_exact_high=int(d==0),configurations=len(values),
-                    positive_total_r=sum(r['total_r']>0 for r in values),zero_total_r=sum(r['total_r']==0 for r in values),
-                    negative_total_r=sum(r['total_r']<0 for r in values),median_total_r=statistics.median(r['total_r'] for r in values),
-                    minimum_total_r=min(r['total_r'] for r in values),maximum_total_r=max(r['total_r'] for r in values),
-                    minimum_closed_trades=min(r['closed_trades'] for r in values),maximum_closed_trades=max(r['closed_trades'] for r in values)))
-    write_csv(work/'matrix_region_summary.csv',groups)
-    return {'boundary_trade_comparisons.csv':sink.count,'matrix_region_summary.csv':len(groups)}
+                    values=[by_key[(c['config_id'],model,cost)] for c in cells]
+                    family.append(dict(branch=ANCHOR_LABELS[anchor],anchor_id=anchor,feature_name=f,feature_operator=op,
+                        feature_lookback=n,execution_model=model,cost_ticks=cost,thresholds=';'.join(str(x) for x in levels),
+                        rule_settings=len(values),unique_raw_streams=len({raw_digest[c['config_id']] for c in cells}),
+                        unique_accepted_streams=len({v['accepted_signal_set_sha256'] for v in values}),
+                        positive_total_r_settings=sum(v['total_r']>0 for v in values),
+                        above_anchor_total_r_settings=sum(v['delta_total_r']>0 for v in values),
+                        no_worse_closed_dd_settings=sum(v['delta_max_closed_dd_r']>=0 for v in values),
+                        longest_positive_total_r_run=longest_run(v['total_r']>0 for v in values),
+                        longest_above_anchor_total_r_run=longest_run(v['delta_total_r']>0 for v in values),
+                        minimum_total_r=min(v['total_r'] for v in values),median_total_r=statistics.median(v['total_r'] for v in values),
+                        maximum_total_r=max(v['total_r'] for v in values),minimum_closed_trades=min(v['closed_trades'] for v in values),
+                        maximum_closed_trades=max(v['closed_trades'] for v in values),
+                        minimum_latest_2y_entry_r=min(v['latest_2y_entry_r'] for v in values),
+                        minimum_era_entry_r=min(v['minimum_era_entry_r'] for v in values),
+                        maximum_accepted_jaccard_neighbours=max((r['maximum_accepted_jaccard'] for r in near
+                            if r['anchor_id']==anchor and r['feature_name']==f and r['feature_operator']==op
+                            and r['feature_lookback']==n and r['execution_model']==model and r['cost_ticks']==cost
+                            and r['maximum_accepted_jaccard'] is not None),default=None)))
+                    for a,b in zip(cells,cells[1:]):
+                        ka,kb=(a['config_id'],model,cost),(b['config_id'],model,cost)
+                        ours,theirs=accepted[kb],accepted[ka]
+                        total=lambda ids:sum(r_value(paths[i][model],cost) for i in sorted(ids) if paths[i][model]['exit'] is not None)
+                        added,removed=total(ours-theirs),total(theirs-ours)
+                        delta=summaries[kb]['total_r']-summaries[ka]['total_r']
+                        if abs(added-removed-delta)>1e-8:raise RuntimeError('Adjacent full replay attribution failed.')
+                        adjacent.append(dict(branch=ANCHOR_LABELS[anchor],anchor_id=anchor,feature_name=f,feature_operator=op,
+                            feature_lookback=n,execution_model=model,cost_ticks=cost,reference_config=a['config_id'],
+                            candidate_config=b['config_id'],reference_threshold=a['feature_threshold'],candidate_threshold=b['feature_threshold'],
+                            common_entries=len(ours&theirs),added_entries=len(ours-theirs),removed_entries=len(theirs-ours),
+                            added_completed_r=added,removed_completed_r=removed,delta_completed_r=delta,
+                            reference_open_count=summaries[ka]['open_at_data_end'],candidate_open_count=summaries[kb]['open_at_data_end']))
+    write_csv(work/'conditional_family_summary.csv',family)
+    write_csv(work/'adjacent_threshold_comparisons.csv',adjacent)
+    return {'conditional_review_table.csv':len(rows),'neighbourhood_summary.csv':len(near),
+            'conditional_family_summary.csv':len(family),'adjacent_threshold_comparisons.csv':len(adjacent),
+            'raw_signal_equivalence_groups.csv':len(raw_groups),'accepted_signal_equivalence_groups.csv':len(accepted_groups)}
 
 
 def self_checks():
@@ -16353,19 +16332,24 @@ def self_checks():
     atr = atr14(uniform)
     check(atr[:14] == [None]*14 and all(x == 2. for x in atr[14:]),'Wilder ATR seed and recursion')
     c,m = make_configs()
-    check(len(c)==65 and len(m)==68,'65 unique geometries and 68 memberships')
-    check(len({distance_label(x) for x in DISTANCES})==9,'Fractional-percent ATR levels have unique labels')
-    check(sum(x['stage_group']=='STRUCTURE_DISTANCE_BOUNDARY_MATRIX' for x in m)==63,'Complete 7 by 9 boundary grid')
-    matrix_ids={x['config_id'] for x in m if x['stage_group']=='STRUCTURE_DISTANCE_BOUNDARY_MATRIX'}
-    check(all(x['body_min_atr']==.75 and x['range_min_atr']==1.25 for x in c if x['config_id'] in matrix_ids),
-          'Matrix fixes body and range; frequency comparator remains separate')
-    probe={'body_atr':.75,'range_atr':1.25,'close_location':.2,'abs_distance_atr_60':0.}
-    exact=next(x for x in c if x['lookback']==60 and x['distance_atr']==0.)
-    check(selected_indices(exact,{1:probe})==[1],'Zero-distance diagnostic accepts exact high equality')
-    check(not selected_indices(exact,{1:dict(probe,abs_distance_atr_60=1e-12)}),'Zero-distance has no implicit rounding tolerance')
-    level=next(x for x in c if x['lookback']==60 and x['distance_atr']==.025)
-    check(selected_indices(level,{1:dict(probe,abs_distance_atr_60=.025)})==[1]
-          and not selected_indices(level,{1:dict(probe,abs_distance_atr_60=.0250001)}),'Distance threshold includes equality and excludes above')
+    check(len(c)==100 and len(m)==100,'100 predeclared rule settings with no hidden sweep')
+    check(sum(len(levels) for _,_,_,levels in FEATURE_SPECS)==47,'47 one-factor settings per fixed anchor')
+    check(sum(x['feature_name']!='NONE' for x in c)==94,'94 conditional rows and six immutable controls')
+    check(all(x['lookback']==60 and x['distance_atr']==.10 and x['body_min_atr']==.75 and
+              x['range_min_atr']==(1.25 if x['anchor_id']==ANCHOR_IDS[0] else 1.00)
+              for x in c if x['feature_name']!='NONE'),'Every conditional row preserves its fixed branch geometry')
+    probe=dict(body_atr=.75,range_atr=1.25,close_location=.20,abs_distance_atr_60=.10,
+               previous_body_atr=.50,previous_close_location=.70,prior_atr_ratio_096=1.,reference_stop_pips=20.,
+               preceding_rise_atr_006=1.,preceding_rise_atr_012=1.,preceding_rise_atr_024=1.,preceding_rise_atr_048=1.)
+    for feature,op,n,levels in FEATURE_SPECS:
+        row=next(x for x in c if x['anchor_id']==ANCHOR_IDS[0] and x['feature_name']==feature and
+                 x['feature_operator']==op and x['feature_lookback']==n)
+        key='close_location' if feature=='signal_close_location' else f'preceding_rise_atr_{n:03d}' if feature=='preceding_rise_atr' else feature
+        level=row['feature_threshold'];equal=dict(probe,**{key:level})
+        bad=dict(probe,**{key:level+1e-8 if op=='le' else level-1e-8})
+        check(selected_indices(row,{1:equal})==[1] and not selected_indices(row,{1:bad}),
+              f'Inclusive feature threshold and wrong-side exclusion {feature}/{op}/N{n}')
+    check(longest_run([False,True,True,False,True])==2,'Contiguous threshold run diagnostic')
     check(len([x for x in c if x['config_id']=='SCREEN_CONTROL'])==1,'Screen control has one immutable geometry')
     # Signal close 10, stop 11.0001, target 6.9997. Both barriers; low nearer open.
     two = [(t,10.5,11.,9.,10.),(t+HOUR,7.2,11.2,6.8,8.)]
@@ -16424,13 +16408,14 @@ def run_job():
     work = Path(tempfile.mkdtemp(prefix='working-',dir=OUT))
     manifest = dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,
         dataset_kind='HISTORICAL_OANDA_MID',status='RUNNING',complete=False,
-        study='PASS1B_STRUCTURE_DISTANCE_BOUNDARY_ONLY',start=iso(START),end_exclusive=iso(END),
+        study='PASS2_ONE_FACTOR_CONDITIONAL_ONLY',start=iso(START),end_exclusive=iso(END),
         rr=RR,cost_ticks=list(COSTS),execution_models=list(MODELS),
-        expected_configurations=65,expected_cases=390,parent_pass1_zip_sha256=PARENT_ZIP_SHA256,
+        expected_configurations=100,expected_cases=600,parent_pass1b_zip_sha256=PARENT_ZIP_SHA256,
         original_screen_zip_sha256='786792e232d0477ed4c2d9440de7ec1110fd7568854b38edf2cb439c04c75fb0',
-        data_source_mode=os.getenv('EURCHF_PASS1B_DATA_SOURCE','embedded'),
-        grid_lookbacks=list(LOOKBACKS),grid_distances_atr=list(DISTANCES),
-        fixed_body_min_atr=.75,fixed_range_min_atr=1.25,
+        data_source_mode=os.getenv('EURCHF_PASS2_DATA_SOURCE','embedded'),
+        fixed_anchors=dict(A_CORE=ANCHOR_IDS[0],C_FREQUENCY_RESEARCH=ANCHOR_IDS[1]),
+        conditional_settings_per_anchor=47,one_feature_at_a_time=True,automatic_selection=False,
+        plateau_not_spike=True,history_is_in_sample=True,
         incumbent_target='P31 frozen; not replayed/optimized in this standalone pass',
         template='FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md',
         user_clarification='Template is a guide; justified pair-specific changes are allowed.',
@@ -16470,23 +16455,28 @@ def run_job():
         write_csv(work/'parent_controls.csv',parents)
         write_json(work/'parent_expected_cases.json',parent_expectations())
         if any(r['status']!='PASS' for r in parents):
-            raise RuntimeError('Pass 1 parent control parity failed; no boundary study conclusions are valid.')
+            raise RuntimeError('Pass 1B parent control parity failed; no conditional study conclusions are valid.')
         manifest['parent_controls'] = 'PASS'
         manifest['parent_control_checks'] = len(parents)
+        manifest['plateau_reporting'] = 'Descriptive neighbourhoods/equivalence/influence; no automatic acceptance'
+        (work/'research_decision_guide.md').write_text(DECISION_GUIDE,encoding='utf-8')
         write_inputs(work,bars,features,paths,configs,memberships,manifest['dataset_kind'])
         (work/'README.md').write_text(RESULT_README,encoding='utf-8')
         manifest.update(source_sha256=source_hash(bars),raw_engulf_signals=len(features),
                         hard_controls='PASS',software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()))
         summaries,counts = analyze(work,bars,features,paths,configs)
-        counts.update(write_boundary_reports(work,bars,features,paths,configs,summaries))
+        counts.update(write_conditional_reports(work,bars,features,paths,configs,summaries))
         write_json(work/'output_row_counts.json',counts)
         manifest.update(status='COMPLETE',complete=True,output_row_counts=counts,
                         completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
         write_json(work/'run_manifest.json',manifest)
-        set_status(state='packaging',progress=96,message='All 390 cases complete; compressing source, ledgers and diagnostics')
+        set_status(state='packaging',progress=96,message='All 600 cases complete; compressing source, ledgers and diagnostics')
         package(work,True)
-        set_status(state='complete',progress=100,message='EUR/CHF H1 short Pass 1B complete; download the results ZIP',
-                   hard_controls='PASS',configurations=65,cases=390,result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
+        set_status(state='complete',progress=100,message='EUR/CHF H1 short Pass 2 complete; download the results ZIP',
+                   hard_controls='PASS',parent_controls='PASS',configurations=100,cases=600,
+                   data_source_mode=os.getenv('EURCHF_PASS2_DATA_SOURCE','embedded').strip().lower(),
+                   dataset_kind=manifest['dataset_kind'],source_sha256=manifest['source_sha256'],
+                   result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
         return True
     except Exception as exc:
         manifest.update(status='ERROR',complete=False,error_type=type(exc).__name__,error=str(exc))
@@ -16506,50 +16496,7 @@ def run_job():
             JOB_LOCK = None
 
 
-RESULT_README = """# EUR/CHF H1 SHORT Pass 1B results
-
-Start with run_manifest.json (complete=true), hard_controls.csv (all PASS),
-coverage.csv, protocol.md, then summary.csv. An error ZIP contains no partial
-performance files and is not a valid research result. file_manifest.json hashes
-every other packaged artifact, excluding itself.
-
-configuration_grid.csv has 65 unique entry configurations: a 63-cell fixed
-body/range lookback-distance matrix, raw engulf and fixed frequency C.
-68 memberships retain screen and A/B parent labels within the matrix.
-There are 390 configuration/cost/execution cases. parent_controls.csv must
-also be all PASS; it verifies complete accepted hashes for all 30 parent cases.
-No automatic winner is declared. neighbourhood_summary.csv varies only
-lookback/distance. boundary_trade_comparisons.csv shows full replay differences
-between adjacent cells; matrix_region_summary.csv groups cells by distance.
-Neighbours share history/trades and are not independent statistical evidence.
-Zero distance is an exact-high diagnostic, not an automatically selected rule.
-
-For ANY full accepted ledger: select its configuration/model/cost rows from
-accepted_trades.csv, and join signal_trade_paths.csv by signal_index and
-execution_model. The join is many-to-one; preserve accepted_sequence. Price
-risk = stop - historical_fill. The short R = (fill - exit_price)/risk for a
-completed trade. Non-gap STOP is exactly -1. Open R is blank, not zero.
-control_accepted_ledgers.csv has already joined ledgers for RAW_ENGULF and
-SCREEN_CONTROL and A/B/C. raw_signal_membership.csv plus raw_signal_features.csv show
-qualifying signals before occupancy and cost-specific validity. The ledger
-digest in summary.csv hashes canonical JSON lines of the denormalized fields
-in control_accepted_ledgers.csv (sort_keys=True, separators=(',',':')).
-
-Period and monthly files separate entry-cohort eventual R from realized exit R.
-rolling_windows.csv is every month-boundary 12/24/36-month REALIZED-R window,
-including inactivity. It is not percent compounded return. Open trades and
-unobserved quotes are not silently assigned an outcome. Cost/exit-model
-comparisons use full replay, not removal of trades from a prior accepted stream.
-
-The CHF event file is exposure attribution only. Eventual R on an exposed trade
-need not have been earned on the event day. No policy dates are excluded.
-MID prices/assumed fills are not executable quote history. Funding, actual
-spreads, intra-hour gap fills and broker mechanics need later investigation.
-
-Resolve the distance boundary before freezing anchors for conditional research. These are
-exploratory standalone results; P31 admission, RR selection, independent full
-signal reimplementation and prospective execution checks remain later work.
-"""
+RESULT_README = "# EUR/CHF H1 SHORT Pass 2 conditional results\n\nStart with complete=true in run_manifest.json and all PASS in hard_controls.csv\nand parent_controls.csv. Error ZIPs contain no valid partial performance. Verify\ncoverage/source/code hashes; the data are the exact previously inspected snapshot.\n\n100 rule settings: six immutable controls and 47 ONE-feature conditions within\neach fixed A/C branch; 600 model/cost cases. configuration_grid.csv and\nfeature_family_definitions.csv record the declared complete universe. RR3 stays\nfixed. No automatic highest-row selection or parameter optimisation occurs.\n\nRead conditional_family_summary.csv, conditional_review_table.csv and\nneighbourhood_summary.csv together. Counts of contiguous lifetime-positive or\nabove-anchor thresholds are descriptive, not a plateau acceptance test.\nMovement lookback neighbours are identified separately. Equivalent streams\nare disclosed in raw_signal_equivalence_groups.csv and\naccepted_signal_equivalence_groups.csv; repeated identical trades are not\nindependent validations. Strong return from a few survivors is insufficient.\n\naccepted_comparisons.csv includes full replay comparisons to every immutable\ncontrol; use anchor_id to choose the branch's OWN parent. Adjacent threshold\ncomparisons have actual common/add/remove entries and R, not simple filtering\nof a previously accepted ledger. Signals can recover earlier blocked entries.\n\nJoin accepted_trades.csv to signal_trade_paths.csv on signal_index and\nexecution_model, preserve accepted_sequence. Short risk=stop-historical_fill;\nR=(fill-exit_price)/risk. Open R remains blank. control_accepted_ledgers.csv is\nalready denormalized for raw/screen/A/C/40-/50-bar controls. Full canonical\nledger digests include prices/times/reasons/outcome, not just counts/R.\n\nPeriods/months distinguish entry-cohort eventual R from realized exit cash.\nEvery zero-inclusive rolling 12/24/36-month window is exported. 2026 is partial.\nAll R/DD are additive trade-risk units, not compounded equity percentages or\nintrabar mark-to-market. Largest-winner subtraction is descriptive influence,\nnot a counterfactual strategy. All policy/event/holiday dates remain included.\n\nAll history is exploratory/in-sample. MID/assumed fills omit actual bid/ask,\nspread spikes, funding and some gap paths. Stop-first/open-gap stress is not a\nworst-case bound. User goal: plateaus, not spikes, and avoid curvefitting; fixed\nscope/reporting helps discipline but does not prove future profitability.\nP31, RR selection, final entry freeze, independent final-strategy confirmation,\nportfolio admission and prospective execution studies remain later work.\n"
 
 
 def launch(background=True):
@@ -16572,14 +16519,14 @@ def launch(background=True):
         STARTED = True
         # Reuse an exact-version complete result across multiple WSGI workers.
         previous = read_status()
-        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and (OUT/RESULT_NAME).exists():
+        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and previous.get('data_source_mode')==os.getenv('EURCHF_PASS2_DATA_SOURCE','embedded').strip().lower() and (OUT/RESULT_NAME).exists():
             if JOB_LOCK is not None:
                 JOB_LOCK.close()
                 JOB_LOCK = None
             return False
-        set_status(state='starting',progress=0,message='Starting EUR/CHF H1 short structure/distance study',runner_sha256=code_hash(),result_path=None)
+        set_status(state='starting',progress=0,message='Starting EUR/CHF H1 short conditional research',runner_sha256=code_hash(),data_source_mode=os.getenv('EURCHF_PASS2_DATA_SOURCE','embedded').strip().lower(),result_path=None)
     if background:
-        threading.Thread(target=run_job,name='eurchf-pass1b-research',daemon=True).start()
+        threading.Thread(target=run_job,name='eurchf-pass2-research',daemon=True).start()
         return True
     return run_job()
 
@@ -16598,7 +16545,7 @@ def app(environ, start_response):
         body = b'{"error":"Not found"}'
         start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
         return [] if method == 'HEAD' else [body]
-    if path=='/start' or (not STARTED and os.getenv('EURCHF_PASS1B_AUTOSTART','1')=='1'):
+    if path=='/start' or (not STARTED and os.getenv('EURCHF_PASS2_AUTOSTART','1')=='1'):
         launch()
     current = read_status()
     code = '200 OK'
@@ -16622,7 +16569,7 @@ def app(environ, start_response):
     elif path=='/health':
         current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
     elif path=='/':
-        current = dict(service='EUR/CHF H1 SHORT Pass 1B boundary study',version=VERSION,status='/status',results='/results',
+        current = dict(service='EUR/CHF H1 SHORT Pass 2 conditional research',version=VERSION,status='/status',results='/results',
                        start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
     body = (json.dumps(current,allow_nan=False)+'\n').encode()
     start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
@@ -16646,7 +16593,7 @@ def main():
         return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
     port = int(os.getenv('PORT','8080'))
     with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
-        if os.getenv('EURCHF_PASS1B_AUTOSTART','1')=='1':
+        if os.getenv('EURCHF_PASS2_AUTOSTART','1')=='1':
             launch()
         print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
         server.serve_forever()
