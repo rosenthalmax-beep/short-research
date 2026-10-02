@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
-"""EUR/CHF H1 SHORT — Pass 3 bounded close-location combinations, 2026-10-02.
-
-Standalone Python 3.10+ standard library; exact verified candles embedded.
-Run: python app.py                 (HTTP service + automatic historical study)
-     python app.py --run           (one study, no HTTP)
-     python app.py --self-test     (synthetic software checks only)
-WSGI: gunicorn --workers 1 --threads 4 app:app
-Routes: /, /health, /start, /status, /results and /eurchf-h1-short-pass3/*.
-Env: PORT=8080, EURCHF_PASS3_OUTPUT_DIR=/tmp/eurchf_h1_short_pass3,
-EURCHF_PASS3_AUTOSTART=1. Default embedded data needs no token/network/companion.
-Optional EURCHF_PASS3_DATA_SOURCE=oanda requires OANDA_TOKEN and identical source.
-
-Our forex research template: 40 settings/240 cases, fixed A/C, RR3 unchanged.
-Only signal close max [.20,.30,.40] AND previous close min [.60,.70,.80],
-plus all predeclared original and single-feature controls. Compare each combination
-to both simpler constituents, neighbours, costs, weak periods, frequency and
-trade overlap. Find plateaus, not spikes; avoid curvefitting. No automatic winner.
-All inspected history is in-sample. P31 remains unchanged; no account/orders.
+"""EUR/CHF H1 SHORT Pass4: bounded A plateau and frequency study.
+Python3.10+, standard library; one standalone runner, no companion files.
+Use as app.py on the separate research service. python app.py runs HTTP/autostart;
+Gunicorn app:app is supported. GET /status, /results, /start, /health.
+CLI: --run, --self-test. RR3 fixed;83 unique rules/498 cases/89 memberships.
+Env: PORT=8080, EURCHF_PASS4_OUTPUT_DIR=/tmp/eurchf_h1_short_pass4,
+EURCHF_PASS4_AUTOSTART=1. Default embedded exact prior snapshot needs no token.
+Optional EURCHF_PASS4_DATA_SOURCE=oanda requires OANDA_TOKEN and identical source.
+Read-only historical research. No orders/account access or live P31 changes.
+Seek plateaus, not spikes. Repeatedly examined history is in-sample.
 """
 from __future__ import annotations
 
@@ -47,7 +39,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, make_server
 
-VERSION = 'EURCHF_H1_SHORT_PASS3_CLOSE_LOCATION_COMBINATIONS_V1_2026_10_02'
+VERSION = 'EURCHF_H1_SHORT_PASS4_PLATEAU_FREQUENCY_V1_2026_10_02'
 PAIR, SIDE, TIMEFRAME = 'EUR_CHF', 'SELL', 'H1'
 UTC = timezone.utc
 START = datetime(2005, 1, 1, tzinfo=UTC)
@@ -67,7 +59,7 @@ REFERENCE_B85 = 'c-pkRP0u|$Zs7M_yq-417m-qSSp-=oNP3kl1_Q@4F*2|N+lvW;eD_GDdd?}4VyX
 REFERENCE_SHA256 = '83cb2474f77f8f6ba7ccbffd5311b656e23f3b103942be25f564bb0271e98b23'
 
 # Immutable Pass 1 source snapshot; no token or network is used in default mode.
-PARENT_ZIP_SHA256 = '65751ee346d40206f3fa0ca5596c21847665d2b9f62b48e25c9df3a48323d703'
+PARENT_ZIP_SHA256 = 'c6d83d78729f6164800ad51eebd5b4a6b653ff8ac68adf09565eb487d91a2934'
 CONTROL_CONFIG_IDS = ('RAW_ENGULF', 'SCREEN_CONTROL', 'M_L060_D010_B075_R125', 'M_L060_D010_B075_R100', 'M_L040_D010_B075_R125', 'M_L050_D010_B075_R125')
 SOURCE_CSV_SHA256 = '862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196'
 SOURCE_CSV_BYTES = 7324607
@@ -15349,12 +15341,12 @@ EMBEDDED_SOURCE_B85 = (
     '&QZv@q{-+OYTR9lK>0~m7Ia4j<vX>ed9#;z&#~|94)FWjg%qR+jOQwQJnq)xf!zN-i2_^bW?L0`kn^?)u5&Aa$vXA7WN+T=W!?qp;+aKio5hP!>YH?z*1x3('
     '%^SXCp91M2`JJG0ZmZBB=cgS;OM2c+dVX?a32Mi31<^uA$bYip{{p4rA3O'
 )
-PARENT_EXPECTATIONS_SHA256 = 'fe7ced2445fcb2775a3ec2f43ebf632b242f33ed331f12e43e401886f0c6f7d1'
-PARENT_EXPECTATIONS_B85 = 'c-rlK?~h%_k=_5I&(5H#x~jU{-xNn{7*H%j(ryq0!JvOSg1wR<akC2q`@iSZlO>Yk4EfB*`>qWTvZ>K<=H0&cp00CFcXieO`hTCaG1gyRtoiuoHUGH2fBfP9G%^3=*Pm!^t?S%9k2&hjtId%-wX#^Nq%3XbT$}pnRC*bEsPZCiIdxB3KKa!r<ImsyfKPt$eVgltPkwD&E57;NxBHtvK7KQCjW0j_ACI5?{<r`9`9H-^fA_<S#~0s>KjBB2e)Y-vk2U`7#W&x5`}nWl&Gl#e_*cLA^0Uu=|M-Vbzx>_T{}aFQ&A0!z{rQ{u_;26#KYus=giEb&Uwr>fTnoRCi~kT`Dy8(RPyV(2$KzkeGw0*?pZxm2Fo`^f<4#x#<-+;LpTZA)^X(rWe|YizYJd9V*Me_<_m}nUV|(#9+lz*4VCej-PyRxWKV9~RZ~pjg`*U1N9k=+G@4wsMym;Jgy!Z}RqKB+*Vv<~QDVFdf-?xAN>u<e$;<I(f^Gwa8m^2=}d(L~7mU!%h$GfTJ&5iS{#<o&%9!-`pcf68MUj0}Mrg{wK#dj}ok>_ss-@o}b9yh!H=da!ZhQYj<$Ko+cUx2|XGN&~ut<PG#d77KuR3*<=wMb26R?QeW>B={OLGA&DRO$onD;0dfl!_h(1~)Te@nX(SnNI@46E}P%7)UU*vYO4#*@qd%S%zUSTc##kQq;9JuZyX7AYkO$M`joIRN9kZC|80(Zv_Lt1_pT&40wJIRJ|b5nQ1)?3J3|LjE9AZlfC*$P<Z2ZuLMHw6Blkh)mocjOkj**l9PB7-wi|4BpbJvQ=L4t<AGP1Yb4q><OquR`inn2{?qTi{Oaq+-+uas$FIKr^0TkL`dgwyeVQtq9*PKo*MMR92{uPiMJk3M>NTgFjmlY6@#YQx3<`QHD0*79REzOSacO0MqKwW>H1(cq*_IhGW2QNLY089XvQ_p3{9KNpieo^bpi}p(nQ|3pO~+A&R)*wqO<XV<JqZ*~-0+p4$dXpYlwS@RS*4HBwlvFgSFOr}6HQN}W3&*JkQcjBuNi#8X;zv?P{!X5ir1;5JWU;19|~j-)D>}MK8`!MSn(nmVy^gEka+WUuSCS~v>W3dR_=S%-1CHd@Yb`7NEa(ceXLoMxg{^vW%QI_FN{W`Cq#tAdwvxVe-#D4`QrCqfBD7d2RaOPeG&`#Ar&G}DuNy+Zh1ODus#I_dKwJr4J7bGKmd{9@&fD`4N+V2vD-AB-VsTPa-Z7!D$sC>FY(A_>BPGLsrNz)($2S5qE55vFM%L2`G3ZN>VrZ@<_ZKT<JJ8HgZvI9xuFU(Ehq!S*FL-=E?AbWd8FCeP91VVXqJ(?!(syLD@mESo!sWFAdowNpgxFJ&}gk0GN{yi3<%gOmzX++se1{{_lJSxi_=xo3N%2(=#@Cgc~adx+iucQHy=<xB(c`OxgbtdO0z&K>}9(r?+6LgeGDPYEKj%MK##`(sFRek*6fJ0`12qf5OIO;His)m&^#p^&_iO}DzPFIz+1xPTnPl2gfcZxg>ftp3d?#Qta$AcvnX5XGB(*xb>j<8qpU4}3<WXit_QKgP5SX{b^sFK&ueB*)vcVw4~deQkm7Pl<w`h|LB3Y)kTBDv*GZWALsm&GkJ4J5P{nYdIslU59e@}!6`+XAn!6pu4~M|vZae{fjaeyp69K-Hc*3%oIpA>l$FIZ#Cce@@z+Y*XRi+DACfsK4slZ^UQeD|8Av%<`OmZ0xsVlX2poI_Oi6iiEKfWMnc%UNIpD;Dg;R`k^Oy-ac9sw&|D;)6Yxq}JD66hYaltLH^EG6V(3Sm65wphd%b+if)6l*|Cot(w}O+Y|kz7B~0{`fgLJ^nXhdi<}H?eR+%JJ3uNehLodp-_eW$rV;wW2Nv3FqFRm3-kmQoUG!_c%m%0(`U4Uai_gUg(}~YLDLX#-8ruYs<#g9XZU&u^gAYbD?`diBPMRHtJm^NEL@)WORA_31VYUC`2sZX&q&bx_GKqsE8`!ro`#kVPrH4a4BKljxCy5M%WF$AfZAbwF%+N6*LFPF`GJriha;grXi7$@mI9FnMn41!ice?E$eL9=r!$a{>H}^tRVyict&v{|1s-u#s6kJV429+><PFwn*0JGJE%mK!6otF2Im^hxr6Z0YmL;F*13^I#hXO-rYekH$&<o;r3={+(jlhh6o)9wa6f8)3$mE<bg5q3W?oqr03a$yiu%R%(5i%EHY-LklZe!w?a;avS$7GNdZlQH*RZUcDXQ<|5`Qawra4JtovJA&!m4FUAg(q;QwVIlx8lS{hBBE><gk6<-n~q_$T`JcdtC0z}GACX?Sg<a`cZ*m{t6I-<Q$-Xi2lK=Mh`1MDSPDtc6&H!+?Nj&yH>t3>2v#-MYhwh$NpBJoSSwfpe1{K^yb6pZo?LA(5e7<O2ws@Yr2_aTZN=8CBI8)PH~<m%q74!vpd#YYvqtl9+5jYllp$s;=<7;M<nSR}W5)#i(A5T9$?!QA74<qj-u*<B5Gr|-^t^g0p3>x<>U;_lTHlEYq62-!Ph9W@7G5I^d&Xwcjc7n%a4iT8niJm0Gu8rc9rJGNEt~dq>fKf%e7#DF?<_?8>J#>^V%Abv|51}pZ;eK8;|(-uecf8%9Z6QrSuM-YyA+n*3WnOCg4bw1GOe|xgDA#mO+g2yy7KJRV0!VXvn{m=uh{{IwuS+)?E`^9jt2u@#T7S$K?y=TQAh~pQqRCbDliuiv`GQ{s;qh?7<~GqU00K4vU&GmK8^P*vNCI|O*a>444T$R5w7q^WzME56?pkTV9?{iAlI<O%~%iuL1d|kF@I{!XMlktFmQ?u3rJgx!><HG%5IIFFxNNUe%jIswaL0>Ub$_Z@E?H6Dn;|O4WB8yAU+JkV{Hf1#7)xSY`SoO!8qaGA?DIabdkxbI^M5SEFoTr3dxZH=L{%SUCKL;A=Rm|xvs^nmdq8lf^>8usGDAVfjTk_#>jFkUmSsoJMjjbp2V`C71m_=B;H8X5E0=4A~hvli-}>fCR}8)xp`!D!3dX)))4@mASAmtpDR_o$qHo)Pg=F^$-H*U$I`|Tn79{x7@H(3DPc~X#U3ygdfC3f1Sh^06B$##jz%kOrqws7V<#s#%wD!ZZjN4XeTYa5#UtvbRu|Fku$}$Kcl%3Bq&G34cig<F{7ihfVpXc%${7xlRmT$qVSs6$*~!u|XYYweN^2lQ_s)yD^Z<$atYZmqfuQeeHC=6bNsgJWdr95-O)R{+lV$vn69<fP&Q|2-6BZ_KUxNr01cA_*HN$G;(kyF7NLUV9XlubjTg?R@*%>3T1kz|*91O|5ejq5w@lcQljWu_OEy>2^r!2}3j0IS{k`<cHpvcp6cJo*)C_Q8g@j!vbz~+@;z@wpw2{VSzwnt%sXN9)J@OETCEd2cj7&t~mk@<iShM|@zLjar)1O`1G4Elgaqj3O*0S3$I5HN^I%*e=%^CHh~aUTi>k%!21HpGO>l9*hHg;Bvp0(vuBwWPrl7wyoOHBMTAaLPiAh-@frHukjDI^zf0f_PrL9m^57>4sCe;<6fO3MmJ4_(@!025X^2kdv<@&AtN?jtBr8kC|3lZKO6U4ReN4(bkLl9<s;C?h!D$7N0Zr^`}j6OJB!w#SxIW7iUDGje@=t99-p-I0HcN*j{rH$kHn@vCG1n=E=D3&c3OnS=#~_fb?l)YEpm(S^|W)i82NT$LY28+P$=6DdPxC+>1Jh;^mP+ppnT*)RALP+C_7P+OumxfhQx@@xCiN)JJn~wPs>#f{@o_?mb)SrZA&2HrS%q6$@JAh>85vIz*fU`z0vsp2<<^yiM<<&I}<}An7tcqau3tx@z`T7;_R2zrxg8&aUv00*9IE=-a#1z8CE@N{`dn%_`<>)BXk&;)%bc40-S@kpqEw4BPw4epY=e6xP}^;a<|pnD`r?U|}LxsvC}pnx#D^&klhim6RKgX{7E0$U~g?Kv0mwp>UtwZUh|1{7s-?=gZOQ`(r@`s7EA+GDMKCTCRiwiI$pj*UZMU1#g<Tk+IUM2C<p*Ua9Rq^HK~D5($QbYZ;|wYwZI;K@W$*eYUyd+*Kv;t_p6~^BGVO$1qBqz{2l%d8s7d0R_C<%K@wHjkdsFlwJ37KqL3oa;KGO<gsY+ta(8k#hL%vN7=aR&BqeNZJ7^e5=G!ZE7hz_l1?HDjkR(r;PU!PD$LsfQKWZ+N>B(GU_xf`u?@qpYVa5p5@)9gQ50n#peT!iNuVp%SO|t~A4?Ml0ODSBA*R`Jx1m(?S#;r`_Nes%4N3J{<uJetUhsQ9mBV_%bH=IdqN;J^LYNk00>0gOu3cp<Dr+uWgDv%REL|J`iF?sTtW-;afPn2x<s{l*kJK!QWm0`*QR*F-&|X?vWk7uRPBy|pCZUvbE^%}>j_k_-BUu|dY4^1<b?&e~gyBD7EJ}VI5}!Uke)YTG{{GX?AAj@t7hiq$`1u#V`Sk1GeewIp$Im}|eEdCh&*S6QL~>-pls$PaCqK}WfXKJ92BI{0iR`i>_3ZgwL}Y`7OF&NVYs|3qb0_BouvUqDR$DA<FnAr)JczruwPH<!FLe}N14KOcmwTHTMiXk%3*cWU{hU&p-m#Cx4LSjVg?UZx2y*Zk4vkRKniHxL_=Ulc6s(&o4_K%Q6oVjp-*p@Z2l<DELu_a&6bfN>^79)Qhr$7)09Qzkw7pnkxe^XjS8T;{EOxI-FqSYCQT}K1hN6@e!~i<k>!LFx4=aKFNTYN(+vDJ%cYwp|+`)%{Bb8hd<i0YyUew*)!6EceHBn(wk$P>UU>A#X`z70$xq>RzjvNP%A|)U*AVpi#*aQ!zgYJY5b@0jpPp)itCytx+#YY0U5*F$^7WdaAyn5J{p6d`#Z8n|i%|;tO>!Q?mD>^uf(43$dRjYaE-3jC$2p0dyMABoomb}iWDL6&grto41V`Q3+>$he-+bnGt+#d8Ohy|864WOmook$LW#YaMUtJY|v;F3~zaSjF1;ElKphXRR(%r;Yo_)HCPB3T392nJVKC%np21p%1ly)crFv?5;a88RTzGjrra!>c`8Z4Nxs`!MUV8{HuAY_&o~Rlw|J;ms`WI~!(Z(h=KZ08J+eoi~-=Jh{WKEnuaG%N7|10(FS@`?EFGx93?(3oC2he3#UtVAQIYWvvQatpfR(Hgspnb16n#ai4Q{SmzmQ82Laz$Q=N2&1%-oLc^ioU6nH?wI?|P9;y$uM3NWYwWjOg0aHq4_7<l%ymFnfe1gA%3)wIy9nq{VU8%c5jqW@)jO_qupsfngIuIUuI6TTV3tRc-EDB%{PZlvB7a}_Y9f=;G7097FF!$5TEX;SHBX72yrx8TP=y_^QUAU~Qly+bEsZlBK(q{qVdGD1td(Y6Pv4LXuXOo*0$46GVHf(tI)?443p)zxoVpJR1wAyKu&X!lt+$2Hm^cs8TO(r;KlsTSBxjL9t4gtnTc6mqqh@v@{3U%G2&o<pbB_j{sLt5LRm7})Z20ms{%QL6E12x`Dvw44ZIRGXfS>_!msSTsAy2>^xV_`<6DWDLJve;1<dH0rM@dKlBZKaT`mbg=1#LtwcN$-UcJ<_w}eBKVcLH0+xjUQ8`o;eh>!>{&5n4{TRFgl(uEUV90g@Q?t=}n@P=FU;me)mhl6b~QNhQ3*O;I-sldca(dg57{8(<`M=^&KT~!!vuc4V3iA9c-EE*s;=)lJ2O8*qb7@v^7VBr(Fzx&5W=dd~+Z=<ZyJ{X*)ipqER;17_YUQf)C|~pf@U3sic>c)Zc-Qq1F+oYHYED4(*6#TzVW1S&Aq$6ZHY<x^mHO6B>jPPeDM5oqBEuqC*cy$DMZO5uGj_7=S~OlFmSf7-ATZSp|MWi<N7GN2@k<))A(p+OV}EM+4tN1nS^Egcee0)6}9+9{g`vT_%+%vR$4mTXHb9+$2Cwr5F-CO3RMft9BB_aFpJ+BvErcUCS`hVT2WGVtc_mR~@~vMY*GSIfbf=CvjS2nr2$;!-QxS?sYbLY7_2ghB*Kv_hK4~y%%sz8~}XoNb12%Lk~4wFp{)n%dcdIz8xpMD|H82$SW)g5uyqH8_%m17_^2N(96Jonv9gZlZ}OMX`=yo@?;r<gSqAaoZO3ZNOKkg8dFx4lQ>7C6i&@BRgp^U*TxeBkkM>_sp4qKW#=W0sX1+~f+&(_ftjg=wU-VzBRP(jnDK_sk*Aj2<^A^Q>_|UT=sdCkGNQ6wb_P!T8McwAS2rgf@!p%@6;>SKzzZ02%v_@Et%sG^WhdKvdTfiN5uJrRO_Dd^kzZ$<_o~ZVAXFpuXVgM_JGZQ>TiP@Sc*fvo2uc;<Bk@`sS%^`Y)oNQ7QDz;84mlhhcVZdJ%u&^>ma29RJmTQudll>Ldle|tIiNIlPS$vPbdYSgG^9vDEZN$$Q%-q!Y}S~>hv9xN5$`~J=;8Rd6T4u>ihGW3lR5Dj@DP2!`n@)Hnz_NRG~v`34kmZ@<&D^7005C&7<5;G1^8l&hJeA#F?qP1`*X`}8R=(o3_hEUC@Kr+DIui3Uq#=!&AP6<h9w>fLdg`}3SfexuiVP`1~-k`&$5K65iD<`sQyl?dA~oy9DtE~F-@wJShK|0YdMK%-ml8<26=#<Izp{eG`NH11<F#FJt(DuAz14zmR~Dw0U~FQ440gC&X{`l=a~agaxcDd#N=}E5m~F9L^$tP`FG~%8(_0<^(eBGyd|@`1}>UXi-Z0dyc4a^YaUEpfu9axK2`$7UYP^%hc7?-m*0Ky&tJWPl;6IJ6hCx-Mo!}zOPF0%E+?Q6N1kDuONJIExcl623d2GkE{{s%V0&rs5_L9T!5B^&3s$A9mPPS?c+)#}@5)22t`fbL;9S$oRgt&%t*n}Rj-((lscQ}wod_eY?Z<{AjTYCw4WP|od=rM*;d>`XeI}Aa@gaxf<4)D&qX9A$ofR%#pIcr%7$6j7H&R6q3S0F`EtYp6B-PYwLquz%j|r0t@w&NNtf_AI4am>37Ij!30};tymu^MF<IL2xDTwch5Ir0rcd9P0VFYvR;*mVJV0J7(I6okQ6)5H$y}I?41+%vU1o{KGSZg!@MS2_7Q`JaUb?woNCaEx>ms}ljc=g_FWN*XUB_r(&in(oR^-QV(7BxqGj95C8lc>hwz3b)tLv$6mHj?aU%WS%P+O(|7CIiZ99Ib6Rs(tPF`|900?m!0qazQz@0T?aKd<NGX0F--iPV`U)S_C$dSx@2|mmg1INQHLJ`AVcn+O6!hEUy9q+gr1O8`^Ef0g2xBurl#~+O~3SR#UE_TE|)*GUW`;IRGhl;+{a_rEdTerlXxiKC!Hq>2mDv$F^KoA*Hp!J@wsZ_^#-r?wcgi0i@7u1~WV}?+IFpgJW}b9XbXHq%K6wQyC<b-V-VL&@(g7RDi*YQ;C-V;(4Z$;LWMdRy>2mRXI*pJrhdSRD!+*(=S*@O?}o_$l9~Pl0^BXxe)?(9Az?&^$1Fn)$!JB#oxRE5PEIfH~+%lTuV9@C4M%swrGf^UQ4GAqfWilWqnx1ZPA3=X_Ory1lAmJgtfLh5S$MMh};1nm4X4Z#@%H-CdoN*oTLl=V{Uu~K2m+v-drnP@j!&VLy1(GmHX^A+q9YT^j-Jv9iDiOl-sOvZnM-~B8{nq)yZod3JyIS92MYjhY~>$@s$0T)0iqjqER#&IDrc|10Le<X>Kay#vJ6Wu80*N6iU1|t{&XSEr}%BP#_IV)bSS!#-{ZK*c9r^&fu5Zvf!`c89j(-lE-oXIO7d%oKGT}_j5OO%oz<h3ytWXgh>?@Z1;kWwK1mD%YGig95$8-owF}JTZ=S}#!;sb%^^s+2jK{GC3$o|i#lX_663sPZpyVlapLZfro_O+gd`bWhpkkj&dl;S-wXa3jiaxtWLL~MTdQq{;7((oK{^Kj<xb=i$^<x!a>ocSb`tr#W^S&QC(5NYua}eGxmC_SKrGvGYcW>ORK1v11}+$*Eu-e0w?}VdAm*w1GVkkx%aPtjpF5y;1?Sj}0I9LLmr_lNf9$yxHRTmpHR)0koN@<2<c9g$8RoXiHW<)}*EP8073ZPiutJSOVfZoGZ`6u-?R=g;h(xDW*zgjCHeXg0dHd0;$Saf7EzhWz-nsW^wu7j&@>rLC3R-g-fmp|6OOUhxIc)igLfL&Ei4VC0K3-=UJ_H{{Vr3o^7eQW4&cFwlMvGXu8&9}iy%HW6FW70v<`c{>!cN}<*Dj=qJ49@p$Z$qPNlYW#@U0s-*$9>^!x|q64?P?nmsM&hoIEF35A{RfVFi&R<CR-ZmuuV|9a0_;I6PZ4Fi%EuB|0WG`~t!TE&}EV&ATc3xK*{NYv(>~;AbZZKHp|emMcb6HZ7mMoj@)(sgUbP<`|AK^XOTSJeu}!J%?i``oTeUS}fw`Yf&;v<VQEkLpFn>HkC1oFWs3onY5X6-3wBsW(bnpN6&*As1&#SRL0`r6mtkl?m{)udNqNpE7P-iMn^MEilYorxfJO?`C28?N&4hzYl^xrSd|29L?Qnk_XDvpDUG@{rRX|c8G?)3R35AL+WQGqa{x^4ML8<zq6Jh%pKB(2H0MO}vzig?H>Sq5IGM7t`el7YdUUdz&>^!ITo=Y@!P7vEWPv<MR%leuGDo#KF55N!#PNx^^n2l?9_eVJ#>SiYum>*sQ;I<3CO?S}y$K&tDIbp#5yT>!<T-fEK36FnGm@9gA|p*W%h4CpoISOUz;Bd#wbdi@Jl;xa8X+*y@kY90yoQ%#lO7NTEK~Ziwad?vMBaY%3c=4IKDI!e4z;M&pHhH>!+AISZ|;siy6qgo1ORMpPKHNj{?UdXh7P#{Ixt(KT40=!E>-Ix=!m2MNRUfCn)KXW&7tT>5Uf$NADSpR5$7w>(T4Zg_ukb89uMLcw>DDug-{Yj?-&Eh1Ox27c^SlgP+FGTo|6h6i4MI3Iv^mU6E{?9wD?PhpaY@2iifAE8m+ZXfQQtF=!%zX)G}1RY#3dIk5!kCE|Fk1Xvd;iD~q=)*krOMFMEw7ZR|ZPXTW8ohG#l`>S)DJ;Fg;-$VZNOAC55%2QxJ?Sim<F9pY-MYmXV6qpS2w>24B@0yQb78Yft{8VAG^oxm}NpyVUhyuFoF9c*18MTt7dMY60NJHK9oc%tRltf_>Ur561f1;%YDOiy3A`UzZf2ueP3&O0j9l-_XhF=~rK%rboC1QWcdEuSmF_cm!8#8VX(I7&x@Zfx%;DbU7K$FSn4@vA`j&EG-qn5RqQ)n`g;-rUVt69PuD43dcs0M9fNLKL@bWrG4%UmcNpZ(Rvd+e=g%TeYRprc7;3mNZ(H%2*Ty9h{!nv-4L2hd%^?rjjlNLtbXCrt<bJnM*-Uj3@h|oK<iS3wl+XAz%=EcZ#+_=J>ZcJZ^I9P_($sXm&mi1cdy<0s>DFfz=RV5yDx@8Gt~D;B1!JIS!tCPFEr#Ii`Fm$)m{G7($zA#R)1&)GZHuCYU%Cm|W=6rgP6U2WwB(M}M;A`G-P;-T@J>B``muGwSUb%wS)#r~?(%@Xo*o`-6ZhW6sBN|H~q)?|?@gn_^`>E<!XQm@>vu(yDF{rL+W34X=(HPsEU@^Nndxx<%tUlX8CsIiSeuM<#jVgm;0o90&|^i_9q{TlEM&b9Drwl<{|+W^aT5vw8G3OS8z1&e1{F@6ROvK*0EiW|Wd)ITmzzl*HUtR<|hJTUMH_rm4E3=}4m0%$Cz^31dssxb3|9ocCvxLy+;2S>6GYjrcKI_T4#;-nFd_u7OFV-l8uJJW?F`Szb&aOjoI~>`txh*fLsIv^xFG-$65(=Q`mY6F6MlT{#YOyOKYX@L@20K5JQPJHWG|UZEM`eUJ=*1k==LZ$xa@nzb_m{NUt$?7cntJG&thCqykXErqjQ+x#}I)i9(KFCL=;H!6%M<rW=d>Zq}x;gL^^uWZdaZGt@&<~3?UJXxITLm@)$fQW03UEZuXD2fDTh46^%Rz3qC8ueUjIMEX6!?|ADKs{=1ClOc>JRYt)H$*PUhzeB@;dZear2t|dF7HOB6VoBVsl+)5rFkGe^l*G!ci8e~LWxeXRk_4r|7>~&KBAb6R*wcIa1xjedUZebg#fW3BL*l=C5KyGBST5W8eySmkBX?$YVCP=8IYlI>IMjDZ8g6?qa4y>{UfuyS;!r4JW91!o=_1`7*G^o6hbUip-m1csso}2qY#bLbJT>E3r8mlFZXAbLy+;2VcvlgAG>Sm1y@VUCwtmJM@=9VEp0@DZTtXB8f7a<+8ZKyOvTmu%rx%LFbCk|Bh$PSC(-`_=4CK^x(o5{HHymUhP`!);;IVU!fDPmqBa%Rz6M1H35%{GPsJ0}_rl4cO=aqHWglKEC1d$XfW$y<izG0Usd^NY1L-`oIMy)pI4YdA44=TTx4Zz3E#Bq^CNOU=B}PhxSLhxsh-`J97(K0--{_Khc@HlMhabQ)q$-g)iNN_2K1|*oM>Y%$K;nxO*BS^xZTY2!g%81R;ad~82E`)L+_mk}MI51~r6P44hz~g)AAA+j+>8%Ru`LBLz@pFA1vwTUN)LR=@Q^6e$yKk!hvCVL#8x=k*1^S$rJdU9a{vl(IX$YB0UKPS&mA{h!B@2c80ERzf%wql@gdjn%gykRC_~AG80_M};u-jmIG|Nxg+Go^m*ReH07;=nsmJd8%C)wNFU6zV&?MWfOBCPj1MC@Rxru=uTU2!qhVs(;6U<FQ<ZPlzTqA*mJm^MFVH$d<72Xs`jn!1W7ARtMdd+E)Z*NgKrtVg_ji|{T?JY)A#HZM;lS}@JM)_{-dB;JKr?Lu<W||{_ayQ1gH2;YcHc`jr6v|2Up(aVhIh#f8!YhHIkiKy)+n}3UhCa#gzGDM%I;m`EU&t+pa&LR)1x;K`8pP^!_$V3W{*-eBQ0_%N#xON0;c-5{uX{N4#4(@9EJRq-%aQ-9fKuZ~WrvHevk7(h;3$(8o3^syjVqLj)!K(^B#2NQtwGZE(P>gzPwx1~aisSE%ApNrs+~$X2@@`AWop#mug|Tf)y*R*EJ%mZ?aQNdX(_RT*I+K-jNmWBVB}S$<^|bUd1l3HAWtd1iIDO-<&-E<qM9SE<7FioOK%6rF1ji9YIyD_%$Ff=EU1O+va*4jHOi#j02iHk$duk=v!<<0Js$`VIUXSQq8h~IQaH}7isdul0irSYl+&g5qF$oQb@-r4LpE$#S{+|2{@*-8*lf9*mV~IbWbWKq5h^A3-B)t%k?1b_Kz!)&__!0pa4i&P5H+eOJXbg7Sb#{xkLWNDO-WL6_A3F>vzO_8uBBrcO#HB11hY!}>;XB7)_KvWJC1BeqDaXCGSWCJ)t}5tKA2%{lOiWGjpSsOmEc4rpF}huh^p>X9Pd`H1q%0QLB+hOTBlKQRcILuZTr%hJngwBSMO~n{JRg~;Rc9c;I&t|Khqoml)EubstT}JLQK(|PU0MBW<*XBm{;?3B~WIj)*)3#8Ebpr`%=&@^5+&*s)9<PP~(t)nUL5+r<R4VrEM(eFXQ`D&JjSl7xi2=Y~oK>_mh|>i));licK5hYjJ|BfjDd74q5@{Y?zlMB;qn^Y65aGpd$6bRv=HJegO>Bo@18<kNnjBUU~y3e+TVmN`5AkK#o<!V9k`J=4UvEZw)18g6oi#D1-Q1`l`YfSS)q-dRbD*(Ge=o1r(GhXqN`VxQ>xp)Zp)hOPd^JPNSL}(|U7n@0axtp-RLHxknMCEBmWzwjSlIpm|I0E(BCop*WOj#hQsUvc05Zj;W;v%_0EG3WA+l=b;dh;~^psQCP(#nxNJnYvLaPk*L=#(Z5pS<fEN|kT_LW<Lqp{G}82IJ9;mVtzP17(Ye<r#!~A@lctPG-uu{*Zn9cxyf*K#;qW))ae@n~PnEU%fC$m!5t3f7jA`W<gv2^)Ca!S6%FKQSL~yTo*%T2(GaSy#MYMNdB+?OEAK<=Xz(rJ{f>X+HG&G<`7D-F+Hbu8^;WeYEaJRB8YE_k|3Jx7lG`FRaTtztLD87jfKBYzhvBGu|-Kan=#L4S|AHO!3)M>5AWbP6>$djdS&26!7&@=QA!UiPKY=d|WX;4ToJ?6nbY<rwRH%9>FUbGWO3Zf#iN5$Lc+Rhx#JCGHj(ZL>Km%i}VVFj+Ji}g8DrzX+3JKC59BIZm{ygN#1Axt%GEh@gxh2YuJuns>&`3&MY0xNeTAWX=F$C<fiFZm<_f*YqCEyt5cy*8|9%eJ+fN~>KGMTfjPb`*2hD6_iAHOpFSHy?AyBGgK0j@aa}Mo$@Hd0(g;+IJ?G8+hmDwY5@`66_@W1()YkY@I#|MiGTKFyn{wsyY`Cg@5gC*7t1Gqw(CH_;dS&J)U?UyMY_Zo2^%0YY1Qu1x~BFRVtVj^<_@9y*&rX*BnygfK?o_NxG~#%x+d$-DfU+!jmuj*v0IRj7bkX)9P?TRMw#ok>eq9CF9(@tmcLf7ne|bh2#v3B!7Tak;svax=8wRE9YGp8QG^uvIaFWI>Llo4`;l0<~XXwQn>BZBcPQQ3nd(D%@e^6w`_-EM32YFl}vN<k{V0~$I4x-$*`RgM}!d0ESp3HZ_edPgpAsO2&)BGfXXn!=w@c0u*jXF_B6F7?9qSv(rhHH*c9ye|Lo<-7Da~>&26pl$}KBvw=<4<v<OO3B;6^W#5kEr@M$6x#bmF9ir3u$gH^W|l@ez=5k-2BHG3PW`XtuvJ+h4uWKyivFCR3tdFh+aAe<whayQ};Qx+)L(3w?FBAzHdMzA}EKdW2`6$BM-W^vw35j%W)EvYOZq;JwV{=FN*<<f?6^#w5L>~%#EqYWdp&fuLRpmI0<0Yu<eK<38jxuv$l`9~8K$Oe2Iz>=;FEAU773elvKWL<T|63N&J-^QSH@6x+OCAPfx<{?oC&1RJFr7>%LVyUgx_k_x!U1*%%yTj(KEm)&L3weRTm3-Mrc?upR(L<o}oJo>b&pX!*7dnMX?%iQIS6&XrFuW+rJqa`b{v+nBIsXzK@fKcfdj?$UWwqXw%FhBez2iu5Pn^bxvU^r$YB2PY24&m{>!jIsrpS3sxVdSaDX&R+l&Ex-R<R?&A$I`B70u3W1&7D$OkqJGOicU)bfo$~`1t6M1dqd)e5kA7;nC51N5T3o9SqZR7Dy3<2}`yHpt5rlh!4mejRl?*+rdJOF=l%zRqeyULl1|?buG?r@ARE4O7Suo<Efv453vVGps?VcF!xiv79YbwNNub1%D!o@1wNr>ZaWtbNJMwdV%k=%dqDedUAsuWY)9-fxaGE5M)dyOHE$=GBpSQuCCa&;!!fZJT@XVG7%#f0Tm_P762e`rM`}PDJc3kKWIb=drPHR;W^GFt+GbbQMZLB(Cwr?x>jaKD1SI$18Z|gzSb}I)s9Mk9n(|Q8B5yw|u((`{l2q%8Y{n8fc6;NJvEDjM^aVih-JsC4YiXC0A5i1FSky<03{eAoPN13tP;w{A;Tk9@@Yzurx|~Bf0s~v4@v4J+(zQ65zN5=bC*IIgTGoL2;3&_$@Er`PwYfnp&edxg7?p#eL`%+f07-A+Bo=7i3nz!Rph@-VPFB~n2k=`Po`GUYid^E@*RyBB2ts<R(GE(5l%?XOUt&+6>SIL<Xe)ItWvi<&mnJCzHc&cyryr9AU&BYdhgZXhMdAK9r5rm*FDrV#y=orm9*`R|53mR)U0^Ig1Sl<O!op<95T=WU_T76@#F4~>`eX#3I_XGw$Q|HuO<#ap;Q<8Vr9uTnp`#?}40y;xsnL_ZWJfG>yAmEzc!I{p1u={g%ka5rX;HymW#YDAZFvnHye|jRONsRQW>aB=@To__L+=2OYZ?OF3J)jfRM<ewyaXaEC%{9}gVtzYCva6!+b&;;55x}e*N6fFuDjL5GqnjPvj$?~VjHb#+i`e&H}yOw13)y#Y8@7NpTI6RsgRE>^Ij}7aizYdlunTk0J?##z3gFE<}9}GW5gaw{61!l{zYY#NO*}hi?g4=GKawABip>g)3iDVQ!gwdY0FJ$$C3yPQjs-Smd?@2=rg)hr=h-A!c<_~f$w<&+Z+OukE~Pv^MC(;3ow_1'
+PARENT_EXPECTATIONS_SHA256 = '4d3796081a0896f150b2497105970500b69806bf60ef7e60d885131353b6dd71'
+PARENT_EXPECTATIONS_B85 = 'c-ri}+m2<)ktOyod~OBYu5R9M9E#H*z$P1H&q#tE5`JwF(?d4c9E|`$|E^_G&C1Nmh|I%`+UKBvL{(Nr#%=rFd%3N(+|AAY&;R#lea`)Ff7$EZzwY%f`_J$G{r~E0{<FXTnbzKit~2Ufvz@y8n&Q%9lQx#hebw5!`Wz)j%rjMK7wT1pi^k9X?q~B~|Mc(p&42lGU;E#G_V-4u;gf&*<N3qCy!*q#HGcQ=|Lxr`fAbIj<=6i?zxz-B{+D-u`NRBg_*N=^_p|-~?D;?b@`peD@!fy_)7t-vZ~y%-e)r2?{^s33{rq>o`se=xKk<h@{@?vy|FGWuk3Wuo{nPw!xYYjRU;g}uycT{Q7ytMCP>aal{p`Q@|L5I*jAyNPfBxCu|1VUSpV)CH#8GNc{qDQ)O@H{~zr6eRzx;Xk|Ms)LXMFlk|F-}5uK(rT>VN6D28K?5_p^U1@BVt(fB(b3{IUOQUP~Rf_-}vy)A_?+-km=G@+VxWJXLjLV{xq!Cis>=_y74HKlT2JuRa{lQ@U{&cba2(t!G6Snn&<>PwDkgr@ESvZ3(B@c^lEdEBV=nzZQdOo`d<zpZ<c2ymrI?^ACT_$4&14-`{-(43p>(%}sO0*nq(fUduX1AFG9TmvzWZmFwzFgPX)^S~2pXyS@nwd=D^4v?tt`1U{f5p_hTd&8!f6n3I=E4+6srH+&-)3S(%oyRAXhry0f>(=eFBOT{*ay0-3ZQyBvYn6-^r$=O|^zX*o75e)iPFwjR};1|Jw=l4{a2O^!Bw#%S^kWiHHurP6|H-8WmKDpf+fl$Z7h5L}!S~rXdj4_R?uy^*;F*FrExV<WE(bRzl-gxaP<=EsaDB_=g`%mxw^RIsQ`+t7-4?q8>cfbGV-~ICUzyDjJLwlJjygUVS0j~kW{8!jqK@}2)AnL73tybbuRPpHze-DcCSx^kwwpGJuOI}(DpolrBv&tB?#j#3=8B5mmtx^l3$x%KF@N>R`Dy{*Af==D5)>0cgsa!`H+6a=%RVXkTeGn*KxZxW?QCW7wl-~{+*?7#^4|l8UG;K<gq%4;?Fj|O8$cxj;Xcc@yvRYYJP{!X5ijS!yUZxIhPXXBjbycVlUB?|179Lz7=E5HZiBE6$Mnp`P(+T&m>o~jBQ5WQc_fegh2U}PfbFUC{6OZORhY0M2mD$S+B7*Zhe+Y>G5Cy;Z?Qj11cfbAhg${#UU&KOvk|+g~ilB#y8!rb4(wD$cUIv4Ff&_X>2p}>%zW{qhL$oeFPhUpM2O>!*jiqDkfQD0ih)2#_7v2R(eMH%ic7C*#GRo@uLm+TY{_k<1`lQg2wE+Q2cy)h;LH&Y~JWz$TY$yZ6$3DFwE?DKGb;|1f$beknvSQZZu$Tb*7LJA6seQc_1bhb&v?taE8f~pY21TpafPlPF<kT@t-RIDJe;9CmcDh=$0Syo_dLs^MU8Nmb{dDd!%qP@O;aqE=8i*6E$O>qMv+WG=fsnA==j4K!<?>b>==C@NbrvmETXn=){P!XpltKaDZ4OtCp!tw+P@aTvtA!My0NxTN=SCpFB*fCX6vi<i6t;~qN%7hjW>K{mJWsJB?cf8F8T&9GQ<9kUw2N5bP5SZC>;NRdpSMaR%`G0p4^qU8i{f&kd?OrU7T>!KNSI|j+A5g(lXpn3GkR|esu&JbCqNQD0EoFHfFg>$PQQpBE`h_{cmnzwvy$;95_}Kh39Dx2fWz}Yej^?*@wH3@{4FPTEN8Gxy3H{pU@%lm+trI8I>g?_HKs%AavK9^p^JFp3OwA8FA6j~P?76Tn3|8_3o;8T=8z4Z0ZVQb4*2bLfC=Vi=pHqZ6ow2-3ArdKjAzxJix{)b-T;EI4#c!YmEAuD1O(>CfcVFEzb;<h{jY_}yZ=<Gz55-pU1%nPUV=kBMQN}<wZTejt`xoihWHz>P+q`-7i)MkE~PT=^cC%3G|D-%L6sk_plOJ=;Z%1A)!TsfGkiQ5`W=(J$K;qYbK=&vM~fd~;rWTbr;7GeK!_FJA3y_rj|8osUv|>HEB;{{GBpM~?eSwg?d-GRCcFeJuWhaX>VWmdP<(CQ$MIy>kAwui90~17MXX4RfXD-*UjhZiZzs&iR+YWVBak5N2{$OsLeke-@f)E)Gp`CY=mN<QWz8twVU1Rs2R_wg9PKj{?y}X&vogg%96>A-U-BbCK`(~_L1=43jBU^h>~;+l7{3~U83A1oGVLK)V0o&=Nic$NiuZdIUx0$E;0F#A1~`J(E*M*!GPc`X_@NrjtkPTrvcfI&QF>Ej)iwyK`C5K>lWuq@Pq0{pW3g6%4toes;7(gJHItUViEczh92kVtw2ZzS!{{d(wUeunf?HV&uOBSfw&AnE)@3&vb)C`>h2mnKxBwCN;tP|M^we;XT;6^NU*IMcHW$IF)pl!)KsXtlQvz!POMvh23%KrpvBZ;W9VWs+DFnd_v$>T4f6*ScS7V;n(!~XcxEE~{E(NH_c=W2#yqq=wNiIqdGnVvqBPMG45Nf$&0)7~36Ru?Xn!AL0Tb}QJAxdzGdJ2!aM}&(kI?~oln9%k`Oq6n=ulOq$e1e6K2*X~nndOaWKwxkUga)mGH}Z<Lz+1<>o9FN;XL%XJwiJB4L-I2l5x@C@y=$1YC9VH#qRV?PbM*NM8nk_EE%1)Gs@AGj`TJc8lh1;ob*SJyyU$woK0H7abM~&F15@2~jb<>t_^qpNwFR#^0EfP(0kHi?0s~(U2D*tW-V6pU5ZY2wLJ&oJ1QsM<E+A+{0sN+<dLtNo`6{RF&fWOX8Pj|jofW(*X|7FoXK0MFtQSSN!XxFix+*u|<wpX8UJnMog(cpM1uh_n%1sFKr?vVBFi-{tlH9O>w8c35MleWq>*NJ<{ow7(;U1+g(!J`g{pf=K091B_)@27ilTRQ%Ov7XC7t_R>q{E}>!T|;&!M#Jw$%E*k7HjHwzg}_)@kUf|%?vmvK&k0gI(1HNUOJiU-qc%EYOobW=O_j0W`u80M}@(dm9OQCD^PJK-hk8NTo$w-6{`>84QYmm2oI2{DRL_&rtw~Ikz(u6tm=#rZkv4|0D6It9Nv9xX?T+j$`+oqX*-K(pI)z}jVmy5FZwVt77G!~sYkH~jD<dLUtoe4x)l=@Q@_n#wj3&Z98kv*FL0P6jzMnD5x71?B!=P{b)~mm${Dbo<GXkJLrlo0n9w_JUNm|oKHRV>)!xb(4w6;J69i#^X<ymN(z(_cLQ`Z<gy=D7m%$@JqQ2VP3|t`S``%r5UmoI^>3TM|Q$NMRhdWtDPgN*kRBN^1?@w45e|`-jRS*QiAkqq}QKMVcfsn8rw9xm4g|=1$zj6>pVgl0WhaC(_qy0!w;On8lPnv7)5L;Z0;;&hhKQb0z@uDg;ok5YyYj*QmENFSEmg1o#8WWp0f&q`FEKHa=ef2Yg7@if{62m*00kQG*129mIsAT2?LKub`izfp(KN1-9dNAk{9*yP!6apBm$|Yc6<D8M18|T5VZgF1<2Ii;CbT-6<=Or<|5eu_{ix~7~wp+-gg^Ld8%a$jtKsd1xBQhIGyUnv~_d)oEz9F9X>DO|^+jPT2x#D>>&=gV*=<o+|g&C}cmI68XLDK9OAmNAr!0}wNW%nt4wKB~KN=5q!^)va*S=}>W3=Ll^_w|=8aLd@&a>W&pxEE(+qK$&S1rDy!gE#{~@Z4T=X2{YTF>zw!P17P=_f$V6WVOBl1|WS|EENT4pd~<vr<96;!Et))qYaOKEoEGRiF;8;Df#k>L7)}m2T@1OJ!xmH4QkJB1qGfA+ray7<WL{oy|-2iS!aa2&g-1jW0=B>@;qRR(RMCq6-P{@m)0Tj9M}&*VfRdqlE-a&i#id6TtL!QdPPNy>TS2`JqU9W55K|GTdl6}kqn0^ZI0u^+Bmx$nKAM-cDIH(+jV>bg?!@gDTAN9a^^r_9>ey2u%FdF3x&PU65NaIiiv;l8!S!amUiHnN;f%k(Hama+=^1CxvZ%B1o99kek3UH<xsfKZZ`ssWBv+g*y;J`^!>4*4Adi%Lm48-H;o&iP*|f$9a_nV593W2>cvRQZU(Vg>)F!JSamA~2#Ey4K`mzVYQ6tRP|(YvaG!1NJa^R!cvl&>>-7;(V8<{bPhjC^Jl-qGFF*nB_W6L-@m>zYU&Lu=JD^cV?{$<dW!AaNrq$|(ILb5sYs@&f>qFNP#M?3-9!V6518t>MrNZ(cqR?C`F99xZAEd&39uUD}7*v8nzyK4x!sjsz!<xZkG)SBy3!*5?K0r~1f=Qq&_S^`D{ai~E7Xad3bit<8akr^d>!awxLG4-V0~)flTb08EFL>bRd?}^%gy+mt+o7s?<btVe$OL?P(AuZ*-X-?hxCWUFxt1<2fW*CMBUh?fARu5nB_2c@<e8eqxlF1bEJ}R=6FQ>HjtTMMM{K5p6fRP0jXb)WNA`Jwk*rT$<&3>+88l#j3WooJv55LHB!2$x-S2<(55M{OuiyRR*T4P!FW>$8x4-!LKmY2tzj^oW*S~!C?l;gq@811$DSTzZl)ZQ^r#_Vz0a4$|8i>;1rDD%3Qm>xhMMO4OI016T*mI?=Uq_raz}h(TS#1;VN#J!%^Ca%k_s%s9dak4J5g_upzu()eFq%-49)N!o`97sqzOau)9XbJlg=jAt2y*Zk4vi49*Mh19eqk_Jl67mN2@BPLVi4pQr_Jl&z&}|y<c6j~p%lzcdVK@qQaE4~;0mspwwG%xH^O1*&aGI=#qQk-j3rD(mj5|)peT7KF@R3ae%2XWr$u5v(<mLz_BuG|9pLaWchDu^kf<S$`%2{ctnTg(4lYkkr34jaZns7Xa<)9TAJyin4OFpD<~Vp3DFK-QDcZZ{CU`O(bSHGEgI6|qa#y=MalA=id?Sz>VWEC<aeuFZR}b4VYMboRSJ$Q9ZT9J_?IPp!&`FiKtOc4;wN|Izoj`s<u=ptx$;jQ>;%#M3!Np9rm^L{Wqn72ke(yG_t>`Ckd(fjG7Fb@HKufzjkz4|cZ-nw$t<h)TlH5)>rGn`2MikSbKyo3oFR2ip(h(=bI{1b$xJJ6*RbDCxK*V2#5xLTec-%8&K%!To%!h_od$rmecxH@gHgY$*L*Uu&Q9_l$?6L7?HjPsaGgEZt_834j3a8FnN}rzGp^p}@<mq{f3<H5W#QXi;n(F8CEV-wZHSc~xMiz|P?Ri<N0arU9KjlDoMqOJm;)eTNXTUnIT*Igr0)p=Vh+9^(-Yhg6`rTEjVp6;CBjBO>)FP9-@UB&EhX+h)i8Xqj-tb0k<?;!>1Q&8(P6nb`+qz}ALXDm}4~*>uXrQg4lzkyQ^m2H_Eel)q%~=${Af7B@J}y-35$KTe1g%gUssnRh-e+Nc0Uh;_ow}?*WXw^QHW^H@s}?z9<GW@n^~6{K#`7^+q3WYTpXLUN-Jea~q&U8@%B^9;tM}2zIRuqi8;6zFi!E!T%ot>Kk4l{dYG<_EJMX-}K{M8TCFSa3R=ETi-`M2~@gs}oJXfe2#$)y64l0>-(wW@*Nv)i<?GEs<LanYU^(1P1M7MQ+cDVp1-&p1gC}|y|Z@S}HiMcVOWHBg&vMhGiMLwg~T>QYOTzf>}-GxS}yU;7;Y2>R=qE~vBS|7IqZ;<`jZsWUDsaFmKo%E|?7tGOWJsBO(7napmu0p{i@bb=CO7qmLX@ACZ!W2!PrBD5|^1w&Qz2ymWJqvaNo>V?4g{ogDiJP9;yB(lpWbR<ErOlHo9U^+NBI4+Z*wXi!8J<oUzD$I$oP2X3I{0#Q+-W;rBs9y$8sW9ZL-3*Wl=N1@S_yeyN&O4xm}&!os^u0->d=8$Mltem$W}z5C1p%V*Ih%0EohJ;v={*;cj~EMhz`9R9e3K9M|67bzyKUFhdcruY=~h%W@Gpb4U1cYM{l-twV9@**|fbgM+2Wi1RCHzgqEVvrqZ)e9{g|Y!K*|T*^U>>mRw9NZxSF6rI^BalvW+HSM5O*Ls@#?gtO+l+{!T7VT2TF;&|YltIpBMvfR;nK832ARw3ENRF-V=X<W(*8g2FR(k9&1408cU?!`1E_g=s?c>wUWBdHfNO?hhaj1keORzJuN{X9;_&@vooDc)dFN<lQi-|@V9z@T-^fDsdaHJ&0qip`BrX)hD<<i#=u7jw-8IJp<+6s?sFXq2kT58@onQaG)`RAnl$-x^O4KxVfIrpluw&pR(NmsUB{7*V9IfSGAQI%2@haLwZ-W^~|l_@yOx{<?iSyVB1@c^ugQ8Clt`IsqsC3fpkjt6K|?_?%PV6?Puszzdjbt{PeP*3(LyIAZ54&utNz*;&YC75)?+^<%dAs=B-Zp_-{bvqd?_saM^@<dikRGX_6Xpi~h)g!ZP)Ld?pn*7~-LGW$Yw@a5>Z6U&rJlvT}IG_}XTBM&ZqRk7Z2c0ie~38itWSf}IJL9*l0kRpLta<uCxRqFKItTE1ChWmYvco*VBFUQB7*ab6|-D`H6tU`}~2kY0>@3nPg)egVXnWPgOOdaIgdm-lu0Ay}q(p>`<;EOSu0t`MMlZV^6KexOsBmI#agWpY7N>&!ohlG&!brpTrF&nz;o+dOEgi=d(D}V{kzH+<b6Vx?pKl5fPy}<JJlGWeK?mq6%Fc)CtUQ8pc2x;X!d(96bny;(!dq5tbr-4xGB^%tq@&aWt_{<^_7=rcDbNRL579euYtZ>P4YQ@yMKhIo%l6&!uBPPeQkEq)0L4@;lm48>wz5%wzQO_bv;$6(zp17z;&x8IIypyfaTb)#f0zU)7d~N~7-k1aMPrv)+fBn^O|I6<`LCQaTh!nqce}*5%H71x{jh|0IA&$JlHqRManBeZ~z$r{idAL0*jf3sE!%MW)eJ5jh(Oj^K*uApi{m?02*u9IV+FUt%Ey20U`&E(8_pNMNN6n-lHg0=OXI%&*uKl})BfV^D;}}3&)A$O8IpBL2Wqqc?m*Rsj$H$$j$!7y(C^`!YZ?7${UJQ_uWjCZD2&Jw1pccy)5F$-R>xgK5j=5lRAzlv+%Qe;GegOFudzS(0V;~|v`?*`u^gJ_lYYO65B1A7o$epUoYZ}3tyLg3PTQIv8AXJ|a!2*i8X0LAjV8QJ30D=AhF7}=sK;hA+4QZO`s;(oO(TFkudgAJc!+VTwvwEN2pEJ@PK{0PzT74wd0E=3)K1ME`@q?(w;l11Q`G@Q(aBCzv*_PS#3^`?6<5LVMYk9P`*R1w+^6Slq58MGyd~riL^$8elt@H@4xd15l;+*WE474z8B#}OdbDY0Bg~1Klxz-zz!g6|?y{+zmfE~SC;D%1$c|c<HGc6YWlw-TLZcS=S)jId~lqrwkoC}b0C+<lkKKBivg6U`vBA;B=tL6FF-*;`fZbC}$lZK2lR{E~&r0%D1rUP)4)eUBNRXPi_ln2Mw9y)c-!jQTUH7{k56!}V|)JxCIyix%MFHSjM0*L38N`h}rb++&d5?7@>S@lXN*-H!bEtr18I;xD-av|%i4oi~dm)1cDIC+%GDAyy3EK<i?vz=f01R&+3ZQuF>e{(D8SeE!Xg|ufwH1!sv3>ft?qHP<~8g8pBxSd|ABZR=3BaV=^-X?<cr2yeO0Hl><0Bw19Rj)~M7Rr-!sejCk9)S;OAKIH+r7Io?lMg77#;eg-!&YCmq%J@0oH5{u*Ob~<%X6F2PGlNWPpeb+yc8UIIXD`?;SME&AmUQ}n$wudNupUa8aROqcmzDyztY?^$c;6N_qH=ufKZCiIk<XqA9Z1ta-cvum}uY&8^)%O4%kE)+aAF$Z_9$eiD&d8q7l#I{&~h5+PFT5Xui(fw7FI`;EXb}e-b8DR<J!AI@ab~+@AOI3d~_AUeGz`xo2x|*K8d15TdyRDfb{8hOR80-OsWPnLdbdJ~B6PD^R@9a7fcaz{G+inck*tX<27xd!FwF|IAL=*OjX)W}NNak3(?FJdYrq3xIMb@=0X^9A>#=gco}d`Fvz<Zk8uX(Yv?jli#&Bsy;z1$7=66R<EUbm^K0~2&0YJ>Z!-Gw=od&Qhk}Pb-{6^x6#)Q=-t3M_C|oT+}smsqWH&NTTxTmiB;plA#lnA1W`NY>mZoh#>Zel7hcz-s5{R?<za=Eg~IS{d_Jia@zMD_e`3x~t+3&dg*M+;6#4wotIR878CF-;OCK~wHrqi|+I8;dehS*E%tWkXvI!(DKn`2JvrzUpSK@>3fRB%vhAzQJaIVZ_;v&ea@gwj7rqN(acjJQVwHx7q@q(RBZa%^MBJ7MaaqTE7G$3O0M1~V0icp!=rXM}P$w9E(71sDlc<ANucwVLEAn_`&9_p9C!vc|`;+0#K=WE;@9UM;x99}IOn2Qy@5gn^^`~boRE&}FA&3j7racgQ>*Uo*}#P_bk`2Du3SZx?hoU(n5{s3}$lM1<wWUk>DGtZs{;@Px^+G9ATWIs5lPRm8ydMiq1WPWrnb@Cx_)G0A%_|{X)DaL)(+RlblX%&K`jydWq9aM^2eko(|a*DYGC3m5kY`rQV>qh0(Jfo|bM)D{FRBp-ipL(kj8HLB9WqYx@Z&(!pHnNca$oqlVSVd+#Dw18N8$obUUrKYg(Z+ZH)m#9Rdr^+EJZk|}*4LWJUd=g~{H$gL_8U{<R-7!}RsDH=ghzI=ThJkE1g;BXwBc!>Mk+&|h((#rE3etC&FAeJf8qE<UizzW(ynwgS!3f<eAp9({xwA)bCX}hhrS6PSt%cn5)s5Qo8&cktg&{)z>K8LD|pI+vz%j7S!+li2>e!LG}|LH&-1NB*9?J)j!)7R^EJFD8+k$)uv+B1)-K;m68`+rD+E7>_&5x8I@PjPzes|E(s_6MyUxIWhMk(i1OV)PErLfT`p$-5h7P_1Ixt(aT40`$j;8GrbYxNhB*=3;8hLH6=2CPB1Z&pphb9s)h3bvy=+nm<=bUB}j|Xv!dY>|UBa~#(JHmi!fdTf>J!YXXi)^d?tW|=pM2Fr19T1S&i5n_4Tl~o-=s+lM?CEKmW^1hnz=PXUcEzhLYZ<CPZy4Q#kKMM<!I@w-%gIHv9-EFU*kqB4$JtZ3&vT~L3b;(^c&5vj&K~{%Zh4ai`NlC{!!f4mV3uYE3;3pFhq%_;K654K=#KGRy1TGuff~uFMgr^B@_@LM2XM?KDEY=UpKm4ACfQI((NYG;g)8rqJHOtNc(Uc#Y7!}COV56d4CA&Hrf2Nh`~h5Z2}-_k&gXGLyY913?OQz@bkjw;l#DSDsI+$l$Iu+5kK#vKu|j2lb)aOjdgP}#$<53k;N&}a{NlI&_@93DoBu$_?|<=+KmXsek~dKFi+}vpZ!SJuqc0Yd@K;J}`dfE*^U!87tGV7p@k*HynL9W1)@fV2Sf9_G(PP+Lesad{dQ2b%NNJhjVPj(Qk)3C+s((@qFCYAe23I69bUgQ=<M*4p{Q2`%k{up+_npZiWoH1X@UHk3xz;{9?#O{w1Pq$|yz;7T;U*{Tvi3`z?|(Ev@J|*H*)F++wAM<Ji9Z4m@+4VdRcp(4C+0T-f*20AWV5ka^+b*3vu(?)vLLQ?Hku_YGgf!3fo~uk&*`*b<Fs=jAoLD^xTW0xTj7yKGu_BrYP3=x5iiJ|@DjzjRdde|ZiL4sv&DT;i9UO;%Z5yPZdq7u_5NKpbUh6ANS^|}3(*B<la)Xx-Jd|-wr={3NN$ZA#zCYI7u@=oi$yrI#TEoL5Qg|MvvOwJ;1eL_6ljfeMta@JH0}OG@)H8aPnl3`mNhi9lcm?^I;x>79E@==0$MFQKdcU8GP44gR0o76MzuJ&zhq#qCX`En@r_tM50kUtg+}-()QR`Ta7xxF80T=s2%$E)Z^#ja0&&1-$5AdvgU;CJ1(;-g?5}~zrN?6ax)pn$xPjSZ*{(}*fBIUs$DC^)a1H|WX=SeBT%vU=mc>aMQ=b(!kZ2qMxeI8aY(QaD){ZyzLp<bjf4`uiUu#T`Z>tzdg?0AbY|bc?4glDv+d<TrzRHxNMn;lnyrZ-CP(J;o!<RoA9{4AVhf3L=oHGa&uCFDmUkV6rKj0C$5fD67pgaZF#A~N*BM5|ucyOYSBRcdMbG6fK?E*Bc2}Ib^(FKa5T?h!h10e3fA4Up?M`~4b1?>^>g6RkRaU(k5QcqngFF~g`6g0jtT-Jnf9ZjU!nJuymV#~gUp8qSk(za{YnD?iTx2cS8G;$j*ihw^LI6Z&Na^EG}8qTuCXzj=(^i&onj{-)vppeyeZv)~qcW&GLY2+t_i=Q%`Sf?#|T+~uWRE3<NY*!Lo%}VaNuB>&H&4ds`cmZ_-$~X&%^(uCMI=KWG-)QCYXP<V#waSt_u1~Sr-08vLk)#FzKb;4p>FR6oA*%%jYH{T;cP~+1+I{t}L&>EFTI9uY4*E*ic=HBYvrP4GEjy7t7uk3T58Vct?e0A@ck4MKqm&74U!O};fwsAJyc00^9IU!T5w+#Sj3x6Eo0<>)J)gj)dM$az)+O!3_jve1f6MGO*P~>E2ZRP0m_B{)(z&Gifa?ayR6+EhcIKwusem%2w!J$T>_R;7PZSS%qzM566EiDpS8;g+9?Da7%fjd)h=U(2Zhav?w83y<s%O~_E#de+@;0EBCb-DTa0kXHyZ{s7)<m63Xm$k|V9pEipm)H-E$s1DbbxEKJ+dR@<55<706JKnOe5P!mF$tMH-cl>%47?#4GdLA&*o-IWlqF|*tOM_Js~*L{+4vIxxpH(GH9)9_j!Nvc$38VMk2S8NE?H4Sz_rX7!cp8)OZdlxx$a&zzslOmi@kuo0fK*sVq3$xnJrrb~TCoWN`75CX)@xd#vqn_eqec4azrK>@(YFk!1*bp2#Y>m4>le-3rsf0LAIB#`h<aOK|axR6e^;!f>T!oZipo0J{3=#4{@odb4xfX?g9@53^*_Xx6f9otbv6!7l`l_P2mU?v%l0?XJy{C9*3*0i|U1>DLOm%%QM%?PTqXu6X3c(E9sm&y~i=b3cVn7cK0kAB9!*X<|7;zdN7&5geL-oFAO$wo6m6T6Q@8K5EDp*2QTn?6GQZTZUvwpUS&D|B}{Yo?2ac?Q<;ik!Nmkuc!FghUoFqM#+x`2)+X#?$Q*Qq(W&_qE_<%4}gdG69XHFSqRij^@Ed+Us%ClgD1^(@1C`65d#GAtn@=?_eELtxb&<C9(vkXht>MX5|yz4#Z@kZhh7ek`!qu?o{8g;-C(Qx1Hb_)Y1wfMWEB<=2zo0x=8TqYI?Q$AQZ$A4a%j%1;9^NNgC=3PZl!U`kt|3SzVJ=>f%}umn-s@4Qn{5>vJ(wl2_J1|fhAhn5Q)Bq$6mE&UY{Wdof3igu{Y+JLVpaXkKAdyKdD>-jBn)fd6;Ns;CKbXvPlPQ2=%BK+k#77uE{9bsDtN$G=?y?2L3s7bokscUMdZCHMv{>lW!#Rd63Mth>F!^ow9v4O}G)u0@yZe?TrETfX^)uBm-V0$cI7B!gQ^O^HNo?_H`h+G_%Y2p5)T<pavm4X$Wh1rJ~>{k*Xh0pA@2Br4b)|hG`VXTUZ(u$XaXr++CLVSUFLRiqd+{*8aGtLi@NS<wxW~w~7v{3TIu`vYFk{OLWgQ^SKHa80XW32L3c}@GA;OjhQvPQSqjbBNyU<?|_GUa0&u>GjMqBMLoB6xH~xVxa)_M5;uYaA`{Nz5D4VhUXV~07|3bfwQt{ZjotSsN4%EP^vEol-G5+T20ZPB;Lyv#@dGA#<&^7N!C}pun`U$Dmdlh6K!=pC<P!FIc#29kE8VpPI3#?ucIsFzIjMrPl*|H9R*Txt<h{Ma>tepu`*X?L1jjc{xiM^H;!d_^8O2tsfcDZxy{>hbeZjxL{8+Ak#mIG2g2)|%aGPV#&HetIatSWJam(k+k1ju?bvpiDqgLH38-vZWPn)nS1!J<@X5&*zW*AdBDMd9(bEW%p%LO3$#xY-lNjO1dVDL1>;(0-%Ef{k++Kex4CsL@E&Yh1O9|KZkp0Y*i#5cciV2QsDCf61*E-#l*$Q?(sQnNo~)hh~2@)IU4-b~{{P58Br=?G?gtZr^2yJP?aWAH4&d9u_7Z|fa&<;o{|EzUAAr6>GDhfLg`R8XiN)t8JX&&tJ~Ev>U->i6K_&nNsOo@MNGFwm#b=W}r$&nmQeWV5a`+|#olhr;v1#%_e2q$8Lc*9*bHcL0YWKz{#kxdt4?8m3onRAsV0KLQ;5l<mtYJ90M`f4@2V1$01wbXbv^ZQ};F?2%4e&)Ul&Jt`GCv1?z`xMzD^Z_(j{7uXcvzOD=%dO14$CT4kSHObnXD_Qnv$%;Vn0C)&Q5Ww$v$ef)w-Zy9Y0zA%~WfC<nd3=7Xq4>*@-G@M!PB`Bzc%4UlK__JwxE5s>NZN_3%yNHbd0Wo;H-`BNhDkgjC`=3`%Vc-(2?9iK()Q`6#OkZ`38FEnc@EM?jV3f#<`=8=`!mcXAo<2LpFbYUR=oO-DS5O4v5+hz3lz^nT@URn6xTH(AY1D$8+Jx89p>avnfGU!3sCZnalQnTS<6yhD?la#j%;c*=v6vr1}x29@V7jM!s_nqm`yNkzJ{#w+`(kM)Vrtt4LH#|rHgso(BjzYH9d}_Y0Wf3SY9=IW!cR1Y(AB9onalWYHjx5y+Hl~_rO^tgFC|c4$bt=VKBspqLl%*oS(MrsUOCX@>D{pnPp=Z$ja~W(LPT$2bjo%({Q+B#1ag~i_MWq$TB+(K5ejO5nFIifkb)U>fhA5(6B4<!I$IXPMwXbLF+3*N0q4UA@~sRj8JxUvJ5@9!s9sHN-oS~W9DN!Bx@N<jL8fp$@Q51+|!H*1MLWJsY$>^ZBw3hxDp<EIXr&Y&iEC6d2>JGFwNBg!Q9RE;*Y=wVJZ-$mgO5R^}|G=&m*MJbGOX3B&^G()wLXtvAb_V_^4STf5OGs$dz|5&+B`oI{XYMMjt>hZ|e>BP@*yRW(2_s#(Ay0&&7cx+u#X&iJM5%4-Pkc0Vq=;FC<&n_*MYJ@}xZ>Ty$O?h8J2q&&=gXUXzo13=Al-^)tF7);xe|E&$5C7>6nzXZBH}>aV%q%Nd8Vi>~6GV+edJ<t&1=J@fR)mbHyJvVyMmw7{$G7<C@RDNKWtU64Blv>|5Ua2gHY>j9K=0Z#5lJ#3uS2JxO)9}`hPJ^b8nik+d7s>+Q>(cmFA>h93JzJ$8TEPW5jLd)>J)yApY*XnRxaAlb@0>QgS5Rmi2+1nOh2b6mMlQ8#ba2!HS%%}=p&MU%X4=c1u0w!~<B5O^SEWgtTa6$Yj)GM^1Mt21I&;y+?;3Ae$nf}QpUi+|agSM~pHQ91h@b1%O?>6_Q?Weci7rZlc2o=>i;dxA<Nup+dQd?~vh4;03B{ujD*tkPW<7`kX#Vs@pS9%CI=p$28+l}CWDxDp26hjCMJ<s^*98e-4m0onz$WCwwEqiTiqh*&Vu{yRQ1V+&d!EybOm^-yG4l+@%#;_Fa0odU9*wEYv4Y4T!4chf^Y`k=gu)^J(3B1fkmEl=HfdB&r-s_fnh9vvJ^qf)e&ncHAwBOKU^3Bx3E|wkP1m>{DL*hq#rI+zz3!>*ZbWfbgTpIvW_L?p0H-y9Djt;-mi#YEI^2sw)P+OT-^wQ${)$DQ!O76fiu)9!(j!Ou?mTPu3$9$EI$)Ix<LtD(;<cAvBkhcbTioeu0TZ85v>kynw?X&n;h{{$m)YkT;f#iNCWA4N?6%$w$lQ{UhDjbhsn~yw<+!{#+97;7v(#5poY&nrlFQKS>+Q@XXE&`DXUo&UlwRYIjNnrzSr~3=_q-y&*m|UA{X1DY*)@wF-TQ)QCtU{k^@s;9p0byqqnlKL^oIc6|Vh8Miw^k>{SMUmIgBXA|Xr`FNS>~ZSjI-?a$?jeI*u-$!7Y>MJ&76Q6yN_yzBf$((qP2Jiq?GFbNN_u4muR^_7OR4LAYEIQxs1k$SG-Q`d@e)>-vJ%>=waMciy?I2IcBTr`UrS1<T9H+x5#C?wbS*Ud)Xv9(4vx^aA({7<SH26eKy>Hi$M%)%kA(08O=Nju~sVwO10aC;Lyv#ai7k`P#*$;m`&$${lOjp4#`EjY#3NFO~ne|hz{Q}#-7&CbaSu^XBQ_3(bgOR!`s@eZz&M3YrybCr!oEc&^P#q=>Ej=w)~Kr2<94o3DXLv$x*T?oIi$Oic+JDV0gcNYY2fl%M2kNC;Abx-hHYUghK;#cn@(nn!<&9-&qznj907BC6UeG_Wk+g5|G@5X9O;$J{Pc606`wZGeTs!bpl&jDQ-kbjZ){VrPG4$7}oK_>b&x(ZW*>9RLgE2YiFP1SWbQ58&+UITK2d<(OiI%I}r{fUEs~MCP0bHV+e;tKzLRh-jVHAv07quaLh!+U>f{fk}R9}WE!)tq@&fjpR;Gvu?nmhFJE>}mAN2ZUfQ_(K{1G502IIahu{4C*PnDC{q=_(NcsMmX6=<DneDAx{wkHSrf?&!t-N-QD(13kacW7=IzV^l=oS(6=nBiwy3D>fkE8JBUN+3~+=W^mUC~cB=zdTgB-0us@NdZ=_B|lt^X?@{7bLQ)?^3J6X>*1M?N*^ev!zhMSIqH$Nbo>V$_|2t+ngMIT?h#N$pQjTu^1amEufOul2NY(1h*%u*`>}2UNg&V-iQbRYj}jX?yU39<-o>{7%M9pTAlcv8KIy>^Hf#OS|+k4Y3{|$ar%Xb&^sXFmL2`K;)A6L2-}R{YegP{5Ar9jwdR~}mghikghwuR@FC8Nlrq6Vb?4R_#D(oM%Z5pYR?7xq3o)d_^kN#sFv-*X9QS9COEQGMG07(zw&4b+Dv_u8*W#!KmxJK5_CO#KXdZzG8oeOE9GauA$UcKWAc)2N{!H={0>)38Q6g>0u2tYe*0I<lOA~lxN698jbr)r@%kE~|%j$x$$ujDv?y=VW8RZgWd}Ed`z~mr)%wGKrs&fqO`+#e<mNGg4B4bHIWZWLc5T-jCovEeA;gI&iLI(+d6-?wxZxV9Pz~St<HIbFDUCV1V=?tdNSBt%m13Y-!c}S+<eH5Mm38tx)a}cpzTh&1b@DnzB%yW*5e*y^k@L-hjQz6MpF{YX9s^4$C=@$|`_U;&x<cr6sz>NwcT53PzNN&$cR7WVn#1h-9EnClhJ7zm`xblUF;5#7VmMr8qD-O(Q#uJ3_$X#H11U?inwU$ma_W-j=*p2wWqXAbiEJ$|LZKrlbF0P0QjS=BaWMWvy9rjgEFQ)6cmi!RvSvzT6h!4FSA3w}Kz6KxMtk$N4H-nk`>bbc~@xcmV+`Lhxnt6n-H{v6BBS0L;hzW|zHUNOi&YH;>V9n#i<xE7C-deVbiU}F&P^3Ue@4Nf`8RbpF;~TTw%q-xJQO2B&7E}Zj1{4JtrL@cpDW`bPbW?~PjDq!S<Ln-`oyoI*aonF-E<wgOhWP?ce4e2(0#}pmi(F30Hl!dGjXq_=&<rJ(8Al7tIS|QnDXunFE%W{ia{*4iG0hio!U3ByXCBSZmY8%#8`4w{?5!8zgcP=gWUW2z2*k?RGYhK?6Fu=#JW>5BoamL_rSU8HxaDMJ4&-f-1ZGm26WMbj@N4aW@~nVB8CLiNg1w~;a2)o&4lsdv+j1v48oa{rzG>JVv@rUzS6!a~B;Uh(!l5UyOi|_BX++@sD?W_Bkc^zCV`BTxqIfb9g8KHFcGf53r|_wTTZ3ZZ7-RPngV_;kx&*g*AwKwee9%oq^JaXg<hE26B+XMu55b3)Cn~}LppsT<dLupzPi6{Pka?dYPebX*V{&T(3UE1j9BO7w)J7e@yW<MJn+0H0*X|eML$AjN-@-3%h6hW<tc^lo7nc@~zz64<ipUlIl0~z_{nh{?sYc7l-T7Tx>kS_=Xl;&F?DPRpOdS*Kd6u+7K#%Rx^i0ai5cemTHwlqP6OB-_%+d9v8-57Wl&99<O|vsctsgj>F93zDEpJs;@#B3!akSHe`h?Sw01{@;<Ndi?mkrsWWBpXtQBUSoh2NiPt^ms27zgqbA-gJ-7LTEvEcPHQB|E|xiSms=QApnoWEgaFuP0ly7M%x((^cX?`$BF(lzTs`ZfN2#?hvcX;iGuQ{VC@Ppxldkj9_X+@Hk)J*S(y2GA+)WBztr~rrZdWW~=bXwnwXT8SufoSI$jaKJdm3O2t|m(=`)B%5$kIo@0)(itHD6{58G`D0Zp0v4>Jlc6S33^N+n+vEACCDGCcRV06cJ8yVtq2d~3iz!||`ropJ$p15wv#zw0uUPEya`4l1XG37v!a8<3D*1_K|l9+s<K3U|!$_+rS180LkR7;-9RchPf05^NaDyIW3y6WV`W8`K{->1BEjP6GR2wxA7dr=MIazvJ3Z~WQ`m}}tyqA_==lCKy6MD<pDlvXAm*fQAzA1nTJ&k(kH9nXy{3`1C_4pM|luH%d?P6IM`zjQ+CN5h9+kB>Vs47Dg?Q8XK_i#-A$obdw+BsFE>sMT)-$fzDG%hYY1+hF3S)!^)LGS*1Q;jXH&j9$H#OcaUAAR`2+e#VPg$rm%s+oZ^YnTD&FRV|T?LLWplAc#Dxo#j$B_*S6MfT>}kJW4srY`7}442E`m>k^l<&Z6d{AHn~}WSVY(2nOCp<NGts6+pQg<4B%=uO^5oTIE5U1I?VL`xxfcTy6x)s-+J|)fsaiALq=)?KyvLL!~OH6bcm@q{M>6p1L$P!j|^Ap}&moPdQfr<zCeDykV37b#;Fb^Hlb%CF8kiQ|MNl;A$Yw7BoOB;G8T;CR~`EXOqq#m+W#WW0D2r32TEckvyjx8y@+k{XO{vC;#-jU;fu${r127{u8A9!-q(@wDxk;S3*h4=064VyHtKo_I(K=^wv;f#^t%oGHdZyt8>E^ST1#s_PnH0r}a_S1`1-Gs4@x0bx!GxCyk)!3od!u7U<%#Ki%7tk3&hS680$W4I=jYtv&zzI!U#WN55M(vK!6?sBBzH=1_)pWA4Sy=7Bk;CLNlE0hFBtyR@xKA;Q-~grB@pb;c8Dt?E?}k*vMk3|@e;xb-6t!tJSMwNw0)1NmU{_wxwZo?E?z4x|-+Y+)>|O<85}T*b48a;BT?E}izFleID1fjkztAZVCN5u(>4L_V${V{r{aa-FpnYH+|xME(ef;9l{vOGXgQ=5+5D(Y}C@Oh@cvg8RaNi@s|1lc;bsC3~ap!g*r1gdV1#y#fFn76-h!6>;YgMDw;(lA8!8uHqZ`VU3o@?St$=bfXNp5SfsVZ@)E|v}HYb5e?2A<V8G=*1pLP=o$J5VFQwA^;u|7?odcDJ?6<jWM@8tZms~zy=W(o6gZd%Rx~Q<gLntBA~ibLgL9eeR;<7k4YskSjM90A0s!ubh_yhdP_(!`gsHAQ>#70|2%cSLc6i5EA3;1<VC8NEgb68loRwPjs1G6_xbcD^WW8T*w}ut%)s7BR?rpG?*73OJLHvLtJ9F>iT6yn%y3ciT5o(L9nVUS;%S(oszZNQ&R${L42Htt|+FFEYft`fEpm<Hiw&gQ0iVd`4#!si+bZyVRBiZZ6##z0LJw`tZ|2@87j~Cv@>EMR=1R?w(Le!oDPOG`K5}y4FzlVr@J_pJ7n%we$RUWbt-PRpuw<_=9tHxOH<Qw1iZ1!ixqz9hM9&ke?_N5Tv>mhO@<GguU%?-btom1^a;YVOZ{0UZtGe?%#N#Aefd<i47`eGLAP$P37Ot_77#^+SZqgup4{m96G7CjeADA$@7f*o$zF2#smkC7Xh=FLlLFd399cey4*_K-NjC3~4v!+gku=(rIfvkf4^THp#$8CEd5tmnR9kw<~$k<vSpbFcmEI9qmZ3J&~PBldg*(Y#5M+(tN8MH35!D;7Lel{}UGAjYXw7{86VWbvgNq2ldyz+kuIp&WU(6H#Q0T(h?+%~v5kJ~G<~K}K?|e)}v_yT>^62*SAnDt99uHYJ9FO`Z8#i?hp#hYVoNMq2o9;~SxZphDd&&zor$@IBr_Vgn)L6wTw`r?)JO*fFlL0VZ9e?JQz+V1)J~c;^bJ+>L(#5%?95xsklK)OI=lsFZ+gz^}^^pSOk;_#=FTXfg^{-EHR*$vlEjV^DfdjKOD)UC%j`P4eKO*Pw&QvRZp#sjaoIgvzD$n!S8=Ux2r^B&rdfg)|K+_IW4eC3qCDJjOz635z$cr?vwZy0}Cg!(lmh-44buyr@#M^KD!BOU_w)p_unabrS0naH-F$^{(ZEmb_m$5<G-tPAHUZu_U{_vdmI(C#0*aermRZ?t+_JHmKCSN}Z9Fu4IQ@2@bvkIBsYM@K$hmzD`LC3SnaG4?u^sr-ENEDi&FoTW)PF;#9M4fabc|$R3)tGNcH?#B;e-KqYH-LwrE)XfE(bZU=MegfZJoscJtSJoIvS+|~-<&5iFe8@ed|7~!cu0v~MIcqT2l3+BGGTk$a+gw&7nXym7yy}>7?o7<`32?;5uhiTufoeAxKbf4h*yd7~K!7XpAWmLYtui4v4Mp$zf9eU!mgvP5mCikKPF(klvS#<ce)>U&i%68qE8qg=rB$b_6&j)ZB<&@~F_00rra~kO`qjgz}yf-fU0UUD)NbbQkYH+}?1U1hzXnO?L#8YTC2X1MB+4)wKNNYQ@86$J-&cP*fy>-PQ83?`y6e_1he?IvEHGaafK3Zmo8sPH)s<{9qccPr^yP*{D*$5@C<sV&5IoW*%{yy-n;GJ7>vizv;H3}W*DUCg$J}ApGZ+r$r>U|whOEynwGBGL#L$OA!Z30Q3;>7D$;-p<^XQaJc_?<%kniOrN@Qe8Hw-$Z}#e`%oaqjEcD`5m7y|;-_u3VJ3;iW&vp0U*D#;ZXrYHKT5+d&kaMF1PkF1YetvfxMf@cMBWL9mpXr<8LC>HA$9{(RNEqGv*GtUAFWB)Y*^fCx|;vS48<R|wNxrj9d)DB_4vl(7iGr>$}&Jopaqz;ssT?EVqaUa6}1R(Jq`c&ShUS?EYu9sv)2iUzp_G31D4Za2as3s01Ja6t?sav8pMjcyJ8g%@rM)|U3vN$2@MdPJtzcUuZ0)L-i8{o}zy?*I=3bVN-~1&Qb`m%zgdbSi8hW?r@^j0eDj<w=`^UKp+_YunWu@qyR@{+d}p!1eSdw4^UMnLQB`H(B;*?k5kApRQi#A^@nYx%+@cJ`Z4*H>r?sEb~<?vv8%c7sn`>4*<G>t$p6ZZbX%B<J$^(Ch_}RkWd7n5}EJ<qFHM^fMqU$$v3w7f~V<iO)4XZr)aO8%gH4X7^KJ^tGsp19&;>+VV0?WwqPm{?!eD_0NY#wlW(jOUpiBPDAZ|yZhVx@sxC#RR0QEtj~#>#%^(#s@D(VL?1pEwnX-HD3*PtB-MrVk74iFSMVB7B`Kz0~Q;m3otu)SsklNa7XT<Ro=dPvqHs;zL4|r``gHL7^3q;_l+O){RmoR<1%G%7c4NTwg_NmGJXwR-bWuN(4owJ{3eSgSCK3`+v>_Obe>Z`!507yQI1xC4bkKTKp`VGloQ4k)ZADv!TjgT@}dcP15{F4QQs7Y3F@#nJb!H)n0Jr#%Ah%8>^67QMh3xL?)Ev<t^)@Y4&wS6*Wc4iH)eOlj;YNo0)i#;}z-4379wG9kk_l1DaI{@Mi^)|D@CBYnWYk?Rm4?qW%T$yXp08Xd`H@y)Z6G4s+OWWC4g1c<7U52c4mO@%&mDa2oKiAkJo@0d`pR?0s0BYZ#Ki;-<`i)0!1O~#K_t|7sI1jij+B<{a)IK}U0a4bAE?60|&ZHi@2b>DU8G2^Z`}4?82pB(QJ_*=UUA@$fi;$N+bjNOd){12{&+KN~RN#gogctGYmIV+1ofR)0mARTvE&;|jUing4_=@Opym$Bvn2<u#S7c#ccv%Fbkw<(-%<M+89hPM3u9y&G!?%<d$^nFb9ZD`eBV%^gre<DBRyD(m%xtk&e5&QKwQ-ylWPjb(M?Y<IrZzKxP>WC75dI$RglAu%-PfEpno!qIPEEx}EzPpD4%g>of>J)nBozAm-U`JIU(KgCkOa@kemb8hF)Kg|a*?c#cfd87I0OR8w2(FCi988(AsqN83x_NvqX?;%l^Eo;^Dmd;f%VCYk`YI%O7DyCegO~73wLi>m3ti;-h<TY?C>OmPLH;D&B0l&>V)j+eeaBKMaCT86`#Kf4|)eY+@lGAXM(x_87+?z)CYir^hw+^b5WnWE59$O`UP~rhO$wWB4=f8>?$_K$Q`$A>|A!Kd&__>J#`-il{DOGXVx)l-?iPJJl-TRzLCgnu&6x?UY4!8szF~C&vTRksEoP?;Nk_=w7EjeZWUrZ#x@IRW-;u_{Ym5}1dE?AnIO8%kzdUwLjyk##VO2Cm233$q?}b$DXc%|&mGF84wzPJu(D$9{$z3qF20e<7g`|t>bo3j1U*sv5SdwgRVdpmJ2yJu8SW)kHrhqtIN71yMh%TlFD#5#`Z|<cdX`1y<&CtLqegw}4r|G%OVtr|^MJt1fQUZuf-Aw3cD#nn<CamFRvt|p7Q?EaJS?ya^^;kgvEd78_H1g*?T3KK2mhW;G&kZcs+Xp<GU<(5XS{g&$WCNEbP1gejX7l=Kw|dNp*6RuZ_Ydoe6W;vDHwO}Q&`)DfZ(4jATTo{3#DLgQfu`Ac;I+??yZ~kx7{sn-AO%-j~)&x-X|GECbcsL%~@bk&$6Ly4LH*|f;+qk#mKdCkwncX7s5gB0Eb(8D%Urko26`5jcF=*keeTX4r))4-8x!e43M62Yu?T%i(>XYPn;@!u89Zb@F5l9pz%D2gL$^$Wc|7oVs&twH8Kg>)};H>$D2gPHyXK>MizJI5%yL~svL)Fm7wFBlo|BWRvt%(km$$8+F3u>+y|%!_wR%5Pa{7eVElCHB$FTe5gxeqfsTOppjd6i+>Ny_Ju!=FlQ~u<3HcGKXO7%R(Wv|WbaDwSzR}9(Vbc2;N2M+d-{&M@#0_iF#z}bOp+~rrUQeDspeAA>i?dOU69)ZKOBniF%&Xiff$OiQ);_7!UoNWVl68O7bH@sfRbM;wNE@7kFkKt3(6PYZzGqhUvtuQf62x0p8l}iwy1JuIj*YjpmeZ#d=Ey(pl?&X!Ea!>G%!vNJ?84{w&Uyf(1FyI)<Jxftak2{97@M;k5S{27pPH0?l+}f3wTbxnT)E?=b*>)|6MPR$+@~nNs)Uvx&qhw|5dg{L;84hfqHK80?M8qgEUfTYVOF|TwbjFV-LtM!xQWBXc5hN^nJuf~s_YK-$r2)7Te}h<dObksKE?P!Ck^^Tgqd9)5<w`QvVNciZZouMi(3)0Q(xfYtYlTDLc5fccLLw4b5NW~qj#MpGI@vQ%8Izrp<&B-xh37zwDPthKi}x(W_r;PS&o#loR4c;lI0b0ANILmyoNt-t1Lkb=}jO#y5}jjo<q&V_6N|*HQ4w@GhgbIyEAhL3M7}qfrPmYdZR|L_{kyxVMiAn2AAm1=LyDaaZ-vStndS9<_e&Eqnj@xrOlvKffugUW3WKJwmzEjp0J`bbAH+um9CoGi+aj(uYC_^jPRxUgC)KWDVL^udA%>qI8+{}8&iug?OrR&fwz0=JW+R^BW2Yyx9`2m$<M$<U^<@Eg3R!>)-huNmSL{4v`qU16y?K?K<ZD0YHqe=4q&nO)>c2i;Rbts$XBLw4JgyS@_>Qp&;xFPQeCnD1m2as*o-w0XBvL}D1)4=UkM7n2Pp2sFJ=Lg2#U$;NW>!`BK0X{kUZBi%2FOTBBW%4+m%Ip1~uW)C++NIx~!fl;=THTg3V@9)JDydoEyFvG}Kq!WnPI8y&fTS)9Top5h7VP*QvUJ8tOx02+LDeOf7i?A)DGp+=vj5=LR*iaq*}S+%X_xMplf$vm4>9Zy6(#iN_h*5H?z7{N(BB)9pNfSl*Ux{*7R6Cm6_{)zu+&nw_>=R>-0{mNAIN8KPv6OcyHI{<N$;5S^k!$ksTkl?M>aHQ@M0G+#i<*{nWh9>$up)yyE&xtB+l)O9(;lKZ*3I+zBQW>(5IHXG@LH?Ic}%@s)bMmS$a$~Y_XnnXv4MxIy!4ooHi`KtjbAez$<FY#@fhZ9zoC$wyO3J3H;F5y=K<<cxM<ChB!mP?ApwUSk>tz@U->{|ZHL8ihr_c%tnMDX|C-qStWl<qS6o;I^joJq~97}6)V7%;mv>rd19ByBK$P=V5b_{=l_`0M+6E%NzxKeqSt`Ge+JklP_eqpqeiD;tZC3KN?aw&dV=k!}q#hsE7ta5(2eK=2&^aSOG)xjd;;p^}|0itB4tS}sM0v?r_Coud`}gtT@eIAVDg#)pr2UT%RD(OMgUQ^xM&C|hX<z&T18IkFe#SUd-<?Bm+(LU8Ei;Al6o$y>o;Oxcx#xUoPb#skp7S-qB7q*Tr})J<-LhwoWs)I6O)uJb^I4m}X6gPUh>1!xi9d0sa9+}SMbxYcbUJM+x^{$%pD#Pn~Zaw9ONv?1J}GgF=f;%ig)o$9k@1E}owR90JF3dReAM)SbZ?vM!$PIP}#xda&B$mO$zTf}Dvs!lerQtM+7OpFfVkZeI%;xwa-Dp}jOk?f}XoLpUJ+z8*FTrL2~H<J0HKxOW=PLJ8A6+oeO&&~gy9Z*BqC@52eHXsxYwyUq2?Pl!sy>R0%HT3ygaH4n0APc#vJ6OA@4|1Xp+OFVvB4WLgiMp+hU1l^nJ1b+XYP49i!+?%TCRCQ>23__IwMxS?^UqgVrfQQv?c?(i-ITBFM>#_Ka<I*qE-<lkAt*B5KOw|`RmQ2X%39VcRoC#2;Np}S0nbbDb|pmkdWhVs0dlPhn23gGmgRc{M1($WM|pdzr%@-!cw`MkKec!1rB^dtIN{Q{R9`*)uZ)PKY(2A{s)z7sPh1HRy&fX^q<Cf(Y6SX9^_AlJZ|{2?wZ`*8QKkupJ^~_SA9bUw?}_FM5Glu2Z&QnH8-)nQH&%@Qzql(%jwFSFKk7gd2=SObfPnu$VN-qC@vJ+x!n0JJ>~J3%7g<UrNJ{ErG^Ehl3I7@oXRID?+pb1&6=SOkxV1b$G=FB1eTi_44-pO|K{#3z&e$f-4-w86J4(GuID{;<q-AYl+mOSq)`!~Q>4M~@MUzb#itkshE2q4;QHuM$IB-wn3Box6mD`910V}vC0Vu6J#5+H7qol2I4KUlHX#UPnI1aI^Ji$bk-FFQ6ZlyPMF(4;H5a)sHwXR9J9-y5QK*=w~zn-v-;rGUzPtgwuy&^_yiJ8X_vCmg8%8Njm6qe}&Dr;ynoe(pcWjR;sqowXT+uRfDo1>Q8q0`)RE4J`nAh-Fh7V(EbsSotY{7yQDssRL#u0$0De$-D6$OT!TA^D>crCQkcwCikx`)blVWC_<wB*_y#Qd7tZg!TdL)bU!kf0rQsexz0nR3nj$S^Wne`9EfW44qLm#vLJ|A~&HJvA8T8<)Z3rIh0N6A(I=TP3q=tW5M9q$<8P7aYN6{O~%KC2+4>Usgh*kClDg_Wm+gk8FNFh%oh<71tApzN8XczcFAUQcHue2_v(8{1|X7Gn{@~c<H@s|4)bC2+j7MJ4Iwu)&D`X7EbpFHrszF_x+qT|g!vUS^c(aCqGq*r5h3BGi5M~fas-jhv=Sm=(a<$-&f4+iSyLxw--LDJ560b>k(BuW$DFBm|9YZUPmzrjNN##Nx#Uk}B8S;VUoCELEc(me_6QfDB1^YM@bH+U-}4%-QJ~1#@*W%%Mw=F7Z|;%Q*6p*WaPCliQq}`>a{?-N(N1)j)I?QG@hr<jw4<TO5l@hSrpgzQ(pOyhvW0)Co1{HfOH#o!Q<1s0T?UV^GE8l|w<slvUosLCkG}8+Xy*h{ZlfQ-vBpg882R>TkjQcR0s9p-4)Y;_q`L@}-LQrZ`8#qNTGnh}p~XYOCle1Zrl_&6vO5?_My9nAa<L4BoOYhywDmUq8B)&Hp4BT($Vcw^%;I!6=1a#h_opLz?t^$Zc6`O;{H-!UR*hF$tB;O=uRf3{I>cp%xI{ESCa}q9uRPusDqkmR|Jq|!(n|<xU#e8i?=#>_=B0T%#Q35a7rs6!uc8j6)@(u1%n4qRICotoF^{=j6v@n@R;DAo@Ii3!4dA%J0XZ&!k-o-I)Lh<%ZnuLY^D6-yk|m}fAp%`>Q|}eQD%$SC7&p(D5D_=gaWF!yr{du=SGL>GaD5>TX)GL(Ey~v9AUg7Kbll{8+$;;Hf)^Ly_*5fs6dsHqNh!Pnk*d}r?J7Kwo@VaWQd@4}2em9Le^y;PTK<vEnx)lr%czcL*_LbvXhO^-%5*=o{8=f<C5AZ@MGUz|j0LDAhKkBV6horPqF=7YaDa;_sca1jI7Ll+xMO$3T=f{s-n0()Iwuj9_nw%lGtSlGe0A^Djln<nQ_K;R+(I?so}O9^V94)7&ikn*>@g7oT8j%l)~hD!QkRoMig6w#DvtW}OjukK8XF2YRZ=KkylGG{&N@vr6!8r4R``CVIRKKo7zY9nyF;bMfWh(%<8Y)DAyAdVMD-V#{Pj1^8}su'
 
-RESULT_NAME = 'EURCHF_H1_SHORT_PASS3_CLOSE_LOCATION_COMBINATIONS_RESULTS.zip'
-OUT = Path(os.getenv('EURCHF_PASS3_OUTPUT_DIR','/tmp/eurchf_h1_short_pass3')).resolve()
-PREFIX = '/eurchf-h1-short-pass3'
+RESULT_NAME = 'EURCHF_H1_SHORT_PASS4_PLATEAU_FREQUENCY_RESULTS.zip'
+OUT = Path(os.getenv('EURCHF_PASS4_OUTPUT_DIR','/tmp/eurchf_h1_short_pass4')).resolve()
+PREFIX = '/eurchf-h1-short-pass4'
 LOCK = threading.RLock()
 STARTED = False
 JOB_LOCK = None
@@ -15465,7 +15457,7 @@ def single_id(anchor,feature,level):
     return f'{label}__{feature.upper()}__{op}__N000__T{round(level*100):04d}'
 
 
-def make_configs():
+def parent_make_configs():
     configs,members=[],[]
     def add(cid,role,lb=0,distance=None,body=0.,candle_range=0.,anchor=None,
             feature='NONE',op='',level=None,signal=None,previous=None):
@@ -15496,6 +15488,67 @@ def make_configs():
                     None,signal,previous)
     if len(configs)!=40 or len({c['config_id'] for c in configs})!=40 or len({config_key(c) for c in configs})!=40:
         raise RuntimeError('Declared 40-rule universe has missing/duplicate definitions.')
+    return configs,members
+
+QUALITY_SIGNAL_LEVELS = (.25,.30,.35,.40,.45)
+QUALITY_PREVIOUS_LEVELS = (.65,.70,.75,.80,.85)
+STRUCTURE_LOOKBACKS = (40,50,60)
+STRUCTURE_DISTANCES = (.075,.10,.125)
+STRUCTURE_REPRESENTATIVES = ((.30,.80),(.40,.70))
+
+
+def combination_id(signal,previous):
+    return f'A__CLOSE_COMBINATION__SCMAX{round(signal*100):04d}__PCMIN{round(previous*100):04d}'
+
+
+def structure_id(signal,previous,lookback,distance):
+    if lookback==60 and distance==.10:return combination_id(signal,previous)
+    return f'A__STRUCTURE__SCMAX{round(signal*100):04d}__PCMIN{round(previous*100):04d}__L{lookback:03d}__D{round(distance*1000):04d}'
+
+
+def make_configs():
+    configs,members=parent_make_configs()
+    by_geometry={config_key(c):c for c in configs}
+    parent_ids={c['config_id'] for c in configs}
+    for c in configs:
+        c['retained_pass3']=1
+        c['structure_reference_id']=None
+        c['matched_single_comparison_scope']='LB60_DISTANCE0.10' if c['anchor_id'] else 'NONE'
+    def add(cid,role,signal,previous,lb=60,distance=.10,reference=None):
+        anchor=ANCHOR_IDS[0]
+        row=dict(config_id=cid,lookback=lb,distance_atr=distance,body_min_atr=.75,range_min_atr=1.25,
+                 close_max=None,anchor_id=anchor,branch='A_CORE',study_role=role,
+                 feature_name='CLOSE_LOCATION_COMBINATION' if signal is not None and previous is not None else
+                    ('signal_close_location' if signal is not None else 'previous_close_location'),
+                 feature_operator='AND' if signal is not None and previous is not None else ('le' if signal is not None else 'ge'),
+                 feature_lookback=0,feature_threshold=None if signal is not None and previous is not None else
+                    (signal if signal is not None else previous),signal_close_max=signal,previous_close_min=previous,
+                 signal_constituent_id=single_id(anchor,'signal_close_location',signal) if signal is not None and lb==60 and distance==.10 else None,
+                 previous_constituent_id=single_id(anchor,'previous_close_location',previous) if previous is not None and lb==60 and distance==.10 else None,
+                 retained_pass3=0,structure_reference_id=reference,
+                 matched_single_comparison_scope='LB60_DISTANCE0.10' if lb==60 and distance==.10 else 'NONE_CHANGED_STRUCTURE')
+        geometry=config_key(row)
+        if geometry in by_geometry:
+            existing=by_geometry[geometry]
+            if reference:existing['structure_reference_id']=reference
+            actual=existing['config_id']
+        else:
+            if cid in {c['config_id'] for c in configs}:raise RuntimeError('Configuration ID collision.')
+            configs.append(row);by_geometry[geometry]=row;actual=cid
+        members.append(dict(requested_label=cid,stage_group=role,config_id=actual))
+    for signal in QUALITY_SIGNAL_LEVELS:
+        for previous in QUALITY_PREVIOUS_LEVELS:
+            add(combination_id(signal,previous),'QUALITY_GRID',signal,previous)
+    for signal in (.25,.35,.45):add(single_id(ANCHOR_IDS[0],'signal_close_location',signal),'NEW_SINGLE_CONTROL',signal,None)
+    for previous in (.65,.75,.85):add(single_id(ANCHOR_IDS[0],'previous_close_location',previous),'NEW_SINGLE_CONTROL',None,previous)
+    for signal,previous in STRUCTURE_REPRESENTATIVES:
+        reference=combination_id(signal,previous)
+        for lb in STRUCTURE_LOOKBACKS:
+            for distance in STRUCTURE_DISTANCES:
+                add(structure_id(signal,previous,lb,distance),'STRUCTURE_GRID',signal,previous,lb,distance,reference)
+    if len(configs)!=83 or len(members)!=89 or len(by_geometry)!=83 or sum(c['retained_pass3'] for c in configs)!=40:
+        raise RuntimeError('Declared 83 unique rules/89 memberships incomplete or duplicated.')
+    if not parent_ids<={c['config_id'] for c in configs}:raise RuntimeError('A retained parent is missing.')
     return configs,members
 
 def atr14(bars):
@@ -15574,7 +15627,7 @@ def base_selected_indices(config, features):
 def selected_indices(config,features):
     indices=base_selected_indices(config,features)
     signal,previous=config['signal_close_max'],config['previous_close_min']
-    if config['study_role']=='COMBINATION' and (signal is None or previous is None):
+    if config['study_role'] in ('COMBINATION','QUALITY_GRID','STRUCTURE_GRID') and (signal is None or previous is None):
         raise RuntimeError('Combination must specify both declared close conditions.')
     for level in (signal,previous):
         if level is not None and (not math.isfinite(level) or not 0<=level<=1):
@@ -15736,11 +15789,11 @@ def fetch_history():
 
 
 def load_history():
-    mode = os.getenv('EURCHF_PASS3_DATA_SOURCE', 'embedded').strip().lower()
+    mode = os.getenv('EURCHF_PASS4_DATA_SOURCE', 'embedded').strip().lower()
     if mode == 'oanda':
         return fetch_history(), 'HISTORICAL_OANDA_MID_REFETCH'
     if mode != 'embedded':
-        raise RuntimeError('EURCHF_PASS3_DATA_SOURCE must be embedded or oanda.')
+        raise RuntimeError('EURCHF_PASS4_DATA_SOURCE must be embedded or oanda.')
     raw = zlib.decompress(base64.b85decode(EMBEDDED_SOURCE_B85))
     if len(raw) != SOURCE_CSV_BYTES or sha(raw) != SOURCE_CSV_SHA256:
         raise RuntimeError('Embedded Pass 1 candle CSV failed integrity; research stopped.')
@@ -15752,10 +15805,10 @@ def load_history():
 def parent_expectations():
     raw = zlib.decompress(base64.b85decode(PARENT_EXPECTATIONS_B85))
     if sha(raw) != PARENT_EXPECTATIONS_SHA256:
-        raise RuntimeError('Embedded Pass 2 parent control expectations failed integrity.')
+        raise RuntimeError('Embedded Pass 3 parent control expectations failed integrity.')
     rows=json.loads(raw)
-    if len(rows)!=132 or len({(r['config_id'],r['execution_model'],r['cost_ticks']) for r in rows})!=132:
-        raise RuntimeError('Incomplete or duplicate Pass 2 parent expectations.')
+    if len(rows)!=240 or len({(r['config_id'],r['execution_model'],r['cost_ticks']) for r in rows})!=240:
+        raise RuntimeError('Incomplete or duplicate Pass 3 parent expectations.')
     return rows
 
 
@@ -15775,11 +15828,11 @@ def parent_controls(bars, features, paths, configs):
     def check(name, actual, expected, tolerance=None):
         passed = actual == expected if tolerance is None else abs(actual-expected) <= tolerance
         rows.append(dict(check=name,status='PASS' if passed else 'FAIL',actual=actual,expected=expected))
-    check('pass3_unique_rule_settings',len(configs),40)
+    check('pass4_unique_rule_settings',len(configs),83)
     check('raw_exact_engulf_count',len(features),9669)
     for expected in parent_expectations():
         cid,model,cost = (expected[k] for k in ('config_id','execution_model','cost_ticks'))
-        prefix = f'pass2_parent_{cid}_{model}_{cost}T_'
+        prefix = f'pass3_parent_{cid}_{model}_{cost}T_'
         indices = selected_indices(by_id[cid],features)
         accepted, invalid, blocked = replay(indices,paths,model,cost)
         digest = hashlib.sha256()
@@ -15924,9 +15977,9 @@ def period_definitions():
 PERIODS = period_definitions()
 
 
-DECISION_GUIDE = '## Plateau and minimum-complexity evidence\nRead combination_review_table.csv with constituent_trade_comparisons.csv and\ncombination_neighbourhood_summary.csv. Each combination is compared with its OWN\nfixed anchor and BOTH single-feature constituents. An above-anchor row can still\nbe worse than a simpler rule. Lower DD after sharply lower exposure is not free\nimprovement. Inspect counts, costs/exits, inactivity, eras/recent/floor and all\nrealized rolling windows before interpreting a lifetime total.\n\nAdjacent combinations change exactly ONE axis with the other held fixed. Axis\nsummaries report contiguous runs and unique streams, not an acceptance score.\nTested edges are explicit; no automatic boundary extension. Equivalence groups,\naccepted-set Jaccard and winner influence expose duplicate evidence and sparse\nsurvivors. Top-three-winner subtraction is descriptive, not an occupancy/deletion\ncounterfactual and cannot justify date exclusions. Marginal differences use full\nreplayed accepted sets including open trades; no accepted-ledger-only filtering.\n\nbranch_frequency_comparisons.csv compares each C rule with the identical A\nconditions, accounting for actual extra/displaced entries. Branches are dependent\nresearch alternatives, not independently allocatable portfolio strategies.\nNo score/ranking/max-row selection or automatic plateau acceptance is performed.\nDo not select a peak or fit the latest losing year. Prefer minimum complexity\nsupported by neighbours and marginal evidence. If adding the second condition\ndoes not help, retain the supported simpler family for local confirmation or stop\nif its own frequency/weakness trade-off is unacceptable. Do not restart an open\nfeature hunt or repeatedly expand to rescue a result. Entry freeze precedes RR\nlast, independent frozen complete-ledger confirmation, exact P31 admission and\nprospective read-only execution observations. P31 live code/orders stay unchanged.\n'
+DECISION_GUIDE = '# EUR/CHF H1 SHORT Pass4 — bounded A plateau and frequency mapping\n\nDeclared in the Pass3 review on2 October2026, before replaying new levels. Use our\nforex research template as a guide: plateau/frequency stage. Seek plateaus, not\nspikes; avoid overfitting/curvefitting. No automatic winner or plateau score.\nThe same repeatedly examined history is in-sample. Neither neighbourhood support\nnor reproduction guarantees predictive validity or freedom from selection bias.\n\n## Exact predeclared universe\n\nKeep ALL40 Pass3 definitions and original IDs, including both A/C branches, all\nsingles and combinations. Every one of their240 complete canonical ledgers must\nmatch the actual supplied Pass3 ZIP. C remains diagnostic; no new C grid.\nA_CORE: exact bearish engulf, body>=.75ATR14, range>=1.25ATR14. RR3 stays fixed.\nDefault structure: previous60-bar high excluding signal, absolute signal-high\ndistance<=.10ATR14. Both candle close locations use completed OHLC.\n\nQuality: signal-close maximum [.25,.30,.35,.40,.45] x previous-close minimum\n[.65,.70,.75,.80,.85], atLB60/distance.10.25 memberships; four existing overlaps.\nSix new matched A singles: signal max[.25,.35,.45], previous min[.65,.75,.85].\nExisting singles provide the other levels. Compare EVERY quality cell with BOTH\nexact constituent singles and its own A anchor. The0.85 joint boundary and0.45\nactivity extensions are limited, predeclared; edge dominance is not permission\nto keep extending the grid.\n\nStructure: two FIXED full-rule representatives (signal max.30/previous min.80)\nand (signal max.40/previous min.70), eachLB[40,50,60] x distance[.075,.10,.125]\nATR.18 memberships; two existing overlaps. Body/range/close rules stay fixed.\nCompare each structural full rule with its OWN unchangedLB60/distance.10 same-\nquality representative, one-axis neighbours and original controls. There is no\nnew matched-single structural grid. Comparisons withLB60 singles at changed\nstructure do NOT isolate the conditional contribution. Such constituent fields\nare blank for changed structure, and reports explicitly label the scope.\n\nExactly83 distinct definitions/498 model-cost cases =40old+21new quality+6new\nsingles+16new structure.89 requested memberships =40+25+6+18; deduplicate six\noverlaps, retaining parent IDs. Do not hide weak/empty rows. Frozen RR3,\n200-observed-bar warmup, source/cutoff, stops/targets, execution and10/20/40-tick\ncosts. No new body/range/filter/session/weekday/policy/RR or portfolio search.\n\n## Evidence discipline and stopping\n\nThe prior four-cell region was useful at four-pip stress but every cell trailed\nthe simpler signal-only.30 rule at two pips. Its latest-year results share just\nthree trades/+0.018R; inactivity and CHF-floor weakness remain. Keep that simpler\nrule competing. The.30/.80 representative is a lower-DD comparator; .40/.70 is an\nactivity comparator. Neither is a final strategy. Counts, difficult periods,\nordinary/stressed/model sensitivity and full replay matter more than the best R.\n\nquality_* reports compare exact matched constituents; structure_* reports compare\nthe fixed full-rule representative. Neighbour and axis rows change one coordinate\nwith all others fixed, mark tested edges and report stream equivalence/Jaccard.\nAxis runs are descriptive, not confidence/significance or an acceptance rule.\nplateau_review_table includes all498 cases and winner influence. Entry-difference\nreports list actual added/removed accepted entries from chronological replays;\nan earlier addition may displace a later trade. Accepted-ledger-only deletion is\nnot a strategy counterfactual. Shared winners/overlap are not independent evidence.\nFull periods, every zero-inclusive month/12/24/36-month rolling window, raw versus\naccepted counts, inactivity, CHF event exposure, open positions and invalid costs\nremain exported. Lifetime positive R or lower DD after reduced exposure alone\ndoes not justify an extra condition. R/DD is additive, not compounded equity.\n\nOne bounded mapping study. If no useful coherent region emerges, retain a\njustified simpler family for a small final local confirmation or stop this family.\nDo not restart a feature hunt or repeatedly expand a peak. If supported, predeclare\nonly genuinely necessary small final confirmation before its outcomes, then freeze\nentries before RR last. Independent frozen complete-ledger confirmation, exact\nP31 admission and prospective read-only observations remain later gates.\nP31 live rules/execution/orders stay unchanged.\n\n## Source, gates and publication\n\nDefault embeds exact137,819-candle verified source, END2026-10-01T00:00Z exclusive;\nno token/network/companion needed. EURCHF_PASS4_DATA_SOURCE=oanda is optional,\nunchanged candle-only route requiring identical source SHA; unknown mode rejects.\nAll240 Pass3 parent cases require full accepted/raw hashes and count/R/PF/DD/\nstreak/open/invalid/p0 parity.3122 parent checks+21 source/screen=3143 historical\ngates. Parent expectations have their own integrity and completeness checks.\nChanged history/control failure publishes an ERROR ZIP with no partial or stale\nperformance. No orders/account endpoints. Same-history verification is not fresh\nOOS, prospective evidence or independent confirmation of a frozen final strategy.\n\n'
 
-PROTOCOL = "# EUR/CHF H1 SHORT Pass 3 — bounded close-location combinations\n\nPrepared 2 October 2026 before examining combination outcomes. Follow our forex\nresearch template as a guide. Standing instruction: seek plateaus, not spikes;\navoid overfitting/curvefitting. This pass is limited interactions after Pass 2,\nnot entry freeze, RR tuning, final independent confirmation or portfolio admission.\nAll repeatedly inspected history is exploratory/in-sample. There is no fresh OOS\nperiod, no automatic winner and no guarantee against selection bias.\n\n## Declared scope and mechanism\nA_CORE: exact bearish engulf, previous 60-bar high excluding signal, absolute\nsignal-high distance<=.10 ATR14, body>=.75 ATR14, range>=1.25 ATR14.\nC_FREQUENCY_RESEARCH: same fixed anchor except range>=1.00 ATR14.\nKeep raw/screen/LB40/LB50 and both anchors as the six original controls.\nSignal close location=(close-low)/(high-low); previous close location uses the\nprevious completed bullish candle's same formula. Both are known by signal close.\nThe proposed interaction asks whether a bearish close near the low adds useful\nevidence after a bullish close near the high, beyond either simpler condition.\nIndividually useful features need not combine usefully or add independent evidence.\n\nSingle-feature controls per branch: signal maximum [.20,.30,.40,.50];\nprevious minimum [.60,.70,.80,.90]. Keep original Pass 2 IDs and exact rules.\nCombinations per branch: signal maximum [.20,.30,.40] AND previous minimum\n[.60,.70,.80]. Nine per branch. Include weaker neighbours, not only .30/.80.\nTotal: six original controls + sixteen singles + eighteen combinations =\n40 unique settings / 240 model-cost cases. No new levels or filters, body/range/\nstructure/RR/timing/calendar/policy sweep. No volatility/movement/stop combinations.\nRR3, warmup, source/cutoff, costs and execution remain frozen.\n\n## Reproducible source and parent gates\nDefault embeds the exact 137,819-candle verified Pass 1/Pass 2 CSV; no token,\nnetwork or companion file needed. END stays 2026-10-01T00:00Z; dates do not advance.\nEURCHF_PASS3_DATA_SOURCE=oanda optionally re-fetches through the retained official\ncandle-only route with OANDA_TOKEN, requiring the identical source fingerprint.\nUnknown modes reject. All 132 cases from the 22 retained parent rules must match\ncomplete canonical accepted hashes, raw hashes, counts and R/PF/DD/streak/open/\ninvalid/p0 metrics. 1,718 parent checks plus 21 source/screen checks = 1,739\nhistorical gates. Expectations have a separate integrity digest. Failure produces\nan error ZIP without partial or stale performance. No orders or account endpoints.\n\n## Frozen execution and data\nOANDA completed unsmoothed MID H1; EUR_CHF short only; 2005-01-01 through\n2026-10-01 exclusive. The first 200 observed candles warm all entry studies.\nATR14 is Wilder recursion, seeded with TR[1:15]; the signal's completed ATR is\nused. Exact bearish engulf: previous close>open, current close<open,\ncurrent open>=previous close, current close<=previous open. No session, weekday,\ndaily-trend, policy-date exclusion or RR search. One standalone configuration\nat a time; no currency conversion, NAV compounding or portfolio admission here.\n\nSignal timestamp = candle start; reference entry = its close, timestamped one\nhour later. Stop = signal high + 0.00010 (10 ticks = 1 pip). Target = reference\nclose - 3*(stop-reference close). Assumed short fill = reference close minus\n10/20/40 ticks (1/2/4 pips); target/stop stay at reference geometry. Risk\ndenominator = stop minus assumed fill. An invalid nonpositive target or target\nat/above assumed fill is rejected BEFORE p0, and is exported. Entry at/after\nthe frozen cutoff is also ineligible. This matters for small raw candles.\nCost assumptions are scenarios, not measured quotes or a maximum realized loss.\n\np0 is replayed for EVERY geometry/model/cost; open-at-cutoff trades occupy the\nstrategy and block later signals. Exit-candle signals may enter at that candle's\nclose. Fixed price barriers permit cached first-touch paths; rejected fill\ngeometry and occupancy are still recomputed independently at each assumed cost.\nCompleted ledgers alone are never obtained by filtering an earlier p0 ledger.\n\nSCREEN_PARITY retains the old screen: next-candle onward OHLC barrier test;\nif both barriers touch, nearest-to-open extreme is assumed first, tie stop-first;\nbarrier fills and exit-candle-end timestamps. It must match the full archived\n240-trade screen at all three costs, as well as source/raw-signal fingerprints.\nAny changed source/history/control stops the run before discovery results.\n\nSTOP_FIRST_GAP_STRESS uses the same signals/entry assumptions: opening price\nat/above stop exits at max(open,stop), opening at/below target fills at target\n(no favorable improvement), otherwise dual-touch bars lose. Known opening-gap\nexits are timestamped at that candle's start; other exits at its end. This is a\nsensitivity model, NOT a worst-case bound: MID H1 cannot reveal intrabar jump\nexecution, spread blowouts, actual quotes, financing, or fills during closure.\nBoth models disclose next observed open and any delay after assumed entry.\n\n## Pair-specific adaptation\nAdd pre-floor, floor-period, 15 January 2015 and post-event diagnostics and\nidentify every accepted trade exposed during that day. All dates are retained\nin full-history results. These are event/cohort summaries, NOT counterfactual\ntrade deletions or date filters. The SNB introduced the minimum EUR/CHF rate on\n6 September 2011 and discontinued it on 15 January 2015. Day-level boundaries\ndo not claim the precise intraday announcement time.\nPrimary sources:\nhttps://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906\nhttps://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115\nAPI candle-parameter reference: https://developer.oanda.com/rest-live-v20/pricing-ep/\nThe candle-only request route is retained from the successfully run Pair #9 code.\n\n## Reporting definitions\nFull accepted ledgers are normalized for a small results ZIP. Join\naccepted_trades.csv to signal_trade_paths.csv on (signal_index, execution_model).\nEach accepted row supplies config_id, cost, actual assumed fill, risk and R;\nthe path supplies signal/entry/exit times, stop, target, reason and exit price.\nOpen accepted trades remain in the table with blank exit/R, not a zero result.\ncontrol_accepted_ledgers.csv additionally contains denormalized raw and archived\ncontrol ledgers, including all 22 retained original/single-feature controls. Source candles, features and raw signal membership are exported.\n\nCandidate-only figures treat qualifying signals in isolation and can overlap;\nthey are NOT executable strategy/portfolio results. Accepted metrics use full\np0 chronology. Trade comparisons to raw, screen and all four numerical/branch controls use actual accepted signal\nsets at the same cost/model; adds and removals are descriptive full-replay\ndifferences, not marginal trades assumed independent of displacement.\n\nEntry cohorts use [period start, period end); their eventual R is not realized\nperiod return. Exit cash uses (period start, period end], including a final\ncompleted candle's close at the cutoff. Both are reported. Monthly data and\nall rolling 12/24/36-month realized-R windows include zero-trade months;\nincomplete 2026 is labeled. Rolling R is additive R, not compounded percent.\nNo realized R is invented for open trades, and no mark-to-market is inferred.\nLast 1/2/3/5/10 years end at the fixed cutoff. Eras are 2005-09, 2010-15,\n2016-21 and 2022-cutoff. They are descriptive, previously inspected history,\nnot pristine out-of-sample tests. Source gaps are reported, never interpolated.\n\n\n## Plateau and minimum-complexity evidence\nRead combination_review_table.csv with constituent_trade_comparisons.csv and\ncombination_neighbourhood_summary.csv. Each combination is compared with its OWN\nfixed anchor and BOTH single-feature constituents. An above-anchor row can still\nbe worse than a simpler rule. Lower DD after sharply lower exposure is not free\nimprovement. Inspect counts, costs/exits, inactivity, eras/recent/floor and all\nrealized rolling windows before interpreting a lifetime total.\n\nAdjacent combinations change exactly ONE axis with the other held fixed. Axis\nsummaries report contiguous runs and unique streams, not an acceptance score.\nTested edges are explicit; no automatic boundary extension. Equivalence groups,\naccepted-set Jaccard and winner influence expose duplicate evidence and sparse\nsurvivors. Top-three-winner subtraction is descriptive, not an occupancy/deletion\ncounterfactual and cannot justify date exclusions. Marginal differences use full\nreplayed accepted sets including open trades; no accepted-ledger-only filtering.\n\nbranch_frequency_comparisons.csv compares each C rule with the identical A\nconditions, accounting for actual extra/displaced entries. Branches are dependent\nresearch alternatives, not independently allocatable portfolio strategies.\nNo score/ranking/max-row selection or automatic plateau acceptance is performed.\nDo not select a peak or fit the latest losing year. Prefer minimum complexity\nsupported by neighbours and marginal evidence. If adding the second condition\ndoes not help, retain the supported simpler family for local confirmation or stop\nif its own frequency/weakness trade-off is unacceptable. Do not restart an open\nfeature hunt or repeatedly expand to rescue a result. Entry freeze precedes RR\nlast, independent frozen complete-ledger confirmation, exact P31 admission and\nprospective read-only execution observations. P31 live code/orders stay unchanged.\n"
+PROTOCOL = "# EUR/CHF H1 SHORT Pass4 — bounded A plateau and frequency mapping\n\nDeclared in the Pass3 review on2 October2026, before replaying new levels. Use our\nforex research template as a guide: plateau/frequency stage. Seek plateaus, not\nspikes; avoid overfitting/curvefitting. No automatic winner or plateau score.\nThe same repeatedly examined history is in-sample. Neither neighbourhood support\nnor reproduction guarantees predictive validity or freedom from selection bias.\n\n## Exact predeclared universe\n\nKeep ALL40 Pass3 definitions and original IDs, including both A/C branches, all\nsingles and combinations. Every one of their240 complete canonical ledgers must\nmatch the actual supplied Pass3 ZIP. C remains diagnostic; no new C grid.\nA_CORE: exact bearish engulf, body>=.75ATR14, range>=1.25ATR14. RR3 stays fixed.\nDefault structure: previous60-bar high excluding signal, absolute signal-high\ndistance<=.10ATR14. Both candle close locations use completed OHLC.\n\nQuality: signal-close maximum [.25,.30,.35,.40,.45] x previous-close minimum\n[.65,.70,.75,.80,.85], atLB60/distance.10.25 memberships; four existing overlaps.\nSix new matched A singles: signal max[.25,.35,.45], previous min[.65,.75,.85].\nExisting singles provide the other levels. Compare EVERY quality cell with BOTH\nexact constituent singles and its own A anchor. The0.85 joint boundary and0.45\nactivity extensions are limited, predeclared; edge dominance is not permission\nto keep extending the grid.\n\nStructure: two FIXED full-rule representatives (signal max.30/previous min.80)\nand (signal max.40/previous min.70), eachLB[40,50,60] x distance[.075,.10,.125]\nATR.18 memberships; two existing overlaps. Body/range/close rules stay fixed.\nCompare each structural full rule with its OWN unchangedLB60/distance.10 same-\nquality representative, one-axis neighbours and original controls. There is no\nnew matched-single structural grid. Comparisons withLB60 singles at changed\nstructure do NOT isolate the conditional contribution. Such constituent fields\nare blank for changed structure, and reports explicitly label the scope.\n\nExactly83 distinct definitions/498 model-cost cases =40old+21new quality+6new\nsingles+16new structure.89 requested memberships =40+25+6+18; deduplicate six\noverlaps, retaining parent IDs. Do not hide weak/empty rows. Frozen RR3,\n200-observed-bar warmup, source/cutoff, stops/targets, execution and10/20/40-tick\ncosts. No new body/range/filter/session/weekday/policy/RR or portfolio search.\n\n## Evidence discipline and stopping\n\nThe prior four-cell region was useful at four-pip stress but every cell trailed\nthe simpler signal-only.30 rule at two pips. Its latest-year results share just\nthree trades/+0.018R; inactivity and CHF-floor weakness remain. Keep that simpler\nrule competing. The.30/.80 representative is a lower-DD comparator; .40/.70 is an\nactivity comparator. Neither is a final strategy. Counts, difficult periods,\nordinary/stressed/model sensitivity and full replay matter more than the best R.\n\nquality_* reports compare exact matched constituents; structure_* reports compare\nthe fixed full-rule representative. Neighbour and axis rows change one coordinate\nwith all others fixed, mark tested edges and report stream equivalence/Jaccard.\nAxis runs are descriptive, not confidence/significance or an acceptance rule.\nplateau_review_table includes all498 cases and winner influence. Entry-difference\nreports list actual added/removed accepted entries from chronological replays;\nan earlier addition may displace a later trade. Accepted-ledger-only deletion is\nnot a strategy counterfactual. Shared winners/overlap are not independent evidence.\nFull periods, every zero-inclusive month/12/24/36-month rolling window, raw versus\naccepted counts, inactivity, CHF event exposure, open positions and invalid costs\nremain exported. Lifetime positive R or lower DD after reduced exposure alone\ndoes not justify an extra condition. R/DD is additive, not compounded equity.\n\nOne bounded mapping study. If no useful coherent region emerges, retain a\njustified simpler family for a small final local confirmation or stop this family.\nDo not restart a feature hunt or repeatedly expand a peak. If supported, predeclare\nonly genuinely necessary small final confirmation before its outcomes, then freeze\nentries before RR last. Independent frozen complete-ledger confirmation, exact\nP31 admission and prospective read-only observations remain later gates.\nP31 live rules/execution/orders stay unchanged.\n\n## Source, gates and publication\n\nDefault embeds exact137,819-candle verified source, END2026-10-01T00:00Z exclusive;\nno token/network/companion needed. EURCHF_PASS4_DATA_SOURCE=oanda is optional,\nunchanged candle-only route requiring identical source SHA; unknown mode rejects.\nAll240 Pass3 parent cases require full accepted/raw hashes and count/R/PF/DD/\nstreak/open/invalid/p0 parity.3122 parent checks+21 source/screen=3143 historical\ngates. Parent expectations have their own integrity and completeness checks.\nChanged history/control failure publishes an ERROR ZIP with no partial or stale\nperformance. No orders/account endpoints. Same-history verification is not fresh\nOOS, prospective evidence or independent confirmation of a frozen final strategy.\n\n## Frozen execution and data\nOANDA completed unsmoothed MID H1; EUR_CHF short only; 2005-01-01 through\n2026-10-01 exclusive. The first 200 observed candles warm all entry studies.\nATR14 is Wilder recursion, seeded with TR[1:15]; the signal's completed ATR is\nused. Exact bearish engulf: previous close>open, current close<open,\ncurrent open>=previous close, current close<=previous open. No session, weekday,\ndaily-trend, policy-date exclusion or RR search. One standalone configuration\nat a time; no currency conversion, NAV compounding or portfolio admission here.\n\nSignal timestamp = candle start; reference entry = its close, timestamped one\nhour later. Stop = signal high + 0.00010 (10 ticks = 1 pip). Target = reference\nclose - 3*(stop-reference close). Assumed short fill = reference close minus\n10/20/40 ticks (1/2/4 pips); target/stop stay at reference geometry. Risk\ndenominator = stop minus assumed fill. An invalid nonpositive target or target\nat/above assumed fill is rejected BEFORE p0, and is exported. Entry at/after\nthe frozen cutoff is also ineligible. This matters for small raw candles.\nCost assumptions are scenarios, not measured quotes or a maximum realized loss.\n\np0 is replayed for EVERY geometry/model/cost; open-at-cutoff trades occupy the\nstrategy and block later signals. Exit-candle signals may enter at that candle's\nclose. Fixed price barriers permit cached first-touch paths; rejected fill\ngeometry and occupancy are still recomputed independently at each assumed cost.\nCompleted ledgers alone are never obtained by filtering an earlier p0 ledger.\n\nSCREEN_PARITY retains the old screen: next-candle onward OHLC barrier test;\nif both barriers touch, nearest-to-open extreme is assumed first, tie stop-first;\nbarrier fills and exit-candle-end timestamps. It must match the full archived\n240-trade screen at all three costs, as well as source/raw-signal fingerprints.\nAny changed source/history/control stops the run before discovery results.\n\nSTOP_FIRST_GAP_STRESS uses the same signals/entry assumptions: opening price\nat/above stop exits at max(open,stop), opening at/below target fills at target\n(no favorable improvement), otherwise dual-touch bars lose. Known opening-gap\nexits are timestamped at that candle's start; other exits at its end. This is a\nsensitivity model, NOT a worst-case bound: MID H1 cannot reveal intrabar jump\nexecution, spread blowouts, actual quotes, financing, or fills during closure.\nBoth models disclose next observed open and any delay after assumed entry.\n\n## Pair-specific adaptation\nAdd pre-floor, floor-period, 15 January 2015 and post-event diagnostics and\nidentify every accepted trade exposed during that day. All dates are retained\nin full-history results. These are event/cohort summaries, NOT counterfactual\ntrade deletions or date filters. The SNB introduced the minimum EUR/CHF rate on\n6 September 2011 and discontinued it on 15 January 2015. Day-level boundaries\ndo not claim the precise intraday announcement time.\nPrimary sources:\nhttps://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906\nhttps://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115\nAPI candle-parameter reference: https://developer.oanda.com/rest-live-v20/pricing-ep/\nThe candle-only request route is retained from the successfully run Pair #9 code.\n\n## Reporting definitions\nFull accepted ledgers are normalized for a small results ZIP. Join\naccepted_trades.csv to signal_trade_paths.csv on (signal_index, execution_model).\nEach accepted row supplies config_id, cost, actual assumed fill, risk and R;\nthe path supplies signal/entry/exit times, stop, target, reason and exit price.\nOpen accepted trades remain in the table with blank exit/R, not a zero result.\ncontrol_accepted_ledgers.csv additionally contains denormalized raw and archived\ncontrol ledgers, including all40 retained Pass3 rules and six new single controls. Source candles, features and raw signal membership are exported.\n\nCandidate-only figures treat qualifying signals in isolation and can overlap;\nthey are NOT executable strategy/portfolio results. Accepted metrics use full\np0 chronology. Trade comparisons to raw, screen and all four numerical/branch controls use actual accepted signal\nsets at the same cost/model; adds and removals are descriptive full-replay\ndifferences, not marginal trades assumed independent of displacement.\n\nEntry cohorts use [period start, period end); their eventual R is not realized\nperiod return. Exit cash uses (period start, period end], including a final\ncompleted candle's close at the cutoff. Both are reported. Monthly data and\nall rolling 12/24/36-month realized-R windows include zero-trade months;\nincomplete 2026 is labeled. Rolling R is additive R, not compounded percent.\nNo realized R is invented for open trades, and no mark-to-market is inferred.\nLast 1/2/3/5/10 years end at the fixed cutoff. Eras are 2005-09, 2010-15,\n2016-21 and 2022-cutoff. They are descriptive, previously inspected history,\nnot pristine out-of-sample tests. Source gaps are reported, never interpolated.\n\n\n"
 
 
 def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind):
@@ -15956,7 +16009,8 @@ def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind
               for label,kind,a,b in PERIODS])
     write_csv(work/'feature_family_definitions.csv',
         [dict(anchor_id=anchor,branch=ANCHOR_LABELS[anchor],feature_name=f,feature_operator=op,
-              feature_lookback=n,thresholds=';'.join(str(v) for v in levels))
+              feature_lookback=n,thresholds=';'.join(str(v) for v in sorted({c['feature_threshold'] for c in configs
+                  if c['anchor_id']==anchor and c['feature_name']==f and c['feature_threshold'] is not None})))
          for anchor in ANCHOR_IDS for f,op,n,levels in FEATURE_SPECS])
 
 
@@ -16042,7 +16096,7 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
                         full = accepted_row(cid,model,cost,seq,i,p)
                         sinks['accepted_trades.csv'].add({k:full[k] for k in definitions['accepted_trades.csv']})
                         digest.update((json.dumps(full,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
-                        if config['study_role']!='COMBINATION':
+                        if config['retained_pass3'] or config['study_role']=='NEW_SINGLE_CONTROL':
                             sinks['control_accepted_ledgers.csv'].add(full)
                         et,xt = path_times[(i,model)]
                         bucket = bisect.bisect_right(BOUNDS,et)-1
@@ -16181,7 +16235,7 @@ def longest_run(flags):
     return longest
 
 
-def write_combination_reports(work,bars,features,paths,configs,summaries):
+def write_parent_combination_reports(work,bars,features,paths,configs,summaries):
     """Descriptive comparisons and 2-axis neighbourhoods; never select or rank a winner."""
     raw={};accepted={};raw_digest={};accepted_digest={}
     by_id={c['config_id']:c for c in configs}
@@ -16324,6 +16378,203 @@ def write_combination_reports(work,bars,features,paths,configs,summaries):
     if any(len(outputs[name])!=n for name,n in expected.items()):raise RuntimeError('Missing declared combination reports.')
     return dict(expected,**{'raw_signal_equivalence_groups.csv':len(raw_groups),'accepted_signal_equivalence_groups.csv':len(accepted_groups)})
 
+def write_plateau_reports(work,bars,features,paths,configs,summaries):
+    """Report all predeclared families. Axes are descriptive, never scored/ranked."""
+    parent_configs=[c for c in configs if c['retained_pass3']]
+    parent_counts=write_parent_combination_reports(work,bars,features,paths,parent_configs,summaries)
+    raw={};accepted={};raw_digest={};accepted_digest={}
+    by_id={c['config_id']:c for c in configs}
+    combos=[c for c in configs if c['study_role']=='COMBINATION']
+    lookup={(c['anchor_id'],c['signal_close_max'],c['previous_close_min']):c['config_id'] for c in combos}
+    for c in configs:
+        cid=c['config_id'];indices=selected_indices(c,features)
+        raw[cid]=set(indices);raw_digest[cid]=signal_hash(indices,bars)
+        for model in MODELS:
+            for cost in COSTS:
+                key=(cid,model,cost);accepted[key]=set(replay(indices,paths,model,cost)[0])
+                accepted_digest[key]=sha(','.join(str(i) for i in sorted(accepted[key])).encode())
+    periods={}
+    with (work/'period_results.csv').open(newline='') as f:
+        for r in csv.DictReader(f):periods[(r['config_id'],r['execution_model'],int(r['cost_ticks']),r['period'])]=r
+    def period(key,name):return float(periods[(*key,name)]['entry_cohort_eventual_r'])
+    def era_min(key):return min(period(key,name) for name in ('ERA_2005_2009','ERA_2010_2015','ERA_2016_2021','ERA_2022_2026'))
+    raw_groups=defaultdict(list);accepted_groups=defaultdict(list)
+    for cid,digest in raw_digest.items():raw_groups[digest].append(cid)
+    for key,digest in accepted_digest.items():accepted_groups[(key[1],key[2],digest)].append(key[0])
+    write_csv(work/'raw_signal_equivalence_groups.csv',
+        [dict(raw_signal_sha256=d,configurations=len(ids),raw_signals=len(raw[ids[0]]),config_ids=';'.join(ids)) for d,ids in sorted(raw_groups.items())])
+    write_csv(work/'accepted_signal_equivalence_groups.csv',
+        [dict(execution_model=k[0],cost_ticks=k[1],accepted_signal_set_sha256=k[2],configurations=len(ids),
+              accepted_entries=len(accepted[(ids[0],k[0],k[1])]),config_ids=';'.join(ids)) for k,ids in sorted(accepted_groups.items())])
+    def comparison(candidate,reference,model,cost,role):
+        ka,kb=(candidate,model,cost),(reference,model,cost)
+        ours,theirs=accepted[ka],accepted[kb]
+        def total(ids):return sum(r_value(paths[i][model],cost) for i in sorted(ids) if paths[i][model]['exit'] is not None)
+        added,removed=ours-theirs,theirs-ours;common=ours&theirs
+        delta=summaries[ka]['total_r']-summaries[kb]['total_r']
+        ar,rr=total(added),total(removed)
+        if abs(ar-rr-delta)>1e-8:raise RuntimeError('Full replay comparison attribution failed.')
+        union=ours|theirs
+        return dict(candidate_config=candidate,reference_config=reference,reference_role=role,
+            execution_model=model,cost_ticks=cost,common_entries=len(common),added_entries=len(added),removed_entries=len(removed),
+            common_completed_r=total(common),added_completed_r=ar,removed_completed_r=rr,delta_completed_r=delta,
+            candidate_total_r=summaries[ka]['total_r'],reference_total_r=summaries[kb]['total_r'],
+            candidate_closed_trades=summaries[ka]['closed_trades'],reference_closed_trades=summaries[kb]['closed_trades'],
+            candidate_open_count=summaries[ka]['open_at_data_end'],reference_open_count=summaries[kb]['open_at_data_end'],
+            delta_max_closed_dd_r=summaries[ka]['max_closed_dd_r']-summaries[kb]['max_closed_dd_r'],
+            accepted_fraction_of_reference=len(ours)/len(theirs) if theirs else None,
+            accepted_jaccard=len(common)/len(union) if union else None,
+            qualifying_subset_of_reference=int(raw[candidate]<=raw[reference]),accepted_subset_of_reference=int(ours<=theirs))
+    review=[]
+    for c in configs:
+        cid=c['config_id']
+        for model in MODELS:
+            for cost in COSTS:
+                key=(cid,model,cost);row=summaries[key]
+                winners=sorted((r_value(paths[i][model],cost) for i in accepted[key]
+                    if paths[i][model]['exit'] is not None and r_value(paths[i][model],cost)>0),reverse=True)
+                top3=sum(winners[:3])
+                detail=dict(row,**{k:c[k] for k in ('branch','study_role','anchor_id','retained_pass3','lookback','distance_atr',
+                    'body_min_atr','range_min_atr','signal_close_max','previous_close_min','signal_constituent_id',
+                    'previous_constituent_id','structure_reference_id','matched_single_comparison_scope')},
+                    accepted_signal_set_sha256=accepted_digest[key],raw_equivalent_configurations=len(raw_groups[raw_digest[cid]]),
+                    accepted_equivalent_configurations=len(accepted_groups[(model,cost,accepted_digest[key])]),
+                    latest_1y_entry_r=period(key,'LATEST_1Y'),latest_2y_entry_r=period(key,'LATEST_2Y'),latest_5y_entry_r=period(key,'LATEST_5Y'),
+                    minimum_era_entry_r=era_min(key),floor_period_entry_r=period(key,'CHF_FLOOR_PERIOD'),
+                    largest_completed_winner_r=max(winners,default=0.),top3_completed_winners_r=top3,
+                    descriptive_total_r_less_top3_winners=row['total_r']-top3,top3_share_gross_winning_r=top3/sum(winners) if winners else None)
+                for label,reference in (('anchor',c['anchor_id']),('signal_single',c['signal_constituent_id']),
+                        ('previous_single',c['previous_constituent_id']),('structure_reference',c['structure_reference_id'])):
+                    control=summaries[(reference,model,cost)] if reference else None
+                    detail['delta_total_r_vs_'+label]=row['total_r']-control['total_r'] if control else None
+                    detail['delta_max_closed_dd_r_vs_'+label]=row['max_closed_dd_r']-control['max_closed_dd_r'] if control else None
+                    detail['closed_trade_fraction_vs_'+label]=row['closed_trades']/control['closed_trades'] if control and control['closed_trades'] else None
+                    detail['delta_latest_2y_entry_r_vs_'+label]=period(key,'LATEST_2Y')-period((reference,model,cost),'LATEST_2Y') if reference else None
+                review.append(detail)
+    review_lookup={(r['config_id'],r['execution_model'],r['cost_ticks']):r for r in review}
+    outputs={'plateau_review_table.csv':review}
+    outputs['study_family_definitions.csv']=[
+        dict(study_family='RETAINED_PASS3',branch='A_AND_C_CONTROLS',axis1='UNCHANGED',axis1_levels='',axis2='UNCHANGED',axis2_levels='',
+            fixed_reference='ORIGINAL_IDS',requested_memberships=40,comparison_scope='RETAINED_DIAGNOSTIC_STUDY'),
+        dict(study_family='QUALITY_GRID',branch='A_CORE',axis1='signal_close_max',axis1_levels=';'.join(map(str,QUALITY_SIGNAL_LEVELS)),
+            axis2='previous_close_min',axis2_levels=';'.join(map(str,QUALITY_PREVIOUS_LEVELS)),
+            fixed_reference=ANCHOR_IDS[0],requested_memberships=25,comparison_scope='EXACT_MATCHED_SINGLE_CONSTITUENTS'),
+        dict(study_family='NEW_SINGLE_CONTROL',branch='A_CORE',axis1='signal_close_max',axis1_levels='.25;.35;.45',
+            axis2='previous_close_min',axis2_levels='.65;.75;.85',fixed_reference=ANCHOR_IDS[0],requested_memberships=6,
+            comparison_scope='ONE_FEATURE_AT_LB60_DISTANCE0.10'),
+        *[dict(study_family='STRUCTURE_GRID',branch='A_CORE',axis1='lookback',axis1_levels=';'.join(map(str,STRUCTURE_LOOKBACKS)),
+            axis2='distance_atr',axis2_levels=';'.join(map(str,STRUCTURE_DISTANCES)),fixed_reference=combination_id(signal,previous),
+            requested_memberships=9,comparison_scope='FIXED_FULL_RULE_REPRESENTATIVE') for signal,previous in STRUCTURE_REPRESENTATIVES]]
+    all_comparisons=[]
+    def grid_reports(name,group,axes,lookup,reference):
+        """A fixed two-axis mapping; lookup is explicit requested membership."""
+        (xd,xlevels),(yd,ylevels)=axes
+        near=[];axis_rows=[];edges=[]
+        for x in xlevels:
+            for y in ylevels:
+                cid=lookup[(x,y)];bounds=[]
+                for dim,value,levels in ((xd,x,xlevels),(yd,y,ylevels)):
+                    if value==levels[0]:bounds.append(dim+'=LOWER')
+                    if value==levels[-1]:bounds.append(dim+'=UPPER')
+                groups={}
+                for dim,value,levels in ((xd,x,xlevels),(yd,y,ylevels)):
+                    pos=levels.index(value)
+                    groups[dim]=[lookup[(levels[j],y) if dim==xd else (x,levels[j])]
+                                 for j in (pos-1,pos+1) if 0<=j<len(levels)]
+                neighbours=groups[xd]+groups[yd]
+                for model in MODELS:
+                    for cost in COSTS:
+                        values=[review_lookup[(other,model,cost)] for other in neighbours]
+                        ours=accepted[(cid,model,cost)];jaccards=[]
+                        for other in neighbours:
+                            theirs=accepted[(other,model,cost)];union=ours|theirs
+                            if union:jaccards.append(len(ours&theirs)/len(union))
+                        near.append(dict(study_family=name,grid_group=group,config_id=cid,execution_model=model,cost_ticks=cost,
+                            x_axis=xd,x_value=x,y_axis=yd,y_value=y,tested_boundaries=';'.join(bounds),
+                            x_axis_neighbour_ids=';'.join(groups[xd]),y_axis_neighbour_ids=';'.join(groups[yd]),
+                            neighbour_ids=';'.join(neighbours),adjacent_configurations=len(neighbours),
+                            comparison_scope='EXACT_MATCHED_SINGLES' if name=='quality' else 'FIXED_FULL_RULE_REPRESENTATIVE',
+                            fixed_reference_id=reference,
+                            positive_total_r_neighbours=sum(v['total_r']>0 for v in values),
+                            above_reference_r_neighbours=sum(v['total_r']>summaries[(reference,model,cost)]['total_r'] for v in values),
+                            above_both_matched_single_r_neighbours=sum(v['delta_total_r_vs_signal_single']>0 and
+                                v['delta_total_r_vs_previous_single']>0 for v in values) if name=='quality' else None,
+                            minimum_neighbour_total_r=min(v['total_r'] for v in values),median_neighbour_total_r=statistics.median(v['total_r'] for v in values),
+                            minimum_neighbour_closed_trades=min(v['closed_trades'] for v in values),
+                            minimum_neighbour_era_entry_r=min(v['minimum_era_entry_r'] for v in values),
+                            minimum_neighbour_latest_2y_entry_r=min(v['latest_2y_entry_r'] for v in values),
+                            minimum_accepted_jaccard=min(jaccards) if jaccards else None,maximum_accepted_jaccard=max(jaccards) if jaccards else None,
+                            identical_raw_stream_neighbours=sum(raw[cid]==raw[other] for other in neighbours),
+                            identical_accepted_stream_neighbours=sum(ours==accepted[(other,model,cost)] for other in neighbours)))
+        for dimension,levels,fixed_levels in ((xd,xlevels,ylevels),(yd,ylevels,xlevels)):
+            for fixed in fixed_levels:
+                ids=[lookup[(value,fixed) if dimension==xd else (fixed,value)] for value in levels]
+                for model in MODELS:
+                    for cost in COSTS:
+                        values=[review_lookup[(cid,model,cost)] for cid in ids]
+                        above=[v['total_r']>summaries[(reference,model,cost)]['total_r'] for v in values]
+                        both=[v['delta_total_r_vs_signal_single']>0 and v['delta_total_r_vs_previous_single']>0 for v in values] if name=='quality' else []
+                        axis_rows.append(dict(study_family=name,grid_group=group,execution_model=model,cost_ticks=cost,
+                            varying_axis=dimension,fixed_axis=yd if dimension==xd else xd,fixed_threshold=fixed,
+                            thresholds=';'.join(str(v) for v in levels),config_ids=';'.join(ids),rule_settings=len(ids),
+                            fixed_reference_id=reference,unique_raw_streams=len({raw_digest[cid] for cid in ids}),
+                            unique_accepted_streams=len({accepted_digest[(cid,model,cost)] for cid in ids}),
+                            positive_total_r_settings=sum(v['total_r']>0 for v in values),above_reference_r_settings=sum(above),
+                            above_both_matched_single_r_settings=sum(both) if both else None,
+                            longest_positive_total_r_run=longest_run(v['total_r']>0 for v in values),
+                            longest_above_reference_r_run=longest_run(above),longest_above_both_matched_single_r_run=longest_run(both) if both else None,
+                            minimum_total_r=min(v['total_r'] for v in values),median_total_r=statistics.median(v['total_r'] for v in values),maximum_total_r=max(v['total_r'] for v in values),
+                            minimum_closed_trades=min(v['closed_trades'] for v in values),minimum_era_entry_r=min(v['minimum_era_entry_r'] for v in values),
+                            minimum_latest_2y_entry_r=min(v['latest_2y_entry_r'] for v in values)))
+                        for a,b in zip(ids,ids[1:]):
+                            edges.append(dict(study_family=name,grid_group=group,varying_axis=dimension,fixed_threshold=fixed,
+                                reference_threshold=by_id[a][dimension],candidate_threshold=by_id[b][dimension],
+                                **comparison(b,a,model,cost,'ADJACENT_'+name.upper())))
+        for suffix,rows in (('neighbourhood_summary',near),('axis_summary',axis_rows),('adjacent_comparisons',edges)):
+            outputs.setdefault(name+'_'+suffix+'.csv',[]).extend(rows)
+        all_comparisons.extend(edges)
+    quality_lookup={(a,b):combination_id(a,b) for a in QUALITY_SIGNAL_LEVELS for b in QUALITY_PREVIOUS_LEVELS}
+    grid_reports('quality','A_L060_D010',(('signal_close_max',QUALITY_SIGNAL_LEVELS),('previous_close_min',QUALITY_PREVIOUS_LEVELS)),quality_lookup,ANCHOR_IDS[0])
+    constituents=[]
+    for cid in quality_lookup.values():
+        c=by_id[cid]
+        for model in MODELS:
+            for cost in COSTS:
+                for role,ref in (('ANCHOR',c['anchor_id']),('SIGNAL_ONLY',c['signal_constituent_id']),('PREVIOUS_ONLY',c['previous_constituent_id'])):
+                    constituents.append(dict(study_family='quality',**comparison(cid,ref,model,cost,role)))
+    outputs['quality_constituent_comparisons.csv']=constituents;all_comparisons.extend(constituents)
+    structural=[]
+    for signal,previous in STRUCTURE_REPRESENTATIVES:
+        reference=combination_id(signal,previous)
+        lookup={(lb,d):structure_id(signal,previous,lb,d) for lb in STRUCTURE_LOOKBACKS for d in STRUCTURE_DISTANCES}
+        grid_reports('structure',reference,(('lookback',STRUCTURE_LOOKBACKS),('distance_atr',STRUCTURE_DISTANCES)),lookup,reference)
+        for cid in lookup.values():
+            for model in MODELS:
+                for cost in COSTS:
+                    structural.append(dict(study_family='structure',signal_close_max=signal,previous_close_min=previous,
+                        comparison_scope='FIXED_FULL_RULE_REPRESENTATIVE',**comparison(cid,reference,model,cost,'SAME_QUALITY_L060_D010')))
+    outputs['structure_reference_comparisons.csv']=structural;all_comparisons.extend(structural)
+    differences=[]
+    for number,row in enumerate(all_comparisons,1):
+        cid,ref,model,cost=(row[k] for k in ('candidate_config','reference_config','execution_model','cost_ticks'))
+        ours,theirs=accepted[(cid,model,cost)],accepted[(ref,model,cost)]
+        for change,ids in (('ADDED',ours-theirs),('REMOVED',theirs-ours)):
+            for i in sorted(ids):
+                p=paths[i][model]
+                differences.append(dict(comparison_number=number,study_family=row['study_family'],reference_role=row['reference_role'],
+                    candidate_config=cid,reference_config=ref,execution_model=model,cost_ticks=cost,change=change,
+                    signal_index=i,signal=p['signal'],entry=p['entry'],exit=p['exit'],reason=p['reason'],r=r_value(p,cost)))
+    outputs['plateau_marginal_entry_differences.csv']=differences
+    expected={'plateau_review_table.csv':498,'quality_neighbourhood_summary.csv':150,'quality_axis_summary.csv':60,
+        'quality_adjacent_comparisons.csv':240,'quality_constituent_comparisons.csv':450,
+        'structure_neighbourhood_summary.csv':108,'structure_axis_summary.csv':72,
+        'structure_adjacent_comparisons.csv':144,'structure_reference_comparisons.csv':108}
+    for name,count in expected.items():
+        if len(outputs[name])!=count:raise RuntimeError('Missing declared '+name)
+    for name,rows in outputs.items():write_csv(work/name,rows)
+    return dict(parent_counts,**{name:len(rows) for name,rows in outputs.items()},
+        **{'raw_signal_equivalence_groups.csv':len(raw_groups),'accepted_signal_equivalence_groups.csv':len(accepted_groups)})
+
 
 def self_checks():
     """Small mathematical/execution checks; no claims about market performance."""
@@ -16345,39 +16596,47 @@ def self_checks():
     uniform = [(t+i*HOUR,10.,11.,9.,10.) for i in range(25)]
     atr = atr14(uniform)
     check(atr[:14] == [None]*14 and all(x == 2. for x in atr[14:]),'Wilder ATR seed and recursion')
-    c,m=make_configs()
-    check(len(c)==40 and len(m)==40,'40 predeclared rule settings with no hidden sweep')
-    check(sum(x['study_role']=='COMBINATION' for x in c)==18,'18 two-feature combinations only')
-    check(sum(x['study_role']=='SINGLE_FEATURE_CONTROL' for x in c)==16,'16 unchanged single-feature controls')
-    check(sum(x['feature_name']=='NONE' for x in c)==6,'Six immutable original controls')
-    check(all(x['lookback']==60 and x['distance_atr']==.10 and x['body_min_atr']==.75 and
-              x['range_min_atr']==(1.25 if x['anchor_id']==ANCHOR_IDS[0] else 1.00)
-              for x in c if x['feature_name']!='NONE'),'Fixed branch geometry at every added condition')
-    check({(x['signal_close_max'],x['previous_close_min']) for x in c if x['study_role']=='COMBINATION'}==
-          {(a,b) for a in (.20,.30,.40) for b in (.60,.70,.80)},'Exact declared 3 by 3 levels; no extensions')
-    probe=dict(body_atr=.75,range_atr=1.25,close_location=.30,previous_close_location=.70,abs_distance_atr_60=.10)
+    c,m=make_configs();by_id={x['config_id']:x for x in c}
+    check(len(c)==83 and len(m)==89,'83 unique predeclared rules and89 requested memberships')
+    parents,_=parent_make_configs()
+    check(len(parents)==40 and all(config_key(by_id[x['config_id']])==config_key(x) for x in parents),'All40 parent IDs and numerical predicates preserved')
+    check(len({config_key(x) for x in c})==83,'No duplicate rule geometries')
+    check(sum(x['stage_group']=='QUALITY_GRID' for x in m)==25,'Exactly25 A quality memberships')
+    check(sum(x['stage_group']=='STRUCTURE_GRID' for x in m)==18,'Exactly18 fixed representative structure memberships')
+    check(sum(x['study_role']=='NEW_SINGLE_CONTROL' for x in c)==6,'Six exact matched new singles')
+    check(all(x['range_min_atr']==1.25 and x['body_min_atr']==.75 and x['anchor_id']==ANCHOR_IDS[0] for x in c if not x['retained_pass3']),'New scope is A only; body/range fixed')
+    check(QUALITY_SIGNAL_LEVELS==(.25,.30,.35,.40,.45) and QUALITY_PREVIOUS_LEVELS==(.65,.70,.75,.80,.85),'Exact declared quality boundaries')
+    check(STRUCTURE_LOOKBACKS==(40,50,60) and STRUCTURE_DISTANCES==(.075,.10,.125) and STRUCTURE_REPRESENTATIVES==((.30,.80),(.40,.70)),'Exact bounded structure levels and representatives')
+    check(all(x['signal_constituent_id'] is None and x['previous_constituent_id'] is None for x in c if x['study_role']=='STRUCTURE_GRID'),'Changed structure has no misleading LB60 single constituents')
     for row in c:
-        if row['study_role'] not in ('COMBINATION','SINGLE_FEATURE_CONTROL'):continue
-        equal=dict(probe)
-        if row['signal_close_max'] is not None:equal['close_location']=row['signal_close_max']
-        if row['previous_close_min'] is not None:equal['previous_close_location']=row['previous_close_min']
-        assert selected_indices(row,{1:equal})==[1]
-        if row['signal_close_max'] is not None:assert not selected_indices(row,{1:dict(equal,close_location=row['signal_close_max']+1e-8)})
-        if row['previous_close_min'] is not None:assert not selected_indices(row,{1:dict(equal,previous_close_location=row['previous_close_min']-1e-8)})
-    check(True,'Inclusive boundaries and exclusion when EITHER combination condition fails')
+        if row['signal_close_max'] is None and row['previous_close_min'] is None:continue
+        probe=dict(body_atr=.75,range_atr=1.25,close_location=row['signal_close_max'] if row['signal_close_max'] is not None else .30,
+                   previous_close_location=row['previous_close_min'] if row['previous_close_min'] is not None else .70,
+                   **{f'abs_distance_atr_{n}':row['distance_atr'] for n in LOOKBACKS})
+        assert selected_indices(row,{1:probe})==[1]
+        if row['signal_close_max'] is not None:assert not selected_indices(row,{1:dict(probe,close_location=row['signal_close_max']+1e-8)})
+        if row['previous_close_min'] is not None:assert not selected_indices(row,{1:dict(probe,previous_close_location=row['previous_close_min']-1e-8)})
+        assert not selected_indices(row,{1:dict(probe,**{f'abs_distance_atr_{row["lookback"]}':row['distance_atr']+1e-8})})
+    check(True,'Every close and structure threshold uses inclusive causal boundaries')
     combo=next(x for x in c if x['study_role']=='COMBINATION')
     try:selected_indices(dict(combo,previous_close_min=None),{1:probe})
-    except RuntimeError:check(True,'Incomplete combination fails rather than silently becoming one feature')
+    except RuntimeError:check(True,'Incomplete retained combination rejects')
     else:raise AssertionError('Incomplete combination accepted')
-    single=next(x for x in c if x['feature_name']=='previous_close_location')
-    try:selected_indices(single,{1:dict(probe,previous_close_location=float('nan'))})
-    except RuntimeError:check(True,'Nonfinite completed-candle feature fails closed')
+    for role in ('QUALITY_GRID','STRUCTURE_GRID'):
+        combo=next(x for x in c if x['study_role']==role)
+        try:selected_indices(dict(combo,previous_close_min=None),{1:probe})
+        except RuntimeError:check(True,'Incomplete new '+role+' fails closed')
+        else:raise AssertionError('Incomplete new combination accepted')
+    single=by_id[single_id(ANCHOR_IDS[0],'previous_close_location',.85)]
+    try:selected_indices(single,{1:dict(probe,abs_distance_atr_60=.10,previous_close_location=float('nan'))})
+    except RuntimeError:check(True,'Nonfinite completed feature fails closed')
     else:raise AssertionError('Nonfinite feature accepted')
-    check(longest_run([False,True,True,False,True])==2,'Contiguous axis run diagnostic')
-    check(all(x['signal_constituent_id'] in {r['config_id'] for r in c} and
-              x['previous_constituent_id'] in {r['config_id'] for r in c} for x in c if x['study_role']=='COMBINATION'),
-          'Every combination references both retained single constituents')
-    check(len([x for x in c if x['config_id']=='SCREEN_CONTROL'])==1,'Screen control has one immutable geometry')
+    check(longest_run([False,True,True,False,True])==2,'Contiguous axis diagnostic')
+    for signal in QUALITY_SIGNAL_LEVELS:
+        for previous in QUALITY_PREVIOUS_LEVELS:
+            row=by_id[combination_id(signal,previous)]
+            assert row['signal_constituent_id'] in by_id and row['previous_constituent_id'] in by_id
+    check(True,'All25 quality cells have BOTH exact matched single controls')
     # Signal close 10, stop 11.0001, target 6.9997. Both barriers; low nearer open.
     two = [(t,10.5,11.,9.,10.),(t+HOUR,7.2,11.2,6.8,8.)]
     paths = find_paths(two,0)
@@ -16435,13 +16694,16 @@ def run_job():
     work = Path(tempfile.mkdtemp(prefix='working-',dir=OUT))
     manifest = dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,
         dataset_kind='HISTORICAL_OANDA_MID',status='RUNNING',complete=False,
-        study='PASS3_BOUNDED_CLOSE_LOCATION_COMBINATIONS',start=iso(START),end_exclusive=iso(END),
+        study='PASS4_A_PLATEAU_FREQUENCY',start=iso(START),end_exclusive=iso(END),
         rr=RR,cost_ticks=list(COSTS),execution_models=list(MODELS),
-        expected_configurations=40,expected_cases=240,parent_pass2_zip_sha256=PARENT_ZIP_SHA256,
+        expected_configurations=83,expected_cases=498,requested_memberships=89,parent_pass3_zip_sha256=PARENT_ZIP_SHA256,
         original_screen_zip_sha256='786792e232d0477ed4c2d9440de7ec1110fd7568854b38edf2cb439c04c75fb0',
-        data_source_mode=os.getenv('EURCHF_PASS3_DATA_SOURCE','embedded'),
+        data_source_mode=os.getenv('EURCHF_PASS4_DATA_SOURCE','embedded'),
         fixed_anchors=dict(A_CORE=ANCHOR_IDS[0],C_FREQUENCY_RESEARCH=ANCHOR_IDS[1]),
-        combinations_per_anchor=9,single_feature_controls_per_anchor=8,conditional_features_in_combination=2,automatic_selection=False,
+        retained_parent_rules=40,quality_grid_memberships=25,new_single_controls=6,structure_grid_memberships=18,
+        quality_signal_levels=list(QUALITY_SIGNAL_LEVELS),quality_previous_levels=list(QUALITY_PREVIOUS_LEVELS),
+        structure_lookbacks=list(STRUCTURE_LOOKBACKS),structure_distances=list(STRUCTURE_DISTANCES),
+        structure_representatives=list(STRUCTURE_REPRESENTATIVES),conditional_features_in_combination=2,automatic_selection=False,
         plateau_not_spike=True,history_is_in_sample=True,
         incumbent_target='P31 frozen; not replayed/optimized in this standalone pass',
         template='FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md',
@@ -16482,7 +16744,7 @@ def run_job():
         write_csv(work/'parent_controls.csv',parents)
         write_json(work/'parent_expected_cases.json',parent_expectations())
         if any(r['status']!='PASS' for r in parents):
-            raise RuntimeError('Pass 2 parent control parity failed; no combination conclusions are valid.')
+            raise RuntimeError('Pass 3 parent control parity failed; no Pass 4 conclusions are valid.')
         manifest['parent_controls'] = 'PASS'
         manifest['parent_control_checks'] = len(parents)
         manifest['plateau_reporting'] = 'Descriptive neighbourhoods/equivalence/influence; no automatic acceptance'
@@ -16492,16 +16754,16 @@ def run_job():
         manifest.update(source_sha256=source_hash(bars),raw_engulf_signals=len(features),
                         hard_controls='PASS',software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()))
         summaries,counts = analyze(work,bars,features,paths,configs)
-        counts.update(write_combination_reports(work,bars,features,paths,configs,summaries))
+        counts.update(write_plateau_reports(work,bars,features,paths,configs,summaries))
         write_json(work/'output_row_counts.json',counts)
         manifest.update(status='COMPLETE',complete=True,output_row_counts=counts,
                         completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
         write_json(work/'run_manifest.json',manifest)
-        set_status(state='packaging',progress=96,message='All 240 cases complete; compressing source, ledgers and diagnostics')
+        set_status(state='packaging',progress=96,message='All 498 cases complete; compressing source, ledgers and diagnostics')
         package(work,True)
-        set_status(state='complete',progress=100,message='EUR/CHF H1 short Pass 3 complete; download the results ZIP',
-                   hard_controls='PASS',parent_controls='PASS',configurations=40,cases=240,
-                   data_source_mode=os.getenv('EURCHF_PASS3_DATA_SOURCE','embedded').strip().lower(),
+        set_status(state='complete',progress=100,message='EUR/CHF H1 short Pass 4 complete; download the results ZIP',
+                   hard_controls='PASS',parent_controls='PASS',configurations=83,cases=498,
+                   data_source_mode=os.getenv('EURCHF_PASS4_DATA_SOURCE','embedded').strip().lower(),
                    dataset_kind=manifest['dataset_kind'],source_sha256=manifest['source_sha256'],
                    result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
         return True
@@ -16523,7 +16785,7 @@ def run_job():
             JOB_LOCK = None
 
 
-RESULT_README = '# EUR/CHF H1 SHORT Pass 3 results\n\nRequire complete=true and all historical gates PASS before interpretation.\nThis is the same inspected historical MID snapshot, not fresh OOS validation.\n40 settings/240 cases: six original controls, sixteen existing single-feature\ncontrols and eighteen close-location combinations. configuration_grid.csv records\nboth numeric conditions and the exact single constituent IDs. All 132 retained\nparent cases must reproduce complete Pass 2 ledgers before combinations run.\n\nStart with combination_review_table.csv, constituent_trade_comparisons.csv,\ncombination_neighbourhood_summary.csv and combination_axis_summary.csv. Compare\nevery combination with BOTH simpler conditions and its own branch anchor. Positive\nlifetime R or lower DD after activity collapses does not establish usefulness.\nRead adjacent_combination_comparisons.csv, all periods/months/rolling windows,\ncounts/inactive periods and winner influence. No automatic winner is produced.\nbranch_frequency_comparisons.csv compares matched C versus A rules; never treat\ntheir heavily overlapping streams as independent portfolio allocations.\n\nraw_signal_equivalence_groups.csv and accepted_signal_equivalence_groups.csv\ndisclose identical streams. Neighbours vary one threshold at a time and explicitly\nmark the tested 3 by 3 edges. Axis runs are descriptive, not a plateau classifier.\nThe largest-winner subtraction is influence analysis, not a deletion backtest.\n\nJoin accepted_trades.csv to signal_trade_paths.csv on signal_index/execution_model,\npreserving accepted_sequence. Open exit/R stays blank and occupies p0. Denormalized\ncontrol_accepted_ledgers.csv contains all 22 retained original/single parent rules.\naccepted_comparisons.csv additionally compares every rule with the six original\ncontrols. Marginal R/entry differences are full chronological replay, not filtering\nan earlier accepted ledger. R=(historical_fill-exit_price)/(stop-historical_fill).\n\nPeriods distinguish entry-cohort eventual R from realized exit cash. Months and\nall rolling 12/24/36-month windows include zero-trade periods; 2026 is partial.\nR/DD is additive trade-risk units, not compounded equity or tick-level drawdown.\nAssumed costs/exits omit actual bid/ask, financing and some gap paths. Stress is\nnot a worst-case bound. Full source, protocol, runner and file hashes are included.\nKeep minimum complexity; stop honestly rather than expand a failing search.\nRR3/P31 remain unchanged. Entry/RR freeze, independent final confirmation,\nportfolio admission and prospective execution studies remain later stages.\n'
+RESULT_README = '# EUR/CHF H1 SHORT Pass4 results\n\nRequire complete=true, all3143 historical gates PASS, and all498 cases present.\nSame frozen137,819-candle MID snapshot; no unseen period or automatic selection.\n83 unique rules/89 requested memberships: all40 Pass3 controls,25 A quality\nmemberships,6 new singles,18 fixed representative structure memberships.\nRR3 unchanged. No new C grid or portfolio feedback.\n\nStart with plateau_review_table.csv (all498 cases), quality_constituent_comparisons,\nquality_neighbourhood_summary/axis_summary/adjacent_comparisons.csv. Every25-cell\nquality rule uses BOTH exact matched single conditions atLB60/distance.10.\nRead structure_reference_comparisons and structure_neighbourhood_summary/\naxis_summary/adjacent_comparisons.csv for the two fixed representatives.\nStructure comparisons are full-rule sensitivity, not isolated added-filter tests.\nNo matched single grid exists at changed structure; corresponding fields are blank.\n\nplateau_marginal_entry_differences.csv identifies actual added/removed accepted\nsignals across new grid references and edges. Full replay at every cost/model\nhandles p0 displacements. configuration_memberships.csv records all89 requests;\noverlaps reference their existing configuration IDs. Equivalence groups cover\nALL83 rules/498 cases; overlapping results are not independent observations.\n\nRetained combination_* / constituent_trade_comparisons / branch_frequency reports\ndescribe the unchanged original Pass3 study ONLY. Their3x3 boundaries are old-\nstudy edges; new quality_* reports describe the new5x5 edges. C rows are controls.\nNo hidden C expansion. Denormalized control_accepted_ledgers includes all40 parent\nrules plus six new singles. Join normalized accepted_trades to signal_trade_paths\non signal_index/execution_model, preserving accepted_sequence. Open R stays blank.\n\nFull source/features/grid/memberships, all periods/months/rolling losses including\ninactivity, CHF event diagnostics and original-control comparisons remain included.\nEntry-cohort eventual R and realized exit-period R differ. R/DD is additive, not\ncompounded return/tick equity. Assumed fills omit observed spread/financing/intrabar\njumps. Stop-first/open-gap stress is a sensitivity model, not a worst-case bound.\nWinner subtraction is descriptive influence, not a deletion backtest.\n\nMinimum complexity matters: keep simpler signal-only.30 competing. Inspect counts,\nweak periods and neighbours; do not select the largest lifetime row or repeatedly\nextend a boundary. Freeze entries before RR last. Final independent parity, exact\nP31 admission and prospective execution evidence remain later gates.\n'
 
 
 def launch(background=True):
@@ -16546,14 +16808,14 @@ def launch(background=True):
         STARTED = True
         # Reuse an exact-version complete result across multiple WSGI workers.
         previous = read_status()
-        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and previous.get('data_source_mode')==os.getenv('EURCHF_PASS3_DATA_SOURCE','embedded').strip().lower() and (OUT/RESULT_NAME).exists():
+        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and previous.get('data_source_mode')==os.getenv('EURCHF_PASS4_DATA_SOURCE','embedded').strip().lower() and (OUT/RESULT_NAME).exists():
             if JOB_LOCK is not None:
                 JOB_LOCK.close()
                 JOB_LOCK = None
             return False
-        set_status(state='starting',progress=0,message='Starting EUR/CHF H1 short combination research',runner_sha256=code_hash(),data_source_mode=os.getenv('EURCHF_PASS3_DATA_SOURCE','embedded').strip().lower(),result_path=None)
+        set_status(state='starting',progress=0,message='Starting EUR/CHF H1 short plateau/frequency research',runner_sha256=code_hash(),data_source_mode=os.getenv('EURCHF_PASS4_DATA_SOURCE','embedded').strip().lower(),result_path=None)
     if background:
-        threading.Thread(target=run_job,name='eurchf-pass3-research',daemon=True).start()
+        threading.Thread(target=run_job,name='eurchf-pass4-research',daemon=True).start()
         return True
     return run_job()
 
@@ -16572,7 +16834,7 @@ def app(environ, start_response):
         body = b'{"error":"Not found"}'
         start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
         return [] if method == 'HEAD' else [body]
-    if path=='/start' or (not STARTED and os.getenv('EURCHF_PASS3_AUTOSTART','1')=='1'):
+    if path=='/start' or (not STARTED and os.getenv('EURCHF_PASS4_AUTOSTART','1')=='1'):
         launch()
     current = read_status()
     code = '200 OK'
@@ -16596,7 +16858,7 @@ def app(environ, start_response):
     elif path=='/health':
         current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
     elif path=='/':
-        current = dict(service='EUR/CHF H1 SHORT Pass 3 combination research',version=VERSION,status='/status',results='/results',
+        current = dict(service='EUR/CHF H1 SHORT Pass 4 plateau/frequency research',version=VERSION,status='/status',results='/results',
                        start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
     body = (json.dumps(current,allow_nan=False)+'\n').encode()
     start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
@@ -16620,7 +16882,7 @@ def main():
         return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
     port = int(os.getenv('PORT','8080'))
     with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
-        if os.getenv('EURCHF_PASS3_AUTOSTART','1')=='1':
+        if os.getenv('EURCHF_PASS4_AUTOSTART','1')=='1':
             launch()
         print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
         server.serve_forever()
