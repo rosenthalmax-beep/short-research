@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""EUR/CHF H1 short Pass11: independent frozen original/ATR1.50 confirmation.
+"""EUR/CHF H1 short Pass12: bounded compression-breakdown research.
 
 Python 3.10+ and IANA timezone data. Embedded immutable MID candles and data-only
 references; no outbound network client, credentials, broker or order operations.
-Two fixed rules, RR3.50, three costs, two models. No parameter search.
+Frozen engulfing controls plus nine predeclared compression rules and shared-p0 combinations.
+RR3.50, three costs, two models. No adaptive search or portfolio admission.
 """
 import argparse
 import base64
@@ -25,8 +26,8 @@ from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, make_server
 from zoneinfo import ZoneInfo
 
-VERSION = 'EURCHF_H1_SHORT_PASS11_INDEPENDENT_CONFIRMATION_V1_2026_10_04'
-RESULT_NAME = 'EURCHF_H1_SHORT_PASS11_INDEPENDENT_CONFIRMATION_RESULTS.zip'
+VERSION = 'EURCHF_H1_SHORT_PASS12_COMPRESSION_BREAKDOWN_V1_2026_10_05'
+RESULT_NAME = 'EURCHF_H1_SHORT_PASS12_COMPRESSION_BREAKDOWN_RESULTS.zip'
 UTC = timezone.utc
 NY = ZoneInfo('America/New_York')
 HOUR = timedelta(hours=1)
@@ -36,8 +37,8 @@ TICK = 0.00001
 MODELS = ('SCREEN_PARITY','STOP_FIRST_GAP_STRESS')
 COSTS = (10,20,40)
 REFERENCE_SHA256 = '4e164aac30675bb20120b7abc85a28e0ebcfbd45010caab054b41b7569c517ea'
-OUT = Path(os.getenv('EURCHF_PASS11_OUTPUT_DIR','./eurchf_pass11_output')).resolve()
-PREFIX = '/eurchf-h1-short-pass11'
+OUT = Path(os.getenv('EURCHF_PASS12_OUTPUT_DIR','./eurchf_pass12_output')).resolve()
+PREFIX = '/eurchf-h1-short-pass12'
 MUTEX = threading.Lock()
 STARTED = False
 FILE_LOCK = None
@@ -31448,62 +31449,6 @@ def confirm(hourly,daily,blobs,gates):
     return out
 
 
-DESIGN = dict(stage='Independent original versus frozen quality confirmation',rules=2,cases=12,rr=3.5,
-              costs_ticks=list(COSTS),execution_models=list(MODELS),automatic_selection=False,parameter_search=False,
-              reference_SHA256=REFERENCE_SHA256,history_is_in_sample=True,portfolio_admission_complete=False,
-              orders_supported=False,credentials_required=False)
-PROTOCOL = '''# EUR/CHF H1 short — Pass11 independent confirmation
-
-Exactly two previously frozen alternatives: original RR3.50 and quality RR3.50
-with completed D1 ATR14 / mean(preceding50 valid ATR14, excluding numerator day)
-<=1.50 at full precision. No new cap, RR, filter or parameter search.
-
-Reconstruct H1 and D1 indicators, original geometry, causal completed daily
-context, raw memberships, isolated barrier paths, adverse entry geometry and p0
-from immutable raw sources. Prior accepted rows never generate signals or trades.
-Compare every frozen raw membership, isolated path, accepted field and case
-summary, plus exact canonical accepted-ledger hashes. Reject any mismatch.
-
-Python standard library only; embedded data-only reference bundle; no imported
-prior signal/execution engine or network/broker/credential/order access.
-Reporting utilities for calendar windows, quantiles, schema and formatting are
-retained to preserve the established report convention. Performance accumulation
-and all trading/indicator/source mechanics are independently authored.
-
-2005-01-01 through 2026-10-01 exclusive, OANDA MID unsmoothed. D1 prehistory
-starts 2003-01-01 and keeps legacy flat/weekend records as returned;17NY/DST,
-only completed end<=H1 close decision. Common ATR and EMA150/200/250 availability
-retained, daily warmup250 observations; EMA direction is not an entry filter.
-H1 warmup200 observations, Wilder ATR14 seed TR1..14, prior60high excludes signal,
-engulf previous bullish, body>=0.75ATR, range>=1.25ATR, ABS(high-priorhigh)<=0.075ATR,
-signal close location<=0.35, previous close location>=0.75.
-
-Stop=signalhigh+10ticks. Entry reference=signalclose at timestamp+1hour.
-Target=reference-3.50*(stop-reference). Short fill=reference-cost*tick,
-tick=0.00001, costs10/20/40ticks(1/2/4assumedpips), risk=stop-fill.
-Valid only0<target<fill<stop and entry<cutoff. p0 occupancy checked before geometry,
-exit-candle reentry allowed; unresolved positions stay occupied. No reference-row
-deletions substitute for replay. Ordinary STOP is exactly-1R. Unresolved trades
-have no realized R.
-
-SCREEN_PARITY dualtouch nearer-to-open extreme first, tie STOP, barrier fill and
-candle-end exit. STOP_FIRST_GAP_STRESS opening>=stop fills max(open,stop) atopen;
-opening<=target cappedtarget atopen; otherwise STOP on dualtouch, barrier/end.
-
-All twelve frozen cases remain visible with complete raw features, indicators,
-asof contexts, trade paths, ledgers, accepted hashes, period/month/zero-inclusive
-rolling results, inactivity, marginal losses/winners, concentration and source
-coverage. Failure publishes only diagnostics; no partial performance bundle.
-
-Independent confirmation concerns reproducibility on repeatedly used in-sample
-history, not new out-of-sample performance or independent broker data. Original
-remains default. The quality alternative is not admitted to P31 or deployed.
-Review returned results, then new exact P31 admission head-to-head at matched
-cutoff2026-09-20T18:29Z; Pass8 applies to original only. No portfolio feedback to
-choose caps, no stacking alternatives. Prospective execution validation later.
-'''
-
-
 def software_checks():
     tests = []
     def test(name,condition):
@@ -31596,10 +31541,413 @@ def software_checks():
     test('performance_ordered_drawdown',stats['total_r']==0 and stats['max_closed_dd_r']==-2 and stats['max_losing_streak']==2)
     test('ledger_hash_sensitive',ledger_hash([dict(rows[0],r=0.0)])!=ledger_hash(rows))
     return tests
+_frozen_software_checks=software_checks
+
+PROTOCOL="# EUR/CHF H1 short — Pass12 bounded compression-breakdown design\n\nDeclared 5 October 2026 before computing the new trigger's market outcomes. User chose to complete this complementary-trigger research before portfolio comparison, then requested code. **This Pass12 is compression research. The earlier Pass12 portfolio-admission plan is deferred**, not implemented by this runner. Number the later admission stage after the research/confirmation sequence is resolved.\n\n## Hypothesis and fixed grid\n\nTest whether a short trigger following a compressed price box supplies useful activity alongside the frozen bearish-engulfing mechanism. More activity must earn its drawdown, cost and displacement effects. No setting is assumed profitable or copied from another pair.\n\nExactly nine compression configurations: preceding **6/12/18 consecutive completed H1 candles** crossed with maximum box width **1.5/2.0/2.5 times ATR14 at the preceding candle**. Uniform coarse neighbouring values, nominated design centre12/2.0 for orientation only; no automatic selection or commitment to that centre. Do not add finer caps, shift the grid or expand RR/filters after seeing these outcomes.\n\nAt signal index i, require i>=200 and all preceding N candles through the signal to be contiguous at one-hour timestamps. Compression boxes spanning missing hours or market closures are ineligible for this new trigger; frozen engulfing rules retain their original observed-bar conventions. Missing-hour exclusions are reported.\n\nBox high/low are the maximum high/minimum low of candles [i-N,i), excluding the signal. Compression width=(box high-box low)/ATR14[i-1]. The preceding ATR uses the same Wilder14 seed TR1..14 and recursion as the frozen source convention. The current breakout cannot enlarge this denominator or the box.\n\nFixed breakdown predicate, not another search:\n\n- Preceding ATR is valid and positive; box width is positive and <=the configured cap.\n- Signal open is inside the box, inclusive of both boundaries.\n- Signal is bearish: close<open.\n- Signal close is **strictly below box low-0.10*preceding ATR14**.\n- Bearish body is >=0.50*preceding ATR14.\n- Signal range is positive and close location within that range is <=0.35.\n\nThese are a fixed impulse/close definition for the new mechanism, not a claim that each threshold is optimal. No engulfing requirement, daily trend/ATR filter, time/session/day filter, news filter, added minimum stop or exit tuning applies to compression.\n\n## Exits and costs\n\nKeep the established short execution convention: entry reference signal close at timestamp+1hour; stop signal high+10ticks; target reference-3.50*(stop-reference). Adverse fill reference-cost*tick, risk stop-fill, tick0.00001. Costs10/20/40ticks=1/2/4assumedpips. Validate0<target<fill<stop and entry<2026-10-01T00:00Z. Same SCREEN_PARITY and STOP_FIRST_GAP_STRESS barrier semantics; ordinary STOP exactly-1R. Entry is not substituted with next open. Unresolved positions carry blank realized R and remain occupied.\n\n## Controls and combinations\n\nFirst reproduce all12 reviewed Pass11 original/ATR1.50 full-history controls from exact raw H1/D1 sources:59/53signals,112memberships,224isolatedpaths,672acceptedrows,12canonicalledgerhashes,complete summaries/indicators/contexts. No original or quality rule change.\n\nResearch rules: two frozen controls, nine compression-only rules, nine ORIGINAL+compression rules, nine ATR1.50-engulfing+compression rules. **29 rules×3costs×2models=174cases**, consisting of12frozencontrol cases and162newresearch cases. No comparatorRR3.00, combined original+quality allocation, portfolio sizing or automatic winner.\n\nEvery combined case merges the **full raw signal streams**, not already accepted trades. One shared p0 short position per case. Exit-candle reentry remains allowed. Occupancy is checked before geometry. On a raw same-bar overlap the engulfing component has priority, even if its entry is invalid; no fallback or double entry. Both components have identical same-bar price geometry and RR, but origin attribution is retained explicitly.\n\nATR1.50 applies only to the quality engulfing component. Compression is the same standalone mechanism in both combinations. Thus a combined quality case can still take a compression trade on a bar where the daily filter rejects engulfing. Keep this visible in origin labels and daily-context diagnostics; do not call the entire union daily-filtered.\n\nReport all raw overlaps, blocked signals and blocking origin, accepted origin, removed/displaced original-core trades, incremental accepted compression trades, retained trade changes and marginal cash identities. A compression trade occupying the slot can displace an engulfing trade; report the lost contribution as well as new winners. Shared-position replay is not a stack of two independent allocations.\n\n## Required evidence and limits\n\nKeep every config/cost/model visible. Complete raw compression features for every candidate passing the fixed impulse/open/close checks before the cap; separate scan/ineligibility counts for all bars/windows; raw memberships, unique isolated paths, accepted/invalid/blocked/open/event trades and exact hashes. Frozen control reports/source/definition bytes stay identifiable.\n\nSummary/calendar/era/latest/CHF/monthly and zero-inclusive12/24/36M rolling reports must show cost sensitivity, activity retention/addition, empty years/months, inter-entry gaps, drawdown/losing streaks, concentration and worst periods. Show origin-level completed contributions for combined cases and direct original-versus-combined trade differences.\n\nNeighbour comparisons use only the declared grid: adjacent caps at the same window and adjacent windows at the same cap, within each of the three branches. Twelvegrid edges×3branches×6cost/models=216comparisons; include every marginal accepted change and cash identity. Report equivalent accepted streams instead of counting duplicates as separate support.\n\nConcentration and top-five-winner arithmetic omission diagnostics do not generate new strategies or re-run p0 after removing a trade. No automatic plateau verdict. Useful support requires a neighbouring region, contributions across periods and a defensible return/drawdown/activity balance after displaced core trades and costs. One spike, rescued historical loss, empty-year targeting or largest net-R row is insufficient. Stop this branch if support is weak instead of repeating adaptive searches.\n\nSources unchanged:137819H1/6914D1 OANDA MID unsmoothed, D1 17NY/DST, same snapshots and cutoff2026-10-01exclusive. All history is reused in sample; no independent broker refresh/OOS/account/orders/live change. Closed R drawdown is not portfolio NAV. MID/assumed fills/no financing/actual conversion-unit rounding/intratrade NAV/shock-fill limits remain.\n\nOn source, frozen-parity, mechanics/cash or report failure, publish error-only diagnostics and replace stale success. Existing source/code cache and read-only research HTTP conventions remain.\n\nReview returned research first. If a supported combined candidate exists, freeze its exact new component/shared-position policy, independently confirm complete ledgers, then conduct matched-cutoff portfolio admission. Otherwise stop compression and resume the already prepared original-versus-ATR1.50 admission design. Original stays default, P31 unchanged, dependent alternatives unstacked.\n"
+DESIGN_SHA256='a9c176fd27b8a23abf0a56307ea4ba4c356c8b50701a7cebb7cb4c64416237db'
+
+BOX_WINDOWS=(6,12,18)
+BOX_CAPS=(1.5,2.0,2.5)
+BREAK_BUFFER_ATR=0.10
+BREAK_BODY_ATR=0.50
+BREAK_CLOSE_MAX=0.35
+DESIGN=dict(stage='Bounded compression-breakdown complementary-trigger research',
+    windows=list(BOX_WINDOWS),box_width_caps=list(BOX_CAPS),compression_configs=9,orientation_centre=dict(window=12,cap=2.0),
+    breakdown_buffer_atr=BREAK_BUFFER_ATR,breakdown_body_min_atr=BREAK_BODY_ATR,breakdown_close_max=BREAK_CLOSE_MAX,
+    rr=3.5,cost_ticks=list(COSTS),execution_models=list(MODELS),rules=29,cases=174,
+    frozen_control_cases=12,new_research_cases=162,neighbour_edges_per_branch=12,neighbour_comparisons=216,
+    core_priority_on_same_bar=True,shared_position_limit=1,compression_D1_filter=False,
+    original_and_quality_immutable=True,automatic_selection=False,further_adaptive_search=False,
+    parameter_search='Exactly the predeclared nine-config grid',history_is_in_sample=True,
+    portfolio_admission_deferred=True,portfolio_admission_complete=False,orders_supported=False,
+    credentials_required=False,reference_sha256=REFERENCE_SHA256,design_sha256=DESIGN_SHA256)
+
+
+def compression_specs():
+    return [dict(compression_config_id=f'C__BOX_N{n:03d}__WMAX{str(cap).replace(".","P")}__BREAK010__BODY050__CL035',
+                 box_window=n,box_width_cap=cap) for n in BOX_WINDOWS for cap in BOX_CAPS]
+
+
+def breakdown_features(hourly,index,window,atr):
+    """Current candle never sets the box or its preceding ATR denominator."""
+    if index<200 or index<window:
+        return None,'WARMUP'
+    previous_atr=atr[index-1]
+    if previous_atr is None or previous_atr<=0:
+        return None,'INVALID_PRECEDING_ATR'
+    block=hourly[index-window:index+1]
+    if any(b[0]-a[0]!=HOUR for a,b in zip(block,block[1:])):
+        return None,'NONCONTIGUOUS_BOX_OR_SIGNAL'
+    box=block[:-1];box_high=max(r[2] for r in box);box_low=min(r[3] for r in box)
+    if box_high<=box_low:
+        return None,'ZERO_BOX_WIDTH'
+    time,opening,high,low,close=hourly[index]
+    if not box_low<=opening<=box_high:
+        return None,'OPEN_OUTSIDE_BOX'
+    if close>=opening:
+        return None,'NOT_BEARISH'
+    if close>=box_low-BREAK_BUFFER_ATR*previous_atr:
+        return None,'NOT_STRICTLY_BELOW_BUFFER'
+    body=(opening-close)/previous_atr
+    if body<BREAK_BODY_ATR:
+        return None,'BODY_BELOW_MINIMUM'
+    if high<=low or (close-low)/(high-low)>BREAK_CLOSE_MAX:
+        return None,'WEAK_CLOSE_OR_ZERO_RANGE'
+    return dict(signal_index=index,signal=stamp(time),decision=stamp(time+HOUR),box_window=window,
+        box_start=stamp(box[0][0]),box_last=stamp(box[-1][0]),box_high=box_high,box_low=box_low,
+        preceding_atr14=previous_atr,box_width_atr=(box_high-box_low)/previous_atr,
+        breakout_below_box_atr=(box_low-close)/previous_atr,body_atr=body,
+        signal_close_location=(close-low)/(high-low)),None
+
+
+def scan_compression(hourly,atr):
+    specs=compression_specs();streams={s['compression_config_id']:[] for s in specs}
+    features=[];audits=[]
+    reasons=('INVALID_PRECEDING_ATR','NONCONTIGUOUS_BOX_OR_SIGNAL','ZERO_BOX_WIDTH','OPEN_OUTSIDE_BOX',
+             'NOT_BEARISH','NOT_STRICTLY_BELOW_BUFFER','BODY_BELOW_MINIMUM','WEAK_CLOSE_OR_ZERO_RANGE')
+    for window in BOX_WINDOWS:
+        counts={reason:0 for reason in reasons};checked=passed=0
+        for index in range(200,len(hourly)):
+            checked+=1
+            row,problem=breakdown_features(hourly,index,window,atr)
+            if problem:
+                counts[problem]+=1;continue
+            passed+=1
+            for cap in BOX_CAPS:
+                row['cap_'+str(cap).replace('.','p')+'_passes']=int(row['box_width_atr']<=cap)
+            features.append(row)
+            for spec in specs:
+                if spec['box_window']==window and row['box_width_atr']<=spec['box_width_cap']:
+                    streams[spec['compression_config_id']].append(index)
+        audits.append(dict(box_window=window,checked_after_warmup=checked,passes_fixed_breakdown_before_cap=passed,
+            **counts,**{'cap_'+str(cap).replace('.','p')+'_raw_count':len(streams[next(s['compression_config_id'] for s in specs if s['box_window']==window and s['box_width_cap']==cap)]) for cap in BOX_CAPS}))
+    return streams,features,audits
+
+
+def study_rules():
+    rules=[dict(r,kind='FROZEN_CONTROL',base_config_id=r['config_id'],compression_config_id=None,
+                box_window=None,box_width_cap=None) for r in RULES]
+    specs=compression_specs()
+    for spec in specs:
+        rules.append(dict(spec,config_id=spec['compression_config_id'],strategy_id='EURCHF_H1_SHORT_COMPRESSION_'+spec['compression_config_id'],
+                          rr=3.5,role='COMPRESSION_ONLY',kind='COMPRESSION_ONLY',base_config_id=None))
+    for base in RULES:
+        for spec in specs:
+            rules.append(dict(spec,config_id=base['config_id']+'__PLUS__'+spec['compression_config_id'],
+                strategy_id=base['strategy_id']+'__PLUS__'+spec['compression_config_id'],rr=3.5,
+                role=base['role']+'_PLUS_COMPRESSION',kind='COMBINED',base_config_id=base['config_id']))
+    return rules
+
+
+def merge_raw(core,compression):
+    core_set,compression_set=set(core),set(compression)
+    return [dict(signal_index=i,origin_trigger='ENGULF' if i in core_set else 'COMPRESSION_BREAKDOWN',
+                 raw_same_bar_overlap=int(i in core_set and i in compression_set)) for i in sorted(core_set|compression_set)]
+
+
+def replay_shared(rule,events,paths,model,cost):
+    """One occupied slot before geometry; raw overlap priority fixed at source."""
+    accepted,invalid,blocked=[],[],[]
+    active=None
+    for event in events:
+        index=event['signal_index']
+        annotation=dict(origin_trigger=event['origin_trigger'],raw_same_bar_overlap=event['raw_same_bar_overlap'])
+        if active is not None and (active['exit_index'] is None or index<active['exit_index']):
+            blocked.append(dict(signal_index=index,**annotation,blocking_signal_index=active['signal_index'],
+                blocking_origin=active['origin_trigger'],blocking_exit_index=active['exit_index'],reason='SHARED_P0_OCCUPIED_BEFORE_GEOMETRY'))
+            continue
+        path=paths[index];fill,problem=price_entry(path,cost)
+        if problem:
+            invalid.append(dict(signal_index=index,**annotation,reason=problem));continue
+        accepted.append(dict(config_id=rule['config_id'],execution_model=model,cost_ticks=cost,
+            accepted_sequence=len(accepted)+1,signal_index=index,exit_index=path['exit_index'],signal=path['signal'],
+            entry=path['entry'],exit=path['exit'],reference_entry=path['reference_entry'],historical_fill=fill,
+            stop=path['stop'],target=path['target'],risk_price=path['stop']-fill,exit_price=path['exit_price'],
+            reason=path['reason'],r=realized(path,cost),**annotation))
+        active=dict(path,origin_trigger=event['origin_trigger'])
+    return accepted,invalid,blocked
+
+
+def trade_identity_hash(rows):
+    keys=[k for k in ROW_FIELDS if k not in ('config_id','accepted_sequence')]
+    return digest(''.join(json.dumps({k:r[k] for k in keys},sort_keys=True,separators=(',',':'))+'\n' for r in rows).encode())
+
+
+def compare_streams(before,after):
+    a,b={r['signal_index']:r for r in before},{r['signal_index']:r for r in after}
+    added,removed=sorted(b.keys()-a.keys()),sorted(a.keys()-b.keys())
+    common=sorted(a.keys()&b.keys())
+    fields=[k for k in ROW_FIELDS if k not in ('config_id','accepted_sequence')]
+    changed=[i for i in common if any(a[i][k]!=b[i][k] for k in fields)]
+    cash=lambda rows:sum(r['r'] or 0 for r in rows)
+    marginal=cash(b[i] for i in added)-cash(a[i] for i in removed)+sum((b[i]['r'] or 0)-(a[i]['r'] or 0) for i in changed)
+    return a,b,added,removed,changed,marginal,cash(after)-cash(before)
+
+
+def run_compression_study(hourly,frozen,gates):
+    rules=study_rules();specs=compression_specs()
+    atr=wilder_series(hourly)
+    comp,features,audit=scan_compression(hourly,atr)
+    core={r['config_id']:[x['signal_index'] for x in frozen['raw_signal_membership.csv'] if x['config_id']==r['config_id']] for r in RULES}
+    union=sorted(set(i for values in list(core.values())+list(comp.values()) for i in values))
+    unique_paths={(model,i):isolated_path(hourly,i,model) for model in MODELS for i in union}
+    names=['summary.csv','accepted_trades.csv','monthly_results.csv','rolling_windows.csv','period_results.csv',
+           'invalid_entries.csv','blocked_signals.csv','open_at_data_end.csv','chf_event_exposure.csv',
+           'raw_membership.csv','raw_same_bar_overlaps.csv','concentration.csv','winner_influence.csv',
+           'origin_contributions.csv','combined_vs_core.csv','core_trade_differences.csv','neighbour_comparisons.csv',
+           'neighbour_trade_changes.csv','accepted_equivalence_groups.csv']
+    outputs={name:[] for name in names}
+    outputs['compression_features.csv']=features;outputs['compression_scan_audit.csv']=audit
+    outputs['configuration_grid.csv']=rules
+    outputs['isolated_paths.csv']=[dict(execution_model=model,**unique_paths[(model,i)]) for model in MODELS for i in union]
+    case_rows={};case_summaries={}
+    core_summaries={(r['config_id'],r['execution_model'],r['cost_ticks']):r for r in frozen['summary.csv']}
+    for rule in rules:
+        core_indices=core.get(rule['base_config_id'],[])
+        comp_indices=comp.get(rule['compression_config_id'],[])
+        events=merge_raw(core_indices,comp_indices)
+        for e in events:
+            outputs['raw_membership.csv'].append(dict(config_id=rule['config_id'],signal=stamp(hourly[e['signal_index']][0]),**e))
+            if e['raw_same_bar_overlap']:
+                outputs['raw_same_bar_overlaps.csv'].append(dict(config_id=rule['config_id'],signal_index=e['signal_index'],
+                    selected_origin='ENGULF',same_price_geometry=True,policy='ENGULF_PRIORITY_NO_DOUBLE_ENTRY_NO_FALLBACK'))
+        indices=[e['signal_index'] for e in events]
+        for model in MODELS:
+            paths={i:unique_paths[(model,i)] for i in indices}
+            for cost in COSTS:
+                rows,invalid,blocked=replay_shared(rule,events,paths,model,cost)
+                summary,months,rolling,periods_out=describe_case(rule,model,cost,indices,paths,rows,invalid,len(blocked))
+                tag=dict(config_id=rule['config_id'],execution_model=model,cost_ticks=cost)
+                summary.update(kind=rule['kind'],role=rule['role'],base_config_id=rule['base_config_id'],
+                    compression_config_id=rule['compression_config_id'],box_window=rule['box_window'],box_width_cap=rule['box_width_cap'],
+                    raw_core_signals=len(core_indices),raw_compression_signals=len(comp_indices),raw_same_bar_overlaps=len(set(core_indices)&set(comp_indices)),
+                    accepted_engulf_trades=sum(r['origin_trigger']=='ENGULF' for r in rows),
+                    accepted_compression_trades=sum(r['origin_trigger']=='COMPRESSION_BREAKDOWN' for r in rows),
+                    blocked_engulf_signals=sum(r['origin_trigger']=='ENGULF' for r in blocked),
+                    blocked_compression_signals=sum(r['origin_trigger']=='COMPRESSION_BREAKDOWN' for r in blocked),
+                    accepted_trade_identity_sha256=trade_identity_hash(rows))
+                key=(rule['config_id'],model,cost);case_rows[key]=rows;case_summaries[key]=summary
+                if rule['kind']=='FROZEN_CONTROL':
+                    expected=core_summaries[key]
+                    for field,value in expected.items():
+                        # Research base_config_id names the actual replayed core
+                        # (quality or original); the historical quality report
+                        # used original's ID as its research parent annotation.
+                        # All complete historical summaries still gate in confirm.
+                        if field in summary and field!='base_config_id':
+                            gates.check('unchanged_core:'+str(key)+':'+field,summary[field],value,numeric=isinstance(value,float))
+                    gates.check('unchanged_core_exact_accepted_hash:'+str(key),ledger_hash(rows),expected['accepted_ledger_sha256'])
+                outputs['summary.csv'].append(summary)
+                outputs['accepted_trades.csv'].extend(dict(strategy_id=rule['strategy_id'],rr=3.5,kind=rule['kind'],base_config_id=rule['base_config_id'],
+                    compression_config_id=rule['compression_config_id'],**r) for r in rows)
+                outputs['monthly_results.csv'].extend(months);outputs['rolling_windows.csv'].extend(rolling);outputs['period_results.csv'].extend(periods_out)
+                outputs['invalid_entries.csv'].extend(dict(tag,**r) for r in invalid)
+                outputs['blocked_signals.csv'].extend(dict(tag,**r) for r in blocked)
+                for r in rows:
+                    if r['exit'] is None:outputs['open_at_data_end.csv'].append(dict(tag,**{k:r[k] for k in ('signal_index','origin_trigger','entry','historical_fill','stop','target')}))
+                    if date(r['entry'])<date('2015-01-16T00:00:00Z') and (r['exit'] is None or date(r['exit'])>date('2015-01-15T00:00:00Z')):
+                        outputs['chf_event_exposure.csv'].append(dict(tag,signal_index=r['signal_index'],origin_trigger=r['origin_trigger'],entry=r['entry'],exit=r['exit'],r=r['r'],reason=r['reason']))
+                winners=sorted((r for r in rows if r['r'] is not None and r['r']>0),key=lambda r:(-r['r'],r['signal_index']))
+                gross=sum(r['r'] for r in winners)
+                outputs['concentration.csv'].append(dict(tag,gross_winning_r=gross,winning_trades=len(winners),
+                    **{f'top{n}_gross_winning_share_pct':100*sum(r['r'] for r in winners[:n])/gross if gross else None for n in (1,3,5)},
+                    total_r_without_top5_winners=summary['total_r']-sum(r['r'] for r in winners[:5])))
+                for rank,winner in enumerate(winners[:5],1):
+                    stats=performance(r['r'] for r in rows if r['r'] is not None and r['signal_index']!=winner['signal_index'])
+                    outputs['winner_influence.csv'].append(dict(tag,winner_rank=rank,signal_index=winner['signal_index'],r=winner['r'],
+                        total_r_without_trade=stats['total_r'],maximum_closed_dd_without_trade=stats['max_closed_dd_r'],
+                        interpretation='Arithmetic omission only; no p0 rerun or new strategy'))
+                for origin in ('ENGULF','COMPRESSION_BREAKDOWN'):
+                    subset=[r for r in rows if r['origin_trigger']==origin]
+                    stats=performance(r['r'] for r in subset if r['r'] is not None)
+                    outputs['origin_contributions.csv'].append(dict(tag,origin_trigger=origin,accepted_trades=len(subset),
+                        open_trades=sum(r['r'] is None for r in subset),closed_trades=stats['closed_trades'],
+                        wins=stats['wins'],losses=stats['losses'],total_r=stats['total_r'],
+                        interpretation='Contribution within this replay; origin drawdowns are not additive'))
+    for rule in rules:
+        if rule['kind']!='COMBINED':continue
+        for model in MODELS:
+            for cost in COSTS:
+                baseline=case_rows[(rule['base_config_id'],model,cost)];combined=case_rows[(rule['config_id'],model,cost)]
+                a,b,added,removed,changed,marginal,delta=compare_streams(baseline,combined)
+                tag=dict(config_id=rule['config_id'],base_config_id=rule['base_config_id'],execution_model=model,cost_ticks=cost)
+                gates.check('combined_marginal_cash:'+str(tag),delta,marginal,numeric=True)
+                gates.check('combined_core_or_new_raw_origin:'+str(tag),all(r['origin_trigger'] in ('ENGULF','COMPRESSION_BREAKDOWN') for r in combined),True)
+                outputs['combined_vs_core.csv'].append(dict(tag,core_accepted=len(baseline),combined_accepted=len(combined),
+                    added_trades=len(added),removed_core_trades=len(removed),changed_retained_trades=len(changed),total_r_delta=delta,
+                    added_total_r=sum(b[i]['r'] or 0 for i in added),removed_core_total_r=sum(a[i]['r'] or 0 for i in removed),
+                    core_max_closed_dd_r=case_summaries[(rule['base_config_id'],model,cost)]['max_closed_dd_r'],
+                    combined_max_closed_dd_r=case_summaries[(rule['config_id'],model,cost)]['max_closed_dd_r']))
+                blockmap={r['signal_index']:r for r in outputs['blocked_signals.csv'] if all(r[k]==tag[k] for k in ('config_id','execution_model','cost_ticks'))}
+                for label,ids,source in [('ADDED',added,b),('REMOVED_CORE',removed,a),('CHANGED_RETAINED',changed,b)]:
+                    for i in ids:
+                        p=source[i];block=blockmap.get(i,{})
+                        outputs['core_trade_differences.csv'].append(dict(tag,change=label,signal_index=i,origin_trigger=p['origin_trigger'],
+                            signal=p['signal'],entry=p['entry'],exit=p['exit'],r=p['r'],
+                            blocking_signal_index=block.get('blocking_signal_index'),blocking_origin=block.get('blocking_origin')))
+    # Twelve grid edges, evaluated separately in each branch and fixed case.
+    edges=[]
+    specmap={(s['box_window'],s['box_width_cap']):s['compression_config_id'] for s in specs}
+    for n in BOX_WINDOWS:
+        edges.extend((specmap[(n,a)],specmap[(n,b)],'CAP') for a,b in zip(BOX_CAPS,BOX_CAPS[1:]))
+    for cap in BOX_CAPS:
+        edges.extend((specmap[(a,cap)],specmap[(b,cap)],'WINDOW') for a,b in zip(BOX_WINDOWS,BOX_WINDOWS[1:]))
+    branches=[None]+[r['config_id'] for r in RULES]
+    for branch in branches:
+        for left,right,axis in edges:
+            lc=left if branch is None else branch+'__PLUS__'+left
+            rc=right if branch is None else branch+'__PLUS__'+right
+            for model in MODELS:
+                for cost in COSTS:
+                    a,b,added,removed,changed,marginal,delta=compare_streams(case_rows[(lc,model,cost)],case_rows[(rc,model,cost)])
+                    tag=dict(branch='COMPRESSION_ONLY' if branch is None else branch,from_config=lc,to_config=rc,
+                             grid_axis=axis,execution_model=model,cost_ticks=cost)
+                    gates.check('neighbour_cash:'+str(tag),delta,marginal,numeric=True)
+                    outputs['neighbour_comparisons.csv'].append(dict(tag,from_trades=len(a),to_trades=len(b),added=len(added),removed=len(removed),
+                        changed_retained=len(changed),total_r_delta=delta,from_max_dd_r=case_summaries[(lc,model,cost)]['max_closed_dd_r'],
+                        to_max_dd_r=case_summaries[(rc,model,cost)]['max_closed_dd_r']))
+                    for label,ids,lookup in [('ADDED',added,b),('REMOVED',removed,a),('CHANGED_RETAINED',changed,b)]:
+                        outputs['neighbour_trade_changes.csv'].extend(dict(tag,change=label,signal_index=i,origin_trigger=lookup[i]['origin_trigger'],
+                            signal=lookup[i]['signal'],entry=lookup[i]['entry'],exit=lookup[i]['exit'],r=lookup[i]['r']) for i in ids)
+    equivalent=defaultdict(list)
+    for s in outputs['summary.csv']:equivalent[(s['execution_model'],s['cost_ticks'],s['accepted_trade_identity_sha256'])].append(s['config_id'])
+    for (model,cost,fingerprint),members in sorted(equivalent.items()):
+        outputs['accepted_equivalence_groups.csv'].append(dict(execution_model=model,cost_ticks=cost,accepted_trade_identity_sha256=fingerprint,
+            member_configs=len(members),config_ids='|'.join(members),interpretation='Equivalent accepted paths are not independent evidence'))
+    gates.check('rules_29',len(rules),29);gates.check('cases_174',len(outputs['summary.csv']),174)
+    gates.check('combined_comparisons_108',len(outputs['combined_vs_core.csv']),108)
+    gates.check('neighbour_comparisons_216',len(outputs['neighbour_comparisons.csv']),216)
+    gates.check('grid_and_policy_pins',BOX_WINDOWS==(6,12,18) and BOX_CAPS==(1.5,2.0,2.5)
+        and BREAK_BUFFER_ATR==0.10 and BREAK_BODY_ATR==0.50 and BREAK_CLOSE_MAX==0.35,True)
+    gates.require()
+    return outputs
+
+
+def software_checks():
+    tests=_frozen_software_checks()
+    def test(name,condition):
+        tests.append(dict(check=name,passed=bool(condition)))
+        if not condition:raise GateFailure('Compression software control failed: '+name)
+    start=date('2020-01-01T00:00:00Z')
+    bars=[(start+i*HOUR,1.,1.001,0.999,1.) for i in range(205)]
+    bars[200]=(start+200*HOUR,1.,1.0002,0.9978,0.9979)
+    atr=wilder_series(bars)
+    row,why=breakdown_features(bars,200,12,atr)
+    test('compression_fixed_breakdown_qualifies',row is not None and why is None)
+    test('box_excludes_signal',row['box_low']==0.999 and row['box_high']==1.001)
+    test('box_denominator_is_preceding_ATR',row['preceding_atr14']==atr[199])
+    test('warmup_signal199_rejected',breakdown_features(bars,199,12,atr)[1]=='WARMUP')
+    big=list(bars);big[200]=(big[200][0],1.,1.05,0.9978,0.9979)
+    other,_=breakdown_features(big,200,12,wilder_series(big))
+    test('signal_extreme_no_box_or_denominator_change',other['box_width_atr']==row['box_width_atr'] and other['preceding_atr14']==row['preceding_atr14'])
+    future=list(bars);future[204]=(future[204][0],1.,2.,0.5,1.)
+    other,_=breakdown_features(future,200,12,wilder_series(future))
+    test('future_bars_no_signal_change',other==row)
+    delayed=list(bars);delayed[196]=(delayed[196][0]+HOUR,*delayed[196][1:])
+    test('noncontiguous_box_rejected',breakdown_features(delayed,200,12,wilder_series(delayed))[1]=='NONCONTIGUOUS_BOX_OR_SIGNAL')
+    already=list(bars);already[200]=(already[200][0],0.9988,1.0002,0.9978,0.9979)
+    test('already_below_box_open_rejected',breakdown_features(already,200,12,wilder_series(already))[1]=='OPEN_OUTSIDE_BOX')
+    boundary=list(bars);threshold=0.999-0.10*atr[199];boundary[200]=(boundary[200][0],1.,1.0002,threshold-0.0001,threshold)
+    test('strict_break_buffer_boundary',breakdown_features(boundary,200,12,wilder_series(boundary))[1]=='NOT_STRICTLY_BELOW_BUFFER')
+    body=list(bars);body[200]=(body[200][0],0.999,1.0002,0.9987,0.99875)
+    test('small_body_rejected',breakdown_features(body,200,12,wilder_series(body))[1]=='BODY_BELOW_MINIMUM')
+    weak=list(bars);weak[200]=(weak[200][0],1.,1.0002,0.994,0.9979)
+    test('weak_close_rejected',breakdown_features(weak,200,12,wilder_series(weak))[1]=='WEAK_CLOSE_OR_ZERO_RANGE')
+    streams,features,audit=scan_compression(bars,atr)
+    test('all_nine_specs_bounded',len(streams)==9 and all(v==[200] for v in streams.values()))
+    test('scan_count_accounting',all(r['checked_after_warmup']==len(bars)-200 and
+        r['checked_after_warmup']==r['passes_fixed_breakdown_before_cap']+sum(r[k] for k in ('INVALID_PRECEDING_ATR','NONCONTIGUOUS_BOX_OR_SIGNAL',
+        'ZERO_BOX_WIDTH','OPEN_OUTSIDE_BOX','NOT_BEARISH','NOT_STRICTLY_BELOW_BUFFER','BODY_BELOW_MINIMUM','WEAK_CLOSE_OR_ZERO_RANGE')) for r in audit))
+    boundary_atr=list(atr);boundary_atr[199]=(1.001-0.999)/1.5
+    boundary_streams,_,_=scan_compression(bars,boundary_atr)
+    test('inclusive_box_cap_in_scanner',all(boundary_streams[s['compression_config_id']]==[200]
+        for s in compression_specs() if s['box_width_cap']==1.5))
+    boundary_atr[199]=(1.001-0.999)/1.500000000001
+    outside_streams,_,_=scan_compression(bars,boundary_atr)
+    test('full_precision_box_cap_in_scanner',all(outside_streams[s['compression_config_id']]==[]
+        for s in compression_specs() if s['box_width_cap']==1.5))
+    events=merge_raw([1,3],[0,1,2])
+    test('raw_overlap_deduplicated',len(events)==4 and events[1]['origin_trigger']=='ENGULF' and events[1]['raw_same_bar_overlap']==1)
+    path=isolated_path([bars[200],(bars[200][0]+HOUR,0.9979,1.002,0.996,0.9979)],0,MODELS[0])
+    paths={i:dict(path,signal_index=i,exit_index=(3 if i==0 else 4)) for i in range(4)}
+    rule=study_rules()[11]
+    accepted,invalid,blocked=replay_shared(rule,events,paths,MODELS[0],10)
+    test('shared_compression_can_block_core',len(blocked)==2 and blocked[0]['origin_trigger']=='ENGULF' and blocked[0]['blocking_origin']=='COMPRESSION_BREAKDOWN')
+    test('shared_exit_candle_reentry',len(accepted)==2 and accepted[1]['signal_index']==3)
+    pathmap={1:dict(path,signal_index=1,target=path['reference_entry']-0.00001)}
+    accepted,invalid,blocked=replay_shared(rule,merge_raw([1],[1]),pathmap,MODELS[0],40)
+    test('same_bar_priority_no_fallback',not accepted and len(invalid)==1 and invalid[0]['origin_trigger']=='ENGULF')
+    paths[0]=dict(paths[0],exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END')
+    accepted,invalid,blocked=replay_shared(rule,events,paths,MODELS[0],10)
+    test('shared_unresolved_blocks_all_later',len(accepted)==1 and len(blocked)==3)
+    a,b,added,removed,changed,marginal,delta=compare_streams([],accepted)
+    test('open_trade_has_no_marginal_realized_R',marginal==delta==0.)
+    test('fixed_branch_count',len(study_rules())==29 and sum(r['kind']=='COMBINED' for r in study_rules())==18)
+    test('quality_cap_only_core',DESIGN['compression_D1_filter'] is False and RULES[1]['d1_filter']['threshold']==1.5)
+    return tests
 
 
 def data_key():
-    return digest(json.dumps(dict(reference=REFERENCE_SHA256,frozen=FROZEN,costs=COSTS,models=MODELS),sort_keys=True).encode())
+    return digest(json.dumps(dict(reference=REFERENCE_SHA256,frozen=FROZEN,design=DESIGN),sort_keys=True).encode())
+
+
+def confirmation_job():
+    global FILE_LOCK
+    success=False;gates=Gates()
+    manifest=dict(DESIGN,version=VERSION,status='RUNNING',runner_sha256=runner_hash(),
+        broker_refetch=False,independent_new_candidate_confirmation_complete=False,prospective_validation_complete=False,
+        parent_reviewed_pass11_zip_sha256='8390a05ac114e6b0756560beef2b391846b7d487cb6699ac7be317795e89a740')
+    try:
+        with tempfile.TemporaryDirectory(prefix='pass12-',dir=OUT) as folder:
+            work=Path(folder);(work/'protocol.md').write_text(PROTOCOL)
+            (work/'runner_source.py').write_bytes(Path(__file__).read_bytes());dump_json(work/'research_design.json',DESIGN)
+            try:
+                software=software_checks();dump_csv(work/'software_checks.csv',software)
+                write_status('running',progress=10,result_path=None,message='Gating both frozen engulfing controls and sources')
+                hourly,daily,blobs,snapshot=load_sources(gates)
+                coverage=audit_sources(hourly,daily,gates)
+                frozen=confirm(hourly,daily,blobs,gates)
+                write_status('running',progress=35,result_path=None,message='Fixed compression grid and complete shared-position replay')
+                outputs=run_compression_study(hourly,frozen,gates)
+                write_status('running',progress=80,result_path=None,message='Publishing all fixed cases, displacements and neighbours')
+                empty={
+                    'invalid_entries.csv':['config_id','execution_model','cost_ticks','signal_index','origin_trigger','raw_same_bar_overlap','reason'],
+                    'blocked_signals.csv':['config_id','execution_model','cost_ticks','signal_index','origin_trigger','raw_same_bar_overlap','blocking_signal_index','blocking_origin','blocking_exit_index','reason'],
+                    'open_at_data_end.csv':['config_id','execution_model','cost_ticks','signal_index','origin_trigger','entry','historical_fill','stop','target'],
+                    'chf_event_exposure.csv':['config_id','execution_model','cost_ticks','signal_index','origin_trigger','entry','exit','r','reason'],
+                    'raw_same_bar_overlaps.csv':['config_id','signal_index','selected_origin','same_price_geometry','policy'],
+                    'core_trade_differences.csv':['config_id','base_config_id','execution_model','cost_ticks','change','signal_index','origin_trigger','signal','entry','exit','r','blocking_signal_index','blocking_origin'],
+                    'neighbour_trade_changes.csv':['branch','from_config','to_config','grid_axis','execution_model','cost_ticks','change','signal_index','origin_trigger','signal','entry','exit','r']}
+                for name,rows in outputs.items():dump_csv(work/name,rows,empty.get(name) if not rows else None)
+                for name,rows in frozen.items():
+                    fields=empty.get(name) if not rows else None
+                    if name=='p0_occupancy.csv' and not rows:fields=['config_id','execution_model','cost_ticks','signal_index','blocking_signal_index','blocking_exit_index','reason']
+                    if name=='eligibility_exclusions.csv' and not rows:fields=['signal_index','signal','decision','context_reason']
+                    dump_csv(work/('frozen_control_'+name),rows,fields)
+                dump_csv(work/'daily_coverage_audit.csv',coverage)
+                for name,content in blobs.items():
+                    if name!='file_manifest.json':(work/('reference_'+name if name.endswith('.csv') and name!='source_candles.csv' else name)).write_bytes(content)
+                dump_json(work/'source_pins.json',FROZEN['source']);dump_json(work/'daily_source_metadata.json',snapshot['metadata'])
+                gates.require()
+                manifest.update(status='COMPLETE',h1_candles=len(hourly),d1_candles=len(daily),
+                    frozen_all12_full_ledger_parity=True,software_checks=len(software),runtime_gates=len(gates.rows),
+                    output_row_counts={k:len(v) for k,v in outputs.items()},frozen_output_row_counts={k:len(v) for k,v in frozen.items()},
+                    next='Review all predeclared compression regions and marginal displaced-core trades; no automatic winner. Portfolio admission deferred.')
+                success=True
+            except Exception as exc:
+                manifest.update(status='ERROR',error=str(exc));dump_json(work/'error_report.json',dict(error=str(exc),traceback=traceback.format_exc(),
+                    interpretation='Failed source/control/mechanics/reporting gate; no partial performance.'))
+            dump_csv(work/'parity_checks.csv',gates.rows,['check','passed','expected','actual'])
+            manifest['completed_utc']=stamp(datetime.now(UTC));dump_json(work/'run_manifest.json',manifest)
+            publish(work,success)
+            write_status('complete' if success else 'error',progress=100,result_path=RESULT_NAME,research_data_key=data_key(),
+                result_sha256=digest((OUT/RESULT_NAME).read_bytes()),manifest=manifest,
+                message='Fixed complementary-trigger research complete; await review' if success else 'Failed gate; download diagnostic ZIP')
+    except Exception:
+        write_status('error',progress=100,result_path=None,message='Publication failed; no current research ZIP available');success=False
+    finally:
+        if FILE_LOCK is not None:FILE_LOCK.close();FILE_LOCK=None
+    return success
 
 
 def read_status():
@@ -31607,7 +31955,6 @@ def read_status():
         return json.loads((OUT/'status.json').read_text())
     except (OSError,ValueError):
         return dict(state='idle',version=VERSION)
-
 
 def write_status(state,**values):
     OUT.mkdir(parents=True,exist_ok=True)
@@ -31617,10 +31964,9 @@ def write_status(state,**values):
         temporary=f.name
     os.replace(temporary,OUT/'status.json')
 
-
 def publish(work,success):
     diagnostics={'protocol.md','run_manifest.json','error_report.json','parity_checks.csv',
-                 'software_checks.csv','runner_source.py','confirmation_design.json'}
+                 'software_checks.csv','runner_source.py','research_design.json'}
     members=[p for p in sorted(work.iterdir()) if p.is_file() and p.name!='file_manifest.json'
              and (success or p.name in diagnostics)]
     dump_json(work/'file_manifest.json',[dict(file=p.name,bytes=p.stat().st_size,sha256=digest(p.read_bytes())) for p in members])
@@ -31632,76 +31978,6 @@ def publish(work,success):
         os.replace(temporary,OUT/RESULT_NAME)
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
-
-
-def confirmation_job():
-    global FILE_LOCK
-    success=False; gates=Gates()
-    manifest=dict(DESIGN,version=VERSION,status='RUNNING',runner_sha256=runner_hash(),
-                  accepted_fields=list(ROW_FIELDS),independent_mechanics=True,
-                  broker_refetch=False,prospective_validation_complete=False)
-    try:
-        with tempfile.TemporaryDirectory(prefix='pass11-',dir=OUT) as folder:
-            work=Path(folder)
-            (work/'protocol.md').write_text(PROTOCOL)
-            (work/'runner_source.py').write_bytes(Path(__file__).read_bytes())
-            dump_json(work/'confirmation_design.json',DESIGN)
-            try:
-                software=software_checks();dump_csv(work/'software_checks.csv',software)
-                write_status('running',progress=10,result_path=None,message='Validating exact H1 and D1 sources')
-                hourly,daily,blobs,snapshot=load_sources(gates)
-                audit=audit_sources(hourly,daily,gates)
-                write_status('running',progress=35,result_path=None,message='Independent indicators, raw signals, context and p0 replay')
-                output=confirm(hourly,daily,blobs,gates)
-                write_status('running',progress=80,result_path=None,message='Publishing complete frozen parity and diagnostic reports')
-                empty_fields={
-                    'invalid_entries.csv':['config_id','execution_model','cost_ticks','signal_index','reason'],
-                    'p0_occupancy.csv':['config_id','execution_model','cost_ticks','signal_index','blocking_signal_index','blocking_exit_index','reason'],
-                    'open_at_data_end.csv':['config_id','execution_model','cost_ticks','signal_index','entry','stop','target','historical_fill'],
-                    'chf_event_exposure.csv':['config_id','execution_model','cost_ticks','signal_index','entry','exit','r','reason'],
-                    'eligibility_exclusions.csv':['signal_index','signal','decision','daily_index','context_reason']}
-                for name,rows in output.items():
-                    dump_csv(work/name,rows,empty_fields.get(name) if not rows else None)
-                dump_csv(work/'daily_coverage_audit.csv',audit)
-                for name,payload in blobs.items():
-                    if name!='file_manifest.json':
-                        (work/('reference_'+name if name.endswith('.csv') and name!='source_candles.csv' else name)).write_bytes(payload)
-                dump_json(work/'source_pins.json',FROZEN['source'])
-                dump_json(work/'daily_source_metadata.json',snapshot['metadata'])
-                dump_json(work/'independence_statement.json',dict(
-                    independently_authored=['load_sources','audit_sources','wilder_series','daily_features','context_for_signal',
-                        'quality_eligible','qualifying_geometry','identify_original','isolated_path','price_entry','realized','execute_p0','performance'],
-                    reused_report_only=['stamp','date','digest','runner_hash','dump_json','dump_csv','ledger_hash','percentile','boundaries','periods','describe_case'],
-                    references_used_only_after_independent_generation=True,
-                    independent_broker_data=False,new_out_of_sample_data=False,portfolio_admission_complete=False))
-                gates.require()
-                manifest.update(status='COMPLETE',cases=12,h1_candles=len(hourly),d1_candles=len(daily),
-                    full_raw_membership_parity=True,full_isolated_path_parity=True,full_accepted_ledger_parity=True,
-                    exact_accepted_hash_parity=True,all_case_summary_parity=True,daily_indicator_and_context_parity=True,
-                    software_checks=len(software),runtime_gates=len(gates.rows),
-                    output_row_counts={k:len(v) for k,v in output.items()},
-                    next='Review returned confirmation; then new exact original-versus-quality P31 admission. Original remains default.')
-                success=True
-            except Exception as exc:
-                manifest.update(status='ERROR',error=str(exc))
-                dump_json(work/'error_report.json',dict(error=str(exc),traceback=traceback.format_exc(),
-                    interpretation='Failed source/parity/reporting gate; do not interpret partial results.'))
-            dump_csv(work/'parity_checks.csv',gates.rows,['check','passed','expected','actual'])
-            manifest['completed_utc']=stamp(datetime.now(UTC))
-            dump_json(work/'run_manifest.json',manifest)
-            publish(work,success)
-            write_status('complete' if success else 'error',progress=100,result_path=RESULT_NAME,
-                         frozen_data_key=data_key(),result_sha256=digest((OUT/RESULT_NAME).read_bytes()),manifest=manifest,
-                         message='Independent frozen confirmation complete; await review' if success else 'Failed gate; download diagnostic ZIP')
-    except Exception:
-        # Withhold any stale archive if publication itself fails.
-        write_status('error',progress=100,result_path=None,message='Result publication failed; no current ZIP available')
-        success=False
-    finally:
-        if FILE_LOCK is not None:
-            FILE_LOCK.close();FILE_LOCK=None
-    return success
-
 
 def launch(background=True):
     global STARTED,FILE_LOCK
@@ -31716,18 +31992,17 @@ def launch(background=True):
             FILE_LOCK=handle
         prior=read_status();bundle=OUT/RESULT_NAME
         if (prior.get('state')=='complete' and prior.get('runner_sha256')==runner_hash()
-            and prior.get('frozen_data_key')==data_key() and bundle.exists()
+            and prior.get('research_data_key')==data_key() and bundle.exists()
             and digest(bundle.read_bytes())==prior.get('result_sha256')):
             STARTED=True
             if FILE_LOCK is not None:FILE_LOCK.close();FILE_LOCK=None
             return False
         STARTED=True
-        write_status('starting',progress=0,result_path=None,message='Independent original versus frozen ATR1.50 confirmation')
+        write_status('starting',progress=0,result_path=None,message='Bounded compression-breakdown research')
     if background:
-        threading.Thread(target=confirmation_job,name='eurchf-pass11',daemon=True).start()
+        threading.Thread(target=confirmation_job,name='eurchf-pass12',daemon=True).start()
         return True
     return confirmation_job()
-
 
 def app(environ,start_response):
     path=environ.get('PATH_INFO','/')
@@ -31739,13 +32014,13 @@ def app(environ,start_response):
     elif path not in ('/','/start','/status','/health','/results'):
         code,value='404 Not Found',dict(error='Not found')
     else:
-        if method=='GET' and (path=='/start' or os.getenv('EURCHF_PASS11_AUTOSTART','1')=='1') and not STARTED:
+        if method=='GET' and (path=='/start' or os.getenv('EURCHF_PASS12_AUTOSTART','1')=='1') and not STARTED:
             launch()
         value=read_status()
         if path=='/results':
             bundle=OUT/RESULT_NAME
             current=(value.get('state') in ('complete','error') and value.get('runner_sha256')==runner_hash()
-                     and value.get('frozen_data_key')==data_key() and value.get('result_path')==RESULT_NAME
+                     and value.get('research_data_key')==data_key() and value.get('result_path')==RESULT_NAME
                      and bundle.exists() and digest(bundle.read_bytes())==value.get('result_sha256'))
             if current:
                 start_response(code,[('Content-Type','application/zip'),('Content-Length',str(bundle.stat().st_size)),
@@ -31760,16 +32035,14 @@ def app(environ,start_response):
                 return blocks()
             code='409 Conflict';value=dict(value,error='Results not ready for this exact code and frozen source')
         elif path=='/health':value=dict(ok=True,state=value.get('state'),version=VERSION,orders_supported=False)
-        elif path=='/':value=dict(service='EUR/CHF independent frozen original/ATR1.50 confirmation',
+        elif path=='/':value=dict(service='EUR/CHF bounded compression-breakdown research',
                                  version=VERSION,state=value.get('state'),status='/status',results='/results',orders_supported=False)
     body=(json.dumps(value,allow_nan=False)+'\n').encode()
     start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
     return [] if method=='HEAD' else [body]
 
-
 class ConcurrentServer(ThreadingMixIn,WSGIServer):
     daemon_threads=True
-
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -31782,11 +32055,10 @@ def main():
     if args.run:
         launch(background=False);print(json.dumps(read_status(),indent=2))
         return 0 if read_status().get('state')=='complete' else 1
-    if os.getenv('EURCHF_PASS11_AUTOSTART','1')=='1':launch()
+    if os.getenv('EURCHF_PASS12_AUTOSTART','1')=='1':launch()
     with make_server('0.0.0.0',int(os.getenv('PORT','8080')),app,server_class=ConcurrentServer) as server:
         print(VERSION+': /status and /results',flush=True);server.serve_forever()
     return 0
 
-
-if __name__=='__main__':
+if __name__=="__main__":
     raise SystemExit(main())
