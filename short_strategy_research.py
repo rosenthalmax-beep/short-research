@@ -1,4 +1,4 @@
-"""EURCHF H1 LONG reclaim frequency study. Reuses confirmed Pass7 engine.
+"""EURCHF H1 LONG two-candle recovery frequency study. Reuses confirmed Pass7 engine.
 Python3.10+ standard library. No network client, broker or order functionality.
 Run: python app.py (HTTP); python app.py --run-once (batch).
 """
@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from wsgiref.simple_server import make_server
 
-VERSION = 'EURCHF_H1_LONG_RECLAIM_FREQUENCY_V1_2026_10_06'
+VERSION = 'EURCHF_H1_LONG_TWO_CANDLE_RECOVERY_V1_2026_10_06'
 UTC = timezone.utc
 BEGIN = datetime(2005,1,1,tzinfo=UTC)
 CUTOFF = datetime(2026,10,1,tzinfo=UTC)
@@ -21,7 +21,7 @@ MODELS = ('SCREEN_PARITY','STOP_FIRST_GAP_STRESS')
 CANDIDATE = 'P5_Q_L200_DIST0.25_RANGE1.375'
 CONTROL = 'P3_COMBO_P0P375_D2P000'
 RULES = ((CANDIDATE,1.375,'FROZEN_RESEARCH_CANDIDATE'),(CONTROL,1.5,'AUDIT_REFERENCE_ONLY'))
-RESULT_NAME = 'EURCHF_H1_LONG_RECLAIM_FREQUENCY_RESULTS.zip'
+RESULT_NAME = 'EURCHF_H1_LONG_TWO_CANDLE_RECOVERY_RESULTS.zip'
 LEDGER_FIELDS = ('config_id','execution_model','cost_ticks','accepted_sequence','signal_index','exit_index','signal','entry','exit','reference_entry','historical_fill','stop','target','risk_price','exit_price','reason','r')
 INT_FIELDS = {'cost_ticks','accepted_sequence','signal_index','exit_index'}
 FLOAT_FIELDS = {'reference_entry','historical_fill','stop','target','risk_price','exit_price','r'}
@@ -25377,8 +25377,8 @@ REFERENCE_B85 = (
     '|F8cauA0Y('
 )
 REFERENCE_BYTE_SHA = 'e13775cf46906a270ff63591a1288e3d60a59ae4219ef6e02aff0aed877e834d'
-PROTOCOL = '# EURCHF H1 LONG reclaim frequency experiment\n\nVersion EURCHF_H1_LONG_RECLAIM_FREQUENCY_V1_2026_10_06. Finite research study; no automatic winner selection. This runner reuses the confirmed Pass7 engine and embedded full source/reference inputs. It is not a new independent implementation or unseen validation. The pre-outcome proposal is EURCHF_H1_LONG_FREQUENCY_REVIEW_2026-10-06.md.\n\nExactly27 B settings: preceding observed H1 low lookback60/120/200 × bullish body .75/1.00/1.25 current ATR14 × close location .65/.75/.85. Require strict low < previous lowest low and strict close > that same level, bullish close > open, inclusive body/close strength thresholds, positive range/ATR, global warmup200. The prior low excludes the current candle; Wilder14 seed is meanTR1..14 at index14 with full causal recurrence. No exact engulf, prior-body, decline, absolute-distance, signal-range, daily/session/weekday filters for B; no RR/holding-period search. Two-candle recovery is excluded from this study.\n\nCore A remains exact bullish engulf, preceding200observed H1low, abs signal-low distance<=.25 currentATR, body>=.75 currentATR, range>=1.375 currentATR, previous absolute body>=.375 priorATR, prior12observed-bar decline=(close[i-13]-close[i-1])/priorATR>=2. RR3. Original range1.50 Q is an audit control only. All12 frozen rule/model/cost cases, full source/feature/path/accepted-row hashes and field parity must match before new study output. Same frozen source137819 OANDA EURCHF H1 MID bars January2005–September2026, exclusiveOctober1. Source byte SHA862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196. No live or broker history fetch.\n\nFor27 B definitions compare B alone and A+B; A/Q controls each produced once. Two exit models ×1/2/4pip assumed adverse entry fills:162 B cases+162 combined+12 controls=336 performance cases. Costs are assumed penalties on MID candles, not observed executable spreads/fills or a total-loss ceiling. Stop=signalLow-10ticks; reference=signalClose at signalStart+1H; target=reference+3*(reference-stop), fill=reference+10/20/40ticks (tick.00001/pip.0001). R=(exit-fill)/(fill-stop); reject unless0<stop<fill<target or entry>=cutoff. Invalid attempts never occupy. Open outcome has blank R and occupies through data end. Scan next observed candle onward; signal at exit candle index remains eligible, as in the fixed engine. Nominal entry after a weekend/source gap stays signalClose timestamp, with delay exposed as an assumption.\n\nSCREEN_PARITY: first barrier; dual touch target only when(high-open)<(open-low), otherwise stop; touched-barrier price at candle end, no opening-gap adjustment. STOP_FIRST_GAP_STRESS: opening stop gap/equality at observed open price/time, then opening target at capped target/open time, otherwise stop before target intrabar at candle end. Neither heuristic resolves actual tick paths; conservative exit model stays separately visible.\n\nA+B replays union RAW qualified signals chronologically with one shared long position. A priority only on simultaneous valid raw qualification; at that candle stop/target geometry is identical for both, so an invalid A cannot be rescued by B. Record dual membership and suppressed B. A B position can block later A and vice versa. Report every accepted/blocked/invalid attempt and blocking component/index, complete ledger, paired added/retained/removed entries versus A and versus B, and exact R(additions)-R(removals)=combinedR-referenceR. Same retained signals must have identical price/outcomes. Do not simply merge standalone accepted trades.\n\nAll87696 monthly rows,11760 calendar/era/recent/CHF diagnostic rows,239904 rolling12/24/36M rows and115668 paired incremental rolling rows retain zeros and weak periods. Entry intervals[start,end); realized exits(start,end]. 2026 is partial. Rolling positive percentages count ALL windows, including no-entry/flat windows; overlapping windows are not independent. Activity reports261months and21complete years2005–2025, longest empty runs, inter-entry gaps; open/censored exposure remains explicit. Winner subtraction is descriptive concentration, not a rerun with winners deleted. Additive closedR DD is not marked account drawdown or portfolio sizing. Neighbour report includes648 one-level model/cost comparisons for B/combined across54unique geometry edges, with identical-population flags and Jaccard; correlated settings are not independent confirmations.\n\nReview profitable net accepted additions after stress/displacement, recent/era distribution, zero-inclusive rolling downside/activity and DD across a coherent neighbouring region. No fixed universal minimumcount, automatic score/winner or targeting specific blank years. Isolated gains/few early winners/boundary failure do not authorize automatic filter/grid expansion. All frozen history is reused/in-sample; prospective evidence requires later unseen observations. Current live short/portfolio services are outside this standalone research runner.\n\nAny source/spec/control/causality/ledger/attribution/report-count failure publishes an error-only ZIP and removes stale valid performance. Software fixtures are labelled synthetic only. Default output is a dedicated temporary research directory; optional EURCHF_LONG_RECLAIM_OUTPUT_DIR selects another dedicated folder. One process on Windows; Linux WSGI advisory lock is preserved.\n\nRun standard-library Python3.10+: python app.py. GET /status, /health, /results; other methods405. Optional python app.py --run-once --output-dir ./reclaim_results. No credentials or package installs.\n'
-README = '# Run the EURCHF H1 LONG reclaim frequency study\n\n1. Save EURCHF_H1_LONG_RECLAIM_FREQUENCY.py as **app.py** in a separate research service.\n2. Use Python3.10+; no packages, credentials or strategy variables are required.\n3. Start with `python app.py` (hosting PORT, default8000).\n4. Open `/status`; wait for `status: COMPLETE` and `complete: true`.\n5. Download `/results` and return **EURCHF_H1_LONG_RECLAIM_FREQUENCY_RESULTS.zip** for review. If status is ERROR, return its diagnostics rather than treating them as strategy results.\n\nLocal batch: `python app.py --run-once --output-dir ./reclaim_results`. An optional EURCHF_LONG_RECLAIM_OUTPUT_DIR chooses a dedicated research output folder. Its prior run ZIP/status are replaced; do not point it at an unrelated folder. Use one process on Windows. WSGI target app:app or app:application is supported.\n\nExactly27 settings, fixedRR3, fullJanuary2005–September2026 source,1/2/4pip costs and both existing exit models. Frozen A/control parity gates, standalone B and combined chronological A+B, all marginal/displaced entries, neighbour comparisons, calendar/era/recent and zero-inclusive rolling12/24/36M reports are included. All input data is embedded in this one file. No live configuration changes are needed. The two-candle idea is not included; this is the agreed first bounded experiment.\n\nThe ZIP is generated by your run. No automatic parameter selection, live orders or portfolio admission. This runner reuses the confirmed engine, so it is not a new independent implementation or untouched OOS validation.\n'
+PROTOCOL = '# EURCHF H1 LONG two-candle breakdown/recovery study\n\nFinite research pass agreed after the same-candle reclaim grid was rejected. Freeze this specification before inspecting outcomes. Reuses the confirmed Pass7 engine, frozen source and examined history; not an independent implementation, untouched out-of-sample validation, or portfolio admission. No automatic winner selection or adaptive parameter expansion.\n\nFor recovery signal index i, breakdown index j=i-1. Freeze the lowest low of the L observed H1 candles at indices j-L through j-1: exclude both breakdown and recovery. Breakdown low must be strictly below that level and its close at or below it. The recovery must start exactly one clock hour after the breakdown, close strictly above the same frozen level and above its own open. Weekend/source gaps between these two candles are excluded by this fixed timing choice; gaps after the entry remain the inherited simulation assumption. No variable recovery delay, breakdown colour/body-strength, engulfing, distance, decline, session, daily or volatility filters are searched for B.\n\nExactly 27 coarse B settings: L=60/120/200; bullish recovery body/current Wilder ATR14 >=0.75/1.00/1.25; recovery close location >=0.65/0.75/0.85. Positive recovery range/ATR. First possible B recovery index201; original A warmup200 stays unchanged. Current recovery ATR uses the full pinned causal recurrence, mean TR1..14 seeded at index14. Stop=min(breakdown low,recovery low)-10 ticks. Reference=completed recovery close, nominal entry=recovery start+1H; RR3 target=reference+3*(reference-stop). No RR, holding period or extra filter search. These axes are carried forward for comparable, bounded research; no new favourable settings are inferred from the rejected same-candle outcomes.\n\nFrozen A remains P5_Q_L200_DIST0.25_RANGE1.375: exact bullish engulf; preceding200 observed H1 low excluding signal; absolute low distance<=0.25 currentATR; bullish body>=0.75 ATR; range>=1.375 ATR; previous absolute body>=0.375 previousATR; preceding12 observed-bar decline=(close[i-13]-close[i-1])/previousATR>=2; RR3; stop=signal low-10 ticks. Q range1.50 is an audit control. Full12 frozen control cases and 106976 field comparisons must match before outputs. Source137819 OANDA EURCHF H1 MID bars, first2005-01-02T18Z, last2026-09-30T23Z, exclusive2026-10-01. CSV SHA862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196. All source and reference inputs embedded; no history fetch.\n\nProduce A/Q controls,27 standalone B and27 chronological A+B definitions, each at1/2/4pip assumed adverse entry fills and both exit models:336 cases. tick0.00001; fill=reference+10/20/40ticks; R=(exit-fill)/(fill-stop). Costs on MID candles are penalties, not observed executable spreads/fills. Reject unless0<stop<fill<target and nominal entry<cutoff. Invalid entry never occupies; open-at-cutoff has blank R and occupies to the source end. Scan exits only from the next observed candle. Nominal entry can precede a delayed next observed candle; expose delay. Signal at exit candle index is eligible under the frozen replay rule.\n\nSCREEN_PARITY uses first barrier; dual touch selects target only if(high-open)<(open-low), otherwise stop, touched price at candle end, no opening-gap adjustment. STOP_FIRST_GAP_STRESS uses opening stop gap/equality at observed open price/time; opening target capped at target/open time; otherwise intrabar stop before target/candle end. These heuristics do not reconstruct tick paths.\n\nCombined A+B replays the RAW qualified union with one shared position. A has fixed simultaneous priority, with no fallback to B if A entry is invalid. A and B have separate stop/target paths even on the same recovery bar; B may use a lower breakdown low. Record suppressed B, invalid attempts and occupancy blockers. Compare trades by(signal index,component), so a same-bar A replacing a different-geometry B is an addition/removal rather than an unchanged trade. All retained geometry and outcomes must match. Exact marginal identity: R(additions)-R(removals)=combinedR-referenceR, versus A and versus B. Do not merge standalone accepted trades.\n\nRetain zero and weak periods:261 monthly rows per case;35 calendar/era/latest/CHF diagnostic periods; rolling12/24/36M with250/238/226 windows per case. Complete entry years2005-2025;2026 partial. Entries[start,end); realized exits(start,end]. Report added/displaced entries and their R, recent/era results, blank years/months and longest inactive runs, open exposures, neighbour populations/Jaccard and648 adjacent comparisons across54 grid edges for B/combined. Rolling percentages count all windows; overlaps and neighbouring settings are correlated. ClosedR DD is additive, not marked-account or compounded portfolio DD. Winner subtraction describes concentration, not a replay deleting wins.\n\nJudge a coherent region by stressed net marginal returns after displacement, distribution over time, activity, rolling downside and drawdown. Extra frequency alone is insufficient. No targeting particular empty years or selecting an isolated boundary maximum. Full history reused/in-sample; prospective evidence needs later unseen observations. Current live SHORT/portfolio untouched.\n\nAny source/spec/control/causality/ledger/attribution failure removes stale valid results and emits an error-only diagnostic ZIP. Software fixtures are synthetic verification only. Python3.10 standard library. Run python app.py, inspect /status for COMPLETE and download /results. GET/HEAD only; other methods405. Optional --run-once --output-dir ./two_candle_results or EURCHF_LONG_TWO_CANDLE_OUTPUT_DIR in a dedicated research folder; replaces prior ZIP/status there. One process on Windows; Linux advisory output lock. No credentials or trading variables.\n'
+README = '# Run the EURCHF H1 LONG two-candle recovery study\n\n1. Save EURCHF_H1_LONG_TWO_CANDLE_RECOVERY.py as **app.py** in your separate research service.\n2. Start with `python app.py`. Python3.10+ standard library; no packages, credentials or live settings.\n3. Wait for `/status` to show `status: COMPLETE` and `complete: true`.\n4. Download `/results` and return **EURCHF_H1_LONG_TWO_CANDLE_RECOVERY_RESULTS.zip**. If ERROR, return the diagnostics.\n\nLocal batch: `python app.py --run-once --output-dir ./two_candle_results`.\nOptional dedicated output folder: EURCHF_LONG_TWO_CANDLE_OUTPUT_DIR. Prior run outputs in that folder are replaced. HOST/PORT(default8000) supported; WSGI app:app or app:application. Use one process on Windows.\n\nExactly27 predeclared settings; original A unchanged; recovery on the next clock-hour candle; B stop below both candles; separate A/B paths and shared position replay. Full2005–September2026 source, RR3,1/2/4pip penalties, both exit models, yearly/rolling/activity, marginal/displaced entries and neighbours included. All data embedded. No automated selection or live orders. This reuses examined history and the confirmed engine; results are research evidence, not unseen validation.\n'
 
 
 
@@ -25809,51 +25809,85 @@ def build_frozen_control_reports(checks,fields):
     return payload,dict(candles=len(candles),raw_engulf_signals=len(features),cases=len(summaries),accepted_rows=len(accepted),parity_checks=len(checks),field_checks=len(fields),source_sha256=source_digest(candles))
 
 
-EXPERIMENT_SPEC = {'version': 'EURCHF_H1_LONG_RECLAIM_FREQUENCY_V1_2026_10_06', 'decision': 'FINITE_RESEARCH_NO_AUTOMATIC_SELECTION', 'core_id': 'P5_Q_L200_DIST0.25_RANGE1.375', 'audit_control_id': 'P3_COMBO_P0P375_D2P000', 'grid': [{'config_id': 'B_L060_BODY0P75_CL0P65', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B_L060_BODY0P75_CL0P75', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B_L060_BODY0P75_CL0P85', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B_L060_BODY1P00_CL0P65', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B_L060_BODY1P00_CL0P75', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B_L060_BODY1P00_CL0P85', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B_L060_BODY1P25_CL0P65', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B_L060_BODY1P25_CL0P75', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B_L060_BODY1P25_CL0P85', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.85}, {'config_id': 'B_L120_BODY0P75_CL0P65', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B_L120_BODY0P75_CL0P75', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B_L120_BODY0P75_CL0P85', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B_L120_BODY1P00_CL0P65', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B_L120_BODY1P00_CL0P75', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B_L120_BODY1P00_CL0P85', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B_L120_BODY1P25_CL0P65', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B_L120_BODY1P25_CL0P75', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B_L120_BODY1P25_CL0P85', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.85}, {'config_id': 'B_L200_BODY0P75_CL0P65', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B_L200_BODY0P75_CL0P75', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B_L200_BODY0P75_CL0P85', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B_L200_BODY1P00_CL0P65', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B_L200_BODY1P00_CL0P75', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B_L200_BODY1P00_CL0P85', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B_L200_BODY1P25_CL0P65', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B_L200_BODY1P25_CL0P75', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B_L200_BODY1P25_CL0P85', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.85}], 'rr': 3.0, 'cost_ticks': [10, 20, 40], 'models': ['SCREEN_PARITY', 'STOP_FIRST_GAP_STRESS'], 'source_csv_sha256': '862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196', 'candles': 137819, 'start': '2005-01-01T00:00:00Z', 'end_exclusive': '2026-10-01T00:00:00Z', 'warmup_bars': 200, 'long_stop_buffer_ticks': 10, 'shared_p0': True, 'same_bar_priority': 'A', 'complement_predicate': 'low < min(previous L lows), close > that fixed prior low, close > open, bullish body/current ATR >= threshold, close location >= threshold; positive range and ATR', 'no_extra_filters': True, 'two_candle_hypothesis_included': False, 'portfolio_admission': False, 'independent_confirmation': False, 'engine': 'Reuses confirmed Pass7 engine; full12control-case field/digest gates precede study outputs', 'planned_cases': 336, 'planned_settings': 27}
-EXPERIMENT_SPEC_SHA = 'b1ca2068e1d7df9f441ee9145833999608d846a8c49dfffa31503b6bc6c6743e'
+EXPERIMENT_SPEC = {'version': 'EURCHF_H1_LONG_TWO_CANDLE_RECOVERY_V1_2026_10_06', 'decision': 'FINITE_RESEARCH_NO_AUTOMATIC_SELECTION', 'core_id': 'P5_Q_L200_DIST0.25_RANGE1.375', 'audit_control_id': 'P3_COMBO_P0P375_D2P000', 'grid': [{'config_id': 'B2_L060_BODY0P75_CL0P65', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B2_L060_BODY0P75_CL0P75', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B2_L060_BODY0P75_CL0P85', 'lookback': 60, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B2_L060_BODY1P00_CL0P65', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B2_L060_BODY1P00_CL0P75', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B2_L060_BODY1P00_CL0P85', 'lookback': 60, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B2_L060_BODY1P25_CL0P65', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B2_L060_BODY1P25_CL0P75', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B2_L060_BODY1P25_CL0P85', 'lookback': 60, 'body_atr': 1.25, 'close_location': 0.85}, {'config_id': 'B2_L120_BODY0P75_CL0P65', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B2_L120_BODY0P75_CL0P75', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B2_L120_BODY0P75_CL0P85', 'lookback': 120, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B2_L120_BODY1P00_CL0P65', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B2_L120_BODY1P00_CL0P75', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B2_L120_BODY1P00_CL0P85', 'lookback': 120, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B2_L120_BODY1P25_CL0P65', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B2_L120_BODY1P25_CL0P75', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B2_L120_BODY1P25_CL0P85', 'lookback': 120, 'body_atr': 1.25, 'close_location': 0.85}, {'config_id': 'B2_L200_BODY0P75_CL0P65', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.65}, {'config_id': 'B2_L200_BODY0P75_CL0P75', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.75}, {'config_id': 'B2_L200_BODY0P75_CL0P85', 'lookback': 200, 'body_atr': 0.75, 'close_location': 0.85}, {'config_id': 'B2_L200_BODY1P00_CL0P65', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.65}, {'config_id': 'B2_L200_BODY1P00_CL0P75', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.75}, {'config_id': 'B2_L200_BODY1P00_CL0P85', 'lookback': 200, 'body_atr': 1.0, 'close_location': 0.85}, {'config_id': 'B2_L200_BODY1P25_CL0P65', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.65}, {'config_id': 'B2_L200_BODY1P25_CL0P75', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.75}, {'config_id': 'B2_L200_BODY1P25_CL0P85', 'lookback': 200, 'body_atr': 1.25, 'close_location': 0.85}], 'rr': 3.0, 'cost_ticks': [10, 20, 40], 'models': ['SCREEN_PARITY', 'STOP_FIRST_GAP_STRESS'], 'source_csv_sha256': '862bf19a2e6a0e8d3c27b961c68c9fc0d104a5d64bd6eaa87fc2665afa38c196', 'candles': 137819, 'start': '2005-01-01T00:00:00Z', 'end_exclusive': '2026-10-01T00:00:00Z', 'warmup_bars': 200, 'long_stop_buffer_ticks': 10, 'shared_p0': True, 'same_bar_priority': 'A; no B fallback even if A has invalid entry geometry', 'complement_predicate': 'For recovery i and breakdown j=i-1: min lows[j-L:j] frozen before j; breakdown low < level and close <= level; recovery start = breakdown start +1H, recovery close > level and > open, positive recovery range/ATR, body/current ATR >= threshold and close location >= threshold', 'no_extra_filters': True, 'two_candle_hypothesis_included': True, 'portfolio_admission': False, 'independent_confirmation': False, 'engine': 'Reuses confirmed Pass7 engine; full12control-case field/digest gates precede study outputs', 'planned_cases': 336, 'planned_settings': 27, 'same_candle_reclaim_included': False, 'complement_first_recovery_index': 201, 'breakdown_recovery_clock_gap_hours': 1, 'complement_stop': 'min(breakdown_low,recovery_low)-10 ticks', 'comparison_trade_identity': ['signal_index', 'trigger_component'], 'source_reused_in_sample': True}
+EXPERIMENT_SPEC_SHA = '6f05e1cae1ccae99ead32f164023598d4fed5fc99e662576941018e8a3f1510d'
+def recovery_paths(candles, signal_indices):
+    paths={}
+    for i in signal_indices:
+        ref=candles[i][4];basis=min(candles[i-1][3],candles[i][3])
+        stop=basis-10*TICK;target=ref+RR*(ref-stop)
+        common=dict(signal_index=i,signal=stamp(candles[i][0]),entry=stamp(candles[i][0]+HOUR),
+            reference_entry=ref,stop=stop,target=target,trigger_component='B',
+            stop_basis_low=basis,breakdown_index=i-1,
+            next_open=candles[i+1][1] if i+1<len(candles) else None,
+            next_candle_delay_hours=(candles[i+1][0]-candles[i][0]-HOUR).total_seconds()/3600 if i+1<len(candles) else None)
+        for model in MODELS:
+            for j in range(i+1,len(candles)):
+                outcome=resolve_touch(candles[j],stop,target,model)
+                if outcome is not None:
+                    price,exit_time,reason,dual,gap_stop,gap_target=outcome
+                    paths[model,i,'B']=dict(common,execution_model=model,exit_index=j,exit=stamp(exit_time),
+                        exit_price=price,reason=reason,dual_touch=dual,gap_stop=gap_stop,gap_target=gap_target)
+                    break
+            else:
+                paths[model,i,'B']=dict(common,execution_model=model,exit_index=None,exit=None,exit_price=None,
+                    reason='OPEN_AT_DATA_END',dual_touch=0,gap_stop=0,gap_target=0)
+    return paths
 
 LOOKBACK_LEVELS = (60,120,200)
 BODY_LEVELS = (0.75,1.0,1.25)
 CLOSE_LEVELS = (0.65,0.75,0.85)
 
 
-def reclaim_grid():
+def recovery_grid():
     def token(x):
         return format(x,'.2f').replace('.','P')
-    return [dict(config_id=f'B_L{lb:03d}_BODY{token(body)}_CL{token(loc)}',
+    return [dict(config_id=f'B2_L{lb:03d}_BODY{token(body)}_CL{token(loc)}',
                  lookback=lb,body_atr=body,close_location=loc)
             for lb in LOOKBACK_LEVELS for body in BODY_LEVELS for loc in CLOSE_LEVELS]
 
 
-def reclaim_features(candles):
+def recovery_features(candles):
     from collections import deque
     atr=wilder_series(candles)
     queues={lb:deque() for lb in LOOKBACK_LEVELS}
     rows=[]
     for i,c in enumerate(candles):
+        j=i-1
         for lb,q in queues.items():
-            if i:
-                low=candles[i-1][3]
+            if i>=2:
+                low=candles[i-2][3]
                 while q and q[-1][1]>=low:q.pop()
-                q.append((i-1,low))
-            while q and q[0][0]<i-lb:q.popleft()
-        if i<200 or atr[i] is None or atr[i]<=0 or c[2]<=c[3]:continue
+                q.append((i-2,low))
+            while q and q[0][0]<j-lb:q.popleft()
+        if i<201 or atr[i] is None or atr[i]<=0 or c[2]<=c[3]:continue
+        first=candles[j]
+        if c[0]-first[0]!=HOUR:continue
         for lb,q in queues.items():
             previous=q[0][1]
-            if c[3]<previous and c[4]>previous and c[4]>c[1]:
+            if first[3]<previous and first[4]<=previous and c[4]>previous and c[4]>c[1]:
                 rows.append(dict(signal_index=i,signal=stamp(c[0]),entry=stamp(c[0]+HOUR),
                     lookback=lb,previous_low=previous,open=c[1],high=c[2],low=c[3],close=c[4],
                     atr14=atr[i],body_atr=(c[4]-c[1])/atr[i],
                     close_location=(c[4]-c[3])/(c[2]-c[3]),
-                    sweep_depth_atr=(previous-c[3])/atr[i],reclaim_height_atr=(c[4]-previous)/atr[i]))
+                    breakdown_index=j,breakdown_start=stamp(first[0]),breakdown_open=first[1],
+                    breakdown_high=first[2],breakdown_low=first[3],breakdown_close=first[4],
+                    prior_window_start_index=j-lb,prior_window_end_index=j-1,
+                    breakdown_recovery_gap_hours=(c[0]-first[0]).total_seconds()/3600,
+                    stop_basis_low=min(first[3],c[3]),
+                    breakdown_depth_atr=(previous-first[3])/atr[i],
+                    recovery_height_atr=(c[4]-previous)/atr[i]))
     return rows
 
 
-def reclaim_qualifies(f,setting):
+
+def recovery_qualifies(f,setting):
     return (f['lookback']==setting['lookback'] and f['atr14']>0 and f['high']>f['low']
-            and f['low']<f['previous_low'] and f['close']>f['previous_low']
+            and f['breakdown_low']<f['previous_low'] and f['breakdown_close']<=f['previous_low']
+            and f['breakdown_recovery_gap_hours']==1 and f['close']>f['previous_low']
             and f['close']>f['open'] and f['body_atr']>=setting['body_atr']
             and f['close_location']>=setting['close_location'])
+
 
 
 def replay_triggers(cid,model,cost,core_indices,b_indices,paths):
@@ -25862,10 +25896,10 @@ def replay_triggers(cid,model,cost,core_indices,b_indices,paths):
     unavailable=-1;occupant=None
     for i in sorted(core|both):
         component='A' if i in core else 'B'
-        p=paths[model,i]
+        p=paths[model,i,component]
         tag=dict(config_id=cid,execution_model=model,cost_ticks=cost,signal_index=i,
                  signal=p['signal'],entry=p['entry'],core_qualified=int(i in core),
-                 reclaim_qualified=int(i in both),selected_component=component,
+                 recovery_qualified=int(i in both),selected_component=component,
                  same_bar_b_suppressed=int(i in core and i in both))
         if i<unavailable:
             row=dict(tag,disposition='P0_OCCUPIED',blocking_signal_index=occupant['signal_index'],
@@ -25883,46 +25917,71 @@ def replay_triggers(cid,model,cost,core_indices,b_indices,paths):
         row={k:p[k] for k in ('signal_index','exit_index','signal','entry','exit','reference_entry','stop','target','exit_price','reason')}
         row.update(config_id=cid,execution_model=model,cost_ticks=cost,accepted_sequence=len(ledger)+1,
                    historical_fill=fill,risk_price=risk,r=None if p['exit_price'] is None else (p['exit_price']-fill)/risk,
-                   trigger_component=component,core_qualified=int(i in core),reclaim_qualified=int(i in both))
+                   trigger_component=component,core_qualified=int(i in core),recovery_qualified=int(i in both))
         ledger.append(row);occupant=row
         unavailable=p['exit_index'] if p['exit_index'] is not None else math.inf
         audit.append(dict(tag,disposition='ACCEPTED',blocking_signal_index=None,blocking_component=None,blocking_exit_index=None))
     return ledger,invalid,blocked,audit
 
 
-def reclaim_software_checks():
+def recovery_software_checks():
     result=[]
     def check(label,value):
-        if not value:raise ValueError('Reclaim software check failed: '+label)
+        if not value:raise ValueError('Two-candle software check failed: '+label)
         result.append(dict(check=label,status='PASS',evidence='SYNTHETIC_SOFTWARE_ONLY'))
     setting=dict(lookback=60,body_atr=.75,close_location=.75)
-    f=dict(lookback=60,atr14=1.,open=1.,high=2.,low=.5,close=1.75,previous_low=.9,body_atr=.75,close_location=.75)
-    check('Reclaim inclusive body/close thresholds',reclaim_qualifies(f,setting))
-    for label,edit in [('Sweep equality rejected',{'low':.9}),('Reclaim equality rejected',{'close':.9}),
-                       ('Body below boundary',{'body_atr':.749}),('Close location below boundary',{'close_location':.749}),
-                       ('Wrong horizon',{'lookback':120}),('Doji rejected',{'close':1.}),
-                       ('Zero ATR rejected',{'atr14':0.}),('Zero range rejected',{'high':.5})]:
-        check(label,not reclaim_qualifies(dict(f,**edit),setting))
+    f=dict(lookback=60,atr14=1.,open=1.,high=2.,low=.5,close=1.75,previous_low=.9,
+           body_atr=.75,close_location=.75,breakdown_low=.8,breakdown_close=.9,breakdown_recovery_gap_hours=1)
+    check('Inclusive body/close and breakdown-close equality',recovery_qualifies(f,setting))
+    for label,edit in [('Breakdown low equality rejected',{'breakdown_low':.9}),
+        ('Breakdown close above frozen level rejected',{'breakdown_close':.9001}),
+        ('Recovery equality rejected',{'close':.9}),('Gap between two candles rejected',{'breakdown_recovery_gap_hours':49}),
+        ('Body below boundary',{'body_atr':.749}),('Close location below boundary',{'close_location':.749}),
+        ('Wrong horizon',{'lookback':120}),('Doji rejected',{'close':1.}),
+        ('Zero ATR rejected',{'atr14':0.}),('Zero range rejected',{'high':.5})]:
+        check(label,not recovery_qualifies(dict(f,**edit),setting))
     d=datetime(2005,1,1,tzinfo=UTC)
+    samples=[(d+i*HOUR,1.,1.1,.95,1.) for i in range(205)]
+    samples[200]=(d+200*HOUR,1.,1.02,.90,.95)
+    samples[201]=(d+201*HOUR,.94,1.1,.92,1.08)
+    rows=recovery_features(samples)
+    check('Prior level excludes both setup candles',len(rows)==3 and all(r['previous_low']==.95 and r['signal_index']==201 for r in rows))
+    bp=recovery_paths(samples,[201])[MODELS[1],201,'B']
+    ap=construct_paths(samples,[201])[MODELS[1],201]
+    check('Stop below breakdown low and distinct A geometry',math.isclose(bp['stop'],.8999) and bp['stop']<ap['stop'])
+    lower=list(samples);lower[201]=(d+201*HOUR,.94,1.1,.88,1.08)
+    check('Stop below recovery low when lower',math.isclose(recovery_paths(lower,[201])[MODELS[1],201,'B']['stop'],.8799))
+    gap=list(samples);gap[201]=(d+203*HOUR,)+gap[201][1:]
+    check('Nonadjacent recovery excluded from feature stream',not recovery_features(gap))
+    no=list(samples);no[200]=(d+200*HOUR,1.,1.02,.90,.96)
+    check('Same-candle-only breakdown excluded',not recovery_features(no))
+    future=list(samples);future[203]=(d+203*HOUR,1.,1.1,.01,1.)
+    check('Future lower low cannot rewrite fixed level',recovery_features(samples[:202])==[r for r in recovery_features(future) if r['signal_index']<202])
     p=dict(reference_entry=1.1,stop=1.,target=1.4,entry=stamp(d+HOUR),signal=stamp(d),
            exit_index=4,exit=stamp(d+4*HOUR),exit_price=1.,reason='STOP',signal_index=0)
-    paths={(MODELS[1],i):dict(p,signal_index=i,signal=stamp(d+i*HOUR),entry=stamp(d+(i+1)*HOUR)) for i in range(6)}
+    paths={(MODELS[1],i,comp):dict(p,signal_index=i,signal=stamp(d+i*HOUR),entry=stamp(d+(i+1)*HOUR),
+            stop=1. if comp=='A' else .9,target=1.4 if comp=='A' else 1.7) for i in range(6) for comp in ('A','B')}
     a,bad,blocked,audit=replay_triggers('AB_TEST',MODELS[1],10,[0,2,4],[0,1,3,4],paths)
-    check('Same-bar core priority',[r['trigger_component'] for r in a]==['A','A'] and audit[0]['same_bar_b_suppressed']==1)
+    check('A priority with separate component geometry',[r['trigger_component'] for r in a]==['A','A'] and a[0]['stop']==1. and audit[0]['same_bar_b_suppressed']==1)
     check('Shared occupancy and exit-index reentry',[r['signal_index'] for r in a]==[0,4] and len(blocked)==3)
     a,_,blocked,_=replay_triggers('AB_TEST',MODELS[1],10,[2,4],[0],paths)
-    check('Complement can displace later core',a[0]['trigger_component']=='B' and blocked[0]['blocking_component']=='B')
-    paths[MODELS[1],0]=dict(paths[MODELS[1],0],target=1.10005)
+    check('B uses own stop and can displace A',a[0]['trigger_component']=='B' and a[0]['stop']==.9 and blocked[0]['blocking_component']=='B')
+    paths[MODELS[1],0,'A']=dict(paths[MODELS[1],0,'A'],target=1.10005)
+    a,bad,_,audit=replay_triggers('AB_TEST',MODELS[1],10,[0,2],[0],paths)
+    check('Invalid simultaneous A does not fall back to B',len(bad)==1 and a[0]['signal_index']==2 and audit[0]['same_bar_b_suppressed']==1)
+    paths[MODELS[1],0,'B']=dict(paths[MODELS[1],0,'B'],target=1.10005)
     a,bad,_,_=replay_triggers('AB_TEST',MODELS[1],10,[2],[0],paths)
-    check('Invalid complement never occupies',len(bad)==1 and a[0]['signal_index']==2)
-    paths[MODELS[1],0]=dict(p,exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END')
+    check('Invalid B never occupies',len(bad)==1 and a[0]['signal_index']==2)
+    paths[MODELS[1],0,'B']=dict(paths[MODELS[1],0,'B'],target=1.7,exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END')
     a,_,blocked,_=replay_triggers('AB_TEST',MODELS[1],10,[2],[0],paths)
-    check('Open complement occupies through cutoff',a[0]['r'] is None and len(blocked)==1)
-    samples=[(d+i*HOUR,1.,1.1,.95,1.) for i in range(205)]
-    samples[200]=(d+200*HOUR,.94,1.1,.90,1.08)
-    observed=reclaim_features(samples)
-    check('Prior-low excludes current low',len([r for r in observed if r['signal_index']==200])==3 and all(r['previous_low']==.95 for r in observed))
+    check('Open B occupies through cutoff',a[0]['r'] is None and len(blocked)==1)
+    core=dict(p,trigger_component='A',historical_fill=1.1001,risk_price=.1001,r=-1.)
+    other=dict(core,trigger_component='B',stop=.9,target=1.7,risk_price=.2001,r=-.5)
+    ls={('AB_TEST',MODELS[1],10):[core],('B_TEST',MODELS[1],10):[other]}
+    attr,changes=compare_ledgers('AB_TEST','B_TEST',MODELS[1],10,ls,{},[])
+    check('Same-index different-component is replaced, not retained',attr['added_accepted']==1 and attr['removed_accepted']==1 and attr['retained_accepted']==0 and math.isclose(attr['net_closed_r_delta'],-.5))
     return result
+
 
 
 def rolling_summaries(rolling):
@@ -25944,8 +26003,8 @@ def rolling_summaries(rolling):
 
 
 def compare_ledgers(candidate,reference,model,cost,ledgers,audits,checks):
-    current={r['signal_index']:r for r in ledgers[candidate,model,cost]}
-    baseline={r['signal_index']:r for r in ledgers[reference,model,cost]}
+    current={(r['signal_index'],r['trigger_component']):r for r in ledgers[candidate,model,cost]}
+    baseline={(r['signal_index'],r['trigger_component']):r for r in ledgers[reference,model,cost]}
     attempts={r['signal_index']:r for r in audits.get((candidate,model,cost),[])}
     changes=[];adds=[];removes=[]
     for i in sorted(set(current)|set(baseline)):
@@ -25954,9 +26013,9 @@ def compare_ledgers(candidate,reference,model,cost,ledgers,audits,checks):
         if now and old:
             for field in ('entry','exit','reference_entry','historical_fill','stop','target','risk_price','exit_price','r','reason'):
                 if not close_enough(old[field],now[field]):raise ValueError('Retained trade changed geometry/outcome: '+field)
-        row=now or old;attempt=attempts.get(i,{})
+        row=now or old;attempt=attempts.get(i[0],{})
         changes.append(dict(config_id=candidate,reference_id=reference,execution_model=model,cost_ticks=cost,
-            signal_index=i,signal=row['signal'],entry=row['entry'],change=change,
+            signal_index=i[0],signal=row['signal'],entry=row['entry'],change=change,
             candidate_component=now.get('trigger_component') if now else None,
             reference_component=old.get('trigger_component') if old else None,
             candidate_r=now['r'] if now else None,reference_r=old['r'] if old else None,
@@ -25977,21 +26036,24 @@ def compare_ledgers(candidate,reference,model,cost,ledgers,audits,checks):
 
 def build_reports(checks,fields):
     gate(checks,'Predeclared experiment specification checksum',EXPERIMENT_SPEC_SHA,fingerprint(json_bytes(EXPERIMENT_SPEC)))
-    grid=reclaim_grid()
+    grid=recovery_grid()
     gate(checks,'Exact frozen complement grid',EXPERIMENT_SPEC['grid'],grid)
     gate(checks,'Exactly27 unique settings',27,len({r['config_id'] for r in grid}))
     controls,control_counts=build_frozen_control_reports(checks,fields)
     source=unpack(SOURCE_B85,SOURCE_BYTE_SHA);candles=load_candles(source)
-    features=reclaim_features(candles)
+    features=recovery_features(candles)
     for prefix in (205,64321,137805):
         full=[r for r in features if r['signal_index']<prefix]
-        gate(checks,'Reclaim feature causal prefix '+str(prefix),fingerprint(json_bytes(full)),fingerprint(json_bytes(reclaim_features(candles[:prefix]))))
+        gate(checks,'Two-candle recovery feature causal prefix '+str(prefix),fingerprint(json_bytes(full)),fingerprint(json_bytes(recovery_features(candles[:prefix]))))
     corefeatures=extract_features(candles)
     populations={cid:[f['signal_index'] for f in corefeatures if entry_qualifies(f,minimum)] for cid,minimum,_ in RULES}
     for setting in grid:
-        populations[setting['config_id']]=[f['signal_index'] for f in features if reclaim_qualifies(f,setting)]
+        populations[setting['config_id']]=[f['signal_index'] for f in features if recovery_qualifies(f,setting)]
         populations['AB_'+setting['config_id']]=sorted(set(populations[CANDIDATE])|set(populations[setting['config_id']]))
-    paths=construct_paths(candles,sorted(set(i for indices in populations.values() for i in indices)))
+    controlpaths=construct_paths(candles,sorted(set(populations[CANDIDATE])|set(populations[CONTROL])))
+    paths={(model,i,component):dict(p,trigger_component=component,stop_basis_low=candles[i][3],breakdown_index=None)
+           for (model,i),p in controlpaths.items() for component,pop in (('A',populations[CANDIDATE]),('Q',populations[CONTROL])) if i in pop}
+    paths.update(recovery_paths(candles,sorted({i for s in grid for i in populations[s['config_id']]})))
     ledgers={};audits={};summaries=[];invalid=[];blocked=[];fullaudit=[]
     grid_by_id={r['config_id']:r for r in grid}
     for cid,indices in populations.items():
@@ -26001,8 +26063,8 @@ def build_reports(checks,fields):
         for model in MODELS:
             for cost in COSTS:
                 if arm in ('CORE','AUDIT_CONTROL'):
-                    ledger,bad,occupied=simulate(cid,model,cost,indices,paths)
-                    for r in ledger:r.update(trigger_component='A' if arm=='CORE' else 'Q',core_qualified=int(arm=='CORE'),reclaim_qualified=0)
+                    ledger,bad,occupied=simulate(cid,model,cost,indices,controlpaths)
+                    for r in ledger:r.update(trigger_component='A' if arm=='CORE' else 'Q',core_qualified=int(arm=='CORE'),recovery_qualified=0)
                     audit=[]
                 else:
                     ledger,bad,occupied,audit=replay_triggers(cid,model,cost,
@@ -26109,15 +26171,15 @@ def build_reports(checks,fields):
     gate(checks,'All648 adjacent model/cost comparisons',648,len(neighbours))
     payload={('control_'+n if n.endswith('.csv') and n not in ('source_candles.csv','coverage.csv','data_gaps.csv','period_definitions.csv') else n):data for n,data in controls.items()}
     accepted=[dict(rr=RR,**r) for ledger in ledgers.values() for r in ledger]
-    extra_fields=['trigger_component','core_qualified','reclaim_qualified']
-    auditfields=['config_id','execution_model','cost_ticks','signal_index','signal','entry','core_qualified','reclaim_qualified','selected_component','same_bar_b_suppressed','disposition','blocking_signal_index','blocking_component','blocking_exit_index']
+    extra_fields=['trigger_component','core_qualified','recovery_qualified']
+    auditfields=['config_id','execution_model','cost_ticks','signal_index','signal','entry','core_qualified','recovery_qualified','selected_component','same_bar_b_suppressed','disposition','blocking_signal_index','blocking_component','blocking_exit_index']
     changefields=['config_id','reference_id','execution_model','cost_ticks','signal_index','signal','entry','change','candidate_component','reference_component','candidate_r','reference_r','candidate_open','reference_open','candidate_attempt','blocking_signal_index','blocking_component']
     payload.update({'experiment_specification.json':json_bytes(EXPERIMENT_SPEC),'study_grid.csv':csv_bytes(grid),
         'summary.csv':csv_bytes(summaries),'combined_overview.csv':csv_bytes(overview),
         'accepted_ledgers.csv':csv_bytes(accepted,['rr']+list(LEDGER_FIELDS)+extra_fields),
-        'reclaim_event_features.csv':csv_bytes(features,['signal_index','signal','entry','lookback','previous_low','open','high','low','close','atr14','body_atr','close_location','sweep_depth_atr','reclaim_height_atr']),
+        'recovery_event_features.csv':csv_bytes(features,['signal_index','signal','entry','lookback','previous_low','open','high','low','close','atr14','body_atr','close_location','breakdown_index','breakdown_start','breakdown_open','breakdown_high','breakdown_low','breakdown_close','prior_window_start_index','prior_window_end_index','breakdown_recovery_gap_hours','stop_basis_low','breakdown_depth_atr','recovery_height_atr']),
         'raw_signal_membership.csv':csv_bytes([dict(config_id=cid,signal_index=i,signal=stamp(candles[i][0])) for cid,p in populations.items() for i in p],['config_id','signal_index','signal']),
-        'signal_trade_paths.csv':csv_bytes(sorted(paths.values(),key=lambda r:(r['execution_model'],r['signal_index']))),
+        'signal_trade_paths.csv':csv_bytes(sorted(paths.values(),key=lambda r:(r['execution_model'],r['signal_index'],r['trigger_component']))),
         'trigger_attempt_audit.csv':csv_bytes(fullaudit,auditfields),
         'invalid_entries.csv':csv_bytes(invalid,['config_id','execution_model','cost_ticks','signal_index','reason']),
         'blocked_signals.csv':csv_bytes(blocked,['config_id','execution_model','cost_ticks','signal_index','reason','blocking_signal_index','blocking_component','blocking_exit_index']),
@@ -26127,13 +26189,12 @@ def build_reports(checks,fields):
         'rolling_summary.csv':csv_bytes(rollsummary),'incremental_periods.csv':csv_bytes(perioddelta),'incremental_rolling_windows.csv':csv_bytes(rollingdelta),
         'influence.csv':csv_bytes(influence),'activity.csv':csv_bytes(activity),'chf_event_exposure.csv':csv_bytes(events,['config_id','execution_model','cost_ticks','rr','signal_index','entry','exit','entered_on_event_day','exited_on_event_day','held_across_event_day_start','eventual_r','outcome','attribution_warning']),
         'neighbour_comparisons.csv':csv_bytes(neighbours),'parity_checks.csv':csv_bytes(checks),
-        'software_checks.csv':csv_bytes(synthetic_checks()+reclaim_software_checks()),'protocol.md':PROTOCOL.encode(),'README.md':README.encode()})
+        'software_checks.csv':csv_bytes(synthetic_checks()+recovery_software_checks()),'protocol.md':PROTOCOL.encode(),'README.md':README.encode()})
     return payload,dict(candles=len(candles),settings=27,cases=len(summaries),core_cases=12,complement_cases=162,combined_cases=162,
-        raw_engulf_signals=control_counts['raw_engulf_signals'],reclaim_events_before_body_close_filters=len(features),
+        raw_engulf_signals=control_counts['raw_engulf_signals'],recovery_events_before_body_close_filters=len(features),
         union_signal_count=len({i for p in populations.values() for i in p}),accepted_rows=len(accepted),
         parity_checks=len(checks),field_checks=len(fields),source_sha256=source_digest(candles),
         experiment_specification_sha256=EXPERIMENT_SPEC_SHA)
-
 
 
 def atomic_file(path,data):
@@ -26151,7 +26212,7 @@ def archive_bytes(payload):
 
 
 def output_folder():
-    return Path(os.environ.get('EURCHF_LONG_RECLAIM_OUTPUT_DIR',str(Path(tempfile.gettempdir())/'eurchf_h1_long_reclaim')))
+    return Path(os.environ.get('EURCHF_LONG_TWO_CANDLE_OUTPUT_DIR',str(Path(tempfile.gettempdir())/'eurchf_h1_long_two_candle')))
 
 
 def run_study(directory=None):
@@ -26178,7 +26239,7 @@ def run_study(directory=None):
         runner=source_path.read_bytes();payload['runner_source.py']=runner
         rows={name:len(list(csv.DictReader(io.StringIO(data.decode())))) for name,data in payload.items() if name.endswith('.csv')}
         status=dict(status='COMPLETE',complete=True,version=VERSION,read_only=True,trading_enabled=False,orders_supported=False,
-            study_scope='Predeclared27setting reclaim complement; reused confirmed engine and examined history',
+            study_scope='Predeclared27setting two-candle recovery complement; reused confirmed engine and examined history',
             research_candidate_id='EURCHF_H1_LONG_Q_L200_D025_R1375_PB0375_N12D2_RR3_RESEARCH_V1',
             core_entry_and_rr_frozen=True,complement_grid_predeclared=True,parameter_search=True,independent_confirmation=False,portfolio_admission=False,unseen_validation=False,
             runner_sha256=fingerprint(runner),specification_sha256=SPEC_BYTE_SHA,reference_package_sha256=REFERENCE_BYTE_SHA,
@@ -26250,10 +26311,10 @@ app=application
 
 
 def main():
-    parser=argparse.ArgumentParser(description='EURCHF H1 long bounded reclaim frequency study')
+    parser=argparse.ArgumentParser(description='EURCHF H1 long bounded two-candle recovery frequency study')
     parser.add_argument('--run-once',action='store_true');parser.add_argument('--output-dir')
     options=parser.parse_args()
-    if options.output_dir:os.environ['EURCHF_LONG_RECLAIM_OUTPUT_DIR']=options.output_dir
+    if options.output_dir:os.environ['EURCHF_LONG_TWO_CANDLE_OUTPUT_DIR']=options.output_dir
     if options.run_once:
         result=run_study();print(json.dumps(result,indent=2));return 0 if result['status']=='COMPLETE' else 1
     ensure_worker()
