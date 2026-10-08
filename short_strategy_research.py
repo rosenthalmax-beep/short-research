@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Read-only missed-signal replay. Python 3.10+, standard library. No order code."""
-VERSION="LIVE_MISSED_SIGNAL_AUDIT_V1_2026_10_06"
+VERSION="LIVE_MISSED_SIGNAL_AUDIT_V2_2026_10_08"
 PROBE_SOURCE_SHA256='bc4b83551d72add28271c8e5b385ce272c76121816fee351268f6b832606689d'
 EXECUTOR_SOURCE_SHA256='17b9cc18883fb6a6a2384164ec6396a4c2feba84dbeeb0fa0a80a198068c886f'
 PURE_ENGINE_SHA256='d0b8f264a9c146daa5951896547f54fd6dff0c163d3d894fc1b0c1a6779a639c'
@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 
 RESULT_NAME='LIVE_MISSED_SIGNAL_AUDIT_RESULTS.zip'
 SECONDS={'M15':900,'H1':3600,'H4':14400}
-DEFAULT_EXECUTOR_URL='https://erf-oanda-executor-production-6f52.up.railway.app'
+SOURCE_RECHECK_LIMIT=64
+SOURCE_PASS_STATUSES={'PASS','PASS_WITH_VERIFIED_ZERO_PRICE_INTERVALS'}
 SAFE_ROUTES={'probe':{'/live-status','/m15-live-status','/live-signal-audit-status','/live-signal-audit','/live-events','/eurchf-pass14/status','/eurchf-pass14/observations'},'executor':{'/','/live-signal-history','/live-audit-status'}}
 _engine={}
 _engine_bytes=zlib.decompress(base64.b85decode(PURE_ENGINE_B85))
@@ -55,11 +56,27 @@ def redact(v,conf):
   for x in private:v=v.replace(x,'[REDACTED]')
  return v
 
+def executor_root():
+ raw=os.getenv('AUDIT_EXECUTOR_URL','').strip() or os.getenv('EXECUTOR_WEBHOOK_URL','').strip()
+ if not raw:raise ValueError('Executor address missing: set AUDIT_EXECUTOR_URL to the working executor root, or copy EXECUTOR_WEBHOOK_URL from the strategy probe to this audit service. No default executor address is assumed.')
+ u=urlsplit(raw)
+ if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/','/webhook','/webhook/'):
+  raise ValueError('Executor address must be an HTTPS service root or its /webhook URL, with no credentials, query or fragment')
+ return u.scheme+'://'+u.netloc
+
+def preflight_executor(reader,c):
+ try:obj=reader.get('executor','/')
+ except Exception as error:
+  raise RuntimeError('Executor connection check failed. Set AUDIT_EXECUTOR_URL to the same working executor root used for /live-signal-history, or copy the probe EXECUTOR_WEBHOOK_URL into the audit service. No replay was run. '+str(error)) from error
+ if not isinstance(obj.get('strategy_rules'),dict) or not obj['strategy_rules']:
+  raise ValueError('Executor connection returned the wrong response schema: expected strategy_rules at /. Check the audit executor address. No replay was run.')
+ return obj
+
 def config():
  now=datetime.now(timezone.utc);end=dt(os.getenv('AUDIT_TO_UTC',stamp(now)))
  start=dt(os.getenv('AUDIT_FROM_UTC','2026-10-01T07:00:00Z'))
  if end>now or end<=start or end-start>timedelta(days=31):raise ValueError('Audit needs a past cutoff, after start, with at most31days')
- c={'start':start,'end':end,'token':os.getenv('OANDA_TOKEN','').strip(),'account':os.getenv('OANDA_ACCOUNT_ID','').strip(),'secret':os.getenv('WEBHOOK_SECRET','').strip(),'probe':os.getenv('AUDIT_PROBE_URL','').strip().rstrip('/'),'executor':os.getenv('AUDIT_EXECUTOR_URL',DEFAULT_EXECUTOR_URL).strip().rstrip('/'),'broker':'https://api-fxpractice.oanda.com' if os.getenv('OANDA_ENV','live').strip().lower()=='practice' else 'https://api-fxtrade.oanda.com','broker_from':dt(os.getenv('AUDIT_BROKER_FROM_UTC','2026-09-01T00:00:00Z')),'eurchf_enabled_from':dt(os.environ['AUDIT_EURCHF_ENABLED_FROM_UTC']) if os.getenv('AUDIT_EURCHF_ENABLED_FROM_UTC') else None}
+ c={'start':start,'end':end,'token':os.getenv('OANDA_TOKEN','').strip(),'account':os.getenv('OANDA_ACCOUNT_ID','').strip(),'secret':os.getenv('WEBHOOK_SECRET','').strip(),'probe':os.getenv('AUDIT_PROBE_URL','').strip().rstrip('/'),'executor':executor_root(),'broker':'https://api-fxpractice.oanda.com' if os.getenv('OANDA_ENV','live').strip().lower()=='practice' else 'https://api-fxtrade.oanda.com','broker_from':dt(os.getenv('AUDIT_BROKER_FROM_UTC','2026-09-01T00:00:00Z')),'eurchf_enabled_from':dt(os.environ['AUDIT_EURCHF_ENABLED_FROM_UTC']) if os.getenv('AUDIT_EURCHF_ENABLED_FROM_UTC') else None}
  if not c['token'] or not c['account'] or not c['probe']:raise ValueError('Set OANDA_TOKEN, OANDA_ACCOUNT_ID and AUDIT_PROBE_URL on the separate audit service')
  if c['broker_from']>start or end-c['broker_from']>timedelta(days=364):raise ValueError('Broker history must begin no later than audit and be within364days')
  if not re.fullmatch(r'[A-Za-z0-9-]+',c['account']):raise ValueError('Invalid account identifier')
@@ -100,7 +117,7 @@ class Reader:
     self.receipts.append({'kind':kind,'path':safe_path,'params':params or {},'method':'GET','http_status':status,'attempt':attempt,'elapsed_ms':round((time.monotonic()-t)*1000,2),'response_sha256':digest(raw)})
     return obj
    except Exception as error:
-    err=redact(str(error),c);self.receipts.append({'kind':kind,'path':safe_path,'method':'GET','attempt':attempt,'error':err})
+    err=redact(str(error),c);self.receipts.append({'kind':kind,'path':safe_path,'method':'GET','attempt':attempt,'http_status':error.code if isinstance(error,HTTPError) else None,'error':err})
     if isinstance(error,HTTPError) and error.code in (400,401,403,404):break
     if attempt<3:time.sleep(min(attempt*.5,1))
   raise RuntimeError(kind+' GET '+safe_path+' failed: '+str(err))
@@ -221,8 +238,8 @@ def replay_all(data,c):
  return results,evals
 
 def fetch_evidence(reader,c):
- evidence={};warnings=[]
- for kind,path,label in [('probe','/live-status','probe_status'),('probe','/m15-live-status','m15_status'),('probe','/live-signal-audit-status','signal_audit_status'),('probe','/live-signal-audit','signal_audit'),('probe','/live-events','recent_live_events'),('probe','/eurchf-pass14/status','eurchf_status'),('executor','/','executor_status'),('executor','/live-signal-history','executor_history'),('executor','/live-audit-status','telemetry_status')]:
+ evidence={'executor_status':preflight_executor(reader,c)};warnings=[]
+ for kind,path,label in [('probe','/live-status','probe_status'),('probe','/m15-live-status','m15_status'),('probe','/live-signal-audit-status','signal_audit_status'),('probe','/live-signal-audit','signal_audit'),('probe','/live-events','recent_live_events'),('probe','/eurchf-pass14/status','eurchf_status'),('executor','/live-signal-history','executor_history'),('executor','/live-audit-status','telemetry_status')]:
   params={'limit':1000} if label=='signal_audit' else {'limit':500} if label=='executor_history' else None
   try:
    obj=reader.get(kind,path,params);evidence[label]=obj
@@ -415,6 +432,64 @@ def regular_fx_open(t):
  local=t.astimezone(_engine['NY_TZ']);weekday=local.weekday()
  return weekday not in (5,) and not (weekday==4 and local.hour>=17) and not (weekday==6 and local.hour<17)
 
+def missing_source_intervals(data,c):
+ missing=[]
+ for (pair,tf),bars in sorted(data.items()):
+  if tf not in ('H1','M15'):continue
+  step=timedelta(seconds=SECONDS[tf])
+  selected=[v for v in bars if v['complete'] and c['start']-step<=v['time'] and v['time']+step<=c['end']]
+  for a,b in zip(selected,selected[1:]):
+   t=a['time']+step
+   while t<b['time']:
+    if regular_fx_open(t):missing.append((pair,tf,t))
+    t+=step
+ return missing
+
+def recheck_source_gaps(reader,c,data):
+ records=[];candidates=missing_source_intervals(data,c)
+ if len(candidates)>SOURCE_RECHECK_LIMIT:
+  return [{'outcome':'RECHECK_LIMIT_EXCEEDED','missing_intervals':len(candidates),'limit':SOURCE_RECHECK_LIMIT}]
+ params={'price':'M','smooth':'false','dailyAlignment':17,'alignmentTimezone':'America/New_York','includeFirst':'true'}
+ for pair,tf,t in candidates:
+  progress(phase='SOURCE_RECHECK',pair=pair,timeframe=tf,interval=stamp(t))
+  record={'pair':pair,'timeframe':tf,'missing_open_utc':stamp(t),'outcome':'UNRESOLVED','requests':[]}
+  records.append(record);hour=t.replace(minute=0,second=0,microsecond=0);end=hour+timedelta(hours=1)
+  try:
+   granules=[tf]+(['H1'] if tf=='M15' else [])
+   for granule in granules:
+    response=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'granularity':granule,'from':stamp(hour),'to':stamp(end)})
+    if response.get('instrument')!=pair or response.get('granularity')!=granule or not isinstance(response.get('candles'),list):raise ValueError('Source recheck response schema/instrument/granularity mismatch')
+    fetched=parse_bars(response['candles'],granule)
+    if any(not v['complete'] or not hour<=v['time']<end for v in fetched):raise ValueError('Source recheck contains unfinished/out-of-range candles')
+    data[(pair,granule)]=merge_bars(data[(pair,granule)]+fetched)
+    record['requests'].append({'granularity':granule,'from':stamp(hour),'to':stamp(end),'returned_bars':len(fetched),'response_sha256':digest(json_bytes(response))})
+   if any(v['time']==t and v['complete'] for v in data[(pair,tf)]):
+    record['outcome']='RECOVERED_NATIVE_BROKER_CANDLE';continue
+   if tf!='M15':continue
+   missing_end=t+timedelta(minutes=15)
+   response=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'granularity':'S5','from':stamp(t),'to':stamp(missing_end)})
+   if response.get('instrument')!=pair or response.get('granularity')!='S5' or not isinstance(response.get('candles'),list):raise ValueError('S5 absence check response schema mismatch')
+   s5=parse_bars(response['candles'],'S5')
+   if any(not t<=v['time']<missing_end or not v['complete'] for v in s5):raise ValueError('S5 absence check contains unfinished/out-of-range candles')
+   record['requests'].append({'granularity':'S5','from':stamp(t),'to':stamp(missing_end),'returned_bars':len(s5),'response_sha256':digest(json_bytes(response))})
+   h=next((v for v in data[(pair,'H1')] if v['time']==hour and v['complete']),None)
+   quarters=[v for v in data[(pair,'M15')] if hour<=v['time']<end and v['complete']]
+   tick=.001 if pair.endswith('JPY') else .00001
+   record['s5_bars_in_missing_interval']=len(s5);record['h1_volume']=h['volume'] if h else None;record['available_m15_volume']=sum(v['volume'] for v in quarters)
+   if not h or not quarters:continue
+   vals={'open':quarters[0]['open'],'close':quarters[-1]['close'],'high':max(v['high'] for v in quarters),'low':min(v['low'] for v in quarters)}
+   delta=max(abs(vals[k]-h[k]) for k in vals);record['aggregation_difference_ticks']=delta/tick
+   # OANDA defines volume as number of prices, not exchange-traded units.
+   # Empty S5 response plus complete H1 quote-count/OHLC conservation is required.
+   if not s5 and h['volume']>0 and h['volume']==record['available_m15_volume'] and delta<=tick+1e-12:
+    record['outcome']='VERIFIED_ZERO_PRICE_INTERVAL';record['replay_handling']='Native omission retained; no candle fabricated and no close evaluated for this absent interval'
+  except Exception as error:
+   record['outcome']='RECHECK_ERROR';record['error']=str(error)
+ return records
+
+def verified_zero_intervals(c):
+ return {(v['pair'],v['timeframe'],dt(v['missing_open_utc'])) for v in c.get('source_rechecks',[]) if v.get('outcome')=='VERIFIED_ZERO_PRICE_INTERVAL'}
+
 def coverage_edges(data,c):
  issues=[]
  for (pair,tf),bars in data.items():
@@ -438,37 +513,52 @@ def coverage_edges(data,c):
  return issues
 
 def cross_source(data,c):
- gaps=[];coverage=[];checks=[]
+ gaps=[];coverage=[];checks=[];verified=verified_zero_intervals(c)
  for (pair,tf),bars in data.items():
   selected=[v for v in bars if c['start']-timedelta(seconds=SECONDS.get(tf,86400))<=v['time']<=c['end']]
   coverage.append({'pair':pair,'timeframe':tf,'bars':len(bars),'first_open':stamp(bars[0]['time']) if bars else None,'last_open':stamp(bars[-1]['time']) if bars else None,'audit_range_bars':len(selected),'canonical_source_sha256':digest(json_bytes(bars))})
   for a,b in zip(selected,selected[1:]):
-   if tf in SECONDS and (b['time']-a['time']).total_seconds()>SECONDS[tf]:
-    weekend=any((a['time']+timedelta(days=i)).weekday()>=5 for i in range((b['time']-a['time']).days+1))
-    gaps.append({'pair':pair,'timeframe':tf,'previous_open':stamp(a['time']),'next_open':stamp(b['time']),'elapsed_seconds':(b['time']-a['time']).total_seconds(),'classification':'GAP_CROSSES_WEEKEND' if weekend else 'GAP_REQUIRES_MARKET_DATA_REVIEW'})
+   if tf not in SECONDS or (b['time']-a['time']).total_seconds()<=SECONDS[tf]:continue
+   step=timedelta(seconds=SECONDS[tf]);missing=[];t=a['time']+step
+   while t<b['time']:
+    if regular_fx_open(t):missing.append(t)
+    t+=step
+   classification='GAP_DURING_REGULAR_WEEKEND_CLOSURE' if not missing else 'VERIFIED_ZERO_PRICE_INTERVAL' if all((pair,tf,t) in verified for t in missing) else 'GAP_REQUIRES_MARKET_DATA_REVIEW'
+   gaps.append({'pair':pair,'timeframe':tf,'previous_open':stamp(a['time']),'next_open':stamp(b['time']),'elapsed_seconds':(b['time']-a['time']).total_seconds(),'classification':classification,'missing_open_market_intervals':[stamp(t) for t in missing]})
  for pair in _engine['STRATEGIES']:
   m={v['time']:v for v in data[(pair,'M15')] if v['complete']};tick=.001 if pair.endswith('JPY') else .00001
   for v in data[(pair,'H1')]:
    end=v['time']+timedelta(hours=1)
    if not c['start']<=end<=c['end'] or not v['complete']:continue
-   a=[m.get(v['time']+timedelta(minutes=15*i)) for i in range(4)]
-   if not all(a):checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':'M15_COVERAGE_MISSING'});continue
+   times=[v['time']+timedelta(minutes=15*i) for i in range(4)];absent=[t for t in times if t not in m];a=[m[t] for t in times if t in m]
+   if absent and (not a or not all((pair,'M15',t) in verified for t in absent)):
+    checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':'M15_COVERAGE_MISSING','missing_open_utc':[stamp(t) for t in absent]});continue
    values={'open':a[0]['open'],'close':a[-1]['close'],'high':max(x['high'] for x in a),'low':min(x['low'] for x in a)}
-   delta=max(abs(values[k]-v[k]) for k in values)
-   checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':'PASS' if delta<=tick+1e-12 else 'CROSS_TIMEFRAME_OHLC_MISMATCH','largest_difference_ticks':delta/tick})
+   delta=max(abs(values[k]-v[k]) for k in values);volume=sum(x['volume'] for x in a)
+   status='PASS' if delta<=tick+1e-12 else 'CROSS_TIMEFRAME_OHLC_MISMATCH'
+   if absent:status='PASS_WITH_VERIFIED_ZERO_PRICE_INTERVALS' if status=='PASS' and volume==v['volume'] else 'ZERO_PRICE_INTERVAL_CONSERVATION_FAILED'
+   checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':status,'largest_difference_ticks':delta/tick,'h1_volume':v['volume'],'available_m15_volume':volume,'verified_zero_price_open_utc':[stamp(t) for t in absent]})
  return gaps,coverage,checks
 
 def make_reports(data,evidence,broker,c,warnings):
  signals,evals=replay_all(data,c);compared,recorded,intervals,strategies,summary=audit_compare(signals,evals,evidence,broker,c)
  gaps,coverage,cross=cross_source(data,c)
  warnings.extend(coverage_edges(data,c))
- if any(v['classification']=='GAP_REQUIRES_MARKET_DATA_REVIEW' and v['timeframe'] in ('H1','M15') for v in gaps):warnings.append('Non-weekend source gaps require review; no complete absence conclusion')
- if any(v['status']!='PASS' for v in cross):warnings.append('Cross-timeframe coverage/OHLC mismatch requires source review')
+ if any(v['classification']=='GAP_REQUIRES_MARKET_DATA_REVIEW' and v['timeframe'] in ('H1','M15') for v in gaps):warnings.append('Missing open-market source intervals require review; no complete absence conclusion')
+ if any(v['status'] not in SOURCE_PASS_STATUSES for v in cross):warnings.append('Cross-timeframe coverage/OHLC mismatch requires source review')
+ warnings.extend('Source recheck unresolved: '+v.get('pair','')+' '+v.get('missing_open_utc','')+' '+v['outcome'] for v in c.get('source_rechecks',[]) if v['outcome'] not in ('RECOVERED_NATIVE_BROKER_CANDLE','VERIFIED_ZERO_PRICE_INTERVAL'))
  summary['evidence_warnings']=warnings
+ summary['source_recheck_outcomes']=dict(Counter(v['outcome'] for v in c.get('source_rechecks',[])))
+ summary['native_omissions_retained']=sum(v['outcome']=='VERIFIED_ZERO_PRICE_INTERVAL' for v in c.get('source_rechecks',[]))
+ summary['synthetic_candles_added']=0
  if warnings:summary['status']='INCOMPLETE'
+ summary['complete']=summary['status']=='COMPLETE'
+ summary['processing_finished']=True
  summary=redact(summary,c)
  compared,recorded,intervals,strategies,evals,signals=[redact(x,c) for x in [compared,recorded,intervals,strategies,evals,signals]]
  files={'summary.json':json_bytes(summary),'signal_comparison.csv':rows_bytes(compared),'recorded_attempt_reconciliation.csv':rows_bytes(recorded),'strategy_summary.csv':rows_bytes(strategies),'all_candle_evaluations.csv':rows_bytes(evals),'raw_qualified_signals.csv':rows_bytes(signals),'broker_trade_intervals.csv':rows_bytes(intervals),'source_coverage.csv':rows_bytes(coverage),'source_gaps.csv':rows_bytes(gaps),'h1_m15_source_checks.csv':rows_bytes(cross),'service_evidence.json':json_bytes(redact(evidence,c)),'broker_evidence.json':json_bytes(redact(broker,c)),'input_provenance.json':json_bytes({'probe_source_sha256':PROBE_SOURCE_SHA256,'executor_source_sha256':EXECUTOR_SOURCE_SHA256,'pure_engine_sha256':PURE_ENGINE_SHA256,'frozen_registry':EXPECTED_RULES,'eurchf_anchor_source_sha256':ANCHOR['source_sha256'],'window_count_variants':[0,1],'eurchf_activation_exact_override':stamp(c['eurchf_enabled_from'])})}
+ files['source_rechecks.json']=json_bytes(redact(c.get('source_rechecks',[]),c))
+ files['verified_zero_price_intervals.csv']=rows_bytes([v for v in c.get('source_rechecks',[]) if v.get('outcome')=='VERIFIED_ZERO_PRICE_INTERVAL'])
  for (pair,tf),bars in data.items():files[f'source_{pair}_{tf}.csv']=rows_bytes(bars)
  return files,summary
 
@@ -489,6 +579,7 @@ def run_audit(folder=None,provided=None):
     if pair in ['USD_JPY','USD_CAD']:data[(pair,'H4')]=collect_source(reader,c,pair,'H4',1000)
    params={'price':'M','granularity':'H1','smooth':'false','dailyAlignment':17,'alignmentTimezone':'America/New_York','from':ANCHOR['bars'][-1]['time'],'to':stamp(c['end']),'includeFirst':'true'}
    data[('EUR_CHF','H1')]=merge_bars(parse_bars(reader.get('broker','/v3/instruments/EUR_CHF/candles',params).get('candles',[]),'H1'))
+   c['source_rechecks']=recheck_source_gaps(reader,c,data)
   else:c,data,evidence,broker,warnings=provided
   files,summary=make_reports(data,evidence,broker,c,warnings)
  except Exception as error:
@@ -497,6 +588,7 @@ def run_audit(folder=None,provided=None):
   if c and 'broker' in locals():files['broker_evidence.json']=json_bytes(redact(broker,c))
  finally:
   if reader:files['request_receipts.json']=json_bytes(redact(reader.receipts,c))
+  summary['processing_finished']=True;summary['complete']=summary.get('status')=='COMPLETE'
   summary['elapsed_seconds']=round(time.monotonic()-beg,3);summary['runner_sha256']=digest(Path(__file__).read_bytes());files['summary.json']=json_bytes(summary)
   files['README.md']=b'Read summary.json first. All network calls are allowlisted GET requests. No orders are sent. Review signal_comparison.csv and recorded_attempt_reconciliation.csv. Missing records are candidates for investigation, not proof that a fill was executable. INCOMPLETE/ERROR must not be treated as no missed signals.\n'
   files['file_manifest.json']=json_bytes({n:{'sha256':digest(b),'size_bytes':len(b)} for n,b in files.items()})
