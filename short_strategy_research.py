@@ -1,640 +1,1203 @@
 #!/usr/bin/env python3
-"""Read-only missed-signal replay. Python 3.10+, standard library. No order code."""
-VERSION="LIVE_MISSED_SIGNAL_AUDIT_V2_2026_10_08"
-PROBE_SOURCE_SHA256='bc4b83551d72add28271c8e5b385ce272c76121816fee351268f6b832606689d'
-EXECUTOR_SOURCE_SHA256='17b9cc18883fb6a6a2384164ec6396a4c2feba84dbeeb0fa0a80a198068c886f'
-PURE_ENGINE_SHA256='d0b8f264a9c146daa5951896547f54fd6dff0c163d3d894fc1b0c1a6779a639c'
-PURE_ENGINE_B85='c-rlK=~CO+y6AtNLdU67!QHlz<O%4IDg#c!ZUP(wyKg#0se~<pI>z#r><~JYTl*dEdBXi9cYSM+)+ou?3_Wz+dv>taTHl(!d01C*bYqSDSuhK40xP_kM)55DyJo@v{XLq{e~p6i%wM~LF7RVGxr$hqU(w$O=<hZ9_l-Zhu34915)5ag$1oa?(H~(nNm4k$zvjW((FgDB*Bv&%dZl+0#Np82I0|mP4^jNNQe8VdKH5J%5}WnsaWoA!4x`B^nxHoOy@SIKUhnYW?a}-G(V6$|_<XSAbd}%F4&L{FJwEF1sDReiPR|Ctv;NzI{;9QNeOp_z(0?ziorV6Ro%-j4jq}s}`wfA6RnQO~8ltkzrh<Q+g~QKY68;{b-|dEt{&Q;C*C|?3;7#LT7$#`1QJXgRH3>gW{IM5~pv6`A6@3OM0Hl_IcwxN>Q8OzJrel8?+ys-EHI62qth%-5Pevi!53ASU+V9TC<1o3lg2|`(_$owAFQd_&75nJCt=Bu2gXWpFuiS)_@MeDFK_d@0LKA^D!X);_Q4%1)LufF8VeCeSA10Z_Xja}3+IhjmzZ?f6G|*W*4{9nf(u@s<H?JcCJc_Jaw7J$*IGzPD2WTAK2C)a<Jo1f$_QoG4I&fScVVOsOPTX<&v)CJ>eVbjw9<+oBoy5VHFq$Wp)3)9@)}<dOR`7K=o{wOQhx0f_NAnZcft)Yevs<*1*>yNUi*#(OcQ$ZZR&-@e*?=&+1Wxr<+|T)NHjiPKqR*H9@H0$_zdtwrSG>4Un9TeMx@c(jcqbiYC+R-aV}J4~P`8wA6aHLcJ4rhNPTE2YZsdpKJFEY`hi>gBpk+~P`D3&laC`ZyikdhUzSq~$cod)=MVpcY@t44wT?bZj?Z?503|B{sL^u6%9zsKI@>hN`^KcU{xbb0=cpO8UYWzrkr#BXVC5uTL#E2$_=mhwN{$=zf@L*ic28kW;%yjK_yM?X=-7U?*kn!Ml;+yNWZO!FPf&{3H$M^)$6NRh_zz-&HeFMwh+_vqy)81}xS*WE2EgR~<H_-?W8j^06n%V>%Qatmnqd8oSO-+MfGGd>djxd?Cd610!JL^a5O&r2M2yz7@ZYJy}?=}cNqc#a9#}@Y=cfRmnEB)&`zg2N?>&GK64imttW}|KMQ=LUq?{a>1g-8a_cL3tpYy2ShWJ7OvPnKmvXoyE(LkNn*hD>atWeZnuX(rI-hkF`QuP42(U550!ZQY*9bk(pQJXy6HTf)vNR8G9IGMVez;&m^eW733*$QWt94CUz)L`EBrD9?ZX{r{Xzp7xkY4<!JFqz4W(m-cM&^VgA;B$%yN%`~HhkNOd42ExOQf1G?k;@+Esqu!x4=${<+_WB?`TSydty9_ZwV|!@q0%DR+N}2_v1i=6h(&_ud8DixRAg7*U3S{9s{#TSzPl?cpcM>mulS-VXon+)@(>6%Ewtatbx7}V&+_g&)-FEwLdH1g;@8Yp2X(u-m{?%BRD;ar>KOPtI8EFGGoJKcm%4V`zCyk|;QM1u~JZ7}l+cz>JYkjYGw12SQJL_A!)n!=|g7m<0E`kC;g!3sjpU}O`<4R5rS3>j)6P!Y>WFkizw$v3#;304l!kI7=aBb@=quF>l<rtNLEt>cgz_~Y{>QFvaz@|C|Hq}~!OWFBcs(?wgO7SSWty@0fPxw-~#`WJrdvL^)&@!owXUL%*fdQpAW*FT}$H5G(W}h)6bOkn$VpRv)d=vQ8%(>Mr$)KQVA%ps3@~0))(<9kez|8-4_v8`S6L<p<q=)wg0FVXQlWpHmX{r<UM7Ti8r5X>&rk=a@<fQiceC<i$_bHKSF2k0(%V|%|a*U~4#F<*=J-8QZYDu1@)Qh!i%@KjJX172#r+y5-5w10iP#f&7+~#^tRZ>oy6YU?Enag3r3kzYtxfgCtdO2<0XrSs%uArDI{Lam_%{gsx1NI4~Vg8DEF5|Hn-fQS>&EUi@gQ1W1hwBI($Wp1=879^>+D&v8*5#cgO}p`cY*sP|KA4(^M3EVyqO)Q}PxMItNwhrs@z^Ms9RKt0|D}xd@Oba%{yva0!bZ_4AmsdXXT5NprTOSXTObjPds`rzB`lClMbu7Ie!4<7s=aH^n~l2da%|LXFYa>ZwU^%R={m<s>xkHgQH;9RQD69}YP|xH-cjeXjK5tpzOZrp%Oo1lXF=M*Kq#NsSh?}HrSicom3z@-7JQx2!{ucd$_JPLIK=Ebu@LW?z#S)^d3&?KGk;$dvaCC;z>~kF_3cqNK9XhG%yHn_Lhk%h{`>Z0>6g9peemCxV~p+U{Xta_B#oP&a<?o023<Nhzi2*7!cpKMI*Cx!7bKZgE2C&iN@&{g`Pu2ge%~AP|Jfg$qWu^}=<-gY8A$S!t#Uk-CopJAAg{*3%nv7sltdGRYFCI@gIJClUxwpwc89egp5g>w{PEnMMR5^dM&s*v(#;%;(kbi5<7ZaLZo8bfOj4S3(Q)1OD*cYnU2{%ZwYwavc4b!W+T~caTZ&bSn%N(NRh!xLACbe}lY^2VSf&Re)cCxum{01!HB$@^CqNplv*`0(#3I}}h>!B*Yhaz;jV8ez|Gj4IpPtoy#9)FVPMd`O1|C0G!9=aR`6Se<q0ds!e5BA8V5hly=Gnp9cW2iBoc9h7&OXpi8HYuBm*tOc!r6@2I|8iJow!?8{k3({v`NVH-I82b)lS(A5PPJ25gK{#91kY#;YoXR(gH({!%v^kCX#N2%@t-(S(cY-t9jghIh7f$2`%ZJgC|$4IXA2`#G%RlQ>OnZh;D*ejKsfL62RYcA5ptm5G34Ks^z+t2?W8{={OvQGb$Fy{NI}TF%l3K4-k@dQ@f;z*M0_SKIYW*=NcF9=GeLo{GJ=faqp|7yAQ3Tt2Xf*Iq_aL@vh16VRL3`w!4_aCD&*dee22}kHJ6S&#ZBPc&;E}Z`o}B>vZe!q<PM{j_=*au<l%-GfDq&E~?fBY5g(0fb*!sa1DW|L@{D=UvNrFdLACk5OWC4p-6qm;_FhVYo6p&&Md(Vr7=)oksm2eh<D%{>Z_>q*Ac5Y+d3ktOp;J(nMV3KKihjOyZYk=>aKlXTRVMsJUH`KpM7TS_6~bTd;NWH6OlFyW%UVZsc<s!Z}2(rKp)aPKr+|xs><XIXz7DS?{x*rs4}8_*3d4c6gJzrk@lPIT<jN|G8$~X44{k2QO52D?U-Q0EcJe(J*Xk7HNyrKG{7|2_!5oL?_<5-lTORa1`q;}l&!$4!5v_9uRRi!(FaXKQgIqk9$Nt28n6%G>*$ETFN^;6qvrNdMP_O2*5~;s*i903JPg!h$oIf$L8WoLM3hOGAU%DCSUZ{k;uv?<@tZe|5`>{pK+UHM-BO_uPB))0wCo2Y42Ux$Qc%w@*=%mg!Fz?_g8+pz9xOs$`$%j80Wz3?{>(&35)sJ-#c|z{;1Od<D~+PK3eg~PC<O?Cjq>ECuEa<3A$iQ8lg@9`{%;U@k!HyU>orP8>22D}B`+O=sTwu`B2~i4D3~IN1>IrvE7DGJEXxSVQvPQPle9)2t!pA0*ItswxeNP0gv=i^bs@PsWvR<5@`Os$mR7s=@ML1ET>43VqTW_6mDpN@NXSmg@)Y0?!ug#V;z3r2@_*;i@nXreh^2YIlKPN~o2b!aaee}=Ja*cTfSsMiGjg@z-+atq>K+8N17_Lea}Zx33`E~SL`Q-Px_#CxB6bIKC>EJIabzas_uwm<4j36YI|Oh4q!x)7A!0a5todYk4Q8RyPg(jHKw`1D*bq9q2H5mE<QXlRb}r><+J7R_a}&W{VT-0{hjLq*A?H&}CeltkC080#bWoGC)rA3p0i;XKdL4Vk^l@`ZlK5!89TtjDNaEh{(VK(8`~LpY#E}oYHxow^IPaxkAD%!GhzqGkrOY4pgNrY=8d{*_vxXB)&aUF<ccd$@vrVp}Sn%l|;<?o&3+?A1m?}YIDeXh*pFf;ESoV;Ph%HL=o+r(FVGWLV&ri=R>Q}UWwB8-OeOEtu1L5*lVSGc>M$oV0B#?uqQ{qQA0sbO1#-(i2YHgCM`n?=gG#K?{s_5#;?0h;kBo#Wk=GV@O^tv2syR|g2Ep2;RTTNh^>_x})2>aK$z_iYa;?m6ImxPK@+4Ss}WAAKm@b+zgkn7&|=c9Qt@{msL(Hs5n(QGQc&hvDhQAF$E9o;*Ae=_Kwo*o<@dAoyt@8{$5GY-E%zKoeqB=9GNwPct@g}c`-z1QtpiMZ)<C@SFIWgPgQN73y>j(OHBdKWMH^p}4B#M?hOO%v;QFA+kGsX2VQ5YdHIFkhiTuG5Kiq>D+olN5nd!i-YJxq*7!)aO$v{_rXc#-lP};+mm>J#qmHnt_v_5P3%I4{T_uY)??4u_775z>p*{U~6luk(<)=Hxqtv530g|D0}(Cq~1a-S1AtUE~x+%TP{h?kEhV+{o`MbRAoTnMLh9NiR8oCKFMqsV@4W72HI|x#Lk#WorTYmeD+tQBG3b|DQ%z?$!OpVD}JoRU1xc=Tz}Nhnng1)?xxc&pO0IPA$D|;++?<J@YE6{xIA#26Z$o&r8PA)wF>o7%0=AQm7-pONh};Bk2w#YWWspRh9(~7C+K-+p^nzk@tO5EH~J%UBR-jWNRy6muymSebo9Y;ws5fX79<tHjcTmaM76Be)P3ymV?E0{863Rt4L(S$tLf0rn!sa(b63$gj3DX1{@Q9fs|`Rd5r0e~m*~vB!Jv8K3Nb%AMXh94C3sovfVk{G_YRLw`!>3l1zO&3(>qY#F_8k9{l<^)9zK*A&zDZOvV>91>6Wg+yimAlaoMAC{7kC~rc7I7Vw9>8(D-i3rfD=c4dO=Z0JsdytWLkAl^IscAw&Ut->ESnyT(N98rUamRu&Ki;x|+JRQa35S5Z2OIiQA||IKM~InC3nGo^V04&_9G_1?QTDU~|dw|20!4L>S0?9lGm-o9;j+urG(-E4a&d+=|dg>BpWr&Gzs>z$rDEe~=Yk!Hb-Nk5znj(7X02a=54j_25(-Of6{865xGKk|A<dk8wjmcC5T1|iacgg3X{dAV)9-0ZlQSI(C21|8oHHb>2&+r8ZCIK$57aO-Mlj~u(@w@01U<){<*{$}@T=yp17|H^M}4xO#e%bN8vy2N48BX1bZCo?pv)9h|KTj&cqS*P`qn$fy;%jtH}7YD7i+d_!;l9%wghOLg>>~;`jx7ltYB51t?Qw;k2@!LyCyuuB)TJ3HVeYy@mUDF>r&=lQ3_8tDj=)u0b&;c$IEFE^NZg17y%`?YAVhZ|yzrOrlvji9&w<W>oh%h!?2}pZ$(*VRZ0cme`Bp`UA8I)GHBSUdo1}IG<6lYU}((Z~tHn(ITT?34k5k^OX(Q%~xYAGw(GOeU-gt8?cyuB%%eEC!9n4!o(r0Z3FC0#QN`Q&X^0-_#D#{gy12&Jn)X%#{-?bnw17E3^yodO^oh`ZGRacvWjmV}P&O>rgoyReXsVIi(l{t`FkL)k2Q^sX7{x8$X4NtbxD>>YNS3s4s6<TvG8+_AOyYwOH59tuG}0ZLbbq8@$Q0L4s-ouajDwG=1@Ag&om!O?FiD{(gsK$>QzBCn(?9(~7^=~t&~Iu#==?#Ni*bwmP2&Y;|>w9B80e2p=&7NBgJcFahNJDU<Q?#dL*ZI#0o1f^S=;<q~a7};qVKp07JM;0fx+yZ%`<Cxa5RsKxcGAUNcq+uzJZ6=cn7w+WCUxZlefH(^fup$_)0Y;AaB_q94EKY10pe#U&6)4J~Y&8u~TBW&4rzLGzS0%-!Q^`Sk`RK7YpSxpi(~g-1u(l$w%EIJkIc~p|CxUhI#bP393qYC%Dw!jJHDw?jQNnLGRg5$MF$-WAH-wdJNkEkS>Kd@cEP*Ll-)<Koi{TpQh+tca9wFm>rzEd;b9lX*kC8-7E+rh9MKIDOk4$zqOW}Rf&Jn>>ymuw);<ig&V}N2lmZmJTwj~u((TQBw0K`m=T?L4Yk;;Z?kp-Zb$#J_QYZ4M|Q8|kNhM5?5w`3Sa9I|Ty(k`ub$%x{VLPvmMro@}A0<pN+DaD5YikT8`D)?ALS+r6M0NE@rwQS04SYeQ+GcgNbvP98sN|dD|?^o9`KrstoU8gHS>53cHwdJLB4M%Slz`Cw1d2fk#xTDynx=jN%nnkc~)0LOflAy?_(rtAOP>eX=ZAm!4DIrVOk#E?hW4K{v5sY-<p|s><ku@Uniw=qr?TG@!@0csyFh!BrGHsYy?ULDW*Om`o;gDL%7@%~`P-JXzq@^etqzNU>5?H4rD|efsaMV#GFd{nZpqLTAC6ll%2}(;n7Cn$02~0MBb{$EWR25Yd^D>KIiV;lWUAj{-;C+q=)=?}W(%Gv<d=szdM6e4@ZH<pOo@?*jo5}?)v!QWtD?Xf>KHf{`)1m$-llNNh@nM}5-*qsLhu2pc-*rxSvNkl?7zKvbpm?gaPHJ;XTv4V+S%-8^;mcA^=-jlHraVfXgBqAj1)_83Q!n*uvGgwHRL*zsYQiFGCifxRB9n*H=-JHmXrjCS-f6R&57+oKyYRG>iw7;BC>%R={&zlTkyVFKI`F>>9caF{(t-b7=>Ykqx(@7jp#x3K(yoF1u5{2%iT_>bKywfDA9N$}zq1bX90migcX)XGOMgG-6d*kx-M;U})4&bdEI&p)74#j-4}CYD4jv#)uu)G551{{^4$#5~A`c^+9ctCa#r4|UY}Ava&}tUHDCJzCKnn)xa)YU-j0bDmHJtDB-E`*C4yk9aU7&gsq?1r?M9z0%?cebY83hpQ5_$94aD6nZZj*R~I6xG0Vy&m~2cs;;vf(F;P^`0mG*I_y)&dQ96+u$gI`<=v5E};TLecBWkC<gv#HXw)zgE(}$p}?4(>R(>fRBW19EkR$!5TOd?9-aG1l%Ko$+ge=d=!DpY%KkH!A~V)YiOwiKsW(r17SG?0&PO*JldgjZUihs$82JpoFL358&jPI{10N-<1h&zHYq^^hLc$~rVPIU$A!4X&6GQrAE0`R%@3&@{?*HGbfZ*ee(}BjGHY1*#?R+_Mc6PbNUVC>WFhNMx_Kl9Dh`8$yY~s%FCr|ZyA)o*FYBa5)p|w0Z)cH4v5$aQ|AYqpIA+I?&EqJ7+NRO`(=~--RiqXWGTndQ`$mTT&SNXxg=9XSp)JkM1EQ+%9~WrXV1gn}Cc?R(&f#<%2C;D1ZX<i(Xu}d`O)C=o2*GzM?I4#SoQ3{a7%`dOh{KS%h_?v-+oqe$|8^n4A=Ba-3Y(FQNvB%39J(JnY;L4|8hkJP4x0`oc)mi8G8RJDr7>&#-|PmEsc^^70{M5OEnHVtO?LwWy->c^)0qmNs={ACaEB>;_)+a$<*ul-XXF6UG%`d+^QSAxx^Y`4d}GW2k4i8K5r%+>@)V`$dlV@i(W{T{@P)MhHJ0gt&LNl}`T`nSwtH+KdEXIYlH=Riv25;l_-_^~$B_;7u>uNeMRx+M0mM;WNXL-=86dqtf+s2=Ij}Xjke)?)g$1nmSixhOr<1N1X-(^EORl-54uJH$b?u}JMi%ch*%_r#^*#XA(<u+nw2S0=HvB16<XV?DSEa}J{!>azM5*V;Q3emkQT`_W3lo1WaVI2Qf7_*{<=tYD5$M@WHQUceWD8(@;?aUqK`mae?h+;u6qLA&jyX_zBJLkA_0h>@cAl6DsHrR}$j6gAY{C)FR&1%$;e_cOeelkH)yq%AG~bFJpTf+vJ7GAm8to{zVZV29_`&NP9=tt*w0iH|@%ca^t2g0fJ_~kiQ7<H-vHa^zIE*9q$sqe(rJM6ATL_O9+QkW9)<n7ugN=gm%vX^C%wao@;mV5?IUQYlBD{Ld-wT}1$XowN7yN@(8OFRN5vV8QO)|5_DVM2ugNG!PiqauS-k_MyZ<SV)mQqagN*GSrC_AE*m!cmLoi;zskUY}_?1DRS+yae(U<Mil&UQ__Y}~-|kxF6~2S8jz%D1$<D+4T#&vIJ~GnQw|?JK`IFRbG!DM8EE^Q2YVh&0GmLxS5djwYYP7fBG@hSg^U-{5-!^-6JN`VeZnB>^pSBo&Fz&Y7HU<5R$?+)7D#=}--W>Cabcyx=kGK^2_13UW0E&uYYS31IYilKFHBl{eTi@dw1J6^O?aewsvadQONFCA6J6B?>l}9M?Q%Y2Rrpv`Cp{N~8$>quK6sJsF7P#z*6q6YA1lf_N2;$7pdLlI1K&__u{$^Heze&7i?aphO*xc1-An<Bv~-tCh`_d!PzLkj#wOU%-hy#pB{n8kv;epdWW=Gk!VB9Tb6a;@E4eEvv0@054pOwECksj$Vzdw>1i6p5BNi%wP&=Zvqa>uJ5ou*;u#e7DTtoyo=^shaE7f0sO8i#wm4w$P~oIf@z>_3%?;&EdD(nt7C<;;D+B2r2)S9xY0xlI9rBv!V<2kTOx|zOax!gI}zpE23mB()}4E%_AO|H$pn|GLZJoXwnH|I%ffx{&xWkV1R|~*@al>mqo1;}Ns}+6jywOn45>Ym1n6r1h}J{uW8)W9i6<9(dASPN$}J)4-Rm8z)6BgA=_1M<hUr=uhh5~PA9V27mR;grawn-1#f^KVhpJK_azP6hP<A-Q$jQk0H*tX#5dJIMM)Mf{EStZmG;i)jrG2>@lT|f6*{6k8ERWAbSIzkB(^BIrZxI<TLfT>l&~O0AiY}ZH0+*L=29-9-UJ$Mt4IHVxk#r}VZk>0$!Og01f*RH^wQ8mC(vhgVnJgEQdktXeRrVwp2g4bbEiwYl3JJiaELIlt-;>hoj=I_gM3$F<iMoqfe-ZhsOfah%TZ@rE!c=au=^V|&Xc7nh=uRWF+^Ux?L%B6GEz(i%s-(f{VL~_lFocg$Tw;DH$+`dhWF@V5s#1@|XKg&;g(t7De*j3Sy72oe5zTVhY<5d>n`H-Ef@w?pYvjlr!lI?{-lx(_MY4~6tuicJPfQ?j3_5QhBM}ErXC^Cet69=|wj`iZMzy6h{uk`^nk0k@ewP0QiR+&Nc-n@0{-$BF4gd}@dqDcRx_SdZHujP#KeW4_Qjh;yP<<CiVv4$6PnR@Yq<~*Mtb(low6`w`RAtiFpbS5P0-UF~5GPfUhWmILZ9>Z^rNxdEh1RTRww1k2g>kyf9Q96WYt^lGe)~)^E-|>$SkeU*rYCK|x>?UKMzd%ZBw1%RlzH9Tv>+H21e*e>u{XX`Z3|anj4O){qZ>rjh<(Ao!f(sX5=3$FqrzZ-r~!xx*B>BK3JeAbTp*QhfADpRSj5PhBj96tH#*JxnJMmh#v*Fnqf5@^SlCWrxE>n@*nbY)o~-3QTD!hyISn}<s#L;FKLx(cQz+5Ah*?&ZemeEJP|GwcnAtVT$57lhy*MS>W>@868I`F>O|lf_rL^wCLy<L<?S<5mG?z<s_3I<oe?{L9CRb6BM_f+c(TA%;n$g(fu8rZI>gU2W(*`OS7A8(yAJWg}kHos@HsHd-i>3yzZ<h!d;NR*th6|9fcF0rS0zTm7LzbAPZ4&z4e1dbgvM#ge^IgQ^aEkT~{!7of(nAAooI(FeRd@fByU`@LyXV+*IHNHFaEeFKLm-o<N1@PxO(?3Kt*-&mJqYidZq8(L$Kn>0KbR6#uS`}l<w)S=F$p#(!BPe!(GcBQsr$`Bpfo_zHH%S-NjM5TjdL<>NzEj=cb$89eoeJa@m3yT*jM?Zrcc!uV^KK4$$=V75>}{oq*;ZUj=&c*oy~!#SC#Y0=Sg%sN#CphDBE1%DI{E=pTtB9n$Ea5IeNq^rC<YhrRe;*92K&2`m<HDIQ86vR@D#KLj0MBg*SZy&oxa5#xhx|GMMF{6{bV6r*yvHN50a0VN<}7p*cyp6*GlMbPNsPmqORId&}i9ujw2;dSp{mowc3UrD%Trs(+M1al<QPQ<IzqAx@S#s*>!-D{+5R?9D__a)CtJ=J2{yRf&TZTCU}1AqZnIDOxrONNQfT8oonn?K7|Cp2hh0dPn<*ee0jS!}I>>{RR@Y2xqN>RhCafU>{Y>b)EYLl@Kc0J=2Xz&Q3QX`=XA==gf=I_q2<YjFF9%B~7GE`<A|@B@BeFo{pxn$<(yp<Rw(gOh8Q7$CEH1qzQ}(fSgCb@0y_h2-^u}k2Mid8$vQ-R+V0yEPu!xRN+DiV8yGZ!j;{btd2q{upHJ2KzVE|26<0p+&$j^U?E;}aJ&R2X8Wv_ch%j~$zs~wdA*~Mdj5>Wv<w|b!CXc2N<nTi%aU7qet39r`p)Vfy*)pCb8z%_iJcV+lbE=;SiOXQc4!XywAUVaz#*J`5_r1uRlKb!mDE|`G;;MTQx8msxDLYU%k;1$u-E$bOMsHQrpwwXy%Q^0*v@j>sG_3o$fNlTs}cxO5GPa~c{WFZS)vw_VQb_L3&7Gu!sK3NbL33Mofx(vg-+gRUbCY$g}kXhn+5U2Xeuxrni`F-oq|dPmY732NI@z<Q9>lsO-ax`k%`Hix0Te$Z^D|?)X001X{2HuAHB8kQ$|Zr=<rJ6JD|m&b+O2iiGMi`Mr7I-yz7#0W!iXA=8~gD3OSxsV<|s&TRKC-{4!(UJvSa|@eHhA4)%Ut@wR6IvPT{TGVeXt)U@+i6M5G)x#Bw6rC2Z#j*6R-Nlwv4)8?O{cAZO~;QNE4gZJm}k=%IncGbAUwu4j|GajJW%yfo=9#Q%f{aJk9L(FQUEqQRJ^{wpeu;9M|?(iiJP_7$il2DcUayr`*`zV}dI!3l|W;B&yQ;UV9CrNyaYg{UDKka~Sj0|z5S_5K7=X+=8gJtlEGxx18VQ16Xp|DA?lrf48xSf}!t_1<74%wyH_Ai(<^o1m{7{u&eOvD)rW@G<0E0lN@M+musAu$5pYE3gDw7PDhLWE$MvB98}H<7Af0Wbwx=M{An4L-OiqQ=I8aU*Xc0)|RuCbhnL9wGG9QeUpp5Z9TlP(#~uCr!0B8Q2PN^ki^wJb-sY-yi?852^dsdPI|ntIJT)^u1-lHl0ULjXmU?;T(InWZu<67wDthLc^3KE=GE=8avF;4Hj!nnVi6np-K|pTyO2hsHk05c9*i@^A{*p0pTZH7iT2Kvu<ebeRZvPvqXqFXJ3{@sa?hR`JEgfE7GNKMT;dc0DHysHbXVGNG8)PT1*XV;xc#2_!U`-eHq_}PIT2}S;z@D7fLoJNo6-)5Zp*_Nq@~gX7NU)GV~RQLVQQTvb1SL>Z<%PI-T5`Pv@S+Rjp)gI=I>LR#%Qe9*Km=?~vb@7^j@<Ypw)QC;{syzEB=(dK=j($;0W<E2qLjsqC_xM{D%}3jk@3$`m(QZv4gc7JZ?KlIJIPTQCV(iS?v9v3YK*)ph!(_%+=P>z982=l$L?tV4>Q69suwY+V@^lE*2eC>a5$F@k1Upvy$qEDr6SNBidBsCT%;asF$LDEL)~_Y^W+J{H=lYq<u?T8=5KmTzrQKg$*h0ko*D)CvT_S}sqn6>+tiF$vT(f=s1qCM>C$ZZhHYVhk1+*k4JHP6{(mf9D_jruUVE>dj|EsgHbXm5ym$;@pl>p}m}%Ww^e-T(nFBmpu`oGc%HJd?$_jr;KMu7y|rg+qnTAYoa4e-<ZUi@Qv}?^V+s@Wl?SFg%sn#H&+uDIAw`%$Qin~RkIuZpfpzpXFu~zHJb5uf!37MT?~xdE)#slk5-t8p*B!<pL-}H$3Y~WFC}<Vm+XVSxo12U6>kh)5>Z7K<7qS@E^1hfKGsExnHgUsk9TNToUT5AF>gSQHKYJ=?616$LMSuehtf`S2gEV1RBny?{&%lpUah1U>oAiD>FT(W3tw5MG_)ac$~3y6pg|4*Lw=PBfT5y8(dL*SsFJ@~Sra9s?{ZKuU)g`Pp}{!BlnsI1`Roy;ZP_+KpDdE6fgoaN1X5KuERB$s-xAm^?alv|4ffr-_CXyXwWHF+7{zIy#yl%87-VBzutXR51Ee!zh=9Kmqh(arn6rt0`>r!=r@c523J!5jB|zP<jnBbdvd&eoMYqDAk7qkV5aPAN5q6sGs`1b8@zNJaR%vY+JOQa5EDVfTN>!@}askYFvD|sHQOYOi+($|)I$3#V2@9=RHn(raW2kZ7CS@1Pg<=;+VvF(DT;R1}uhv9V%W2T22<nvuP;+`#?|gsb{B$3j5g3E4|NQ%ZiSlKg{c>DC8yviS+aFkOdhZVoKUnK8+)i~_kZ0s&HLHhFJn?UWI!)NeA`q12L_$!Uw%cu3yV300qA#+cF4uk>(816iSlr`pKz|@fJNOz5=d%crt0YRl*T+aM9$VA97zx;;aPn!#w)`nPslbYN`cMHm!6OW#o6B&5^vC2bfqDlto80ng#<&k@j@My=fP{z{BR;UE!7)+VuabPX`DmVuyxDE!(IxSbR0uA*Iz*=6sEF{U3Xej3d&o!UFiGRC!<m(%=(gP0YHRJF2@+DKr3MsRY6oLtuu4dcqZ+yp3ZbnmnUYU|X5~;(-Ko^noK<13q=<Q8={2qBFR%GW%c&U>co~%<E0L>|Nc2H)gh(_eBT7`B$kOJN>T9fnZa4DX^yb`SVP4E|DJ3C7F_Ua&RqMZYv{R6~`IEbKq2vtq^r!V|xDieH%-WrVei+kSwFUybg`gXk=rLF0$e*q2rd~B1GY{+4j%CBLc;4^|KY_B);ZxqHnLOW0nmIQQZIY@fJ0&MWrCbijW#GqP+Mszfc^N8(k<BS8LUx6K%N)>B-df#0Xh${%k`?-aGx|a!XiRQxl@Jw2(3A|HF^ABIVKjhU;(WE222;d>)re$s!Ii*`gQdX#YKgu1AscZq*;I84nNO#>gsQ^3ugs??>q=`bGerZcv-6}pCcY=Ph7I%mM-)jwNInNgZ)K_SWqbM{LuDm<keY+vW{D=-gaumvxAhJwiAb2T=1@Q`nxKCHxf}-|ZM}22v1mm$q^QI<NFMtgeZRcJlH1<-U;r^SR50gCqGh~xKE-dlrYu*7s|8^u<P7C|tKLgK?n}$&H7!N^u?Be6l<!54$9NHSt9WH1q*Y!lMM|3LRMAk)n%1Ujh&WdxI<<+08AUA`M|oTLqGsfADJPWUT+%_)co$8lvMG^b8VE;Sv+frHmYgFTx{RVR6qmx*kNPl-hw~7>K5!kx5O0U>d5kVQYJtz8(P&&$8{8Pj=z}$iehW7y(WK5U1tn+#3Zvi94_J_>S-00A!pj@~Ggq+wg@J+qnm0J`R^TI51|cl7XC)T6A?~bk$kjD{foKG_dSJ~A&@~#5fZE=mU7w?WCbMunrurM9C2-7Ga<WGAm`@oY^|-L>XFf#>ty7F2UI&PbA>g13;>WTobjcMYFDGcuq(09T#56V}e#GB#tyG{?#991`t2N-vY~r<^of(J7zkWKt4ZZb8oL6*6+oNa;w4F55F%sz_0LG4bs`kQq6Gy+Jd!n;KY;%^1%is#0`^ZcZ+zVCgop?FS5t{;ds<|z_F2{AO>>a;98IW)WZ+Fn|{d|0WRuStbN%u2vw9{Yu{S$Bh;Pm9Mw}&H4D{E_dPmdbADBUDkNSBowqe!buvsQ!!@tILgC62U05A($ui}Wb3JV|4wu4chb&v~0M)m_havMRl%48B!()BUu6cqqTLoZ6r!K9r>6Eu7r%7p7hzfKMN(e&-0Um8Z?KsiD@{AIdZZ53|<bBy|z*DV{$6gA72ti11>)_=|o*oR2;?nndH8m)Z+1c<OPN4~zJ_bH!=u=2l$WN}}er?9tY^!?yD!bK=Vu{nx_x%qPwHp>^Ami8kAcbX1dH;MU14+j=3$)Hf4Y_?|j3M(oFPE50ZHyVO_D9=7$oMuBUh{M%-BBA<b3@7yjl?8!#WZN=0lG=E|3A%zAl;F7#RH46PtlL(QtVFF4|s>KBCy(y4Y>R1zsBP0?vG}ngh6R;oM<>Y++il1L}TI%v4;GpP6s_N>xUfHfoNL9`8>dS1sYPwN^r&_mIqvN?m<IIVyYn)c~_L5-g<Ncn{J<+t5BMGd^`Pp7Y+lWL1s1X1{(=-S`>-YyhKeuP!m-Y$u&j%a-IQby@gg61k!UD?v@h?ZzFSN8r2wqWx|2LVD+P&BWKzBN@;4+FhK}GSpm`47BI*V!2I_LSZUbrqoq-h+D=EHzEcrq_e?B80S0z?*O@f{tAd3(T#jPMT%tcMe%a}gyhL>G6A)SL;t#tSppNFAA0JRh@1<4X8~cw2BvXdd1jr1K<bA^oUzh&-ITA=kqomx}(=`4S}WL4n60&rh&~Pe9m2(eiJy_lvaNXw{c&`J!l+W3ew~r_W(1ni@z&M$3B{^jABDhxOUY`M8|1Q{zC8YINVnRUlc^)$H08Xn<*%)>QkFgYz!*1z~ey|26S>QYpx+`Xg3FwA-B*=r2J?D^D81q(vsRBt73qD=YV}ay6tfY3@R5`+d#2`7b2Mji0mKx5(C;8!4~3Dtaq%u`R=_jIZ2?@wa;a*HQ29ry?r~k(ogMVYDQOoD;O9lfl9J-r$2Z7&IGh8!Jtj{?T-ng|{D!!XegIF42V;Uc+I*d#F^M;T|E!PE)kM@eL?9%-fnE?R5fXhHYNQNgaknk@?B$?VhG(5v*C1#W6bFHhvfd>-VpA?1p0#-|A0vJT?;C@7L&ihkdv31%AEbz_!qz(qXAcfU$}W#EcU#NZW28reN(m8}zDd&||hpX{Kb6u)E);cM$DL;;d;J7#9F7iC1|+s#To^1^#?(+-o{=8I|D4WNWiDtr1@}BCAGLHcQ9(L#mP{+m6hUm2Qa1x0UuSa(E~;e$_#%d|6kmt3#Tpev7JW%Lb`PVl*eVn}qeMCb^I=oTBUpl$KF$op!p_g*2Z0{lL`7V|S2HBV&XbpE<6r!kpt7HHSOM9Vqhfr8KqfRV|Pm^TbLE>$*KD7SJC=C|{W%Zn%UBD19@HkS-JfGD-as36P<g+G#z^+NM0@XDg@+-bSSl`t>5u;mA60KmM%>JU3N9@%I?Mtk7$xM^%`!_JbmWFIIowTz8*OtSM1;-&AftH=enKG-fVxzj%a&A-W<jvO<We(ATe*lc}k|r!R@Fty-_QTUM8^;x1+K-lJ-}u1LF~F1yHBS>f_~$r=mE8H>soi^>-%|2Nj}X1r6mq`6h%bVY!xYo>}B!e-*?HGJ_J{RCv64ZdGe8?FwSrl@gMsbHC>#;p~Y!gVrrDZ$+kSzcrVubK-$QYh>B3WVnQ4Q>k6C95zRWG?X{ELv_+n07(EMONRf@ZHF~iZy(GbT)IfXq!<>*VSjc4CphOw<avg@5M=YDXvu4Om$syaSJ5dd|)DeNwv6M87ih#g|*|@ibWSKbt+nOe(krsWlMmx>*XHeG%uM?s80hwL}sq5Yo;kSN08E7tS)^OS$N7*Db^-F^jXM@Q>~1jd~RuFW2B36JpA`EBwwA1mfY*gl!<)`o;BtgbEU|#Ukz2|DA~a;;TCa1{oA_g4$-l6#rzf-Vj-4FfR^7{*1Tv}aXXGa;~(-X^rilXa+gjml~>i($IGpbSaOVoZfpj*^sWkBN<70&+H%)5{n1oa?U)t}2LA&yg<E|VAVrn>Fi5O%;C~6gMS!M?^dTtJF`tZsgoGP5#L^i0hyF~}7plT(>vO7d&s`U;$sL;XnGdkn0~6}1s*B>zVp~^|<0?S14-!u_g@%>EG)Y<NbX7&q1kE&v)<P=-T7BG!GK&S!MYn<yh-2uMlYpYO=MX3_c|;^unvyJ3mPE^?bzZb}TePKNLBtoZq{ibki2eE+FySn?N!F{HdkLg~m4(es>LclhvhIQ>Q6hyfuS5;qkB{P*p!6t{6mEpNgjf7-h~BWGJtigSMX^S8Iq53gDE2hf%A?>}iNLNL<dTIk72F~clg2JzgiT8a*qDG9NKdn9in{!+Jq=wOb`<d2G!8*GjAHuiPMLQuf8_LgG{oin3XxTB77jlr2q7}f6@I}$C3Tff1!%Q)3VP3}yiEQDcQ)c`?o0+~5fM<BUYXk>cQ9WSp(QU4@*nh<M97mD%q4b%i%(H(tk6`l?#riA6{Lougm)p?UHj&euBKq#Iproe7E3`>(~C{YiWXzUhNRA7R=kpIP>~(yrHg8{2dOSu(Jsnm%((qiM-l}^13;~~Xbf3zZ4oOWRPDJi$EeHk=Q}%=R6iT`6MVr+MfHV4&ePcKwm!PNZ8vOLT;%(_mIKN4o5>Tj4SoPk;krfcujV|8Zf?#IDtj!q<!-C=sYD&^5)sO!qm!$J1<9pAIKvzD`oQFBVdZgMFmfRXDJZ#WD#I-YETztuvh}xfN@TC31h#6{Qd;mfnFR`D8<eWrS}6&*W(c%W_eT;LYPwP|$~PUBuBx_o*|-N&%){dG4vR!0EFFbV6oF6_eUKk{P#krT7jYmai0ZOu%cqFmH%h>qR*L!>zm@5)O-nVq&sJ$CsjV#+-CQ!Vd9kQwQ?9J&;;EG=)vS6dY9;C~tNssjFSO52E9=6!HEL^R@@{2nT`RJ!Z}a54mS0s}CgxmoiHhU&bm13sTRM&0MD&V*3E-YNwi%V4l?xxLr2GO$?9hMfzNb+=+~2}l@0Gk?k>&PnODBD?TG?faQ`fBM5=X|5$mbovTq+t@DwPvR)1^g<qWCB4YCawV2^)rhtXcgT66sC^oG^V}x`9TZ@>wuRYaf&UMN~wDoF<E60wR8s>kW5saYt^{SC(trdN*_?1=LdFTeFyvFfBw}6Kj~&_)5bRx|q`%k=(W$e|Fsn6I`7wAbLpEN_7u0zf_sl)SuKi2R-_;Fp9laHmsYR3o#xH#gJ$z8oFcCn2l;0lLRtuQCvJ|MVT2>2xW(b@E^JG2}8s*nyWaT8WUC&2?h~h02m^^;D6OHYA$6b8+PH4b{JgyBC!$!rcQ(Ga2By$CU9!;!0ggtQ)R=Y$h1G<LS;MFw~8*<8WAHJb*+SL0&Kg{ZA%pzD?HT|462a*f`&;STE+LHV`mSpX0i}Qv4*V<E=a0IiA@P_RwJnFMpGHQL=0(h05u;vt=pbyl!UYJOW=_(D8i8vU@Poi3B$2pzY7Y5phtjOiBGXX1AwYkw9WVz^cDYatz<Mc4s-6G5BA=@@n|-ecd%bm^^Xc|#0oXB*0}|nlotxpHyAFST~PH8KYaU~cKb|7>}Mdc>jZmhRH>;E<)y~7l<IeFFf=|H6^CkCS*0+>S<ya1DD-ZQLuP+2SnMY4wrCZd1rVtQAyQZxL{tY-DVvQp6?JZ$wwE9omc0zTPUSp{q?J*5CYsL>_4){i2<{HBE|PZC%)=~|BP1{e)QmHWX86GZX8j8%xE2chlKC*hT4rhtCi9yBFo2Dnv3~-f;ZGs=kctYtEw8kEA(!?gQ~Gg-tA$D)>J&=8;gz69gvauLVJDcS^EKTwu`?8&++hotM$>U{HCwOBY9X}Bojz(%-PY8AB@3wUNX1;$MPv&>jnQbvW$f(GbzmBqo|;nb1Ko*_A$VuWs2jAGV3a{^vTK%J%i!w_l!|pioRd_ZPSbiVM0Cfansw_VTtQM8T{$Pls->D`2{HApXU0HU=7d1~_}j%t42BDYha34DTt!SA)@2`e`YKIU2%16#Ns(S!m?fJxkzSx;1;dtfGiaVDi7bUWc*<^I&DG<tEz=2THA$8l{N8EP+~61PmbG_0=rbjPoP|^m865*j@lDv~)zhR}R@#(*rk)9lL{UNHFC;Hiz@xfZf^El6({|;4B+dng#^7K{s3<$jdJ0|m>|P?yv}t~?JSxpe*s<I+-*-(Yfn0YwSyg8|xftFB5(mXy&fp;qVwVwj08o;dp0oN;+)^=$un(E;P{)vN0za7(?YTj~!FV$c7=iLKv3?21qafZGyzfE7hH%=%Tf(jaPbK)DS=oM3&trc%T?J8aoI?#FPu8+fa&WUy^w7nkBRP_Vq3iHjic8O~a>vd%xfFxT3;k?(Q*5*}Wm0d?=>StxUF5<##Nyge`APoTm10+_#K*+;cTLWIX7E@DeyZxRA2?M{9!D1uBIV!K#j-Z?D2mrZ%?ZfV9dU|c9*hX}wQ?5P)|wh5y5`DuQPf*23JL*?UQ-M8@+Zv?CHes}gFo*QV1?H}ss;+_9qytjzlSj@I^!W-4=+s7pK5E`6gz3HT&t1>vUH7zwxsJ!t4eZfS50tqrs830EOlZmAlE~+*fMT`SQ8R~KgFbSti93RaO@4&-e@5WY6Q=J1{RKj`N?wZGi!`gF7$tH!WrFEPROK+FMUIl=)3EgRf&>B%IWA?=A}u!%Fj%q<MGyk^ryV$6pvpOWlE{z@0c<M<t-3&|7Et|^@3aQYN0K7z3>*iD&B(Y*_D?}{3()qW|_ppJqKO0CP6UDEVDb9=t~07DP+|^wM1a1sUQKhBM<v${eA1**&BMdsR*=3<N#_@z%N1sK+on0t^rAlp&s@B&zaTRJ3H?kazj|Kl5L?>B8U`diafW(@fgZOzQH*B6kfs@P+9f%I+zIkUon#<mf-*nR+$z458^q6R7I!Q%*h%e4_1KKJIoFyHC@s{$OMBM9|u+tzegMf$vS)PqHR}GxcH|kT!%I_#|e5M{mw>oY{QV~gKkV{UpT018r0Pf>gEp0p0v!uZ{ZI%GP{#btGdQVx3tBVj1;{&8xU`wkTWFQXfd!voFP49o~<RpI2g_Xq3%1@oHIQ|xE@HBsowLp;_^0{+ldiVdQLf;RhXkW<C0Bj1XS9oIQcCETR3f=9s}OKEU-!md@}4aj&w>-2Xt0lybfzc&boXn=ESXv!CTo}MbH~!cT)%hKAG+8z%Dca1>9NjO@*`7IQR(~pdq<$m=u5+8va-Lgm9F6L;p}dy6mGXe`Ky#VFSePY@28+`j;X*qyh|5lt<*ef2grcP-avmKgjj!r+!E!Ca}%cI9-SQJ7!;J(KLPRmdV-lrQ57__6{k-oY^DzM<Hp<5+dcy{0es6yoYJ8D(92Wljs(A62|(*{qen$JsTRwJea}2>m42*|I*+8$hE)7g*X^k-{SZ?yWQhx_&LB&qv&B~LL*}J@m)$pM3EqC1qMceP|5?;@m7mP21Ws{owa-Zp(0X8Xo`ABV~Fab1l#O4B=^IQKLxYg8U6^n{DU-Z$qB2gHH}r}-*ruMf!OA1Oz1b^WIhX$9j9F?@Co#6U2GGU<Q23j_wWOr)>TZs6X*sCx)Z`Q&{tA~<72Hd<TE)N#Fdwcn<78))M!F9Jn0amC<7W?z^@A530O1!2d@TUPeH6FY9f`O#{QI4VAFn9bRY2RdrkWw_ZVz(GY^|o(B`dYPfAN-Z=d$S!YUGBk=#hpmnR<^Tvi^SH5iLvT=Wmzk$_v{r2{emm6)vozE_F$dk{x8i`trQ;9(lB`X4=mM3hz08mMvTDwrYdk+?fDRO22Pr}qbBHCyv=I6PAFkCP7-f>v(FuBkE&2-Q2;J+JcOGMYnGiEY5ta4?_19n(GyeiT8ib^Mr<Zg0qj^6!UlTi+P8@5-y;CK(g8&g4swbkYg4H`$nh5bq_33A_Txe$9%Ur`69hKD)-*4keqRo<vHuqp~%ki!8qjpNq##D=h0ZlscGbo^~L>vX3$hBy%R%4_4`&4ZNe{GjGuE?ekt!YCw##sB%GHz2<-CGJ(eY?^(FWkpG!+MLr&6h)#-#qhS7k8i;(d2iODHZ?D*Is2!^=1il60#<Uw$uYfN6=eqQr_j*I54)`$EvVmzK#uUbeMN1`SKc%4;%zKAHW)&Rej_FTIM<HvDpI6#h_*LnjdN;9^6jp*$3i&>TV?fYwmJ$?B))8GBR`ISV8AI1J6$m#Wy>Bl8N3$_DxQ)u+wK?vpyn2~+)$d!1?$n-mnb7c`GIgq|+zpb?Ssatv-m@RnxF0e>`P3I0W{s;cNUr|^=D;<vK%v;V$dJbEqe>w$^~8(^n<1oiGbIhbRgkOeyA<abn5<j&M-epc<prhq4$XIwhR=VUqA<Tsp6nuR`KaY;L0ypOrX^|XWc^(s0U6q?XDm%fWM{u}{u$~FAs{AqJoQ!cVvas|XTMTBjwT~gnZ(@u@c3x|_y~8Q6%gKlAVchTAU(Z1dy`;8L-vLemBH|nELcF8!9z13ay3|H5-tP8@5FUW{f(;_B<GHC!chp3N$`9dNJmJDf`9Jy_Tirp=<{~>g#D8?pwGQkzHbXz7%3*|B{fA_d*@WJ5znqk0vJh{R&NBiY{l}cWK)gDA`{P*A|wm(x+FTX&8aG{+Lzl&exq9V*r?W`8`UbiQLW`Riug};1!7s!(t=BcTj#XPuT;F@`HM}bwCeRz$q`KC7Yxbk3;)MGVukL_a>J<F51=pLY<3f;PN&UYK+*Z$u}%@9<LI>0XgT6K$%ZI!-?JfPZ+$iAEu@T%s}FWi2}G$GOn)cAs<ysg>f^OFS*u788iU|Nw}kQo5^(CM?I(BKYbXE3M@mT%RZOL&VP*!)qf};?*->`bp?P4LLww|IMSWI1Gpg)hH?*b+@Qodl!o}>EJJ|H3ej{S=4n-36dmQgH)o@vA{@j60b!_VgkU`OZj@pc~dh95nld`S!n>N&2N);oQp_bE>I@sy0FtjvAWg0GvVVKFCmt{in_eO0mg`ieTU<r~})!R-5Yz0f`?-&U*mpawQaD%4WK#B_Q>hTD)9Yz-fJaV}Z3=Wa-!$iP1-I~?>{s@Sqd!cr<n52o-E{#fU+ki^f;Dvc)R3bN~1S-+1V`y0-NV*)_Y3`O8?P!J~y<(-&Z3)(mB<1B<H-0i(V%})r2VmYvqAbO|9eV-xZD!ng3^+5%(DVzX#TdeK=%Ur`5V&Ic$kUis%|dJH)U579Q5t$wWm)!{-oasi-%B4R^#=XD!`{LBCt%|($n$w}HeQN1o6{N$9azX)o4prB|G9GN@gU5)S;VZJLT25`Vb+We2;AD{aPZ+Uqzo^9J2=?)Y`0}U4MVp7X2=B$S-L-u!D-R`fkcJXb6RG+;W%y6F2iV>wvo@aN)6C54*<lf6r;w>UeBnn9h#ROeOAgbrgpW0szbQZM<L4Q;$D3)li#!r4?8a`P`Czhft;LPT9ER#)d6lV$uu>CV*|5HvGI?Hbk-f6_`+@f1CdpFbIS@Ir@!?3CuoBPgBBuRPa<v@DXSoEJh`xux#_S!3JRLsUgpXft!ue*23!t97rtl&t0JL8nuSCVNdF?4VA{8*Rg~b|MM@Gj_wAL0xO#C!gEGb9$Ph5LrN>y_%3Gr1H`zTJNqAAdhxC$wJdloD!R9Qo(br5<5pr9EJurS1H#t{}A_f<=Md}#HrP?iS<xb%iX3ewxQ-?6n`s|`U7%?ns@9~JB*=;&cA!xSDMpQx2d?0ejAvvxCmHzdpvZki^lXSOoJEpP2TJ$YLK)Ec7D-O4x_-;ZH%KQG&nYY(FLN~POy3bh^dIW}@f8!Rm4j^j9?wmr*%w5tjc9qyYmI}1j+kY4p2%OfdH8z&hU=;l&n}S=?Sn1lvF-i{Mn$4Y<U5z8@#kEzqExY#ON{%E{wHI}4YV?%*N?PrO1g*tIGX~=If})xBthA@JkO<tphm*PZw6J1o5dI!Va(lg?<ObWja^{GL&mtagum8T+Mv83z?ZNxLw>xmUPod7XORBSfEGPKN429(#=BX&x)=6@DP56Ojz^A|EsRa10<-uQr{^{w#@e%PG9iN{)$%TJnchNE`%j#}DvG}yp+74~aOT*7V(7caP=(?1hR4AK}r7)Nb7h318WVmRybDUMK&RNxd=9Z3onTcFG$4X@SSZIlp_PV8tA@dy5_kym1a@*=?w$*uh0}`Xqr42}k5T73G_YsjsA_;iK4tL?Y?%Osb*0yZ>X$(ux!GrlQihBv)q+2Fh=t=1EW7(P(yT+NMaq#w?hrLAJJ14!*E_jTZZTqhq9QQCcSt>RT<;RUqCPW+4+v=3Otqylvou@EYL0J3S-ILXut5}N4wh)zG!dlhIcepPbT(<&y)hYt?%oeLMj&)lv?{%KYv0e~C?9?nNh`5Y3=)n^XoCWQ2x?RVKX4y)cHA@@H_y`snif;>9Xb2nGKR7)(?CoLp@&pR2`z+EFo<qpNy}}zG!7Q@y)k=jGnq=8OdV7BO25RM;@131LNivN4ETU+iX)+8UW7*q5DN%cPJBE|1O*^Ynr`;TNx@Dy6LNb}VpaEgo=;DsOc%(^w?6C9KwHxpxthC*LQ?&;DfAsgx4vvqW##HdPg2j<3{sl7;O`nT;zxZuSIp%J^H(>md>Gw}@=iEPK#@h;l=Kt8LKD;9EpMU?a_2%HHcW50R@BQ50$7QcTuCvx(xXmg$UGl~N`ioYsTDf6B3gw4QFQeDnxxxHpRPt7yR$o%7H;%A;*8L0Xl+qCk9R)rqrTQD3RO8|D^xOGrv(`_P9$=nWkcp(EaZxh=;-bj{c@L!`UDUx}Yle8h)aV8B21vvO;~O;g;_Vsy!+oMWf^rJipG@5n?)Iv=M_XYYIdK=Hi>opmcVQ2;K$cn@S-K+c)1>dxWOV5T*LjzeVjqW>_|d2FU0M-ygvN=J8DiT|p*`S>EFsbC5^A?|<6NUnkK%BM05epvK80U`#Ns4%-kL?8R0wCJAUiiw599YPeL~`n70gWhn?QUQCR@<uBC73_d*H-OUO@lt<f*?4`0usqV5;Ia7qRJ@MtfemqQB62v`U;uDghK8S}WIPQNm=Q<)Q^AQf%aC+WBVq4w7EF=>Kn`|G#CjPG3HdKD0<^{jO&~=qFW)o;c9{%D)N6_*omn=2Vtej}}qJ?_u92UAPB#l!tbt=IP^xx7_nQ%7gZgt(g%~0I>@8<|yMba5lS@g^dvYGr+i>H|QN6e#q=x-q8oA<2hS@!JMlM(WE_D9>MN`H218j(aNx_Re)u<1V`4~$!%W3N3{a{Sk}}54<??U?sKM&H-qC}`$yahit8`j?gLmiSPjnYm4qB{BI`THV&xO9IXwJ>3zhoWGmTjpbJUbRXyhmK?Idm>?j54z6SO7kspLyuNkRinzM$pcx9iC(hE&XFPlZ(*4_H&By||d0?QoI(!5pgk2QfgrdOQOJy~&HYOk@kh;qn%UzpJ)AOmHP7{4PiN-CWWSqLuIvQJ6$f*?*lAw7BmV)n{kRSdycp#`BDqV6!=Xh!^pb%?IKqqO}~&WjxMaK1tuLH9TyKz6R4-`VqfQ%MZrA>kF0dlkD*@>tk34TXo1C<O_>QF1ScPh$5(!gP$>Fe{3~z;cg7+V|c;Ygpk_l;%$Rhb;HRlh`&I6UOx`3)~5BtjURswW<OZ?3Hcf(i@_MNyZ~#u!_VYHV}${Q1O>KSk6)E=b&9H$qs1!a%K83jA@r@LR5_if-q}>>?D-cT<bwag8vyb{jr4>){zVDp;l{f0VaONOfV~?X2mhLfh}jD-7}Em&>3hw1?}S&J`GY1eQImT8;pCGAI%S=IR0a=o8O<jnA6`nqcK}|7PrVoSb8%?4k*{K(8cvkG;@-f_`YxSJswv6BE^R4SNk{dRX#6vpYn)%^UuphY8hQ1S#64XZ`0?I-8}dkdM{oPirtQ5yevjt<B=wZrPgxmBdDs|l3p{%BX3+ni^ZwD^2lP|7ovWoXVMIlM4bA<3W_hZe626tx#zc)q<X`zB5W)m_idoXhRWvb-!aWpbS{gwXGNo~TBhA~*rp;w9H@jZTn}$>GDjef?k}8~|#7~m>4SvmpXpEKnJASr^<A>^k@SJWv4t@)USW_fQHQdXLaAUKU7k#eLf59cE%-Wxiew*GA!<Pp!Un#dnyC^)V$_9Bbid0&+ku7AHHtjk<n_RaIV?FCcvSrCqc82=<BEAW$eE~C>Pp4=Q8pr@Uvn{-_Rx!SJSolcULJyR!<Z&|oVY09IHJGm;!LUas(AE9Qv*8QVTc_b@o&1Y3-J1{uEp&?~BM`<z{#_2z@S{5aiw4XVE&gV@UPT8Euaa<2<ta~$U%mX6j>WwfdGWpeQrCuiFH&y8Pxt#v3iJO1bmU^v'
-EXPECTED_RULES={'EUR_USD_H1_LONG': {'pair': 'EUR_USD', 'side': 'BUY', 'timeframe': 'H1', 'rr': [3.5], 'risk_percent': 1.0}, 'EUR_USD_H1_SHORT': {'pair': 'EUR_USD', 'side': 'SELL', 'timeframe': 'H1', 'rr': [4.0], 'risk_percent': 1.0}, 'GBP_USD_H1_LONG': {'pair': 'GBP_USD', 'side': 'BUY', 'timeframe': 'H1', 'rr': [4.25], 'risk_percent': 1.0}, 'GBP_USD_H1_SHORT': {'pair': 'GBP_USD', 'side': 'SELL', 'timeframe': 'H1', 'rr': [2.5], 'risk_percent': 1.0}, 'USD_JPY_H1_LONG': {'pair': 'USD_JPY', 'side': 'BUY', 'timeframe': 'H1', 'rr': [3.75], 'risk_percent': 1.0}, 'USD_JPY_H1_SHORT': {'pair': 'USD_JPY', 'side': 'SELL', 'timeframe': 'H1', 'rr': [2.5], 'risk_percent': 1.0}, 'USD_CAD_H1_LONG': {'pair': 'USD_CAD', 'side': 'BUY', 'timeframe': 'H1', 'rr': [3.5], 'risk_percent': 1.0}, 'USD_CAD_H1_SHORT': {'pair': 'USD_CAD', 'side': 'SELL', 'timeframe': 'H1', 'rr': [3.25], 'risk_percent': 1.0}, 'EUR_GBP_H1_LONG': {'pair': 'EUR_GBP', 'side': 'BUY', 'timeframe': 'H1', 'rr': [3.0], 'risk_percent': 1.0}, 'EUR_GBP_H1_SHORT': {'pair': 'EUR_GBP', 'side': 'SELL', 'timeframe': 'H1', 'rr': [3.0], 'risk_percent': 1.0}, 'EUR_JPY_H1_LONG': {'pair': 'EUR_JPY', 'side': 'BUY', 'timeframe': 'H1', 'rr': [5.5], 'risk_percent': 1.0}, 'EUR_JPY_H1_SHORT': {'pair': 'EUR_JPY', 'side': 'SELL', 'timeframe': 'H1', 'rr': [7.25], 'risk_percent': 1.0}, 'AUD_USD_H1_LONG': {'pair': 'AUD_USD', 'side': 'BUY', 'timeframe': 'H1', 'rr': [3.25], 'risk_percent': 1.0}, 'AUD_USD_H1_SHORT': {'pair': 'AUD_USD', 'side': 'SELL', 'timeframe': 'H1', 'rr': [3.5], 'risk_percent': 1.0}, 'AUD_JPY_H1_LONG_TIGHT_QUALITY': {'pair': 'AUD_JPY', 'side': 'BUY', 'timeframe': 'H1', 'rr': [4.25], 'risk_percent': 1.0}, 'AUD_JPY_H1_SHORT_PRIMARY_RR3P25': {'pair': 'AUD_JPY', 'side': 'SELL', 'timeframe': 'H1', 'rr': [3.25], 'risk_percent': 1.0}, 'EUR_USD_M15_LONG': {'pair': 'EUR_USD', 'side': 'BUY', 'timeframe': 'M15', 'rr': [3.75], 'risk_percent': 1.0}, 'EUR_USD_M15_SHORT': {'pair': 'EUR_USD', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.5], 'risk_percent': 1.0}, 'GBP_USD_M15_LONG': {'pair': 'GBP_USD', 'side': 'BUY', 'timeframe': 'M15', 'rr': [4.25], 'risk_percent': 1.0}, 'GBP_USD_M15_SHORT': {'pair': 'GBP_USD', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.0], 'risk_percent': 1.0}, 'USD_JPY_M15_LONG': {'pair': 'USD_JPY', 'side': 'BUY', 'timeframe': 'M15', 'rr': [4.0], 'risk_percent': 1.0}, 'USD_JPY_M15_SHORT': {'pair': 'USD_JPY', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.0, 4.75], 'risk_percent': 1.0}, 'USD_CAD_M15_LONG': {'pair': 'USD_CAD', 'side': 'BUY', 'timeframe': 'M15', 'rr': [5.0, 5.25], 'risk_percent': 1.0}, 'USD_CAD_M15_SHORT': {'pair': 'USD_CAD', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.5, 4.0], 'risk_percent': 1.0}, 'EUR_GBP_M15_LONG': {'pair': 'EUR_GBP', 'side': 'BUY', 'timeframe': 'M15', 'rr': [2.25, 2.75], 'risk_percent': 1.0}, 'EUR_GBP_M15_SHORT': {'pair': 'EUR_GBP', 'side': 'SELL', 'timeframe': 'M15', 'rr': [2.5, 4.5], 'risk_percent': 1.0}, 'EUR_JPY_M15_LONG': {'pair': 'EUR_JPY', 'side': 'BUY', 'timeframe': 'M15', 'rr': [4.25], 'risk_percent': 1.0}, 'EUR_JPY_M15_SHORT': {'pair': 'EUR_JPY', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.0, 4.75], 'risk_percent': 0.75}, 'AUD_USD_M15_SHORT': {'pair': 'AUD_USD', 'side': 'SELL', 'timeframe': 'M15', 'rr': [3.5], 'risk_percent': 1.0}, 'AUD_JPY_M15_LONG': {'pair': 'AUD_JPY', 'side': 'BUY', 'timeframe': 'M15', 'rr': [3.5], 'risk_percent': 1.0}, 'AUD_JPY_M15_SHORT': {'pair': 'AUD_JPY', 'side': 'SELL', 'timeframe': 'M15', 'rr': [4.0], 'risk_percent': 1.0}, 'EURCHF_H1_SHORT_PRIMARY_L060_D0075_SC035_PC075_RR3P50_V1': {'pair': 'EUR_CHF', 'side': 'SELL', 'timeframe': 'H1', 'rr': [3.5], 'risk_percent': 1.0}}
-import os,sys,math,json,csv,io,zipfile,hashlib,base64,zlib,bisect,time,threading,tempfile,re,traceback,argparse
+"""EUR/CHF M15 SHORT — Pass 1 controlled engulfing discovery, 2026-10-08.
+
+Single file; Python 3.10+ standard library only; no orders/account endpoints.
+Run: python app.py                 (HTTP service + automatic research run)
+     python app.py --run           (one research run, no HTTP server)
+     python app.py --self-test     (synthetic software checks, no network)
+Also exposes a WSGI `app`: gunicorn --workers 1 --threads 4 app:app
+
+Environment: OANDA_TOKEN (existing research-service token), optional
+OANDA_API_URL=https://api-fxtrade.oanda.com or https://api-fxpractice.oanda.com,
+PORT=8080, EURCHF_M15_PASS1_OUTPUT_DIR=/tmp/eurchf_m15_short_pass1.
+Routes: /, /health, /start, /status, /results; descriptive route aliases too.
+
+Guide: FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md. The user clarified
+that this is a successful research guide, not rigid pair-independent rules.
+This pass adds CHF policy-date diagnostics and stop-first/open-gap sensitivity;
+neither is an optimized date filter. RR stays 3.0; no portfolio tuning here.
+619 unique geometries; 10/20/40 assumed adverse ticks; two exit assumptions.
+New M15 source is checked against broker H1 and the pinned historical H1 source.
+
+All history is exploratory/in-sample. MID candles/assumed costs are not real
+fills. Full normalized accepted ledgers and source candles are in the ZIP.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import bisect
+import csv
+import hashlib
+import io
+import json
+import math
+import os
+import shutil
+import statistics
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+import zlib
+from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime,timezone,timedelta
-from collections import Counter,defaultdict
-from urllib.parse import urlsplit,urlencode,urljoin
-from urllib.request import Request,build_opener,HTTPRedirectHandler
-from urllib.error import HTTPError
-from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from socketserver import ThreadingMixIn
+from wsgiref.simple_server import WSGIServer, make_server
 
-RESULT_NAME='LIVE_MISSED_SIGNAL_AUDIT_RESULTS.zip'
-SECONDS={'M15':900,'H1':3600,'H4':14400}
-SOURCE_RECHECK_LIMIT=64
-SOURCE_PASS_STATUSES={'PASS','PASS_WITH_VERIFIED_ZERO_PRICE_INTERVALS'}
-SAFE_ROUTES={'probe':{'/live-status','/m15-live-status','/live-signal-audit-status','/live-signal-audit','/live-events','/eurchf-pass14/status','/eurchf-pass14/observations'},'executor':{'/','/live-signal-history','/live-audit-status'}}
-_engine={}
-_engine_bytes=zlib.decompress(base64.b85decode(PURE_ENGINE_B85))
-if hashlib.sha256(_engine_bytes).hexdigest()!=PURE_ENGINE_SHA256:raise RuntimeError('Embedded pure evaluator integrity failed')
-exec(compile(_engine_bytes,'<pinned-pure-evaluators>','exec'),_engine)
-ANCHOR=_engine['EURCHF_FROZEN_ANCHOR'];EURCHF_ID=_engine['EURCHF_PRIMARY_ID']
-_STATE={'status':'NOT_STARTED','complete':False,'read_only':True,'orders_supported':False,'version':VERSION}
-_LOCK=threading.Lock();_WORKER=None
+VERSION = 'EURCHF_M15_SHORT_PASS1_ENGULFING_DISCOVERY_V1_2026_10_08'
+PAIR, SIDE, TIMEFRAME = 'EUR_CHF', 'SELL', 'M15'
+UTC = timezone.utc
+START = datetime(2005, 1, 1, tzinfo=UTC)
+END = datetime(2026, 10, 8, tzinfo=UTC)  # exclusive entry cutoff, frozen
+BAR = timedelta(minutes=15)
+H1_BAR = timedelta(hours=1)
+PINNED_H1_END = datetime(2026, 10, 1, tzinfo=UTC)
+PINNED_H1_COUNT = 137819
+TICK, PIP, RR, WARMUP = 0.00001, 0.0001, 3.0, 200
+COSTS = (10, 20, 40)
+MODELS = ('NEAREST_OPEN_SENSITIVITY', 'STOP_FIRST_GAP_STRESS')
+LOOKBACKS = (20, 40, 60, 100, 150, 200)
+DISTANCES = (0.10, 0.25, 0.50, 0.75)
+BODIES = (0.0, 0.50, 0.75, 1.00, 1.25)
+RANGES = (0.0, 1.00, 1.25, 1.50, 1.75)
+PINNED_H1_SHA256 = '9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac'
+RESULT_NAME = 'EURCHF_M15_SHORT_PASS1_ENGULFING_DISCOVERY_RESULTS.zip'
+OUT = Path(os.getenv('EURCHF_M15_PASS1_OUTPUT_DIR', '/tmp/eurchf_m15_short_pass1')).resolve()
+PREFIX = '/eurchf-m15-short-pass1'
+LOCK = threading.RLock()
+STARTED = False
+JOB_LOCK = None
+RUN_CLOCK = None
+STATUS = dict(state='not_started', progress=0, message='Ready', version=VERSION,
+              orders_supported=False, trading_enabled=False, pair=PAIR)
 
-def stamp(v):
- if isinstance(v,datetime):return v.astimezone(timezone.utc).isoformat().replace('+00:00','Z')
- return v
 
-def dt(v):
- if isinstance(v,datetime):return v
- x=datetime.fromisoformat(str(v).replace('Z','+00:00'))
- if x.tzinfo is None:raise ValueError('Timestamp must include Z or a timezone offset')
- return x.astimezone(timezone.utc)
+def iso(value):
+    return value.astimezone(UTC).isoformat().replace('+00:00', 'Z')
 
-def digest(b):return hashlib.sha256(b).hexdigest()
-def json_bytes(v):return (json.dumps(v,sort_keys=True,indent=2,default=stamp,allow_nan=False)+'\n').encode()
-def rows_bytes(rows,fields=None):
- if fields is None:fields=list(dict.fromkeys(k for r in rows for k in r))
- out=io.StringIO();w=csv.DictWriter(out,fieldnames=fields or ['empty'],extrasaction='ignore');w.writeheader()
- for row in rows:w.writerow({k:(json.dumps(v,sort_keys=True,default=stamp) if isinstance(v,(dict,list,set,tuple)) else stamp(v)) for k,v in row.items()})
- return out.getvalue().encode()
-def progress(**kw):
- with _LOCK:_STATE.update(kw)
-def output_dir():return Path(os.getenv('AUDIT_OUTPUT_DIR',str(Path(tempfile.gettempdir())/'live_missed_signal_audit'))).resolve()
-def redact(v,conf):
- private=[conf.get(k) for k in ['token','account','secret'] if conf.get(k)]
- if isinstance(v,dict):return {k:('[REDACTED]' if str(k).lower() in {'authorization','secret','webhook_secret','token','accountid','userid'} else redact(x,conf)) for k,x in v.items()}
- if isinstance(v,list):return [redact(x,conf) for x in v]
- if isinstance(v,str):
-  for x in private:v=v.replace(x,'[REDACTED]')
- return v
 
-def executor_root():
- raw=os.getenv('AUDIT_EXECUTOR_URL','').strip() or os.getenv('EXECUTOR_WEBHOOK_URL','').strip()
- if not raw:raise ValueError('Executor address missing: set AUDIT_EXECUTOR_URL to the working executor root, or copy EXECUTOR_WEBHOOK_URL from the strategy probe to this audit service. No default executor address is assumed.')
- u=urlsplit(raw)
- if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/','/webhook','/webhook/'):
-  raise ValueError('Executor address must be an HTTPS service root or its /webhook URL, with no credentials, query or fragment')
- return u.scheme+'://'+u.netloc
+def when(value):
+    return value if isinstance(value, datetime) else datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(UTC)
 
-def preflight_executor(reader,c):
- try:obj=reader.get('executor','/')
- except Exception as error:
-  raise RuntimeError('Executor connection check failed. Set AUDIT_EXECUTOR_URL to the same working executor root used for /live-signal-history, or copy the probe EXECUTOR_WEBHOOK_URL into the audit service. No replay was run. '+str(error)) from error
- if not isinstance(obj.get('strategy_rules'),dict) or not obj['strategy_rules']:
-  raise ValueError('Executor connection returned the wrong response schema: expected strategy_rules at /. Check the audit executor address. No replay was run.')
- return obj
 
-def config():
- now=datetime.now(timezone.utc);end=dt(os.getenv('AUDIT_TO_UTC',stamp(now)))
- start=dt(os.getenv('AUDIT_FROM_UTC','2026-10-01T07:00:00Z'))
- if end>now or end<=start or end-start>timedelta(days=31):raise ValueError('Audit needs a past cutoff, after start, with at most31days')
- c={'start':start,'end':end,'token':os.getenv('OANDA_TOKEN','').strip(),'account':os.getenv('OANDA_ACCOUNT_ID','').strip(),'secret':os.getenv('WEBHOOK_SECRET','').strip(),'probe':os.getenv('AUDIT_PROBE_URL','').strip().rstrip('/'),'executor':executor_root(),'broker':'https://api-fxpractice.oanda.com' if os.getenv('OANDA_ENV','live').strip().lower()=='practice' else 'https://api-fxtrade.oanda.com','broker_from':dt(os.getenv('AUDIT_BROKER_FROM_UTC','2026-09-01T00:00:00Z')),'eurchf_enabled_from':dt(os.environ['AUDIT_EURCHF_ENABLED_FROM_UTC']) if os.getenv('AUDIT_EURCHF_ENABLED_FROM_UTC') else None}
- if not c['token'] or not c['account'] or not c['probe']:raise ValueError('Set OANDA_TOKEN, OANDA_ACCOUNT_ID and AUDIT_PROBE_URL on the separate audit service')
- if c['broker_from']>start or end-c['broker_from']>timedelta(days=364):raise ValueError('Broker history must begin no later than audit and be within364days')
- if not re.fullmatch(r'[A-Za-z0-9-]+',c['account']):raise ValueError('Invalid account identifier')
- for label in ['probe','executor']:
-  u=urlsplit(c[label])
-  if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/'):raise ValueError('AUDIT_PROBE_URL/AUDIT_EXECUTOR_URL must be HTTPS service roots')
- return c
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
 
-class NoRedirect(HTTPRedirectHandler):
- def redirect_request(self,*args,**kwargs):raise RuntimeError('Redirect refused; use the exact HTTPS service root')
 
-class Reader:
- def __init__(self,c):self.c=c;self.receipts=[];self.opener=build_opener(NoRedirect())
- def get(self,kind,path,params=None):
-  c=self.c;u=urlsplit(path)
-  if u.scheme or u.netloc or '..' in path or '?' in path or '#' in path:raise ValueError('Only allowlisted relative GET paths are accepted')
-  headers={'Accept':'application/json','Accept-Datetime-Format':'RFC3339','User-Agent':'ReadOnlySignalAudit/1'}
-  if kind=='broker':
-   a=re.escape(c['account'])
-   good=re.fullmatch(r'/v3/instruments/(?:EUR_USD|GBP_USD|USD_JPY|USD_CAD|EUR_GBP|EUR_JPY|AUD_USD|AUD_JPY|EUR_CHF)/candles',path) or re.fullmatch(r'/v3/accounts/'+a+r'/(?:summary|transactions|transactions/idrange|trades|openTrades|trades/[0-9]+)',path)
-   if not good:raise ValueError('Broker GET path is not allowlisted')
-   headers['Authorization']='Bearer '+c['token']
-  else:
-   if kind not in SAFE_ROUTES or path not in SAFE_ROUTES[kind]:raise ValueError('Service GET path is not allowlisted')
-   if path=='/eurchf-pass14/observations':
-    if not c['secret']:raise ValueError('WEBHOOK_SECRET is needed only for EURCHF observation GET')
-    headers['X-Webhook-Secret']=c['secret']
-  url=c[kind]+path+(('?'+urlencode(params)) if params else '')
-  safe_path=path.replace(c['account'],'[ACCOUNT]');err=None
-  for attempt in range(1,4):
-   t=time.monotonic()
-   try:
-    req=Request(url,headers=headers,method='GET')
-    with self.opener.open(req,timeout=45) as res:raw=res.read(32*1024*1024+1);status=res.status
-    if len(raw)>32*1024*1024:raise ValueError('Response exceeds32MiB')
-    obj=json.loads(raw)
-    if not isinstance(obj,dict):raise ValueError('Expected a JSON object')
-    self.receipts.append({'kind':kind,'path':safe_path,'params':params or {},'method':'GET','http_status':status,'attempt':attempt,'elapsed_ms':round((time.monotonic()-t)*1000,2),'response_sha256':digest(raw)})
-    return obj
-   except Exception as error:
-    err=redact(str(error),c);self.receipts.append({'kind':kind,'path':safe_path,'method':'GET','attempt':attempt,'http_status':error.code if isinstance(error,HTTPError) else None,'error':err})
-    if isinstance(error,HTTPError) and error.code in (400,401,403,404):break
-    if attempt<3:time.sleep(min(attempt*.5,1))
-  raise RuntimeError(kind+' GET '+safe_path+' failed: '+str(err))
+def file_sha(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        for block in iter(lambda: source.read(1024*1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
-def parse_bars(raw,tf):
- out=[]
- for v in raw:
-  if not v.get('mid'):raise ValueError('MID candle missing')
-  t=dt(v['time']);a={k:float(v['mid'][key]) for k,key in [('open','o'),('high','h'),('low','l'),('close','c')]}
-  if not all(math.isfinite(x) and x>0 for x in a.values()) or a['low']>min(a['open'],a['close']) or a['high']<max(a['open'],a['close']) or a['low']>a['high']:raise ValueError('Invalid candle geometry')
-  if tf in ('M15','H1') and (t.second or t.microsecond or (t.minute%(15 if tf=='M15' else 60))):raise ValueError('Candle grid is invalid')
-  out.append({'time':t,**a,'complete':bool(v.get('complete',False)),'volume':int(v.get('volume',0))})
- return out
 
-def merge_bars(bars):
- d={}
- for v in bars:
-  t=v['time']
-  if t in d and any(d[t][k]!=v[k] for k in ['open','high','low','close']):raise ValueError('Conflicting duplicate OHLC; source may have changed during fetch')
-  d[t]=v
- return [d[k] for k in sorted(d)]
+def code_hash():
+    return file_sha(Path(__file__))
 
-def collect_source(reader,c,pair,tf,count):
- params={'price':'M','granularity':tf,'smooth':'false','dailyAlignment':17,'alignmentTimezone':'America/New_York'}
- warm_end=c['start']-timedelta(days=1)
- raw=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'count':count+4,'to':stamp(warm_end)})
- bars=parse_bars(raw['candles'],tf)
- if len(bars)<count:raise ValueError(f'Insufficient {pair} {tf} history for live window')
- cursor=bars[-1]['time']
- while cursor<c['end']:
-  b=min(cursor+timedelta(days=7),c['end']);r=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'from':stamp(cursor),'to':stamp(b),'includeFirst':'true'})
-  bars+=parse_bars(r['candles'],tf);cursor=b
- return merge_bars(bars)
 
-def daily_boundary(t):return _engine['current_daily_start'](t)
-def completes(v,tf,t):
- if tf=='D':return v['time']<daily_boundary(t)
- return v['time']+timedelta(seconds=SECONDS[tf])<=t
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
-class Replay:
- def __init__(self,data,variant):self.data=data;self.variant=variant;self.asof=None;self.engine=dict(_engine);self.engine['m15_fetch_recent']=self.fetch_recent
- # Functions use their definition-global mapping: create a new isolated namespace per replay variant.
- def initialize(self):
-  ns={};exec(compile(_engine_bytes,'<pinned-pure-evaluators>','exec'),ns);ns['m15_fetch_recent']=self.fetch_recent;self.engine=ns
- def fetch_recent(self,pair,tf,count,complete_only=True):
-  rows=self.data[(pair,tf)];t=self.asof
-  if complete_only:
-   eligible=[v for v in rows if v.get('complete') and completes(v,tf,t)]
-   # Request count may include one current forming candle, removed by the live parser.
-   n=count-self.variant
-   return [dict(v) for v in eligible[-n:]]
-  opened=[dict(v) for v in rows if v['time']<=t]
-  # The last forming candle supplies the next actual open timestamp only; its final OHLC is never used.
-  for v in opened:
-   if not completes(v,tf,t):
-    for k in ['open','high','low','close']:v[k]=v['open']
-    v['complete']=False
-  n=count if opened and not completes(opened[-1],tf,t) else count-self.variant
-  return opened[-n:]
- def h1(self,pair,side,t):
-  self.asof=t;e=self.engine;rows=self.fetch_recent(pair,'H1',750,True)
-  if len(rows)<749:raise ValueError('H1 live window incomplete')
-  conf=e['STRATEGIES' if side=='BUY' else 'SHORT_STRATEGIES'][pair]
-  atr=e['atr_series'](rows,conf['atr_length'])
-  daily=self.fetch_recent(pair,'D',2500,True) if side=='BUY' or conf.get('requires_daily_state',True) else []
-  if daily and len(daily)<2499:raise ValueError('Daily live window incomplete')
-  state=e['build_daily_state' if side=='BUY' else 'build_short_daily_state'](daily,conf) if daily else []
-  value=e['evaluate_signal_at_index' if side=='BUY' else 'evaluate_short_signal_at_index'](pair,rows,atr,len(rows)-1,state)
-  if value is None:raise ValueError('H1 evaluator has insufficient state')
-  return value
- def m15(self,pair,t):
-  self.asof=t
-  return self.engine['evaluate_latest_m15_pair'](pair)
 
-def canonical_h1(e,pair,side,v):
- conf=e['STRATEGIES' if side=='BUY' else 'SHORT_STRATEGIES'][pair]
- sid=conf.get('strategy_id',f'{pair}_H1_'+('LONG' if side=='BUY' else 'SHORT'))
- entry=e['round_price'](v['close'],conf);stop=e['round_price'](v['low']-conf['stop_buffer_ticks']*conf['tick_size'] if side=='BUY' else v['high']+conf['stop_buffer_ticks']*conf['tick_size'],conf);rr=conf['reward_risk']
- return {'signal_id':e['signal_id_for' if side=='BUY' else 'short_signal_id_for'](pair,v['signal_close_utc']),'strategy_id':sid,'pair':pair,'side':side,'timeframe':'H1','trigger_id':conf.get('trigger_id','H1_LONG') if side=='BUY' else v.get('trigger_id','H1_SHORT'),'signal_start_utc':stamp(v['signal_start_utc']),'signal_close_utc':stamp(v['signal_close_utc']),'entry':entry,'stop':stop,'rr':rr,'target':e['round_price'](entry+(1 if side=='BUY' else -1)*rr*abs(entry-stop),conf)}
+class CSVFile:
+    """Streaming outputs keep memory bounded for full configuration ledgers."""
+    def __init__(self, path, fields):
+        self.file = path.open('w', newline='', encoding='utf-8')
+        self.writer = csv.DictWriter(self.file, fieldnames=fields, extrasaction='raise')
+        self.writer.writeheader()
+        self.count = 0
 
-def replay_all(data,c):
- results=[];evals=[];engines=[]
- for variant in [0,1]:
-  r=Replay(data,variant);r.initialize();engines.append(r)
-  name='COUNT_COMPLETED' if variant==0 else 'COUNT_MINUS_ONE_FORMING'
-  for pair in sorted(_engine['STRATEGIES']):
-   progress(phase='REPLAY',pair=pair,variant=name)
-   times=[v['time']+timedelta(hours=1) for v in data[(pair,'H1')] if v['complete'] and c['start']<=v['time']+timedelta(hours=1)<=c['end']]
-   for t in times:
-    for side in ['BUY','SELL']:
-     v=r.h1(pair,side,t);record=canonical_h1(r.engine,pair,side,v)
-     evals.append({'variant':name,'strategy_id':record['strategy_id'],'signal_close_utc':stamp(t),'qualified':bool(v['qualified']),'diagnostics':v})
-     if v['qualified']:results.append({**record,'variant':name,'diagnostics':v})
-   times=[v['time']+timedelta(minutes=15) for v in data[(pair,'M15')] if v['complete'] and c['start']<=v['time']+timedelta(minutes=15)<=c['end']]
-   ids=[k for k,a in EXPECTED_RULES.items() if a['pair']==pair and a['timeframe']=='M15']
-   for t in times:
-    v=r.m15(pair,t);signals={x['strategy_id']:x for x in v['signals']}
-    if len(signals)!=len(v['signals']):raise ValueError('Unexpected duplicate strategy triggers on one M15 candle')
-    for sid in ids:evals.append({'variant':name,'strategy_id':sid,'signal_close_utc':stamp(t),'qualified':sid in signals,'diagnostics':signals.get(sid,{})})
-    for sig in v['signals']:
-     precision=3 if pair.endswith('JPY') else 5
-     results.append({**{k:stamp(sig[k]) for k in ['strategy_id','trigger_id','pair','side','timeframe','signal_start_utc','signal_close_utc','entry','stop','target','rr']},'entry':round(sig['entry'],precision),'stop':round(sig['stop'],precision),'target':round(round(sig['entry'],precision)+(1 if sig['side']=='BUY' else -1)*sig['rr']*abs(round(sig['entry'],precision)-round(sig['stop'],precision)),precision),'signal_id':r.engine['m15_signal_id'](sig),'variant':name,'diagnostics':sig.get('diagnostics',{})})
- # Pinned EURCHF causal recurrence. Exact ATR is independent of rolling count ambiguity.
- e=_engine;bars=[{**v,'time':dt(v['time'])} for v in ANCHOR['bars']];atr=ANCHOR['atr14'];observed=ANCHOR['observed_count'];last=bars[-1]['time']
- overlap=next((v for v in data[('EUR_CHF','H1')] if v['time']==last),None)
- if overlap is None or any(overlap[k]!=bars[-1][k] for k in ['open','high','low','close']):raise ValueError('EURCHF pinned anchor broker overlap mismatch')
- for v in data[('EUR_CHF','H1')]:
-  if v['time']<=last or not v['complete'] or v['time']+timedelta(hours=1)>c['end']:continue
-  prev=bars[-1];tr=max(v['high']-v['low'],abs(v['high']-prev['close']),abs(v['low']-prev['close']));atr=(13*atr+tr)/14;bars.append(v);bars=bars[-61:];observed+=1
-  res=e['eurchf_signal_at_index'](bars,[None]*60+[atr],60,observed_index=observed-1);t=v['time']+timedelta(hours=1)
-  if t<c['start']:continue
-  record=canonical_h1(e,'EUR_CHF','SELL',res)
-  evals.append({'variant':'PINNED_EURCHF','strategy_id':EURCHF_ID,'signal_close_utc':stamp(t),'qualified':bool(res['qualified']),'diagnostics':res})
-  if res['qualified']:results.append({**record,'variant':'PINNED_EURCHF','diagnostics':res})
- for x in results:
-  a=EXPECTED_RULES[x['strategy_id']]
-  if (x['pair'],x['side'],x['timeframe'])!=(a['pair'],a['side'],a['timeframe']) or x['rr'] not in a['rr']:raise ValueError('Generated signal differs from frozen registry')
- return results,evals
+    def add(self, row):
+        self.writer.writerow(row)
+        self.count += 1
 
-def fetch_evidence(reader,c):
- evidence={'executor_status':preflight_executor(reader,c)};warnings=[]
- for kind,path,label in [('probe','/live-status','probe_status'),('probe','/m15-live-status','m15_status'),('probe','/live-signal-audit-status','signal_audit_status'),('probe','/live-signal-audit','signal_audit'),('probe','/live-events','recent_live_events'),('probe','/eurchf-pass14/status','eurchf_status'),('executor','/live-signal-history','executor_history'),('executor','/live-audit-status','telemetry_status')]:
-  params={'limit':1000} if label=='signal_audit' else {'limit':500} if label=='executor_history' else None
-  try:
-   obj=reader.get(kind,path,params);evidence[label]=obj
-   required={'signal_audit':{'events','more_available','matched_count'},'executor_history':{'signals','more_available','matched_count'},'executor_status':{'strategy_rules'},'probe_status':{'live_watcher_enabled','live_submission_enabled'},'m15_status':{'m15_live_watcher_enabled','m15_live_submission_enabled'},'signal_audit_status':{'event_count'},'eurchf_status':{'metadata','candidate_live_enabled'},'telemetry_status':{'telemetry'},'recent_live_events':{'events'}}[label]
-   if not required.issubset(obj):warnings.append(label+': response schema incomplete')
-   if obj.get('status')=='error':warnings.append(label+': endpoint reports an error')
-   if obj.get('more_available'):warnings.append(label+': history truncated; no complete absence conclusion')
-  except Exception as error:evidence[label]={'error':str(error)};warnings.append(label+': endpoint unavailable')
- observations=[]
- if c['secret']:
-  after=0
-  for _ in range(100):
-   try:obj=reader.get('probe','/eurchf-pass14/observations',{'limit':1000,'after_id':after})
-   except Exception as error:warnings.append('EURCHF observations unavailable: '+str(error));break
-   if 'observations' not in obj:raise ValueError('EURCHF observation response schema mismatch')
-   rows=obj['observations'];observations+=rows
-   if not rows:break
-   nextid=int(obj.get('next_after_id',after))
-   if nextid<=after:raise ValueError('EURCHF observation pagination did not advance')
-   after=nextid
-  else:warnings.append('EURCHF observation pagination hit the safety limit')
- else:warnings.append('EURCHF persistent observations not read: WEBHOOK_SECRET was not supplied')
- evidence['eurchf_observations']={'observations':observations}
- metadata=evidence.get('eurchf_status',{}).get('metadata',{})
- if metadata.get('anchor_source_sha256') and metadata['anchor_source_sha256']!=ANCHOR['source_sha256']:raise ValueError('Fresh EURCHF probe anchor provenance differs from frozen replay')
- registry=evidence.get('executor_status',{}).get('strategy_rules')
- if registry:
-  if set(registry)!=set(EXPECTED_RULES):raise ValueError('Current executor registry differs from supplied32strategy code')
-  for sid,a in EXPECTED_RULES.items():
-   b=registry[sid]
-   if any(a[k]!=b[k] for k in ['pair','side','timeframe']) or sorted(a['rr'])!=sorted(b['rr']) or a.get('risk_percent',1.0)!=b.get('risk_percent',1.0):raise ValueError('Current executor rules/RR differ from frozen replay')
- else:warnings.append('Fresh executor registry could not be verified')
- return evidence,warnings
+    def close(self):
+        self.file.close()
 
-def fetch_broker(reader,c):
- account=reader.get('broker',f'/v3/accounts/{c["account"]}/summary')
- meta=reader.get('broker',f'/v3/accounts/{c["account"]}/transactions',{'from':stamp(c['broker_from']),'to':stamp(c['end']),'pageSize':1000})
- tx=[]
- for page in meta.get('pages',[]):
-  u=urlsplit(page);base=urlsplit(c['broker'])
-  if u.scheme!=base.scheme or u.netloc!=base.netloc or u.path!=f'/v3/accounts/{c["account"]}/transactions/idrange':raise ValueError('Unexpected broker transaction page URL')
-  from urllib.parse import parse_qs
-  pars=parse_qs(u.query)
-  if set(pars)!={'from','to'} or any(len(v)!=1 or not v[0].isdigit() for v in pars.values()):raise ValueError('Unexpected transaction page parameters')
-  tx+=reader.get('broker',u.path,{k:v[0] for k,v in pars.items()}).get('transactions',[])
- if len(tx)!=int(meta.get('count',-1)) or len({v['id'] for v in tx})!=len(tx):raise ValueError('Broker transaction page count/duplicates mismatch')
- tx.sort(key=lambda v:(dt(v['time']),int(v['id'])))
- trades=[];before=None
- for _ in range(200):
-  pars={'state':'ALL','count':500}
-  if before:pars['beforeID']=before
-  batch=reader.get('broker',f'/v3/accounts/{c["account"]}/trades',pars).get('trades',[])
-  if not batch:break
-  trades+=batch;n=min(int(v['id']) for v in batch)
-  if before and n>=int(before):raise ValueError('Trade history pagination did not advance')
-  before=str(n)
-  if len(batch)<500:break
- else:raise ValueError('Broker trade-history pagination safety limit reached')
- if len({v['id'] for v in trades})!=len(trades):raise ValueError('Duplicate broker trade history')
- return {'account_summary':account,'transactions_metadata':meta,'transactions':tx,'trades':trades}
 
-def activation(sid,t,c):
- if sid!=EURCHF_ID:return 'ASSUMED_ACTIVE_FROM_AUDIT_START'
- if c['eurchf_enabled_from']:return 'EXACT_ENABLED_FROM_OVERRIDE' if t>=c['eurchf_enabled_from'] else 'NOT_LIVE_YET'
- if t<dt('2026-10-05T16:53:24.982125Z'):return 'NOT_LIVE_YET'
- if t<dt('2026-10-05T17:06:00Z'):return 'ACTIVATION_TIME_UNCERTAIN'
- return 'KNOWN_ENABLED_BY_REPORTED_SNAPSHOT'
+def write_csv(path, rows, fields=None):
+    """Stream rows; never materialize the full multi-decade source or ledgers."""
+    iterator = iter(rows)
+    first = next(iterator, None)
+    if fields is None:
+        fields = list(first) if first is not None else []
+    sink = CSVFile(path, fields)
+    try:
+        if first is not None:
+            sink.add(first)
+        for row in iterator:
+            sink.add(row)
+    finally:
+        sink.close()
 
-def extract_probe_events(evidence):
- out=[]
- for v in evidence.get('signal_audit',{}).get('events',[]):out.append({**v,'evidence_source':'PERSISTENT_SIGNAL_AUDIT'})
- for v in evidence.get('eurchf_observations',{}).get('observations',[]):
-  if v.get('kind')=='WATCHER' and v.get('qualified'):out.append({**v,'event':v.get('status'),'evidence_source':'EURCHF_WATCHER_OBSERVATION'})
- # In-memory manual checks may look like qualification. Preserve separately, not proof of live detection.
- return out
 
-def trade_intervals(broker,history):
- mapping={str(v['oanda_trade_id']):v.get('strategy_id') or f'{v["pair"]}_H1_'+('LONG' if v['side']=='BUY' else 'SHORT') for v in history if v.get('oanda_trade_id')}
- out=[]
- for v in broker.get('trades',[]):
-  units=float(v['initialUnits']);closed=v.get('closeTime')
-  if v.get('state')=='CLOSED' and not closed:raise ValueError('Closed broker trade has no closeTime')
-  out.append({'trade_id':str(v['id']),'pair':v['instrument'],'side':'BUY' if units>0 else 'SELL','strategy_id':mapping.get(str(v['id'])),'open':v['openTime'],'close':closed,'attribution':'EXECUTOR_TRADE_ID' if str(v['id']) in mapping else 'UNATTRIBUTED_BROKER_TRADE'})
- return out
+def set_status(**values):
+    with LOCK:
+        STATUS.update(values, updated_at=iso(datetime.now(UTC)))
+        if RUN_CLOCK is not None:
+            STATUS['elapsed_seconds'] = round(time.monotonic() - RUN_CLOCK, 1)
+        OUT.mkdir(parents=True, exist_ok=True)
+        pending = OUT / f'.status-{os.getpid()}.tmp'
+        write_json(pending, STATUS)
+        os.replace(pending, OUT / 'status.json')
+    print(json.dumps({k: STATUS[k] for k in ('state', 'progress', 'message')}), flush=True)
 
-def gate_context(signal,intervals,hedging):
- t=dt(signal['signal_close_utc']);end=t+timedelta(seconds=120);active=[];boundary=[]
- for v in intervals:
-  if v['pair']!=signal['pair']:continue
-  a=dt(v['open']);b=dt(v['close']) if v['close'] else None
-  if a<=t and (b is None or b>t):active.append(v)
-  if t<a<=end or b is not None and t<b<=end:boundary.append(v['trade_id'])
- own=[v['trade_id'] for v in active if v['strategy_id']==signal['strategy_id']]
- opp=[v['trade_id'] for v in active if v['side']!=signal['side']]
- unknown=[v['trade_id'] for v in active if not v['strategy_id']]
- possible=bool(own or opp and (signal['pair']=='AUD_JPY' or hedging is False))
- return {'own_strategy_open_at_close':own,'opposite_trades_at_close':opp,'unattributed_active_trades':unknown,'gate_changes_within_120s':boundary,'possible_position_gate':possible,'historical_gate_certainty':'TIMING_UNCERTAIN' if boundary else 'HEDGING_OR_ATTRIBUTION_UNCERTAIN' if unknown or hedging is None and opp else 'RECORDED_INTERVALS_STABLE_HISTORICAL_MODE_ASSUMED'}
 
-def broker_outcome(record,broker):
- oid=str(record.get('oanda_order_id') or '');tid=str(record.get('oanda_trade_id') or '')
- tx=broker.get('transactions',[])
- found=[v for v in tx if oid and (str(v.get('orderID') or '')==oid or str(v.get('id') or '')==oid) or tid and str((v.get('tradeOpened') or {}).get('tradeID') or '')==tid]
- fills=[v for v in found if v['type']=='ORDER_FILL'];cancels=[v for v in found if v['type']=='ORDER_CANCEL'];rejects=[v for v in found if v['type'].endswith('_REJECT')]
- if any(v.get('tradeOpened') for v in fills):return 'BROKER_OPENING_FILL_CONFIRMED',found
- if fills:return 'BROKER_NON_OPENING_FILL_REVIEW',found
- if cancels:return 'BROKER_CANCELLED_BEFORE_FILL',found
- if rejects:return 'BROKER_REJECT_CONFIRMED',found
- if tid and any(str(v['id'])==tid for v in broker.get('trades',[])):return 'BROKER_TRADE_CONFIRMED_FROM_HISTORY',found
- if record.get('status')=='order_failed':return 'EXECUTOR_ORDER_FAILED',found
- if record.get('status')=='rejected':return 'EXECUTOR_REJECTED',found
- if record.get('status')=='order_filled':return 'EXECUTOR_FILLED_LABEL_BROKER_OUTCOME_UNRESOLVED',found
- return 'EXECUTOR_ATTEMPT_OUTCOME_UNRESOLVED',found
+def read_status():
+    try:
+        data = json.loads((OUT / 'status.json').read_text())
+        if data.get('version') == VERSION:
+            return data
+    except (OSError, ValueError):
+        pass
+    with LOCK:
+        return dict(STATUS)
 
-def audit_compare(signals,evals,evidence,broker,c):
- history=evidence.get('executor_history',{}).get('signals',[]);pevents=extract_probe_events(evidence)
- byid=defaultdict(list);auditid=defaultdict(list)
- history=[v for v in history if not str(v.get('signal_id','')).startswith('PIPELINE-') and not v.get('hypothetical_execution') and not v.get('read_only')]
- for v in history:byid[v.get('signal_id')].append(v)
- for v in pevents:auditid[v.get('signal_id')].append(v)
- intervals=trade_intervals(broker,history)
- mode=broker.get('account_summary',{}).get('account',{}).get('hedgingEnabled');mode=mode if isinstance(mode,bool) else None
- grouped=defaultdict(list)
- for v in signals:grouped[v['signal_id']].append(v)
- compared=[]
- for sid,variants in sorted(grouped.items(),key=lambda kv:(kv[1][0]['signal_close_utc'],kv[0])):
-  sig=variants[0];rec=byid[sid];events=auditid[sid];t=dt(sig['signal_close_utc']);enabled=activation(sig['strategy_id'],t,c)
-  variantnames=sorted({v['variant'] for v in variants});robust=len(variantnames)==2 or variantnames==['PINNED_EURCHF'];gate=gate_context(sig,intervals,mode)
-  broker_details=[];reason='';classification=None
-  if rec:
-   outcomes=[broker_outcome(v,broker) for v in rec];classification=outcomes[-1][0]
-   # Any exact linked opening fill wins over a duplicate rejection/cancellation record.
-   for a,b in outcomes:
-    if a in ('BROKER_OPENING_FILL_CONFIRMED','BROKER_TRADE_CONFIRMED_FROM_HISTORY'):classification=a
-    broker_details+=b
-   reason='; '.join(str(v.get('reason') or '') for v in rec)
-  elif enabled=='NOT_LIVE_YET':classification='REPLAY_SIGNAL_BEFORE_ACTIVATION'
-  elif not robust:classification='WINDOW_SENSITIVE_REPLAY_SIGNAL_REQUIRES_REVIEW'
-  elif enabled=='ACTIVATION_TIME_UNCERTAIN':classification='ACTIVATION_TIME_UNCERTAIN'
-  elif events:
-   text=' '.join(str(v.get('event') or v.get('status') or '') for v in events).upper()
-   bodies=[]
-   for v in events:
-    ex=v.get('executor') or {};b=ex.get('response') if isinstance(ex,dict) else None
-    if not b and v.get('executor_response_json'):
-     try:b=json.loads(v['executor_response_json'])
-     except Exception:pass
-    if isinstance(b,dict):bodies.append(b)
-   if bodies:
-    classification=broker_outcome(bodies[-1],broker)[0];broker_details=broker_outcome(bodies[-1],broker)[1]
-    if classification=='EXECUTOR_ATTEMPT_OUTCOME_UNRESOLVED':classification='PROBE_EXECUTOR_RESPONSE_RECORDED'
-   elif 'SUBMISSION_ERROR' in text:classification='PROBE_SUBMISSION_ERROR_OUTCOME_REQUIRES_BROKER_REVIEW'
-   elif any(x in text for x in ['STALE','NOT_SUBMITTED','DISABLED','NOT_ENABLED','ALREADY_OPEN','PYRAMID','OPPOSITE_POSITION','PAIR_GATE','POSITION_BLOCK']):classification='PROBE_EXPLICIT_SKIP_RECORDED'
-   else:classification='PROBE_DETECTED_NO_EXECUTOR_OUTCOME_RECORDED'
-   reason='; '.join(str(v.get('executor_reason') or v.get('error') or v.get('event') or v.get('status') or '') for v in events)
-  elif gate['possible_position_gate']:classification='REPLAY_SIGNAL_NO_RECORD_POSSIBLE_POSITION_BLOCK'
-  else:classification='REPLAY_SIGNAL_NO_RECORDED_ATTEMPT_REQUIRES_REVIEW'
-  recorded_geometry=[];matching_geometry=[]
-  for v in rec:
-   byvariant=[]
-   for candidate in variants:
-    differences=[k for k,a in [('reference_entry',candidate['entry']),('stop',candidate['stop']),('rr',candidate['rr'])] if v.get(k) is not None and not math.isclose(float(v[k]),float(a),rel_tol=0,abs_tol=1e-8)]
-    byvariant.append(differences)
-    if not differences:matching_geometry.append(candidate['variant'])
-   recorded_geometry+=min(byvariant,key=len)
-  unlinked=[v['id'] for v in broker.get('transactions',[]) if v.get('type') in ('MARKET_ORDER','MARKET_ORDER_REJECT') and v.get('instrument')==sig['pair'] and t<=dt(v['time'])<=t+timedelta(seconds=120) and str(v.get('id')) not in {str(x.get('oanda_order_id')) for x in rec}]
-  compared.append({**{k:v for k,v in sig.items() if k not in ('diagnostics','variant')},'qualification_variants':variantnames,'qualification_robust_to_window_count':robust,'activation_evidence':enabled,'classification':classification,'confirmed_missed_trade':False,'executor_records':len(rec),'probe_lifecycle_events':len(events),'executor_order_ids':[v.get('oanda_order_id') for v in rec],'executor_labels':[v.get('status') for v in rec],'broker_transactions':[{'id':v['id'],'type':v['type'],'reason':v.get('reason'),'time':v['time']} for v in broker_details],'geometry_mismatches':sorted(set(recorded_geometry)),'matching_recorded_geometry_variants':sorted(set(matching_geometry)),'geometry_by_variant':{x['variant']:{k:x[k] for k in ['entry','stop','rr','target']} for x in variants},'unlinked_broker_order_time_candidates':unlinked,'reason':reason,**gate})
- recorded=[]
- for v in history:
-  try:
-   # Canonical IDs finish in the candle-close epoch milliseconds.
-   t=datetime.fromtimestamp(int(str(v.get('signal_id','')).rsplit('-',1)[-1])/1000,timezone.utc)
-  except Exception:
-   try:t=dt(v['logged_at'])
-   except Exception:continue
-  if not c['start']<=t<=c['end']:continue
-  outcome,found=broker_outcome(v,broker)
-  recorded.append({**v,'reproduced_raw_signal':v.get('signal_id') in grouped,'broker_reconciled_outcome':outcome,'broker_transactions':found,'legacy_filled_label_without_fill':v.get('status')=='order_filled' and v.get('actual_fill') is None})
- control=[v for v in signals if v['strategy_id']=='USD_JPY_H1_SHORT' and v['signal_close_utc']=='2026-10-01T07:00:00Z']
- needs=c['start']<=dt('2026-10-01T07:00:00Z')<=c['end'];control_pass=not needs or bool(control) and all(abs(v['entry']-158.152)<1e-8 and abs(v['stop']-158.398)<1e-8 and v['rr']==2.5 for v in control)
- per_strategy=[]
- for sid,a in EXPECTED_RULES.items():
-  ev=[v for v in evals if v['strategy_id']==sid];sig=[v for v in compared if v['strategy_id']==sid]
-  per_strategy.append({'strategy_id':sid,**a,'evaluated_candle_closes':len({v['signal_close_utc'] for v in ev}),'replay_qualified_unique_signals':len(sig),'qualified_after_activation_or_uncertain':sum(v['activation_evidence']!='NOT_LIVE_YET' for v in sig),'window_sensitive_signals':sum(not v['qualification_robust_to_window_count'] for v in sig),'classifications':dict(Counter(v['classification'] for v in sig))})
- summary={'status':'COMPLETE','complete':True,'read_only':True,'orders_supported':False,'version':VERSION,'audit_start_utc':stamp(c['start']),'audit_cutoff_utc':stamp(c['end']),'replayed_strategies':32,'unique_qualified_signals':len(compared),'classifications':dict(Counter(v['classification'] for v in compared)),'known_cancelled_order_positive_control':{'required':needs,'passed':control_pass,'matching_variants':[v['variant'] for v in control]},'recorded_attempts_in_window':len(recorded),'recorded_attempts_not_reproduced':sum(not v['reproduced_raw_signal'] for v in recorded),'confirmed_missed_trades':0,'broker_cancelled_attempts':sum(v['broker_reconciled_outcome']=='BROKER_CANCELLED_BEFORE_FILL' for v in recorded),'legacy_filled_labels_without_actual_fill':sum(v['legacy_filled_label_without_fill'] for v in recorded),'historical_price_guard_replay':'NOT_POSSIBLE_FROM_MID_CANDLES_WITHOUT_HISTORICAL_EXECUTION_QUOTES','absence_conclusion':'Review source coverage, activation assumptions, window sensitivity and unrecorded signals; COMPLETE does not prove every would-be trade was executable.','hedging_current_snapshot':mode,'past_code_and_activation_assumption':'Supplied current rules assumed applicable since audit start for31 strategies; EURCHF bounds explicit. Deployment/flag changes need external records.'}
- if summary['recorded_attempts_not_reproduced']:summary['status']='INCOMPLETE'
- if not control_pass:summary.update(status='INCOMPLETE',absence_conclusion='Known cancelled-order signal did not reproduce; do not accept a clean no-missed-signal conclusion.')
- return compared,recorded,intervals,per_strategy,summary
 
-def regular_fx_open(t):
- local=t.astimezone(_engine['NY_TZ']);weekday=local.weekday()
- return weekday not in (5,) and not (weekday==4 and local.hour>=17) and not (weekday==6 and local.hour<17)
+def config_key(config):
+    return tuple(config[k] for k in ('lookback', 'distance_atr', 'body_min_atr', 'range_min_atr', 'close_max'))
 
-def missing_source_intervals(data,c):
- missing=[]
- for (pair,tf),bars in sorted(data.items()):
-  if tf not in ('H1','M15'):continue
-  step=timedelta(seconds=SECONDS[tf])
-  selected=[v for v in bars if v['complete'] and c['start']-step<=v['time'] and v['time']+step<=c['end']]
-  for a,b in zip(selected,selected[1:]):
-   t=a['time']+step
-   while t<b['time']:
-    if regular_fx_open(t):missing.append((pair,tf,t))
-    t+=step
- return missing
 
-def recheck_source_gaps(reader,c,data):
- records=[];candidates=missing_source_intervals(data,c)
- if len(candidates)>SOURCE_RECHECK_LIMIT:
-  return [{'outcome':'RECHECK_LIMIT_EXCEEDED','missing_intervals':len(candidates),'limit':SOURCE_RECHECK_LIMIT}]
- params={'price':'M','smooth':'false','dailyAlignment':17,'alignmentTimezone':'America/New_York','includeFirst':'true'}
- for pair,tf,t in candidates:
-  progress(phase='SOURCE_RECHECK',pair=pair,timeframe=tf,interval=stamp(t))
-  record={'pair':pair,'timeframe':tf,'missing_open_utc':stamp(t),'outcome':'UNRESOLVED','requests':[]}
-  records.append(record);hour=t.replace(minute=0,second=0,microsecond=0);end=hour+timedelta(hours=1)
-  try:
-   granules=[tf]+(['H1'] if tf=='M15' else [])
-   for granule in granules:
-    response=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'granularity':granule,'from':stamp(hour),'to':stamp(end)})
-    if response.get('instrument')!=pair or response.get('granularity')!=granule or not isinstance(response.get('candles'),list):raise ValueError('Source recheck response schema/instrument/granularity mismatch')
-    fetched=parse_bars(response['candles'],granule)
-    if any(not v['complete'] or not hour<=v['time']<end for v in fetched):raise ValueError('Source recheck contains unfinished/out-of-range candles')
-    data[(pair,granule)]=merge_bars(data[(pair,granule)]+fetched)
-    record['requests'].append({'granularity':granule,'from':stamp(hour),'to':stamp(end),'returned_bars':len(fetched),'response_sha256':digest(json_bytes(response))})
-   if any(v['time']==t and v['complete'] for v in data[(pair,tf)]):
-    record['outcome']='RECOVERED_NATIVE_BROKER_CANDLE';continue
-   if tf!='M15':continue
-   missing_end=t+timedelta(minutes=15)
-   response=reader.get('broker',f'/v3/instruments/{pair}/candles',{**params,'granularity':'S5','from':stamp(t),'to':stamp(missing_end)})
-   if response.get('instrument')!=pair or response.get('granularity')!='S5' or not isinstance(response.get('candles'),list):raise ValueError('S5 absence check response schema mismatch')
-   s5=parse_bars(response['candles'],'S5')
-   if any(not t<=v['time']<missing_end or not v['complete'] for v in s5):raise ValueError('S5 absence check contains unfinished/out-of-range candles')
-   record['requests'].append({'granularity':'S5','from':stamp(t),'to':stamp(missing_end),'returned_bars':len(s5),'response_sha256':digest(json_bytes(response))})
-   h=next((v for v in data[(pair,'H1')] if v['time']==hour and v['complete']),None)
-   quarters=[v for v in data[(pair,'M15')] if hour<=v['time']<end and v['complete']]
-   tick=.001 if pair.endswith('JPY') else .00001
-   record['s5_bars_in_missing_interval']=len(s5);record['h1_volume']=h['volume'] if h else None;record['available_m15_volume']=sum(v['volume'] for v in quarters)
-   if not h or not quarters:continue
-   vals={'open':quarters[0]['open'],'close':quarters[-1]['close'],'high':max(v['high'] for v in quarters),'low':min(v['low'] for v in quarters)}
-   delta=max(abs(vals[k]-h[k]) for k in vals);record['aggregation_difference_ticks']=delta/tick
-   # OANDA defines volume as number of prices, not exchange-traded units.
-   # Empty S5 response plus complete H1 quote-count/OHLC conservation is required.
-   if not s5 and h['volume']>0 and h['volume']==record['available_m15_volume'] and delta<=tick+1e-12:
-    record['outcome']='VERIFIED_ZERO_PRICE_INTERVAL';record['replay_handling']='Native omission retained; no candle fabricated and no close evaluated for this absent interval'
-  except Exception as error:
-   record['outcome']='RECHECK_ERROR';record['error']=str(error)
- return records
+def make_configs():
+    configs, by_key, membership = [], {}, []
 
-def verified_zero_intervals(c):
- return {(v['pair'],v['timeframe'],dt(v['missing_open_utc'])) for v in c.get('source_rechecks',[]) if v.get('outcome')=='VERIFIED_ZERO_PRICE_INTERVAL'}
+    def add(label, role, lookback=0, distance=None, body=0., candle_range=0., close_max=None):
+        row = dict(config_id=label, lookback=lookback, distance_atr=distance,
+                   body_min_atr=body, range_min_atr=candle_range, close_max=close_max)
+        key = config_key(row)
+        if key not in by_key:
+            by_key[key] = row
+            configs.append(row)
+        row = by_key[key]
+        membership.append(dict(requested_label=label, stage_group=role, config_id=row['config_id']))
 
-def coverage_edges(data,c):
- issues=[]
- for (pair,tf),bars in data.items():
-  if tf not in ('H1','M15'):continue
-  step=timedelta(seconds=SECONDS[tf]);minute=15 if tf=='M15' else 60
-  finish=c['end'].replace(second=0,microsecond=0,minute=(c['end'].minute//minute)*minute)
-  last_expected=finish-step
-  for _ in range(300):
-   if regular_fx_open(last_expected):break
-   last_expected-=step
-  eligible=[v for v in bars if v['complete'] and completes(v,tf,c['end'])]
-  if not eligible or eligible[-1]['time']<last_expected:issues.append(pair+' '+tf+': trailing completed-candle coverage missing under regular FX schedule (holidays may require manual review)')
-  # First close at/after audit start, including the signal bar that began earlier.
-  first=c['start'].replace(second=0,microsecond=0,minute=(c['start'].minute//minute)*minute)
-  if first<c['start']:first+=step
-  for _ in range(300):
-   if regular_fx_open(first-step):break
-   first+=step
-  first_open=first-step
-  if first<=c['end'] and not any(v['complete'] and v['time']==first_open for v in bars):issues.append(pair+' '+tf+': first eligible audit candle missing under regular FX schedule')
- return issues
+    add('RAW_ENGULF', 'CONTROL_RAW')
+    add('BASELINE_CONTROL', 'CONTROL_PREDECLARED', 60, .25, .75, 1.25)
+    for x in (.25, .50, .75, 1., 1.25, 1.50):
+        add(f'BODY_{round(x*100):03d}', 'SINGLE_BODY', body=x)
+    for x in (.50, .75, 1., 1.25, 1.50, 1.75, 2.):
+        add(f'RANGE_{round(x*100):03d}', 'SINGLE_RANGE', candle_range=x)
+    for x in (.10, .20, .25, .33, .50):
+        add(f'CLOSE_{round(x*100):03d}', 'SINGLE_CLOSE', close_max=x)
+    for lb in LOOKBACKS:
+        for distance in DISTANCES:
+            add(f'STRUCT_L{lb:03d}_D{round(distance*100):03d}', 'SINGLE_STRUCTURE', lb, distance)
+    for lb in LOOKBACKS:
+        for distance in DISTANCES:
+            for body in BODIES:
+                for candle_range in RANGES:
+                    label = f'M_L{lb:03d}_D{round(distance*100):03d}_B{round(body*100):03d}_R{round(candle_range*100):03d}'
+                    add(label, 'STRUCTURE_BODY_RANGE_MATRIX', lb, distance, body, candle_range)
+    assert len(configs) == 619 and len({c['config_id'] for c in configs}) == 619
+    assert len(membership) == 644
+    return configs, membership
 
-def cross_source(data,c):
- gaps=[];coverage=[];checks=[];verified=verified_zero_intervals(c)
- for (pair,tf),bars in data.items():
-  selected=[v for v in bars if c['start']-timedelta(seconds=SECONDS.get(tf,86400))<=v['time']<=c['end']]
-  coverage.append({'pair':pair,'timeframe':tf,'bars':len(bars),'first_open':stamp(bars[0]['time']) if bars else None,'last_open':stamp(bars[-1]['time']) if bars else None,'audit_range_bars':len(selected),'canonical_source_sha256':digest(json_bytes(bars))})
-  for a,b in zip(selected,selected[1:]):
-   if tf not in SECONDS or (b['time']-a['time']).total_seconds()<=SECONDS[tf]:continue
-   step=timedelta(seconds=SECONDS[tf]);missing=[];t=a['time']+step
-   while t<b['time']:
-    if regular_fx_open(t):missing.append(t)
-    t+=step
-   classification='GAP_DURING_REGULAR_WEEKEND_CLOSURE' if not missing else 'VERIFIED_ZERO_PRICE_INTERVAL' if all((pair,tf,t) in verified for t in missing) else 'GAP_REQUIRES_MARKET_DATA_REVIEW'
-   gaps.append({'pair':pair,'timeframe':tf,'previous_open':stamp(a['time']),'next_open':stamp(b['time']),'elapsed_seconds':(b['time']-a['time']).total_seconds(),'classification':classification,'missing_open_market_intervals':[stamp(t) for t in missing]})
- for pair in _engine['STRATEGIES']:
-  m={v['time']:v for v in data[(pair,'M15')] if v['complete']};tick=.001 if pair.endswith('JPY') else .00001
-  for v in data[(pair,'H1')]:
-   end=v['time']+timedelta(hours=1)
-   if not c['start']<=end<=c['end'] or not v['complete']:continue
-   times=[v['time']+timedelta(minutes=15*i) for i in range(4)];absent=[t for t in times if t not in m];a=[m[t] for t in times if t in m]
-   if absent and (not a or not all((pair,'M15',t) in verified for t in absent)):
-    checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':'M15_COVERAGE_MISSING','missing_open_utc':[stamp(t) for t in absent]});continue
-   values={'open':a[0]['open'],'close':a[-1]['close'],'high':max(x['high'] for x in a),'low':min(x['low'] for x in a)}
-   delta=max(abs(values[k]-v[k]) for k in values);volume=sum(x['volume'] for x in a)
-   status='PASS' if delta<=tick+1e-12 else 'CROSS_TIMEFRAME_OHLC_MISMATCH'
-   if absent:status='PASS_WITH_VERIFIED_ZERO_PRICE_INTERVALS' if status=='PASS' and volume==v['volume'] else 'ZERO_PRICE_INTERVAL_CONSERVATION_FAILED'
-   checks.append({'pair':pair,'h1_open':stamp(v['time']),'status':status,'largest_difference_ticks':delta/tick,'h1_volume':v['volume'],'available_m15_volume':volume,'verified_zero_price_open_utc':[stamp(t) for t in absent]})
- return gaps,coverage,checks
 
-def make_reports(data,evidence,broker,c,warnings):
- signals,evals=replay_all(data,c);compared,recorded,intervals,strategies,summary=audit_compare(signals,evals,evidence,broker,c)
- gaps,coverage,cross=cross_source(data,c)
- warnings.extend(coverage_edges(data,c))
- if any(v['classification']=='GAP_REQUIRES_MARKET_DATA_REVIEW' and v['timeframe'] in ('H1','M15') for v in gaps):warnings.append('Missing open-market source intervals require review; no complete absence conclusion')
- if any(v['status'] not in SOURCE_PASS_STATUSES for v in cross):warnings.append('Cross-timeframe coverage/OHLC mismatch requires source review')
- warnings.extend('Source recheck unresolved: '+v.get('pair','')+' '+v.get('missing_open_utc','')+' '+v['outcome'] for v in c.get('source_rechecks',[]) if v['outcome'] not in ('RECOVERED_NATIVE_BROKER_CANDLE','VERIFIED_ZERO_PRICE_INTERVAL'))
- summary['evidence_warnings']=warnings
- summary['source_recheck_outcomes']=dict(Counter(v['outcome'] for v in c.get('source_rechecks',[])))
- summary['native_omissions_retained']=sum(v['outcome']=='VERIFIED_ZERO_PRICE_INTERVAL' for v in c.get('source_rechecks',[]))
- summary['synthetic_candles_added']=0
- if warnings:summary['status']='INCOMPLETE'
- summary['complete']=summary['status']=='COMPLETE'
- summary['processing_finished']=True
- summary=redact(summary,c)
- compared,recorded,intervals,strategies,evals,signals=[redact(x,c) for x in [compared,recorded,intervals,strategies,evals,signals]]
- files={'summary.json':json_bytes(summary),'signal_comparison.csv':rows_bytes(compared),'recorded_attempt_reconciliation.csv':rows_bytes(recorded),'strategy_summary.csv':rows_bytes(strategies),'all_candle_evaluations.csv':rows_bytes(evals),'raw_qualified_signals.csv':rows_bytes(signals),'broker_trade_intervals.csv':rows_bytes(intervals),'source_coverage.csv':rows_bytes(coverage),'source_gaps.csv':rows_bytes(gaps),'h1_m15_source_checks.csv':rows_bytes(cross),'service_evidence.json':json_bytes(redact(evidence,c)),'broker_evidence.json':json_bytes(redact(broker,c)),'input_provenance.json':json_bytes({'probe_source_sha256':PROBE_SOURCE_SHA256,'executor_source_sha256':EXECUTOR_SOURCE_SHA256,'pure_engine_sha256':PURE_ENGINE_SHA256,'frozen_registry':EXPECTED_RULES,'eurchf_anchor_source_sha256':ANCHOR['source_sha256'],'window_count_variants':[0,1],'eurchf_activation_exact_override':stamp(c['eurchf_enabled_from'])})}
- files['source_rechecks.json']=json_bytes(redact(c.get('source_rechecks',[]),c))
- files['verified_zero_price_intervals.csv']=rows_bytes([v for v in c.get('source_rechecks',[]) if v.get('outcome')=='VERIFIED_ZERO_PRICE_INTERVAL'])
- for (pair,tf),bars in data.items():files[f'source_{pair}_{tf}.csv']=rows_bytes(bars)
- return files,summary
+def atr14(bars):
+    out = [None] * len(bars)
+    tr = [None] * len(bars)
+    for i in range(1, len(bars)):
+        tr[i] = max(bars[i][2] - bars[i][3], abs(bars[i][2] - bars[i-1][4]), abs(bars[i][3] - bars[i-1][4]))
+    if len(bars) > 14:
+        out[14] = sum(tr[1:15]) / 14
+        for i in range(15, len(bars)):
+            out[i] = (out[i-1] * 13 + tr[i]) / 14
+    return out
 
-def run_audit(folder=None,provided=None):
- folder=Path(folder or output_dir());folder.mkdir(parents=True,exist_ok=True);final=folder/RESULT_NAME
- # Dedicated audit outputs only. Remove stale results before a new run.
- final.unlink(missing_ok=True);progress(status='RUNNING',complete=False,phase='CONFIG')
- c={};reader=None;files={};beg=time.monotonic()
- try:
-  if provided is None:
-   c=config();reader=Reader(c);evidence,warnings=fetch_evidence(reader,c);progress(phase='BROKER_HISTORY');broker=fetch_broker(reader,c);data={}
-   pairs=sorted(_engine['STRATEGIES'])
-   for pair in pairs:
-    progress(phase='FETCH_SOURCE',pair=pair)
-    data[(pair,'H1')]=collect_source(reader,c,pair,'H1',1000)
-    data[(pair,'M15')]=collect_source(reader,c,pair,'M15',2000 if pair=='AUD_JPY' else 260)
-    data[(pair,'D')]=collect_source(reader,c,pair,'D',2500)
-    if pair in ['USD_JPY','USD_CAD']:data[(pair,'H4')]=collect_source(reader,c,pair,'H4',1000)
-   params={'price':'M','granularity':'H1','smooth':'false','dailyAlignment':17,'alignmentTimezone':'America/New_York','from':ANCHOR['bars'][-1]['time'],'to':stamp(c['end']),'includeFirst':'true'}
-   data[('EUR_CHF','H1')]=merge_bars(parse_bars(reader.get('broker','/v3/instruments/EUR_CHF/candles',params).get('candles',[]),'H1'))
-   c['source_rechecks']=recheck_source_gaps(reader,c,data)
-  else:c,data,evidence,broker,warnings=provided
-  files,summary=make_reports(data,evidence,broker,c,warnings)
- except Exception as error:
-  message=redact(str(error),c);summary={'status':'ERROR','complete':False,'read_only':True,'orders_supported':False,'version':VERSION,'error':message};files={'error.json':json_bytes(summary)}
-  if c and 'evidence' in locals():files['service_evidence.json']=json_bytes(redact(evidence,c))
-  if c and 'broker' in locals():files['broker_evidence.json']=json_bytes(redact(broker,c))
- finally:
-  if reader:files['request_receipts.json']=json_bytes(redact(reader.receipts,c))
-  summary['processing_finished']=True;summary['complete']=summary.get('status')=='COMPLETE'
-  summary['elapsed_seconds']=round(time.monotonic()-beg,3);summary['runner_sha256']=digest(Path(__file__).read_bytes());files['summary.json']=json_bytes(summary)
-  files['README.md']=b'Read summary.json first. All network calls are allowlisted GET requests. No orders are sent. Review signal_comparison.csv and recorded_attempt_reconciliation.csv. Missing records are candidates for investigation, not proof that a fill was executable. INCOMPLETE/ERROR must not be treated as no missed signals.\n'
-  files['file_manifest.json']=json_bytes({n:{'sha256':digest(b),'size_bytes':len(b)} for n,b in files.items()})
-  tmp=folder/(RESULT_NAME+'.tmp')
-  with zipfile.ZipFile(tmp,'w',zipfile.ZIP_DEFLATED) as z:
-   for n,b in files.items():z.writestr(n,b)
-  tmp.replace(final);(folder/'status.json').write_bytes(json_bytes(summary));progress(**summary)
- return summary
 
-def start():
- global _WORKER
- with _LOCK:
-  if _WORKER is not None:return
-  _WORKER=threading.Thread(target=run_audit,daemon=True);_WORKER.start()
+def previous_high(highs, lookback):
+    """Monotonic queue; excludes the current signal candle."""
+    out, queue = [None] * len(highs), deque()
+    for i in range(len(highs)):
+        while queue and queue[0] < i - lookback:
+            queue.popleft()
+        if i >= lookback:
+            out[i] = highs[queue[0]]
+        while queue and highs[queue[-1]] <= highs[i]:
+            queue.pop()
+        queue.append(i)
+    return out
 
-def application(environ,start_response):
- method=environ.get('REQUEST_METHOD','GET');path=environ.get('PATH_INFO','/')
- if method not in ['GET','HEAD']:status='405 Method Not Allowed';body=b'GET/HEAD only';typ='text/plain'
- elif path in ['/','/health']:status='200 OK';body=json_bytes({'service':VERSION,'read_only':True,'orders_supported':False,'routes':['/status','/results']});typ='application/json'
- elif path=='/status':
-  if method=='GET':start()
-  with _LOCK:body=json_bytes(dict(_STATE))
-  status='200 OK';typ='application/json'
- elif path=='/results':
-  p=output_dir()/RESULT_NAME
-  with _LOCK:finished=_STATE.get('status') in ['COMPLETE','INCOMPLETE','ERROR']
-  if finished and p.exists():status='200 OK';body=p.read_bytes();typ='application/zip'
-  else:status='409 Conflict';body=b'Audit is not finished. Check /status';typ='text/plain'
- else:status='404 Not Found';body=b'Not found';typ='text/plain'
- headers=[('Content-Type',typ),('Content-Length',str(len(body))),('Cache-Control','no-store')]
- if typ=='application/zip':headers.append(('Content-Disposition','attachment; filename='+RESULT_NAME))
- start_response(status,headers);return [b'' if method=='HEAD' else body]
-app=application
 
-class Handler(BaseHTTPRequestHandler):
- def serve(self):
-  result=[]
-  body=b''.join(application({'REQUEST_METHOD':self.command,'PATH_INFO':urlsplit(self.path).path},lambda status,headers:result.append((status,headers))))
-  status,headers=result[0];self.send_response(int(status.split()[0]))
-  for k,v in headers:self.send_header(k,v)
-  self.end_headers();self.wfile.write(body)
- do_GET=serve;do_HEAD=serve;do_POST=serve;do_PUT=serve;do_DELETE=serve;do_PATCH=serve
- def log_message(self,*args):pass
+def bearish_engulf(bars, i):
+    if i < 1:
+        return False
+    po, pc, op, cl = bars[i-1][1], bars[i-1][4], bars[i][1], bars[i][4]
+    return pc > po and cl < op and op >= pc and cl <= po
+
+
+def make_features(bars):
+    atr = atr14(bars)
+    prev = {lb: previous_high([b[2] for b in bars], lb) for lb in LOOKBACKS}
+    raw = {}
+    for i in range(WARMUP, len(bars)):
+        if not bearish_engulf(bars, i) or atr[i] is None or atr[i] <= 0:
+            continue
+        op, hi, lo, cl = bars[i][1:]
+        row = dict(signal_index=i, signal=iso(bars[i][0]), entry=iso(bars[i][0] + BAR),
+                   atr14=atr[i], body_atr=abs(cl-op)/atr[i], range_atr=(hi-lo)/atr[i],
+                   close_location=(cl-lo)/(hi-lo), reference_stop_pips=(hi + 10*TICK - cl)/PIP)
+        for lb in LOOKBACKS:
+            row[f'previous_high_{lb}'] = prev[lb][i]
+            row[f'signed_distance_atr_{lb}'] = (hi-prev[lb][i])/atr[i]
+            row[f'abs_distance_atr_{lb}'] = abs(hi-prev[lb][i])/atr[i]
+        raw[i] = row
+    return raw
+
+
+def selected_indices(config, features):
+    result = []
+    for i, row in features.items():
+        if row['body_atr'] < config['body_min_atr'] or row['range_atr'] < config['range_min_atr']:
+            continue
+        if config['lookback'] and row[f"abs_distance_atr_{config['lookback']}"] > config['distance_atr']:
+            continue
+        if config['close_max'] is not None and row['close_location'] > config['close_max']:
+            continue
+        result.append(i)
+    return result
+
+
+def find_paths(bars, i):
+    """Fixed stop/target first-touch is reusable; eligibility is replayed per cost."""
+    reference = bars[i][4]
+    stop = bars[i][2] + 10*TICK
+    target = reference - RR*(stop-reference)
+    common = dict(signal_index=i, signal=iso(bars[i][0]), entry=iso(bars[i][0]+BAR),
+                  reference_entry=reference, stop=stop, target=target,
+                  next_open=bars[i+1][1] if i+1 < len(bars) else None,
+                  next_candle_delay_hours=(bars[i+1][0]-bars[i][0]-BAR).total_seconds()/3600 if i+1 < len(bars) else None)
+    for j in range(i+1, len(bars)):
+        op, hi, lo = bars[j][1:4]
+        hit_stop, hit_target = hi >= stop, lo <= target
+        if not hit_stop and not hit_target:
+            continue
+        both = hit_stop and hit_target
+        if both:
+            legacy_reason = 'TARGET' if (op-lo) < (hi-op) else 'STOP'
+        else:
+            legacy_reason = 'STOP' if hit_stop else 'TARGET'
+        legacy = dict(common, exit_index=j, exit=iso(bars[j][0]+BAR),
+                      exit_price=stop if legacy_reason == 'STOP' else target,
+                      reason=legacy_reason, dual_touch=int(both), gap_stop=0, gap_target=0)
+        # Opening prices are observed MID prints, not guaranteed broker fills.
+        if op >= stop:
+            reason, price, exit_time = 'STOP_GAP' if op > stop else 'STOP', max(op, stop), bars[j][0]
+        elif op <= target:
+            reason, price, exit_time = 'TARGET_GAP_CAPPED', target, bars[j][0]
+        elif hit_stop:
+            reason, price, exit_time = 'STOP', stop, bars[j][0]+BAR
+        else:
+            reason, price, exit_time = 'TARGET', target, bars[j][0]+BAR
+        stress = dict(common, exit_index=j, exit=iso(exit_time), exit_price=price, reason=reason,
+                      dual_touch=int(both), gap_stop=int(op > stop), gap_target=int(op <= target))
+        return {'NEAREST_OPEN_SENSITIVITY': legacy, 'STOP_FIRST_GAP_STRESS': stress}
+    opened = dict(common, exit_index=None, exit=None, exit_price=None,
+                  reason='OPEN_AT_DATA_END', dual_touch=0, gap_stop=0, gap_target=0)
+    return {model: dict(opened) for model in MODELS}
+
+
+def geometry(path, cost):
+    fill = path['reference_entry'] - cost*TICK
+    if when(path['entry']) >= END:
+        return None, 'ENTRY_AT_OR_AFTER_CUTOFF'
+    if not 0 < path['target'] < fill < path['stop']:
+        return None, 'INVALID_FILL_STOP_TARGET_GEOMETRY'
+    return fill, None
+
+
+def r_value(path, cost):
+    fill, problem = geometry(path, cost)
+    if problem or path['exit'] is None:
+        return None
+    if path['reason'] == 'STOP':
+        return -1.0  # preserve archive exact -1 convention
+    return (fill-path['exit_price'])/(path['stop']-fill)
+
+
+def replay(indices, paths, model, cost):
+    """p0 per exact geometry and assumed cost, including unresolved positions."""
+    accepted, invalid, blocked = [], [], 0
+    occupied_until = -1
+    for i in indices:
+        if i < occupied_until:
+            blocked += 1
+            continue
+        path = paths[i][model]
+        _, problem = geometry(path, cost)
+        if problem:
+            invalid.append((i, problem))
+            continue
+        accepted.append(i)
+        occupied_until = path['exit_index'] if path['exit_index'] is not None else math.inf
+    return accepted, invalid, blocked
+
+
+def source_hash(bars):
+    return sha('\n'.join(f'{iso(t)},{op:.5f},{hi:.5f},{lo:.5f},{cl:.5f}' for t,op,hi,lo,cl in bars).encode())
+
+
+def signal_hash(indices, bars):
+    return sha('\n'.join(iso(bars[i][0]) for i in indices).encode())
+
+
+def fetch_history(granularity='M15'):
+    """Read-only candle GETs. Fixed chunks stay below the 5,000-candle limit."""
+    if granularity not in ('M15','H1'):
+        raise RuntimeError('Only M15/H1 candle reads are supported.')
+    token = os.getenv('OANDA_TOKEN','').strip()
+    if not token or any(ord(c)<32 or ord(c)==127 for c in token):
+        raise RuntimeError('Configure OANDA_TOKEN without quotes, newlines or control characters.')
+    api=os.getenv('OANDA_API_URL','https://api-fxtrade.oanda.com').rstrip('/')
+    if api not in ('https://api-fxtrade.oanda.com','https://api-fxpractice.oanda.com'):
+        raise RuntimeError('OANDA_API_URL must be the official fxtrade or fxpractice HTTPS API host.')
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,req,fp,code,msg,headers,newurl):
+            raise RuntimeError('Unexpected broker redirect; credentials were not forwarded.')
+    opener=urllib.request.build_opener(NoRedirect)
+    step=BAR if granularity=='M15' else H1_BAR
+    span=timedelta(days=35 if granularity=='M15' else 180)
+    total=math.ceil((END-START)/span)
+    cursor,by_time,volumes,receipts=START,{},{},[]
+    while cursor < END:
+        end=min(cursor+span,END)
+        params=dict(price='M',granularity=granularity,smooth='false',includeFirst='true',
+                    **{'from':iso(cursor),'to':iso(end)})
+        url=api+'/v3/instruments/EUR_CHF/candles?'+urllib.parse.urlencode(params)
+        payload=None
+        begin=time.monotonic()
+        for attempt in range(3):
+            req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/json'},method='GET')
+            try:
+                with opener.open(req,timeout=45) as response:
+                    payload=json.load(response)
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (429,500,502,503,504) or attempt==2:
+                    raise RuntimeError(f'Broker {granularity} candle request failed: HTTP {exc.code}, chunk {len(receipts)+1}.') from None
+            except (urllib.error.URLError,TimeoutError):
+                if attempt==2:
+                    raise RuntimeError(f'Broker {granularity} candle request failed after three attempts, chunk {len(receipts)+1}.') from None
+            time.sleep(attempt+1)
+        if not isinstance(payload,dict) or payload.get('instrument')!=PAIR or payload.get('granularity')!=granularity:
+            raise RuntimeError('Unexpected broker candle instrument/granularity.')
+        candles=payload.get('candles')
+        if not isinstance(candles,list) or not candles:
+            raise RuntimeError(f'Empty {granularity} history chunk {len(receipts)+1}; shortened history is not accepted.')
+        included,duplicates=0,0
+        for candle in candles:
+            t=when(candle['time'])
+            if not cursor <= t <= end:
+                raise RuntimeError('Candle outside the requested broker chunk.')
+            if not START <= t < END or t==end:
+                continue  # exclusive chunk end; next chunk includes it
+            if candle.get('complete') is not True:
+                raise RuntimeError('Incomplete candle inside the frozen historical window.')
+            mid=candle.get('mid')
+            volume=candle.get('volume')
+            if not isinstance(mid,dict) or isinstance(volume,bool) or not isinstance(volume,int) or volume<=0:
+                raise RuntimeError('Completed historical candle lacks valid MID OHLC/price count.')
+            row=(t,*[float(mid[k]) for k in ('o','h','l','c')])
+            if t in by_time:
+                if by_time[t]!=row or volumes[t]!=volume:
+                    raise RuntimeError('Conflicting duplicate broker candle at '+iso(t))
+                duplicates+=1
+            by_time[t]=row
+            volumes[t]=volume
+            included+=1
+        if not included:
+            raise RuntimeError('A historical request yielded no candles inside its own chunk.')
+        receipts.append(dict(granularity=granularity,start=iso(cursor),end_exclusive=iso(end),
+                             candles_returned=len(candles),included=included,duplicate_count=duplicates,
+                             elapsed_seconds=round(time.monotonic()-begin,3),http_method='GET',status_code=200))
+        fraction=len(receipts)/total
+        set_status(state='fetching',progress=round((2+16*fraction) if granularity=='M15' else (18+8*fraction)),
+                   message=f'EUR/CHF {granularity} full-history chunk {len(receipts)}/{total}')
+        cursor=end
+    bars=[by_time[t] for t in sorted(by_time)]
+    validate_bars(bars,step)
+    return bars,volumes,receipts
+
+
+def validate_bars(bars, step=BAR):
+    if not bars:
+        raise RuntimeError('Empty dataset.')
+    seconds=int(step.total_seconds())
+    for i,(t,op,hi,lo,cl) in enumerate(bars):
+        if t.tzinfo is None or t.second or t.microsecond or int(t.timestamp()) % seconds:
+            raise RuntimeError('Candle timestamp is not aligned to the requested granularity.')
+        if not all(math.isfinite(x) and x > 0 for x in (op,hi,lo,cl)) or not lo <= min(op,cl) <= max(op,cl) <= hi:
+            raise RuntimeError('Invalid OHLC at '+iso(t))
+        if i and t <= bars[i-1][0]:
+            raise RuntimeError('Unsorted or duplicate candle timestamp.')
+        if not START <= t < END:
+            raise RuntimeError('Candle outside the frozen study window.')
+
+
+def crosscheck_history(work, bars, volumes, h1, h1_volumes):
+    """All observed H1 bars must match grouped native M15 OHLC and price counts.
+
+    A sparse M15 hour is accepted only when its observed bars exhaust the H1
+    price count and reproduce its OHLC. No missing candle is manufactured.
+    """
+    grouped=defaultdict(list)
+    for bar in bars:
+        grouped[bar[0].replace(minute=0)].append(bar)
+    controls=[]
+    def check(name,actual,expected):
+        controls.append(dict(check=name,status='PASS' if actual==expected else 'FAIL',actual=actual,expected=expected))
+    old=[bar for bar in h1 if bar[0]<PINNED_H1_END]
+    check('historical_H1_count_matches_prior_research',len(old),PINNED_H1_COUNT)
+    check('historical_H1_OHLC_hash_matches_prior_research',source_hash(old),PINNED_H1_SHA256)
+    h1_times={b[0] for b in h1}
+    check('native_M15_hour_set_equals_H1_hour_set',set(grouped)==h1_times,True)
+    mismatch,sparse=0,0
+    out=CSVFile(work/'h1_m15_crosschecks.csv',['hour','m15_bars','m15_price_count','h1_price_count','max_ohlc_error_ticks','status'])
+    try:
+        for t,op,hi,lo,cl in h1:
+            rows=grouped.get(t,[])
+            if not rows:
+                count,error=0,None
+                okay=False
+            else:
+                aggregated=(rows[0][1],max(r[2] for r in rows),min(r[3] for r in rows),rows[-1][4])
+                error=max(abs(x-y)/TICK for x,y in zip(aggregated,(op,hi,lo,cl)))
+                count=sum(volumes[r[0]] for r in rows)
+                okay=len(rows)<=4 and error<=1e-6 and count==h1_volumes[t]
+            mismatch+=not okay
+            sparse+=bool(rows) and len(rows)<4
+            out.add(dict(hour=iso(t),m15_bars=len(rows),m15_price_count=count,h1_price_count=h1_volumes[t],
+                         max_ohlc_error_ticks=error,status='PASS_NATIVE_SPARSE_PRICE_INTERVALS' if okay and len(rows)<4 else ('PASS' if okay else 'FAIL')))
+    finally:
+        out.close()
+    check('all_H1_native_M15_aggregation_mismatches',mismatch,0)
+    check('first_M15_in_first_requested_week',START <= bars[0][0]<START+timedelta(days=7),True)
+    check('last_M15_in_final_requested_day',END-timedelta(days=1)<=bars[-1][0]<END,True)
+    annual=[]
+    for y in range(START.year,END.year+1):
+        subset=[b for b in bars if b[0].year==y]
+        annual.append(dict(year=y,candles=len(subset),first=iso(subset[0][0]) if subset else None,
+                           last=iso(subset[-1][0]) if subset else None,partial_year=int(y==END.year),
+                           first_month=subset[0][0].month if subset else None,last_month=subset[-1][0].month if subset else None))
+    write_csv(work/'yearly_data_coverage.csv',annual)
+    check('every_requested_year_contains_candles',all(r['candles']>0 for r in annual),True)
+    check('complete_years_reach_January_and_December',all(r['first_month']==1 and r['last_month']==12 for r in annual if not r['partial_year']),True)
+    write_csv(work/'source_controls.csv',controls)
+    write_json(work/'coverage_crosscheck_summary.json',dict(h1_hours=len(h1),native_m15_candles=len(bars),
+               aggregation_mismatches=mismatch,sparse_hours_verified_by_price_count=sparse,synthetic_candles=0,
+               h1_source_sha256=source_hash(h1),native_m15_source_sha256=source_hash(bars)))
+    if any(row['status']!='PASS' for row in controls):
+        raise RuntimeError('Full-history source/aggregation controls failed; inspect source_controls.csv and crosschecks. No discovery results are valid.')
+    return controls
+
+
+def hard_controls(bars, features, paths, configs):
+    """Independent signal/ATR/ledger arithmetic on predeclared controls.
+
+    No archived EURCHF M15 results exist yet. These are implementation controls
+    on the same source, not fresh out-of-sample confirmation of a strategy.
+    """
+    rows=[]
+    def check(name,actual,expected):
+        rows.append(dict(check=name,status='PASS' if actual==expected else 'FAIL',actual=actual,expected=expected))
+    check('configuration_count',len(configs),619)
+    check('configuration_keys_unique',len({config_key(c) for c in configs}),619)
+    check('complete_years_have_observed_candles',all(any(b[0].year==y for b in bars) for y in range(2005,2027)),True)
+    check('first_candle_in_first_requested_week',START <= bars[0][0] < START+timedelta(days=7),True)
+    check('last_candle_in_final_requested_day',END-timedelta(days=1) <= bars[-1][0] < END,True)
+    # Different implementation: seed/recurrence and direct slices, without queues.
+    atr_ref=[None]*len(bars)
+    true_ranges=[max(bars[k][2]-bars[k][3],abs(bars[k][2]-bars[k-1][4]),abs(bars[k][3]-bars[k-1][4])) for k in range(1,len(bars))]
+    if len(bars)>14:
+        v=math.fsum(true_ranges[:14])/14
+        atr_ref[14]=v
+        for k in range(15,len(bars)):
+            v += (true_ranges[k-1]-v)/14
+            atr_ref[k]=v
+    atr_prod=atr14(bars)
+    error=max((abs(a-b) for a,b in zip(atr_ref,atr_prod) if a is not None),default=0)
+    check('independent_ATR_absolute_error_le_1e12',error<=1e-12,True)
+    raw_ref=[k for k in range(WARMUP,len(bars)) if bars[k-1][4]>bars[k-1][1] and bars[k][4]<bars[k][1]
+             and bars[k][1]>=bars[k-1][4] and bars[k][4]<=bars[k-1][1] and atr_ref[k]>0]
+    check('independent_all_raw_engulf_indices',list(features)==raw_ref,True)
+    maximum_feature_error=0.
+    for k in raw_ref:
+        high,low,op,cl=bars[k][2],bars[k][3],bars[k][1],bars[k][4]
+        for lb in LOOKBACKS:
+            previous=max(b[2] for b in bars[k-lb:k])
+            maximum_feature_error=max(maximum_feature_error,abs(previous-features[k][f'previous_high_{lb}']))
+    check('all_prior_high_features_match_direct_slices',maximum_feature_error==0,True)
+    for cid in ('RAW_ENGULF','BASELINE_CONTROL'):
+        config=next(c for c in configs if c['config_id']==cid)
+        indices=[]
+        for k in raw_ref:
+            atr=atr_ref[k]
+            op,hi,lo,cl=bars[k][1:]
+            if abs(cl-op)/atr < config['body_min_atr'] or (hi-lo)/atr < config['range_min_atr']:
+                continue
+            if config['lookback'] and abs(hi-max(b[2] for b in bars[k-config['lookback']:k]))/atr > config['distance_atr']:
+                continue
+            if config['close_max'] is not None and (cl-lo)/(hi-lo)>config['close_max']:
+                continue
+            indices.append(k)
+        check(cid+'_independent_qualifying_indices',selected_indices(config,features)==indices,True)
+        for model in MODELS:
+            for cost in COSTS:
+                # Direct chronological reference: scan bars for each eligible entry.
+                # Never consumes production cached paths or its accepted ledger.
+                ref=[]
+                busy=-1
+                for k in indices:
+                    if k < busy:
+                        continue
+                    ref_entry=bars[k][4]
+                    stop=bars[k][2]+.00010
+                    target=ref_entry-3*(stop-ref_entry)
+                    fill=ref_entry-cost*.00001
+                    if bars[k][0]+BAR>=END or not 0<target<fill<stop:
+                        continue
+                    exit_index,exit_price,reason,exit_time=None,None,'OPEN_AT_DATA_END',None
+                    for j in range(k+1,len(bars)):
+                        op,hi,lo=bars[j][1:4]
+                        if hi<stop and lo>target:
+                            continue
+                        exit_index=j
+                        if model=='NEAREST_OPEN_SENSITIVITY':
+                            lose=hi>=stop and (lo>target or hi-op<=op-lo)
+                            reason='STOP' if lose else 'TARGET'
+                            exit_price=stop if lose else target
+                            exit_time=bars[j][0]+BAR
+                        elif op>=stop:
+                            exit_price=op
+                            reason='STOP_GAP' if op>stop else 'STOP'
+                            exit_time=bars[j][0]
+                        elif op<=target:
+                            exit_price=target
+                            reason='TARGET_GAP_CAPPED'
+                            exit_time=bars[j][0]
+                        elif hi>=stop:
+                            exit_price,reason,exit_time=stop,'STOP',bars[j][0]+BAR
+                        else:
+                            exit_price,reason,exit_time=target,'TARGET',bars[j][0]+BAR
+                        break
+                    rr=None if exit_index is None else (-1. if reason=='STOP' else (fill-exit_price)/(stop-fill))
+                    ref.append((k,exit_index,iso(exit_time) if exit_time else None,reason,fill,stop,target,exit_price,rr))
+                    busy=exit_index if exit_index is not None else math.inf
+                accepted,invalid,blocked=replay(indices,paths,model,cost)
+                actual=[]
+                for k in accepted:
+                    p=paths[k][model]
+                    actual.append((k,p['exit_index'],p['exit'],p['reason'],geometry(p,cost)[0],p['stop'],p['target'],p['exit_price'],r_value(p,cost)))
+                mismatch=abs(len(actual)-len(ref))
+                for a,b in zip(actual,ref):
+                    mismatch+=sum(x!=y for x,y in zip(a[:4],b[:4]))
+                    mismatch+=sum((x is None)!=(y is None) or (x is not None and y is not None and abs(x-y)>1e-10) for x,y in zip(a[4:],b[4:]))
+                check(f'{cid}_{model}_{cost}T_complete_ledger_mismatches',mismatch,0)
+    return rows
+
+
+def stats(values):
+    values = list(values)
+    wins = [x for x in values if x > 0]
+    losses = [x for x in values if x < 0]
+    total = peak = dd = 0.
+    streak = worst_streak = 0
+    for x in values:
+        total += x
+        peak = max(peak,total)
+        dd = min(dd,total-peak)
+        streak = streak+1 if x < 0 else 0
+        worst_streak = max(worst_streak,streak)
+    return dict(closed_trades=len(values), wins=len(wins), losses=len(losses),
+                win_rate_pct=100*len(wins)/len(values) if values else None,
+                total_r=total, expectancy_r=total/len(values) if values else None,
+                profit_factor=sum(wins)/-sum(losses) if losses else None,
+                max_closed_dd_r=dd, max_losing_streak=worst_streak)
+
+
+def quantile(values, fraction):
+    if not values:
+        return None
+    values = sorted(values)
+    index = (len(values)-1)*fraction
+    lo, hi = math.floor(index), math.ceil(index)
+    return values[lo] + (values[hi]-values[lo])*(index-lo)
+
+
+def month_bounds():
+    result = []
+    year, month = START.year, START.month
+    while datetime(year,month,1,tzinfo=UTC) <= END:
+        result.append(datetime(year,month,1,tzinfo=UTC))
+        year,month = (year+1,1) if month==12 else (year,month+1)
+    if result[-1] < END:
+        result.append(END)  # explicit partial final month, never relabelled a full month
+    return result
+
+
+BOUNDS = month_bounds()
+
+
+def period_definitions():
+    periods = []
+    for year in range(2005,2027):
+        periods.append((f'YEAR_{year}', 'calendar', datetime(year,1,1,tzinfo=UTC), min(datetime(year+1,1,1,tzinfo=UTC),END)))
+    for a,b in ((2005,2010),(2010,2016),(2016,2022),(2022,2027)):
+        periods.append((f'ERA_{a}_{b-1}', 'era', datetime(a,1,1,tzinfo=UTC),min(datetime(b,1,1,tzinfo=UTC),END)))
+    for years in (1,2,3,5,10):
+        periods.append((f'LATEST_{years}Y', 'recent', END.replace(year=END.year-years), END))
+    # Calendar-day boundaries are diagnostic labels, not intraday announcement times.
+    periods.extend([
+        ('CHF_PRE_FLOOR','policy_diagnostic',START,datetime(2011,9,6,tzinfo=UTC)),
+        ('CHF_FLOOR_PERIOD','policy_diagnostic',datetime(2011,9,6,tzinfo=UTC),datetime(2015,1,15,tzinfo=UTC)),
+        ('CHF_2015_01_15','policy_diagnostic',datetime(2015,1,15,tzinfo=UTC),datetime(2015,1,16,tzinfo=UTC)),
+        ('CHF_AFTER_2015_01_15','policy_diagnostic',datetime(2015,1,16,tzinfo=UTC),END),
+    ])
+    return periods
+
+
+PERIODS = period_definitions()
+
+
+PROTOCOL = "# EUR/CHF M15 SHORT — Pass 1 protocol, frozen 8 October 2026\n\nUse FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md as a flexible guide.\nQuestion: does exact bearish engulfing near prior highs have a coherent region\nunder assumed execution costs? This is standalone entry discovery. All tested\nhistory is exploratory; repeated inspection does not create fresh out-of-sample data.\n\n## Predeclared grid\n619 unique geometries, 644 study memberships, 3,714 model/cost cases.\nControls: RAW_ENGULF and BASELINE_CONTROL. The latter is a generic comparison:\nLB60 / absolute high distance <=0.25 ATR / body >=0.75 ATR / range >=1.25 ATR.\nIt is not a previously proven M15 strategy or the frozen H1 strategy copied over.\n\n- Single body minima: 0.25, 0.50, 0.75, 1.00, 1.25, 1.50 ATR.\n- Single range minima: 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00 ATR.\n- Single close-location maxima: 0.10, 0.20, 0.25, 0.33, 0.50.\n- Structure singles and matrix: previous-bar lookbacks 20, 40, 60, 100, 150, 200;\n  absolute high distances 0.10, 0.25, 0.50, 0.75 ATR.\n- Matrix body minima: 0, 0.50, 0.75, 1.00, 1.25 ATR.\n- Matrix range minima: 0, 1.00, 1.25, 1.50, 1.75 ATR; no matrix close filter.\n\nZero body/range means no filter. LB60 means 15 hours of observed M15 candles,\nnot always 15 wall-clock hours. Prior high excludes the signal candle. Signed\ndistances are exported. Threshold equality is included. Duplicate geometries\nrun once with all requested memberships retained. No session/weekday/date filter,\nnew indicator hunt or RR search is included in this discovery pass.\n\n## Source, coverage and implementation gates\nOfficial OANDA completed, unsmoothed MID M15. Request 2005-01-01 through\n2026-10-08T00:00:00Z exclusive (cutoff: 01:00 BST on 8 October). Warm every\nconfiguration with the first 200 observed bars. ATR14 uses TR1..14 as its seed,\nthen causal Wilder recurrence, including the completed signal candle.\n\nFetch fixed 35-day M15 chunks (at most 3,360 calendar slots) and 180-day H1\nchunks. Requests are candle GETs only, with bounded retries and redirects blocked.\nMissing chunks, malformed data, incomplete candles inside the frozen window or\nconflicting duplicates stop the run. Credentials are not written to results.\n\nThis is the first EURCHF M15 study: no expected M15 count/hash is invented.\nRecord canonical five-decimal OHLC and volume-containing CSV fingerprints, raw\nsignal fingerprints and full accepted-ledger digests for subsequent reuse.\nEvery requested year must contain bars; complete years must reach January and\nDecember. First candle must be in the first requested week, last candle in the\nfinal requested day. Coverage, native gaps and every HTTP chunk receipt are exported.\n\nAggregate ALL native M15 candles by UTC hour. Every observed hour must appear\nin both M15 and native H1 sources; OHLC and sum of price counts must match.\nSparse M15 hours pass only when their native bars exhaust H1 price counts and\nreproduce its OHLC. No flat synthetic candles or interpolation. Whole-hour\nbroker omissions and closures remain visible. This verifies consistency of the\nbroker source, not accuracy against a separate provider. The historical H1\nportion before 2026-10-01 must reproduce our prior 137,819 candles and SHA256:\n9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac\nChanged history or a source mismatch stops discovery; do not silently relax gates.\n\nIndependent calculations check ATR, every raw engulf index and all prior-high\nfeatures using direct slices. Separate chronological bar scans for RAW and\nBASELINE controls must match every accepted entry/exit, price, outcome and R\nat both exit models and all costs. These are implementation checks on the same\nsource, not final independent validation of a subsequently chosen strategy.\nAn error ZIP contains diagnostics without partial performance files.\n\n## Signals and execution assumptions\nExact bearish engulf: previous close > open; current close < open;\ncurrent open >= previous close; current close <= previous open. Reject dojis.\nReference entry = completed signal close, timestamped signal start +15 minutes.\nStop = signal high +0.00010 (10 ticks /1 pip).\nTarget = reference entry -3*(stop-reference entry). RR3 is fixed for entry discovery.\nAssumed adverse short fill = reference entry -10/20/40 ticks (1/2/4 pips).\nStop/target stay fixed; R denominator = stop-assumed fill.\n\nRequire 0 < target < fill < stop. Reject invalid geometry and entries at/after\ncutoff before occupancy. Replay every geometry/model/cost independently with\none position at a time. Open trades occupy the strategy through cutoff and have\nblank exit/R. A signal on the exit candle may enter at that candle's close.\nIsolated qualifying signals can overlap and are labelled separately from replay.\n\nPrimary model STOP_FIRST_GAP_STRESS: observed opening >=stop fills at max(open,stop);\nopening <=target fills at target without favorable improvement; otherwise a\nbar touching both barriers loses. Gap exits use candle start; other exits use\ncandle end. Adverse opening gaps can lose more than 1R.\nNEAREST_OPEN_SENSITIVITY assumes the nearer extreme is touched first on a\nboth-barrier candle (tie loses), uses barrier fills and candle-end exits. It is\nan alternate OHLC assumption, not archived parity or the preferred selection model.\n\nFirst-touch scanning begins on the next observed candle. Hypothetical entry at\nthe signal close is assumed even before a market closure; next observed open\nand delays are disclosed. MID prices plus adverse entry penalties are assumed\nscenarios, not historical bid/ask execution. Ask-side short stops, financing,\nintrabar jump fills and guaranteed fills are unobserved. Neither model bounds\nworst-case loss. Cost fractions relative to stop size are reported explicitly.\n\n## Reporting and decision sequence\nExport every configuration, weak/empty case, membership, source candle, feature,\npath, full normalized accepted ledger, both joined control ledgers, open/invalid\nentry, full-replay comparison, neighbourhood and tested boundary.\nR/drawdown are additive risk units, not account percentages. Closed drawdown\nexcludes floating position risk. No NAV compounding or currency conversion here.\n\nCalendar years, eras, latest 1/2/3/5/10 years and every complete calendar-month\n12/24/36-month rolling window include inactivity. Entry cohorts [start,end)\nreport eventual trade R; realized exits (start,end] report cash R within the period.\nZero-entry years and windows remain visible. October 2026 is a partial month:\nit enters full-history/latest-year figures but is never called a complete rolling\nmonth endpoint. Open trades are right-censored, not zero-profit completed trades.\n\nPre-floor, floor period, 15 January 2015 and post-event diagnostics keep all dates.\nShock exposure is attribution, not a counterfactual deletion of exposed trades.\nReview stressed costs, stable interior regions, frequency, weak eras/recent years\nand event concentration before freezing a few distinguishable anchors. No auto winner.\n\nEntry rules freeze before RR selection, independent final ledgers, exact current\n32-strategy portfolio admission (including EURCHF H1 short overlap) and forward\nexecution checks. Portfolio admission is a later gate, not a tuning objective.\nA weak generic control alone does not exhaust the pair; broad unsupported\nresults do not justify unlimited filter searching. This runner has no orders.\n\nPrimary references:\nhttps://developer.oanda.com/rest-live-v20/instrument-ep/\nhttps://developer.oanda.com/rest-live-v20/instrument-df/\nhttps://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906\nhttps://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115\n"
+
+
+def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind, volumes=None):
+    write_csv(work/'source_candles.csv',
+              (dict(time=iso(t),open=op,high=hi,low=lo,close=cl,volume=volumes[t] if volumes else None) for t,op,hi,lo,cl in bars))
+    write_csv(work/'coverage.csv', [dict(pair=PAIR,timeframe=TIMEFRAME,price_type='MID',
+              requested_start=iso(START),end_exclusive=iso(END),candles=len(bars),
+              first=iso(bars[0][0]),last=iso(bars[-1][0]),warmup_bars=WARMUP,
+              sha256=source_hash(bars),dataset_kind=dataset_kind)])
+    write_csv(work/'data_gaps.csv',
+              [dict(previous_candle=iso(a[0]),next_candle=iso(b[0]),
+                    missing_wall_clock_hours=(b[0]-a[0]-BAR).total_seconds()/3600,
+                    interpretation='Native source omission/closure retained; within-hour omissions verified against H1 price count; no interpolation')
+               for a,b in zip(bars,bars[1:]) if b[0]-a[0] > BAR],
+              ['previous_candle','next_candle','missing_wall_clock_hours','interpretation'])
+    feature_fields = ['signal_index','signal','entry','atr14','body_atr','range_atr','close_location','reference_stop_pips']
+    feature_fields += [k for lb in LOOKBACKS for k in (f'previous_high_{lb}',f'signed_distance_atr_{lb}',f'abs_distance_atr_{lb}')]
+    write_csv(work/'raw_signal_features.csv', features.values(), feature_fields)
+    write_csv(work/'configuration_grid.csv', configs)
+    write_csv(work/'configuration_memberships.csv', memberships)
+    path_fields = ['execution_model','signal_index','signal','entry','reference_entry','stop','target',
+                   'next_open','next_candle_delay_hours','exit_index','exit','exit_price','reason','dual_touch','gap_stop','gap_target']
+    write_csv(work/'signal_trade_paths.csv',
+              (dict(execution_model=model,**paths[i][model]) for i in paths for model in MODELS), path_fields)
+    write_csv(work/'period_definitions.csv', [dict(period=label,period_type=kind,start=iso(a),end=iso(b),
+              entry_interval='[start,end)',exit_cash_interval='(start,end]',partial_calendar_year=int(kind=='calendar' and b==END and (END.month!=1 or END.day!=1)))
+              for label,kind,a,b in PERIODS])
+
+
+STAT_FIELDS = list(stats([]))
+CASE = ['config_id','execution_model','cost_ticks']
+SUMMARY_FIELDS = CASE + ['raw_signals','eligible_isolated_signals','isolated_completed',
+    'isolated_open','isolated_total_r','isolated_profit_factor','geometry_invalid_all_signals',
+    'p0_blocked_signals','invalid_unblocked_entries','open_at_data_end'] + STAT_FIELDS + [
+    'dual_touch_closed','gap_stop_closed','gap_target_closed','entry_next_open_gap_count',
+    'entries_before_market_closure','median_stop_pips','median_cost_fraction_reference_risk',
+    'p90_cost_fraction_reference_risk','median_holding_hours','max_holding_hours',
+    'maximum_inter_entry_gap_days','leading_no_entry_days','trailing_no_entry_days',
+    'zero_entry_months','max_consecutive_zero_entry_months','positive_complete_entry_years',
+    'negative_complete_entry_years','zero_entry_complete_years','raw_signal_sha256','accepted_ledger_sha256']
+for _width in (12,24,36):
+    SUMMARY_FIELDS += [f'worst_{_width}m_realized_r',f'worst_{_width}m_start',f'worst_{_width}m_end',f'zero_entry_{_width}m_windows']
+
+
+def analyze(work, bars, features, paths, configs, *, progress=True):
+    """Pure reporting/replay layer. Production calls this only after hard gates."""
+    sinks = {}
+    definitions = {
+        'summary.csv': SUMMARY_FIELDS,
+        'raw_signal_membership.csv': ['config_id','signal_index'],
+        'accepted_trades.csv': CASE+['accepted_sequence','signal_index','historical_fill','risk_price','r'],
+        'invalid_entries.csv': CASE+['signal_index','reason'],
+        'open_at_data_end.csv': CASE+['signal_index','entry','historical_fill','stop','target','held_hours_to_cutoff'],
+        'control_accepted_ledgers.csv': CASE+['accepted_sequence','signal_index','exit_index','signal','entry','exit',
+             'reference_entry','historical_fill','stop','target','risk_price','exit_price','reason','r'],
+        'period_results.csv': CASE+['period','period_type','start','end','partial_calendar_year','entry_count',
+             'entry_cohort_completed','entry_cohort_eventual_r','entry_cohort_open',
+             'exit_count','realized_r','realized_max_dd_r','open_at_period_end'],
+        'monthly_results.csv': CASE+['month','start','end','partial_month','entry_count','exit_count','realized_r','entry_cohort_eventual_r','entry_cohort_open'],
+        'rolling_windows.csv': CASE+['months','start','end','entry_count','exit_count','realized_r','zero_entry_window','zero_exit_window'],
+        'accepted_comparisons.csv': CASE+['reference_config','common_entries','added_entries','removed_entries',
+             'common_completed_r_candidate','common_completed_r_reference','added_completed_r','removed_completed_r',
+             'candidate_total_r','reference_total_r','delta_total_r','candidate_open_count','reference_open_count'],
+        'chf_event_exposure.csv': CASE+['signal_index','entry','exit','entered_on_event_day','exited_on_event_day',
+             'held_across_event_day_start','eventual_r','outcome','attribution_warning'],
+    }
+    for name,fields in definitions.items():
+        sinks[name] = CSVFile(work/name,fields)
+    summaries = {}
+    path_times = {(i,model):(when(p['entry']),when(p['exit']) if p['exit'] else None)
+                  for i,models in paths.items() for model,p in models.items()}
+    # Trade R only depends on signal path and assumed fill; p0 is still replayed each time.
+    outcome = {(model,cost):{i:r_value(paths[i][model],cost) for i in paths} for model in MODELS for cost in COSTS}
+    refs = {}
+    for config in configs:
+        if config['config_id'] in ('RAW_ENGULF','BASELINE_CONTROL'):
+            indices = selected_indices(config,features)
+            for model in MODELS:
+                for cost in COSTS:
+                    refs[(config['config_id'],model,cost)] = replay(indices,paths,model,cost)[0]
+    shock_start = datetime(2015,1,15,tzinfo=UTC)
+    shock_end = datetime(2015,1,16,tzinfo=UTC)
+    try:
+        for number,config in enumerate(configs,1):
+            cid = config['config_id']
+            indices = selected_indices(config,features)
+            raw_digest = signal_hash(indices,bars)
+            for i in indices:
+                sinks['raw_signal_membership.csv'].add(dict(config_id=cid,signal_index=i))
+            for model in MODELS:
+                for cost in COSTS:
+                    tag = dict(config_id=cid,execution_model=model,cost_ticks=cost)
+                    rs_by_i = outcome[(model,cost)]
+                    accepted,invalid,blocked = replay(indices,paths,model,cost)
+                    closed = [i for i in accepted if paths[i][model]['exit'] is not None]
+                    open_ids = [i for i in accepted if paths[i][model]['exit'] is None]
+                    isolated = [i for i in indices if geometry(paths[i][model],cost)[1] is None]
+                    isolated_rs = [rs_by_i[i] for i in isolated if rs_by_i[i] is not None]
+                    rs = [rs_by_i[i] for i in closed]
+                    digest = hashlib.sha256()
+                    month_entries = [0]*(len(BOUNDS)-1)
+                    month_exits = [0]*(len(BOUNDS)-1)
+                    month_cash = [0.]*(len(BOUNDS)-1)
+                    month_cohort = [0.]*(len(BOUNDS)-1)
+                    month_open = [0]*(len(BOUNDS)-1)
+                    for seq,i in enumerate(accepted,1):
+                        p = paths[i][model]
+                        fill = geometry(p,cost)[0]
+                        full = dict(tag,accepted_sequence=seq,signal_index=i,exit_index=p['exit_index'],
+                            signal=p['signal'],entry=p['entry'],exit=p['exit'],reference_entry=p['reference_entry'],
+                            historical_fill=fill,stop=p['stop'],target=p['target'],risk_price=p['stop']-fill,
+                            exit_price=p['exit_price'],reason=p['reason'],r=rs_by_i[i])
+                        sinks['accepted_trades.csv'].add({k:full[k] for k in definitions['accepted_trades.csv']})
+                        digest.update((json.dumps(full,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
+                        if cid in ('RAW_ENGULF','BASELINE_CONTROL'):
+                            sinks['control_accepted_ledgers.csv'].add(full)
+                        et,xt = path_times[(i,model)]
+                        bucket = bisect.bisect_right(BOUNDS,et)-1
+                        month_entries[bucket] += 1
+                        if xt is None:
+                            month_open[bucket] += 1
+                            sinks['open_at_data_end.csv'].add(dict(tag,signal_index=i,entry=p['entry'],historical_fill=fill,
+                                stop=p['stop'],target=p['target'],held_hours_to_cutoff=(END-et).total_seconds()/3600))
+                        else:
+                            month_cohort[bucket] += rs_by_i[i]
+                            exit_bucket = bisect.bisect_left(BOUNDS,xt)-1
+                            if not 0 <= exit_bucket < len(month_cash):
+                                raise RuntimeError('Exit outside the reporting months.')
+                            month_cash[exit_bucket] += rs_by_i[i]
+                            month_exits[exit_bucket] += 1
+                        if et < shock_end and (xt is None or xt >= shock_start):
+                            sinks['chf_event_exposure.csv'].add(dict(tag,signal_index=i,entry=p['entry'],exit=p['exit'],
+                                entered_on_event_day=int(shock_start <= et < shock_end),
+                                exited_on_event_day=int(xt is not None and shock_start < xt <= shock_end),
+                                held_across_event_day_start=int(et < shock_start and (xt is None or xt > shock_start)),
+                                eventual_r=rs_by_i[i],outcome=p['reason'],
+                                attribution_warning='Exposure attribution only; not an event-removal counterfactual'))
+                    for i,reason in invalid:
+                        sinks['invalid_entries.csv'].add(dict(tag,signal_index=i,reason=reason))
+                    for k in range(len(month_cash)):
+                        sinks['monthly_results.csv'].add(dict(tag,month=BOUNDS[k].strftime('%Y-%m'),
+                            start=iso(BOUNDS[k]),end=iso(BOUNDS[k+1]),partial_month=int(BOUNDS[k+1].day!=1),
+                            entry_count=month_entries[k],exit_count=month_exits[k],realized_r=month_cash[k],
+                            entry_cohort_eventual_r=month_cohort[k],entry_cohort_open=month_open[k]))
+                    positive_years = negative_years = empty_years = 0
+                    for label,kind,a,b in PERIODS:
+                        entry_ids = [i for i in accepted if a <= path_times[(i,model)][0] < b]
+                        exit_ids = [i for i in closed if a < path_times[(i,model)][1] <= b]
+                        cohort_closed = [i for i in entry_ids if rs_by_i[i] is not None]
+                        cohort_r = sum(rs_by_i[i] for i in cohort_closed)
+                        period_stats = stats(rs_by_i[i] for i in exit_ids)
+                        opened = sum(path_times[(i,model)][0] < b and
+                                     (path_times[(i,model)][1] is None or path_times[(i,model)][1] > b) for i in accepted)
+                        partial = int(kind == 'calendar' and b == END and (END.month != 1 or END.day != 1))
+                        sinks['period_results.csv'].add(dict(tag,period=label,period_type=kind,start=iso(a),end=iso(b),
+                            partial_calendar_year=partial,entry_count=len(entry_ids),entry_cohort_completed=len(cohort_closed),
+                            entry_cohort_eventual_r=cohort_r,entry_cohort_open=len(entry_ids)-len(cohort_closed),
+                            exit_count=len(exit_ids),realized_r=period_stats['total_r'],
+                            realized_max_dd_r=period_stats['max_closed_dd_r'],open_at_period_end=opened))
+                        if kind == 'calendar' and not partial:
+                            positive_years += cohort_r > 0
+                            negative_years += cohort_r < 0
+                            empty_years += not entry_ids
+                    prefixes = []
+                    for series in (month_entries,month_exits,month_cash):
+                        values = [0]
+                        for v in series:
+                            values.append(values[-1]+v)
+                        prefixes.append(values)
+                    rolled = {}
+                    for width in (12,24,36):
+                        worst, empty = None, 0
+                        for stop in range(width,len(BOUNDS)):
+                            if BOUNDS[stop].day != 1:
+                                continue  # rolling windows use complete calendar months
+                            start = stop-width
+                            en,ex,cash = [p[stop]-p[start] for p in prefixes]
+                            row = dict(tag,months=width,start=iso(BOUNDS[start]),end=iso(BOUNDS[stop]),
+                                entry_count=en,exit_count=ex,realized_r=cash,zero_entry_window=int(en==0),zero_exit_window=int(ex==0))
+                            sinks['rolling_windows.csv'].add(row)
+                            empty += en == 0
+                            if worst is None or cash < worst['realized_r']:
+                                worst = row
+                        rolled.update({f'worst_{width}m_realized_r':worst['realized_r'],
+                                       f'worst_{width}m_start':worst['start'],f'worst_{width}m_end':worst['end'],
+                                       f'zero_entry_{width}m_windows':empty})
+                    for reference in ('RAW_ENGULF','BASELINE_CONTROL'):
+                        reference_ids = refs.get((reference,model,cost))
+                        if reference_ids is None:
+                            continue  # only used by tiny synthetic subset tests
+                        ours, theirs = set(accepted),set(reference_ids)
+                        common, added, removed = ours & theirs, ours-theirs, theirs-ours
+                        total = lambda ids: sum(rs_by_i[i] for i in sorted(ids) if rs_by_i[i] is not None)
+                        reference_r = total(theirs)
+                        sinks['accepted_comparisons.csv'].add(dict(tag,reference_config=reference,
+                            common_entries=len(common),added_entries=len(added),removed_entries=len(removed),
+                            common_completed_r_candidate=total(common),common_completed_r_reference=total(common),
+                            added_completed_r=total(added),removed_completed_r=total(removed),
+                            candidate_total_r=sum(rs),reference_total_r=reference_r,delta_total_r=sum(rs)-reference_r,
+                            candidate_open_count=len(open_ids),reference_open_count=sum(rs_by_i[i] is None for i in reference_ids)))
+                    entry_times = [path_times[(i,model)][0] for i in accepted]
+                    holdings = [(path_times[(i,model)][1]-path_times[(i,model)][0]).total_seconds()/3600 for i in closed]
+                    risk_sizes = [paths[i][model]['stop']-paths[i][model]['reference_entry'] for i in accepted]
+                    fractions = [cost*TICK/v for v in risk_sizes]
+                    run = maxrun = 0
+                    for n in month_entries:
+                        run = run+1 if n == 0 else 0
+                        maxrun = max(maxrun,run)
+                    isolated_stats = stats(isolated_rs)
+                    row = dict(tag,raw_signals=len(indices),eligible_isolated_signals=len(isolated),
+                        isolated_completed=len(isolated_rs),isolated_open=len(isolated)-len(isolated_rs),
+                        isolated_total_r=isolated_stats['total_r'],isolated_profit_factor=isolated_stats['profit_factor'],
+                        geometry_invalid_all_signals=len(indices)-len(isolated),p0_blocked_signals=blocked,
+                        invalid_unblocked_entries=len(invalid),open_at_data_end=len(open_ids),**stats(rs),
+                        dual_touch_closed=sum(paths[i][model]['dual_touch'] for i in closed),
+                        gap_stop_closed=sum(paths[i][model]['gap_stop'] for i in closed),
+                        gap_target_closed=sum(paths[i][model]['gap_target'] for i in closed),
+                        entry_next_open_gap_count=sum(paths[i][model]['next_open'] is not None and
+                            abs(paths[i][model]['next_open']-paths[i][model]['reference_entry']) > .5*TICK for i in accepted),
+                        entries_before_market_closure=sum((paths[i][model]['next_candle_delay_hours'] or 0) > 0 for i in accepted),
+                        median_stop_pips=quantile([v/PIP for v in risk_sizes],.5),
+                        median_cost_fraction_reference_risk=quantile(fractions,.5),p90_cost_fraction_reference_risk=quantile(fractions,.9),
+                        median_holding_hours=quantile(holdings,.5),max_holding_hours=max(holdings) if holdings else None,
+                        maximum_inter_entry_gap_days=max(((b-a).total_seconds()/86400 for a,b in zip(entry_times,entry_times[1:])),default=None),
+                        leading_no_entry_days=((entry_times[0] if entry_times else END)-START).total_seconds()/86400,
+                        trailing_no_entry_days=(END-(entry_times[-1] if entry_times else START)).total_seconds()/86400,
+                        zero_entry_months=sum(n==0 for n in month_entries),max_consecutive_zero_entry_months=maxrun,
+                        positive_complete_entry_years=positive_years,negative_complete_entry_years=negative_years,
+                        zero_entry_complete_years=empty_years,raw_signal_sha256=raw_digest,accepted_ledger_sha256=digest.hexdigest(),**rolled)
+                    sinks['summary.csv'].add(row)
+                    summaries[(cid,model,cost)] = row
+            if progress and (number % 20 == 0 or number == len(configs)):
+                set_status(state='analyzing',progress=round(40+52*number/len(configs)),
+                           message=f'{number}/{len(configs)} entry configurations completed; all costs and exit assumptions')
+        expected = len(configs)*len(MODELS)*len(COSTS)
+        if sinks['summary.csv'].count != expected:
+            raise RuntimeError('Missing configuration/cost/model results.')
+    finally:
+        for sink in sinks.values():
+            sink.close()
+    write_neighbours(work,configs,summaries)
+    counts = {name:sink.count for name,sink in sinks.items()}
+    write_json(work/'output_row_counts.json',counts)
+    return summaries,counts
+
+
+def write_neighbours(work, configs, summaries):
+    axes = {'lookback':LOOKBACKS,'distance_atr':DISTANCES,'body_min_atr':BODIES,'range_min_atr':RANGES}
+    grid = {config_key(c):c for c in configs if c['lookback'] in LOOKBACKS and c['close_max'] is None
+            and c['body_min_atr'] in BODIES and c['range_min_atr'] in RANGES and c['distance_atr'] in DISTANCES}
+    rows = []
+    for config in grid.values():
+        neighbours,edges = set(),[]
+        for name,levels in axes.items():
+            index = levels.index(config[name])
+            if index in (0,len(levels)-1):
+                edges.append(name+('=LOWER' if index==0 else '=UPPER'))
+            for adjacent in (index-1,index+1):
+                if 0 <= adjacent < len(levels):
+                    other = dict(config,**{name:levels[adjacent]})
+                    if config_key(other) in grid:
+                        neighbours.add(grid[config_key(other)]['config_id'])
+        for model in MODELS:
+            for cost in COSTS:
+                values = [summaries[(cid,model,cost)] for cid in sorted(neighbours)]
+                rows.append(dict(config_id=config['config_id'],execution_model=model,cost_ticks=cost,
+                    tested_boundaries=';'.join(edges),adjacent_configurations=len(values),
+                    positive_total_r_neighbours=sum(r['total_r'] > 0 for r in values),
+                    median_neighbour_total_r=quantile([r['total_r'] for r in values],.5),
+                    minimum_neighbour_total_r=min((r['total_r'] for r in values),default=None),
+                    minimum_neighbour_closed_trades=min((r['closed_trades'] for r in values),default=None),
+                    neighbour_ids=';'.join(sorted(neighbours))))
+    write_csv(work/'neighbourhood_summary.csv',rows,
+              CASE+['tested_boundaries','adjacent_configurations','positive_total_r_neighbours',
+                    'median_neighbour_total_r','minimum_neighbour_total_r','minimum_neighbour_closed_trades','neighbour_ids'])
+
+
+def self_checks():
+    """Small mathematical/execution checks; no claims about market performance."""
+    passed = []
+    def check(condition, name):
+        if not condition:
+            raise AssertionError(name)
+        passed.append(dict(check=name,status='PASS',evidence='SYNTHETIC_SOFTWARE_ONLY'))
+    t = datetime(2020,1,1,tzinfo=UTC)
+    bars = [(t,10.,11.,9.,10.5),(t+BAR,10.5,11.,9.,9.5)]
+    check(bearish_engulf(bars,1),'Exact bearish engulf accepts boundary equality')
+    check(not bearish_engulf([(t,10.,11.,9.,10.),bars[1]],1),'Previous doji rejected')
+    vals = [1.,3.,2.,100.,4.,5.]
+    ph = previous_high(vals,3)
+    check(ph == [None,None,None,3.,100.,100.],'Prior extreme excludes signal high')
+    for lb in (1,2,3,5):
+        fast = previous_high(vals,lb)
+        check(all(fast[i] == max(vals[i-lb:i]) for i in range(lb,len(vals))),f'Prior high agrees with direct slices LB{lb}')
+    uniform = [(t+i*BAR,10.,11.,9.,10.) for i in range(25)]
+    atr = atr14(uniform)
+    check(atr[:14] == [None]*14 and all(x == 2. for x in atr[14:]),'Wilder ATR seed and recursion')
+    c,m = make_configs()
+    check(len(c)==619 and len(m)==644,'Complete grid and duplicate membership control')
+    check(len([x for x in c if x['config_id']=='BASELINE_CONTROL'])==1,'Predeclared baseline has one immutable geometry')
+    # Signal close 10, stop 11.0001, target 6.9997. Both barriers; low nearer open.
+    two = [(t,10.5,11.,9.,10.),(t+BAR,7.2,11.2,6.8,8.)]
+    paths = find_paths(two,0)
+    check(paths['NEAREST_OPEN_SENSITIVITY']['reason']=='TARGET' and paths['STOP_FIRST_GAP_STRESS']['reason']=='STOP',
+          'Dual-touch stop-first diagnostic differs from alternate heuristic')
+    gapped = [(t,10.5,11.,9.,10.),(t+BAR,12.,12.1,11.5,11.8)]
+    gp = find_paths(gapped,0)
+    check(gp['STOP_FIRST_GAP_STRESS']['exit_price']==12. and r_value(gp['STOP_FIRST_GAP_STRESS'],10)<-1,
+          'Adverse opening gap can lose more than 1R')
+    check(gp['STOP_FIRST_GAP_STRESS']['exit']==iso(t+BAR),'Known opening-gap exit uses opening timestamp')
+    capped = [(t,10.5,11.,9.,10.),(t+BAR,6.,6.5,5.5,6.2)]
+    cp = find_paths(capped,0)['STOP_FIRST_GAP_STRESS']
+    check(cp['exit_price']==cp['target'] and cp['gap_target']==1,'Favorable target gap gives no improvement')
+    # Explicit replay fixtures isolate p0 from barrier detection.
+    fixture = dict(signal_index=0,signal=iso(t),entry=iso(t+BAR),reference_entry=1.,stop=1.001,
+                   target=.997,exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END',dual_touch=0,gap_stop=0,gap_target=0)
+    mapping = {i:{model:dict(fixture,signal_index=i) for model in MODELS} for i in (0,1,2)}
+    chosen,_,blocked = replay([0,1,2],mapping,'NEAREST_OPEN_SENSITIVITY',10)
+    check(chosen==[0] and blocked==2,'Open trade occupies p0 through data end')
+    for model in MODELS:
+        mapping[0][model].update(exit_index=1,exit=iso(t+2*BAR),exit_price=1.001,reason='STOP')
+    check(replay([0,1,2],mapping,'NEAREST_OPEN_SENSITIVITY',10)[0]==[0,1],'Exit-candle signal can re-enter')
+    mapping[0]['NEAREST_OPEN_SENSITIVITY'].update(target=.9998)
+    check(replay([0,1,2],mapping,'NEAREST_OPEN_SENSITIVITY',40)[0]==[1],'Invalid high-cost entry does not occupy p0')
+    check(replay([0,1,2],mapping,'NEAREST_OPEN_SENSITIVITY',10)[0]==[0,1],'Cost-specific replay preserves valid lower-cost entry')
+    check(geometry(dict(fixture,entry=iso(END)),10)[1]=='ENTRY_AT_OR_AFTER_CUTOFF','No new trade at exclusive data cutoff')
+    check(r_value(fixture,10) is None,'Unclosed trade has no invented realized R')
+    check(stats([])['closed_trades']==0 and stats([])['total_r']==0,'Empty case remains explicit')
+    check(stats([2.,-1.,-1.,-1.,2.])['max_closed_dd_r']==-3.,'Closed R drawdown chronology')
+    check(stats([-1.,-1.,2.,-1.])['max_losing_streak']==2,'Losing streak reset')
+    check(len(BOUNDS)==263 and len(PERIODS)==35,'Complete zero-inclusive monthly and period universe')
+    return passed
+
+
+def package(work, completed):
+    """Atomic publication. An error archive cannot include partial performance."""
+    allowed_on_error = {'protocol.md','run_manifest.json','error_report.csv','hard_controls.csv',
+                        'software_checks.csv','coverage.csv','data_gaps.csv','runner_source.py',
+                        'source_controls.csv','h1_m15_crosschecks.csv','yearly_data_coverage.csv',
+                        'coverage_crosscheck_summary.json','fetch_receipts.csv'}
+    members = [p for p in sorted(work.iterdir()) if p.is_file() and p.name != 'file_manifest.json' and
+               (completed or p.name in allowed_on_error)]
+    files = [dict(file=p.name,bytes=p.stat().st_size,sha256=file_sha(p)) for p in members]
+    write_json(work/'file_manifest.json',files)
+    temporary = OUT / (RESULT_NAME+'.tmp')
+    with zipfile.ZipFile(temporary,'w',zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as z:
+        for p in members+[work/'file_manifest.json']:
+            z.write(p,p.name)
+    os.replace(temporary,OUT/RESULT_NAME)
+
+
+def run_job():
+    global RUN_CLOCK, JOB_LOCK
+    RUN_CLOCK=time.monotonic()
+    OUT.mkdir(parents=True,exist_ok=True)
+    work=Path(tempfile.mkdtemp(prefix='working-',dir=OUT))
+    manifest=dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,
+        dataset_kind='HISTORICAL_OANDA_MID',status='RUNNING',complete=False,
+        study='PASS1_ENTRY_DISCOVERY_ONLY',start=iso(START),end_exclusive=iso(END),
+        rr=RR,cost_ticks=list(COSTS),execution_models=list(MODELS),
+        expected_configurations=619,expected_cases=3714,
+        incumbent_target='PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1; admission deferred',
+        template='FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md',
+        source_policy='New M15 fingerprint recorded; broker H1 aggregation plus pinned pre-October H1 controls must pass',
+        user_clarification='Template is a guide; justified pair/timeframe adaptations allowed.',
+        orders_supported=False,trading_enabled=False)
+    try:
+        (work/'protocol.md').write_text(PROTOCOL,encoding='utf-8')
+        shutil.copyfile(__file__,work/'runner_source.py')
+        write_csv(work/'software_checks.csv',self_checks())
+        set_status(state='validating',progress=1,message='Software checks passed; fetching full M15 source')
+        bars,volumes,m15_receipts=fetch_history('M15')
+        write_csv(work/'coverage.csv',[dict(pair=PAIR,timeframe=TIMEFRAME,candles=len(bars),
+                   first=iso(bars[0][0]),last=iso(bars[-1][0]),sha256=source_hash(bars))])
+        write_csv(work/'fetch_receipts.csv',m15_receipts)
+        h1,h1_volumes,h1_receipts=fetch_history('H1')
+        write_csv(work/'fetch_receipts.csv',m15_receipts+h1_receipts)
+        crosscheck_history(work,bars,volumes,h1,h1_volumes)
+        write_csv(work/'source_h1_crosscheck_candles.csv',
+                  (dict(time=iso(t),open=op,high=hi,low=lo,close=cl,volume=h1_volumes[t]) for t,op,hi,lo,cl in h1))
+        configs,memberships=make_configs()
+        features=make_features(bars)
+        paths={}
+        set_status(state='building_paths',progress=28,message='Full-history coverage passed; building raw engulf paths')
+        for number,i in enumerate(features,1):
+            paths[i]=find_paths(bars,i)
+            if number%2000==0:
+                set_status(state='building_paths',progress=round(28+10*number/max(1,len(features))),
+                           message=f'{number}/{len(features)} raw engulf paths built')
+        set_status(state='validating',progress=38,message='Independently checking ATR, signals and complete control ledgers')
+        hard=hard_controls(bars,features,paths,configs)
+        write_csv(work/'hard_controls.csv',hard)
+        if any(r['status']!='PASS' for r in hard):
+            raise RuntimeError('Independent implementation control failed; no discovery conclusions are valid.')
+        write_inputs(work,bars,features,paths,configs,memberships,manifest['dataset_kind'],volumes)
+        (work/'README.md').write_text(RESULT_README,encoding='utf-8')
+        manifest.update(source_sha256=source_hash(bars),source_volume_csv_sha256=file_sha(work/'source_candles.csv'),
+                        source_h1_sha256=source_hash(h1),source_candles=len(bars),raw_engulf_signals=len(features),
+                        source_controls='PASS',hard_controls='PASS',software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()))
+        _,counts=analyze(work,bars,features,paths,configs)
+        manifest.update(status='COMPLETE',complete=True,output_row_counts=counts,
+                        completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
+        write_json(work/'run_manifest.json',manifest)
+        set_status(state='packaging',progress=96,message='All 3,714 cases complete; compressing ledgers and diagnostics')
+        package(work,True)
+        set_status(state='complete',progress=100,message='EUR/CHF M15 short Pass 1 complete; download the results ZIP',
+                   hard_controls='PASS',source_controls='PASS',configurations=619,cases=3714,result_path='/results',
+                   result_bytes=(OUT/RESULT_NAME).stat().st_size)
+        return True
+    except Exception as exc:
+        manifest.update(status='ERROR',complete=False,error_type=type(exc).__name__,error=str(exc))
+        write_json(work/'run_manifest.json',manifest)
+        write_csv(work/'error_report.csv',[dict(error_type=type(exc).__name__,message=str(exc),traceback=traceback.format_exc())])
+        try:
+            package(work,False)
+            result_path='/results'
+        except Exception:
+            result_path=None
+        set_status(state='error',progress=100,message=str(exc),result_path=result_path,hard_controls='NOT_COMPLETE')
+        return False
+    finally:
+        shutil.rmtree(work,ignore_errors=True)
+        if JOB_LOCK is not None:
+            JOB_LOCK.close()
+            JOB_LOCK=None
+
+
+RESULT_README = "# EUR/CHF M15 SHORT Pass 1 results\n\nBegin with run_manifest.json: complete=true; source_controls.csv and hard_controls.csv\nmust all pass. Then read coverage.csv, yearly_data_coverage.csv, protocol.md and\nsummary.csv. An error ZIP has diagnostics and no partial performance results.\nfile_manifest.json hashes every other packaged artifact.\n\n619 unique geometries /3,714 cases. configuration_memberships.csv retains the\n644 requested study labels. neighbourhood_summary.csv shows adjacent cells and\nboundaries; overlapping neighbours are not independent evidence. No automatic winner.\n\nFull accepted ledger: select configuration/model/cost in accepted_trades.csv;\njoin signal_trade_paths.csv on (signal_index,execution_model), preserving\naccepted_sequence. Risk=stop-fill; short R=(fill-exit_price)/risk for closed trades.\nOrdinary STOP=-1. Open R is blank. control_accepted_ledgers.csv contains joined\nRAW/BASELINE controls. Summary ledger hash uses canonical sorted JSON lines of\nthe same joined fields, with separators=(',',':').\n\nCompare yearly/era/latest periods, every rolling 12/24/36-month window, empty\nwindows, costs, exit assumptions and event exposure. Entry-cohort eventual R is\nseparate from realized period R. The final October 2026 monthly row is explicitly\npartial; rolling months use complete month boundaries. No account compounding.\n\nNew M15 fingerprints are recorded. H1 overlap must match prior EURCHF history,\nand every native M15 hour's OHLC/price counts must match native H1. Broker-omitted\nwhole hours remain source gaps. No interpolation or manufactured candles.\nMID candles and assumed fills are not executable quote history.\n\nReview stressed regions before choosing a few anchors. RR selection, independent\nfinal strategy confirmation, exact live32 admission and forward execution checks\nremain later work. This research runner only requests candles; no orders/account reads.\n"
+
+
+def launch(background=True):
+    global STARTED, JOB_LOCK
+    with LOCK:
+        if STARTED:
+            return False
+        OUT.mkdir(parents=True,exist_ok=True)
+        # Linux Railway/Gunicorn: avoid two workers writing one result archive.
+        if os.name == 'posix':
+            import fcntl
+            handle = (OUT/'run.lock').open('a+')
+            try:
+                fcntl.flock(handle,fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                STARTED = True
+                return False
+            JOB_LOCK = handle
+        STARTED = True
+        # Reuse an exact-version complete result across multiple WSGI workers.
+        previous = read_status()
+        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and (OUT/RESULT_NAME).exists():
+            if JOB_LOCK is not None:
+                JOB_LOCK.close()
+                JOB_LOCK = None
+            return False
+        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 short discovery',runner_sha256=code_hash(),result_path=None)
+    if background:
+        threading.Thread(target=run_job,name='eurchf-m15-pass1-research',daemon=True).start()
+        return True
+    return run_job()
+
+
+def app(environ, start_response):
+    """Dependency-free WSGI app, including status while the worker is busy."""
+    path = environ.get('PATH_INFO','/')
+    if path.startswith(PREFIX):
+        path = path[len(PREFIX):] or '/'
+    method = environ.get('REQUEST_METHOD','GET')
+    if method not in ('GET','HEAD'):
+        body = b'{"error":"GET or HEAD only; no order endpoints"}'
+        start_response('405 Method Not Allowed',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
+        return [] if method == 'HEAD' else [body]
+    if path not in ('/','/health','/start','/status','/results'):
+        body = b'{"error":"Not found"}'
+        start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
+        return [] if method == 'HEAD' else [body]
+    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_PASS1_AUTOSTART','1')=='1'):
+        launch()
+    current = read_status()
+    code = '200 OK'
+    if path=='/results':
+        bundle = OUT/RESULT_NAME
+        if current.get('state') in ('complete','error') and current.get('result_path') and bundle.exists():
+            start_response(code,[('Content-Type','application/zip'),('Content-Length',str(bundle.stat().st_size)),
+                                 ('Content-Disposition',f'attachment; filename="{RESULT_NAME}"'),('Cache-Control','no-store')])
+            if method=='HEAD':
+                return []
+            def chunks():
+                with bundle.open('rb') as stream:
+                    while True:
+                        block = stream.read(1024*1024)
+                        if not block:
+                            break
+                        yield block
+            return chunks()
+        current = dict(error='Results are not ready',**current)
+        code = '409 Conflict'
+    elif path=='/health':
+        current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
+    elif path=='/':
+        current = dict(service='EUR/CHF M15 SHORT Pass 1 discovery',version=VERSION,status='/status',results='/results',
+                       start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
+    body = (json.dumps(current,allow_nan=False)+'\n').encode()
+    start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
+    return [] if method=='HEAD' else [body]
+
+
+class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
+    daemon_threads = True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--run',action='store_true',help='Run the historical study once without an HTTP server')
+    group.add_argument('--self-test',action='store_true',help='Synthetic mathematical/execution checks only; no OANDA request')
+    args = parser.parse_args()
+    if args.self_test:
+        print(json.dumps(dict(version=VERSION,market_data_used=False,checks=self_checks()),indent=2))
+        return 0
+    if args.run:
+        return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
+    port = int(os.getenv('PORT','8080'))
+    with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
+        if os.getenv('EURCHF_M15_PASS1_AUTOSTART','1')=='1':
+            launch()
+        print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
+        server.serve_forever()
+    return 0
+
 
 if __name__=='__main__':
- parser=argparse.ArgumentParser(description='Read-only live missed-signal audit');parser.add_argument('--run-once',action='store_true');args=parser.parse_args()
- if args.run_once:
-  result=run_audit();print(json.dumps(result,indent=2));sys.exit(0 if result['status']=='COMPLETE' else 1)
- start();ThreadingHTTPServer((os.getenv('HOST','0.0.0.0'),int(os.getenv('PORT','8000'))),Handler).serve_forever()
+    raise SystemExit(main())
