@@ -1,26 +1,13 @@
-#!/usr/bin/env python3
-"""EUR/CHF M15 SHORT — Pass 1 controlled engulfing discovery, 2026-10-08.
-
-Single file; Python 3.10+ standard library only; no orders/account endpoints.
-Run: python app.py                 (HTTP service + automatic research run)
-     python app.py --run           (one research run, no HTTP server)
-     python app.py --self-test     (synthetic software checks, no network)
-Also exposes a WSGI `app`: gunicorn --workers 1 --threads 4 app:app
-
-Environment: OANDA_TOKEN (existing research-service token), optional
-OANDA_API_URL=https://api-fxtrade.oanda.com or https://api-fxpractice.oanda.com,
-PORT=8080, EURCHF_M15_PASS1_OUTPUT_DIR=/tmp/eurchf_m15_short_pass1.
-Routes: /, /health, /start, /status, /results; descriptive route aliases too.
-
-Guide: FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md. The user clarified
-that this is a successful research guide, not rigid pair-independent rules.
-This pass adds CHF policy-date diagnostics and stop-first/open-gap sensitivity;
-neither is an optimized date filter. RR stays 3.0; no portfolio tuning here.
-619 unique geometries; 10/20/40 assumed adverse ticks; two exit assumptions.
-New M15 source is checked against broker H1 and the pinned historical H1 source.
-
-All history is exploratory/in-sample. MID candles/assumed costs are not real
-fills. Full normalized accepted ledgers and source candles are in the ZIP.
+"""EUR/CHF M15 SHORT — Pass 1B bounded structure/body extension, 2026-10-08.
+Python3.10+ standard library. Exact Pass1 history is in the companion ZIP;
+no credentials, broker requests, account reads or orders.
+70 geometries/75 memberships/420 cases; fixed RR3; 1/2/4-pip assumed costs.
+Run python app.py (HTTP and autostart), python app.py --run (CLI), or
+python app.py --self-test (synthetic checks). WSGI app:app; one worker recommended.
+PORT=8080; EURCHF_M15_PASS1B_OUTPUT_DIR optional; /status and /results.
+Keep EURCHF_M15_PASS1_FROZEN_DATA.zip alongside this file.
+Source, H1 aggregation, independent controls and every archived parent ledger
+must pass before new-grid outcome evaluation. All history remains exploratory.
 """
 from __future__ import annotations
 
@@ -51,7 +38,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, make_server
 
-VERSION = 'EURCHF_M15_SHORT_PASS1_ENGULFING_DISCOVERY_V1_2026_10_08'
+VERSION = 'EURCHF_M15_SHORT_PASS1B_STRUCTURE_BODY_BOUNDARIES_V2_GITHUB_SPLIT_2026_10_08'
 PAIR, SIDE, TIMEFRAME = 'EUR_CHF', 'SELL', 'M15'
 UTC = timezone.utc
 START = datetime(2005, 1, 1, tzinfo=UTC)
@@ -63,14 +50,24 @@ PINNED_H1_COUNT = 137819
 TICK, PIP, RR, WARMUP = 0.00001, 0.0001, 3.0, 200
 COSTS = (10, 20, 40)
 MODELS = ('NEAREST_OPEN_SENSITIVITY', 'STOP_FIRST_GAP_STRESS')
-LOOKBACKS = (20, 40, 60, 100, 150, 200)
-DISTANCES = (0.10, 0.25, 0.50, 0.75)
-BODIES = (0.0, 0.50, 0.75, 1.00, 1.25)
+LOOKBACKS = (40, 60, 80, 100, 150, 200, 250, 300)
+DISTANCES = (0.05, 0.075, 0.10, 0.15, 0.20)
+BODIES = (0.75, 1.00, 1.25, 1.50, 1.75)
 RANGES = (0.0, 1.00, 1.25, 1.50, 1.75)
+
+PARENT_IDS = ('RAW_ENGULF', 'BASELINE_CONTROL', 'M_L200_D010_B075_R125', 'M_L200_D010_B125_R000', 'M_L060_D010_B125_R150')
+FAMILIES = {
+ 'A_STRUCTURE': dict(lookback=200,distance_atr=.10,body_min_atr=.75,range_min_atr=1.25,axes={'lookback':(150,200,250,300),'distance_atr':DISTANCES}),
+ 'B_STRUCTURE': dict(lookback=200,distance_atr=.10,body_min_atr=1.25,range_min_atr=0.,axes={'lookback':(150,200,250,300),'distance_atr':DISTANCES}),
+ 'C_STRUCTURE': dict(lookback=60,distance_atr=.10,body_min_atr=1.25,range_min_atr=1.50,axes={'lookback':(40,60,80,100),'distance_atr':DISTANCES}),
+ 'B_BODY': dict(lookback=200,distance_atr=.10,body_min_atr=1.25,range_min_atr=0.,axes={'body_min_atr':BODIES}),
+ 'C_BODY': dict(lookback=60,distance_atr=.10,body_min_atr=1.25,range_min_atr=1.50,axes={'body_min_atr':BODIES}),
+}
+
 PINNED_H1_SHA256 = '9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac'
-RESULT_NAME = 'EURCHF_M15_SHORT_PASS1_ENGULFING_DISCOVERY_RESULTS.zip'
-OUT = Path(os.getenv('EURCHF_M15_PASS1_OUTPUT_DIR', '/tmp/eurchf_m15_short_pass1')).resolve()
-PREFIX = '/eurchf-m15-short-pass1'
+RESULT_NAME = 'EURCHF_M15_SHORT_PASS1B_STRUCTURE_BODY_BOUNDARIES_RESULTS.zip'
+OUT = Path(os.getenv('EURCHF_M15_PASS1B_OUTPUT_DIR', '/tmp/eurchf_m15_short_pass1b')).resolve()
+PREFIX = '/eurchf-m15-short-pass1b'
 LOCK = threading.RLock()
 STARTED = False
 JOB_LOCK = None
@@ -168,37 +165,27 @@ def config_key(config):
 
 def make_configs():
     configs, by_key, membership = [], {}, []
-
-    def add(label, role, lookback=0, distance=None, body=0., candle_range=0., close_max=None):
-        row = dict(config_id=label, lookback=lookback, distance_atr=distance,
-                   body_min_atr=body, range_min_atr=candle_range, close_max=close_max)
-        key = config_key(row)
+    def add(label,role,lookback=0,distance=None,body=0.,candle_range=0.,close_max=None):
+        row=dict(config_id=label,lookback=lookback,distance_atr=distance,body_min_atr=body,range_min_atr=candle_range,close_max=close_max)
+        key=config_key(row)
         if key not in by_key:
-            by_key[key] = row
-            configs.append(row)
-        row = by_key[key]
-        membership.append(dict(requested_label=label, stage_group=role, config_id=row['config_id']))
-
-    add('RAW_ENGULF', 'CONTROL_RAW')
-    add('BASELINE_CONTROL', 'CONTROL_PREDECLARED', 60, .25, .75, 1.25)
-    for x in (.25, .50, .75, 1., 1.25, 1.50):
-        add(f'BODY_{round(x*100):03d}', 'SINGLE_BODY', body=x)
-    for x in (.50, .75, 1., 1.25, 1.50, 1.75, 2.):
-        add(f'RANGE_{round(x*100):03d}', 'SINGLE_RANGE', candle_range=x)
-    for x in (.10, .20, .25, .33, .50):
-        add(f'CLOSE_{round(x*100):03d}', 'SINGLE_CLOSE', close_max=x)
-    for lb in LOOKBACKS:
-        for distance in DISTANCES:
-            add(f'STRUCT_L{lb:03d}_D{round(distance*100):03d}', 'SINGLE_STRUCTURE', lb, distance)
-    for lb in LOOKBACKS:
-        for distance in DISTANCES:
-            for body in BODIES:
-                for candle_range in RANGES:
-                    label = f'M_L{lb:03d}_D{round(distance*100):03d}_B{round(body*100):03d}_R{round(candle_range*100):03d}'
-                    add(label, 'STRUCTURE_BODY_RANGE_MATRIX', lb, distance, body, candle_range)
-    assert len(configs) == 619 and len({c['config_id'] for c in configs}) == 619
-    assert len(membership) == 644
-    return configs, membership
+            by_key[key]=row;configs.append(row)
+        membership.append(dict(requested_label=label,stage_group=role,config_id=by_key[key]['config_id']))
+    add('RAW_ENGULF','PARENT_CONTROL')
+    add('BASELINE_CONTROL','PARENT_CONTROL',60,.25,.75,1.25)
+    add('M_L200_D010_B075_R125','PARENT_CONTROL',200,.10,.75,1.25)
+    add('M_L200_D010_B125_R000','PARENT_CONTROL',200,.10,1.25,0.)
+    add('M_L060_D010_B125_R150','PARENT_CONTROL',60,.10,1.25,1.50)
+    for family,definition in FAMILIES.items():
+        rows=[{k:definition[k] for k in ('lookback','distance_atr','body_min_atr','range_min_atr')}]
+        for axis,levels in definition['axes'].items():
+            rows=[dict(row,**{axis:level}) for row in rows for level in levels]
+        for row in rows:
+            label=f"{family}_L{row['lookback']:03d}_D{round(row['distance_atr']*1000):04d}_B{round(row['body_min_atr']*100):03d}"
+            add(label,family,row['lookback'],row['distance_atr'],row['body_min_atr'],row['range_min_atr'])
+    assert len(configs)==70 and len({c['config_id'] for c in configs})==70
+    assert len(membership)==75
+    return configs,membership
 
 
 def atr14(bars):
@@ -247,8 +234,8 @@ def make_features(bars):
                    close_location=(cl-lo)/(hi-lo), reference_stop_pips=(hi + 10*TICK - cl)/PIP)
         for lb in LOOKBACKS:
             row[f'previous_high_{lb}'] = prev[lb][i]
-            row[f'signed_distance_atr_{lb}'] = (hi-prev[lb][i])/atr[i]
-            row[f'abs_distance_atr_{lb}'] = abs(hi-prev[lb][i])/atr[i]
+            row[f'signed_distance_atr_{lb}'] = None if prev[lb][i] is None else (hi-prev[lb][i])/atr[i]
+            row[f'abs_distance_atr_{lb}'] = None if prev[lb][i] is None else abs(hi-prev[lb][i])/atr[i]
         raw[i] = row
     return raw
 
@@ -258,7 +245,7 @@ def selected_indices(config, features):
     for i, row in features.items():
         if row['body_atr'] < config['body_min_atr'] or row['range_atr'] < config['range_min_atr']:
             continue
-        if config['lookback'] and row[f"abs_distance_atr_{config['lookback']}"] > config['distance_atr']:
+        if config['lookback'] and (row[f"abs_distance_atr_{config['lookback']}"] is None or row[f"abs_distance_atr_{config['lookback']}"] > config['distance_atr']):
             continue
         if config['close_max'] is not None and row['close_location'] > config['close_max']:
             continue
@@ -349,82 +336,91 @@ def signal_hash(indices, bars):
     return sha('\n'.join(iso(bars[i][0]) for i in indices).encode())
 
 
-def fetch_history(granularity='M15'):
-    """Read-only candle GETs. Fixed chunks stay below the 5,000-candle limit."""
-    if granularity not in ('M15','H1'):
-        raise RuntimeError('Only M15/H1 candle reads are supported.')
-    token = os.getenv('OANDA_TOKEN','').strip()
-    if not token or any(ord(c)<32 or ord(c)==127 for c in token):
-        raise RuntimeError('Configure OANDA_TOKEN without quotes, newlines or control characters.')
-    api=os.getenv('OANDA_API_URL','https://api-fxtrade.oanda.com').rstrip('/')
-    if api not in ('https://api-fxtrade.oanda.com','https://api-fxpractice.oanda.com'):
-        raise RuntimeError('OANDA_API_URL must be the official fxtrade or fxpractice HTTPS API host.')
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self,req,fp,code,msg,headers,newurl):
-            raise RuntimeError('Unexpected broker redirect; credentials were not forwarded.')
-    opener=urllib.request.build_opener(NoRedirect)
-    step=BAR if granularity=='M15' else H1_BAR
-    span=timedelta(days=35 if granularity=='M15' else 180)
-    total=math.ceil((END-START)/span)
-    cursor,by_time,volumes,receipts=START,{},{},[]
-    while cursor < END:
-        end=min(cursor+span,END)
-        params=dict(price='M',granularity=granularity,smooth='false',includeFirst='true',
-                    **{'from':iso(cursor),'to':iso(end)})
-        url=api+'/v3/instruments/EUR_CHF/candles?'+urllib.parse.urlencode(params)
-        payload=None
-        begin=time.monotonic()
-        for attempt in range(3):
-            req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/json'},method='GET')
-            try:
-                with opener.open(req,timeout=45) as response:
-                    payload=json.load(response)
-                break
-            except urllib.error.HTTPError as exc:
-                if exc.code not in (429,500,502,503,504) or attempt==2:
-                    raise RuntimeError(f'Broker {granularity} candle request failed: HTTP {exc.code}, chunk {len(receipts)+1}.') from None
-            except (urllib.error.URLError,TimeoutError):
-                if attempt==2:
-                    raise RuntimeError(f'Broker {granularity} candle request failed after three attempts, chunk {len(receipts)+1}.') from None
-            time.sleep(attempt+1)
-        if not isinstance(payload,dict) or payload.get('instrument')!=PAIR or payload.get('granularity')!=granularity:
-            raise RuntimeError('Unexpected broker candle instrument/granularity.')
-        candles=payload.get('candles')
-        if not isinstance(candles,list) or not candles:
-            raise RuntimeError(f'Empty {granularity} history chunk {len(receipts)+1}; shortened history is not accepted.')
-        included,duplicates=0,0
-        for candle in candles:
-            t=when(candle['time'])
-            if not cursor <= t <= end:
-                raise RuntimeError('Candle outside the requested broker chunk.')
-            if not START <= t < END or t==end:
-                continue  # exclusive chunk end; next chunk includes it
-            if candle.get('complete') is not True:
-                raise RuntimeError('Incomplete candle inside the frozen historical window.')
-            mid=candle.get('mid')
-            volume=candle.get('volume')
-            if not isinstance(mid,dict) or isinstance(volume,bool) or not isinstance(volume,int) or volume<=0:
-                raise RuntimeError('Completed historical candle lacks valid MID OHLC/price count.')
-            row=(t,*[float(mid[k]) for k in ('o','h','l','c')])
-            if t in by_time:
-                if by_time[t]!=row or volumes[t]!=volume:
-                    raise RuntimeError('Conflicting duplicate broker candle at '+iso(t))
-                duplicates+=1
-            by_time[t]=row
-            volumes[t]=volume
-            included+=1
-        if not included:
-            raise RuntimeError('A historical request yielded no candles inside its own chunk.')
-        receipts.append(dict(granularity=granularity,start=iso(cursor),end_exclusive=iso(end),
-                             candles_returned=len(candles),included=included,duplicate_count=duplicates,
-                             elapsed_seconds=round(time.monotonic()-begin,3),http_method='GET',status_code=200))
-        fraction=len(receipts)/total
-        set_status(state='fetching',progress=round((2+16*fraction) if granularity=='M15' else (18+8*fraction)),
-                   message=f'EUR/CHF {granularity} full-history chunk {len(receipts)}/{total}')
-        cursor=end
-    bars=[by_time[t] for t in sorted(by_time)]
-    validate_bars(bars,step)
-    return bars,volumes,receipts
+def load_frozen_history(work):
+    if not FROZEN_SOURCE_FILE.is_file():
+        raise RuntimeError('Missing EURCHF_M15_PASS1_FROZEN_DATA.zip. Upload this file alongside app.py in the same folder.')
+    payload=FROZEN_SOURCE_FILE.read_bytes()
+    if sha(payload)!=EMBEDDED_PAYLOAD_SHA256:
+        raise RuntimeError('Frozen source archive SHA mismatch.')
+    shutil.copyfile(FROZEN_SOURCE_FILE,work/'EURCHF_M15_PASS1_FROZEN_DATA.zip')
+    with zipfile.ZipFile(io.BytesIO(payload)) as bundle:
+        if set(bundle.namelist())!=set(EMBEDDED_MEMBER_PINS) or bundle.testzip() is not None:
+            raise RuntimeError('Frozen source archive members/CRC mismatch.')
+        for name,pin in EMBEDDED_MEMBER_PINS.items():
+            data=bundle.read(name)
+            if len(data)!=pin['bytes'] or sha(data)!=pin['sha256']:
+                raise RuntimeError('Frozen source member SHA/size mismatch: '+name)
+            destination='archived_pass1_fetch_receipts.csv' if name=='fetch_receipts.csv' else name
+            (work/destination).write_bytes(data)
+    def read_source(name,step):
+        bars,volumes=[],{}
+        with (work/name).open(newline='') as stream:
+            for row in csv.DictReader(stream):
+                t=when(row['time']);v=int(row['volume'])
+                if v<0:raise RuntimeError('Negative archived price count.')
+                bars.append((t,*[float(row[k]) for k in ('open','high','low','close')]))
+                volumes[t]=v
+        validate_bars(bars,step)
+        return bars,volumes
+    bars,volumes=read_source('source_candles.csv',BAR)
+    h1,hvolumes=read_source('source_h1_crosscheck_candles.csv',H1_BAR)
+    if len(bars)!=546647 or source_hash(bars)!='63eeea194c7106cfe0ebe248e96a392ab876611da5fc2fb569e3b2f304eaaa22':
+        raise RuntimeError('Pinned Pass 1 M15 source mismatch.')
+    if len(h1)!=137939 or source_hash(h1)!='b3b686ad3a92569d971d2d9412c8afe64a5ad8f54b5d097840c4a2d6cebbd2c0':
+        raise RuntimeError('Pinned Pass 1 H1 source mismatch.')
+    return bars,volumes,h1,hvolumes
+
+
+def archived_parent_parity(work,bars,features,paths,configs):
+    """Match every accepted parent field to the actually returned Pass 1 archive."""
+    expected=defaultdict(list)
+    with (work/'parent_pass1_accepted_ledgers.csv').open(newline='') as source:
+        for row in csv.DictReader(source):
+            expected[(row['config_id'],row['execution_model'],int(row['cost_ticks']))].append(row)
+    checks=[]
+    provenance=json.loads((work/'parent_pass1_provenance.json').read_text())
+    parent_summaries={(r['config_id'],r['execution_model'],int(r['cost_ticks'])):r for r in provenance['parent_summaries']}
+    integer={'cost_ticks','accepted_sequence','signal_index','exit_index'}
+    numeric={'reference_entry','historical_fill','stop','target','risk_price','exit_price','r'}
+    expected_keys={(cid,model,cost) for cid in PARENT_IDS for model in MODELS for cost in COSTS}
+    if not set(expected)<=expected_keys or set(parent_summaries)!=expected_keys:
+        raise RuntimeError('Incomplete parent case archive.')
+    for config in configs:
+        cid=config['config_id']
+        if cid not in PARENT_IDS:continue
+        indices=selected_indices(config,features)
+        for model in MODELS:
+            for cost in COSTS:
+                key=(cid,model,cost);old=expected[key]
+                archived_count=int(parent_summaries[key]['closed_trades'])+int(parent_summaries[key]['open_at_data_end'])
+                if len(old)!=archived_count:
+                    raise RuntimeError('Incomplete parent accepted row archive for '+str(key))
+                accepted,_,_=replay(indices,paths,model,cost)
+                mismatches=abs(len(accepted)-len(old))
+                for seq,(i,ref) in enumerate(zip(accepted,old),1):
+                    p=paths[i][model];fill=geometry(p,cost)[0]
+                    actual=dict(config_id=cid,execution_model=model,cost_ticks=cost,accepted_sequence=seq,
+                        signal_index=i,exit_index=p['exit_index'],signal=p['signal'],entry=p['entry'],exit=p['exit'],
+                        reference_entry=p['reference_entry'],historical_fill=fill,stop=p['stop'],target=p['target'],
+                        risk_price=p['stop']-fill,exit_price=p['exit_price'],reason=p['reason'],r=r_value(p,cost))
+                    if set(actual)!=set(ref):mismatches+=1;continue
+                    for field,value in actual.items():
+                        archived=ref[field]
+                        if value is None:mismatches+=archived!=''
+                        elif field in integer:mismatches+=int(archived)!=value
+                        elif field in numeric:mismatches+=not archived or abs(float(archived)-value)>1e-10
+                        else:mismatches+=str(value)!=archived
+                checks.append(dict(config_id=cid,execution_model=model,cost_ticks=cost,
+                    check='complete_archived_accepted_ledger_fields',status='PASS' if mismatches==0 else 'FAIL',
+                    actual=mismatches,expected=0,reference_accepted=len(old)))
+                raw_match=signal_hash(indices,bars)==parent_summaries[key]['raw_signal_sha256']
+                checks.append(dict(config_id=cid,execution_model=model,cost_ticks=cost,
+                    check='archived_qualifying_signal_fingerprint',status='PASS' if raw_match else 'FAIL',
+                    actual=raw_match,expected=True,reference_accepted=len(old)))
+    write_csv(work/'parent_pass1_parity.csv',checks)
+    if any(r['status']!='PASS' for r in checks):
+        raise RuntimeError('Pass 1 complete parent ledger/signal parity failed; no new-grid results are valid.')
+    return checks
 
 
 def validate_bars(bars, step=BAR):
@@ -502,14 +498,14 @@ def crosscheck_history(work, bars, volumes, h1, h1_volumes):
 def hard_controls(bars, features, paths, configs):
     """Independent signal/ATR/ledger arithmetic on predeclared controls.
 
-    No archived EURCHF M15 results exist yet. These are implementation controls
+    Archived EURCHF M15 Pass 1 controls now exist. These are implementation controls
     on the same source, not fresh out-of-sample confirmation of a strategy.
     """
     rows=[]
     def check(name,actual,expected):
         rows.append(dict(check=name,status='PASS' if actual==expected else 'FAIL',actual=actual,expected=expected))
-    check('configuration_count',len(configs),619)
-    check('configuration_keys_unique',len({config_key(c) for c in configs}),619)
+    check('configuration_count',len(configs),70)
+    check('configuration_keys_unique',len({config_key(c) for c in configs}),70)
     check('complete_years_have_observed_candles',all(any(b[0].year==y for b in bars) for y in range(2005,2027)),True)
     check('first_candle_in_first_requested_week',START <= bars[0][0] < START+timedelta(days=7),True)
     check('last_candle_in_final_requested_day',END-timedelta(days=1) <= bars[-1][0] < END,True)
@@ -529,13 +525,22 @@ def hard_controls(bars, features, paths, configs):
              and bars[k][1]>=bars[k-1][4] and bars[k][4]<=bars[k-1][1] and atr_ref[k]>0]
     check('independent_all_raw_engulf_indices',list(features)==raw_ref,True)
     maximum_feature_error=0.
+    maximum_normalized_distance_error=0.
     for k in raw_ref:
         high,low,op,cl=bars[k][2],bars[k][3],bars[k][1],bars[k][4]
         for lb in LOOKBACKS:
+            if k<lb:
+                check(f'unavailable_prior_high_{k}_{lb}_blank',features[k][f'previous_high_{lb}'] is None,True)
+                continue
             previous=max(b[2] for b in bars[k-lb:k])
             maximum_feature_error=max(maximum_feature_error,abs(previous-features[k][f'previous_high_{lb}']))
+            signed=(high-previous)/atr_ref[k]
+            maximum_normalized_distance_error=max(maximum_normalized_distance_error,
+                abs(signed-features[k][f'signed_distance_atr_{lb}']),
+                abs(abs(signed)-features[k][f'abs_distance_atr_{lb}']))
     check('all_prior_high_features_match_direct_slices',maximum_feature_error==0,True)
-    for cid in ('RAW_ENGULF','BASELINE_CONTROL'):
+    check('all_signed_absolute_distances_match_independent_ATR_and_slices',maximum_normalized_distance_error<=1e-10,True)
+    for cid in PARENT_IDS:
         config=next(c for c in configs if c['config_id']==cid)
         indices=[]
         for k in raw_ref:
@@ -543,7 +548,7 @@ def hard_controls(bars, features, paths, configs):
             op,hi,lo,cl=bars[k][1:]
             if abs(cl-op)/atr < config['body_min_atr'] or (hi-lo)/atr < config['range_min_atr']:
                 continue
-            if config['lookback'] and abs(hi-max(b[2] for b in bars[k-config['lookback']:k]))/atr > config['distance_atr']:
+            if config['lookback'] and (k<config['lookback'] or abs(hi-max(b[2] for b in bars[k-config['lookback']:k]))/atr > config['distance_atr']):
                 continue
             if config['close_max'] is not None and (cl-lo)/(hi-lo)>config['close_max']:
                 continue
@@ -667,7 +672,7 @@ def period_definitions():
 PERIODS = period_definitions()
 
 
-PROTOCOL = "# EUR/CHF M15 SHORT — Pass 1 protocol, frozen 8 October 2026\n\nUse FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md as a flexible guide.\nQuestion: does exact bearish engulfing near prior highs have a coherent region\nunder assumed execution costs? This is standalone entry discovery. All tested\nhistory is exploratory; repeated inspection does not create fresh out-of-sample data.\n\n## Predeclared grid\n619 unique geometries, 644 study memberships, 3,714 model/cost cases.\nControls: RAW_ENGULF and BASELINE_CONTROL. The latter is a generic comparison:\nLB60 / absolute high distance <=0.25 ATR / body >=0.75 ATR / range >=1.25 ATR.\nIt is not a previously proven M15 strategy or the frozen H1 strategy copied over.\n\n- Single body minima: 0.25, 0.50, 0.75, 1.00, 1.25, 1.50 ATR.\n- Single range minima: 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00 ATR.\n- Single close-location maxima: 0.10, 0.20, 0.25, 0.33, 0.50.\n- Structure singles and matrix: previous-bar lookbacks 20, 40, 60, 100, 150, 200;\n  absolute high distances 0.10, 0.25, 0.50, 0.75 ATR.\n- Matrix body minima: 0, 0.50, 0.75, 1.00, 1.25 ATR.\n- Matrix range minima: 0, 1.00, 1.25, 1.50, 1.75 ATR; no matrix close filter.\n\nZero body/range means no filter. LB60 means 15 hours of observed M15 candles,\nnot always 15 wall-clock hours. Prior high excludes the signal candle. Signed\ndistances are exported. Threshold equality is included. Duplicate geometries\nrun once with all requested memberships retained. No session/weekday/date filter,\nnew indicator hunt or RR search is included in this discovery pass.\n\n## Source, coverage and implementation gates\nOfficial OANDA completed, unsmoothed MID M15. Request 2005-01-01 through\n2026-10-08T00:00:00Z exclusive (cutoff: 01:00 BST on 8 October). Warm every\nconfiguration with the first 200 observed bars. ATR14 uses TR1..14 as its seed,\nthen causal Wilder recurrence, including the completed signal candle.\n\nFetch fixed 35-day M15 chunks (at most 3,360 calendar slots) and 180-day H1\nchunks. Requests are candle GETs only, with bounded retries and redirects blocked.\nMissing chunks, malformed data, incomplete candles inside the frozen window or\nconflicting duplicates stop the run. Credentials are not written to results.\n\nThis is the first EURCHF M15 study: no expected M15 count/hash is invented.\nRecord canonical five-decimal OHLC and volume-containing CSV fingerprints, raw\nsignal fingerprints and full accepted-ledger digests for subsequent reuse.\nEvery requested year must contain bars; complete years must reach January and\nDecember. First candle must be in the first requested week, last candle in the\nfinal requested day. Coverage, native gaps and every HTTP chunk receipt are exported.\n\nAggregate ALL native M15 candles by UTC hour. Every observed hour must appear\nin both M15 and native H1 sources; OHLC and sum of price counts must match.\nSparse M15 hours pass only when their native bars exhaust H1 price counts and\nreproduce its OHLC. No flat synthetic candles or interpolation. Whole-hour\nbroker omissions and closures remain visible. This verifies consistency of the\nbroker source, not accuracy against a separate provider. The historical H1\nportion before 2026-10-01 must reproduce our prior 137,819 candles and SHA256:\n9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac\nChanged history or a source mismatch stops discovery; do not silently relax gates.\n\nIndependent calculations check ATR, every raw engulf index and all prior-high\nfeatures using direct slices. Separate chronological bar scans for RAW and\nBASELINE controls must match every accepted entry/exit, price, outcome and R\nat both exit models and all costs. These are implementation checks on the same\nsource, not final independent validation of a subsequently chosen strategy.\nAn error ZIP contains diagnostics without partial performance files.\n\n## Signals and execution assumptions\nExact bearish engulf: previous close > open; current close < open;\ncurrent open >= previous close; current close <= previous open. Reject dojis.\nReference entry = completed signal close, timestamped signal start +15 minutes.\nStop = signal high +0.00010 (10 ticks /1 pip).\nTarget = reference entry -3*(stop-reference entry). RR3 is fixed for entry discovery.\nAssumed adverse short fill = reference entry -10/20/40 ticks (1/2/4 pips).\nStop/target stay fixed; R denominator = stop-assumed fill.\n\nRequire 0 < target < fill < stop. Reject invalid geometry and entries at/after\ncutoff before occupancy. Replay every geometry/model/cost independently with\none position at a time. Open trades occupy the strategy through cutoff and have\nblank exit/R. A signal on the exit candle may enter at that candle's close.\nIsolated qualifying signals can overlap and are labelled separately from replay.\n\nPrimary model STOP_FIRST_GAP_STRESS: observed opening >=stop fills at max(open,stop);\nopening <=target fills at target without favorable improvement; otherwise a\nbar touching both barriers loses. Gap exits use candle start; other exits use\ncandle end. Adverse opening gaps can lose more than 1R.\nNEAREST_OPEN_SENSITIVITY assumes the nearer extreme is touched first on a\nboth-barrier candle (tie loses), uses barrier fills and candle-end exits. It is\nan alternate OHLC assumption, not archived parity or the preferred selection model.\n\nFirst-touch scanning begins on the next observed candle. Hypothetical entry at\nthe signal close is assumed even before a market closure; next observed open\nand delays are disclosed. MID prices plus adverse entry penalties are assumed\nscenarios, not historical bid/ask execution. Ask-side short stops, financing,\nintrabar jump fills and guaranteed fills are unobserved. Neither model bounds\nworst-case loss. Cost fractions relative to stop size are reported explicitly.\n\n## Reporting and decision sequence\nExport every configuration, weak/empty case, membership, source candle, feature,\npath, full normalized accepted ledger, both joined control ledgers, open/invalid\nentry, full-replay comparison, neighbourhood and tested boundary.\nR/drawdown are additive risk units, not account percentages. Closed drawdown\nexcludes floating position risk. No NAV compounding or currency conversion here.\n\nCalendar years, eras, latest 1/2/3/5/10 years and every complete calendar-month\n12/24/36-month rolling window include inactivity. Entry cohorts [start,end)\nreport eventual trade R; realized exits (start,end] report cash R within the period.\nZero-entry years and windows remain visible. October 2026 is a partial month:\nit enters full-history/latest-year figures but is never called a complete rolling\nmonth endpoint. Open trades are right-censored, not zero-profit completed trades.\n\nPre-floor, floor period, 15 January 2015 and post-event diagnostics keep all dates.\nShock exposure is attribution, not a counterfactual deletion of exposed trades.\nReview stressed costs, stable interior regions, frequency, weak eras/recent years\nand event concentration before freezing a few distinguishable anchors. No auto winner.\n\nEntry rules freeze before RR selection, independent final ledgers, exact current\n32-strategy portfolio admission (including EURCHF H1 short overlap) and forward\nexecution checks. Portfolio admission is a later gate, not a tuning objective.\nA weak generic control alone does not exhaust the pair; broad unsupported\nresults do not justify unlimited filter searching. This runner has no orders.\n\nPrimary references:\nhttps://developer.oanda.com/rest-live-v20/instrument-ep/\nhttps://developer.oanda.com/rest-live-v20/instrument-df/\nhttps://www.snb.ch/en/publications/communication/press-releases/2011/pre_20110906\nhttps://www.snb.ch/en/publications/communication/press-releases/2015/pre_20150115\n"
+PROTOCOL = "# EUR/CHF M15 SHORT — Pass 1B structure/body boundaries\nFrozen 8 October 2026, before inspecting any new-grid market results.\nGuide: FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md (flexible).\n\nQuestion: were Pass 1's marginal 2-pip-positive edge cells isolated, or is there\nan interpretable wider neighbourhood at longer lookbacks, tighter distances or\nlarger bodies? Pass 1 had no positive geometry at 4 pips. This bounded extension\nis exploratory, not confirmation or approval to add a strategy.\n\n## Frozen design\n70 unique geometries, 75 study memberships, 420 model/cost cases.\nPreserve five exact parent controls and their original configuration IDs:\nRAW_ENGULF; BASELINE_CONTROL (LB60/D0.25/B0.75/R1.25);\nA=M_L200_D010_B075_R125; B=M_L200_D010_B125_R000;\nC=M_L060_D010_B125_R150. A/B/C are research reference cells, not frozen winners.\n\nThree separate structure grids, each 4 lookbacks x5 distances:\n- A: LB150/200/250/300; D0.05/0.075/0.10/0.15/0.20; B0.75/R1.25 fixed.\n- B: same lookbacks/distances; B1.25/R0 fixed.\n- C: LB40/60/80/100; same distances; B1.25/R1.50 fixed.\nTwo separate body ladders at fixed structure/range:\n- B: LB200/D0.10/R0; B0.75/1.00/1.25/1.50/1.75.\n- C: LB60/D0.10/R1.50; same body minima.\nDo not form a new lookback x distance x body x range Cartesian search.\nNo new range/close/indicator, session/weekday/date exclusion or RR sweep.\nDuplicate geometries run once; requested memberships remain visible. R0 means\nno range filter. Body >=1.25 implies range >=1.25: identical signal streams\nacross families are counted explicitly, not independent successes.\n\nAdjacency is within each frozen family: one step on one study axis only.\nBoundary flags identify every lower/upper tested edge. Neighbourhood counts also\nshow distinct raw-signal fingerprints. A positive boundary is unresolved;\ndo not automatically extend again or select the greatest historical R.\n\n## Exact data and mandatory gates\nDefault is offline: exact completed OANDA unsmoothed MID Pass 1 source in the\ncompanion EURCHF_M15_PASS1_FROZEN_DATA.zip alongside app.py.\nNo token or API call needed. Requested window 2005-01-01 to 2026-10-08T00:00Z,\nexclusive. Native546647 M15 candles, actual first2005-01-02T18:45Z and\nlast2026-10-07T23:45Z. Source CSV SHA256:\n59f3a83fb838d9921f9f2433cd928a77ef451301bec466a3fedd67744ae2f707\nCanonical five-decimal OHLC SHA256:\n63eeea194c7106cfe0ebe248e96a392ab876611da5fc2fb569e3b2f304eaaa22\nNative H1 archive has137939 bars and canonical SHA256:\nb3b686ad3a92569d971d2d9412c8afe64a5ad8f54b5d097840c4a2d6cebbd2c0\n\nVerify the companion ZIP and every member SHA and byte size, then exact M15/H1 counts and\ncanonical hashes. All native M15 hours must exhaust H1 price counts and match\nOHLC; pre-October H1 must reproduce the prior137819 candles/hash. No synthetic\nbars, interpolation or refreshed/extended history. Preserve original receipts\nas archived fetch evidence, not requests performed by this offline run.\n\nATR14 uses TR1..14 seed and causal Wilder recurrence. Original warm-up200\nremains for all old controls. Longer lookbacks additionally require their full\nobserved-bar history; missing prior-high features are blank and ineligible for\nthat configuration only. Direct-slice implementation checks cover all features.\nComplete accepted parent ledgers must reproduce every field at both exit models\nand all three costs BEFORE evaluating new-grid outcomes. Parent ledger count/R\nagreement alone is insufficient. Source/control failure produces an error ZIP\nwithout partial performance results. This is same-source software parity,\nnot fresh out-of-sample evidence. Parent archive had CRLF-only runner changes.\n\n## Execution, unchanged from Pass 1\nExact bearish engulf: prevC>prevO, C<O, O>=prevC, C<=prevO; dojis rejected.\nPrevious high excludes signal; absolute (signalH-priorH)/ATR <=D. Body and range\nminimum equality included. No close-location filter. Previous N observed M15\nbars are market bars, not N*15 minutes of continuous wall-clock time.\nReference entry=completed signal close; stop=signalH+10ticks(1pip);\ntarget=close-3*(stop-close). Fixed RR3. Assumed short entry penalty10/20/40ticks\n(1/2/4pips); stop/target fixed; R denominator=stop-assumed_fill.\nRequire0<target<fill<stop, with invalid geometry/cutoff rejected before occupancy.\nReplay each configuration/model/cost separately with one position at a time;\nopen trade occupies to cutoff and has blank R; signal on exit candle can enter.\n\nPrimary STOP_FIRST_GAP_STRESS: stop-opening gaps fill at max(open,stop), favorable\ntarget-opening gaps capped at target, simultaneous barrier touches lose.\nOpening-gap exits timestamp at candle start; other exits at candle end.\nAlternate NEAREST_OPEN_SENSITIVITY uses nearer extreme first (tie loses), barrier\nfills/candle-end time. It is an OHLC sensitivity assumption, not observed path.\nScan next observed bar; assumed close fill before closures remains disclosed.\nMID+entry penalties do not reconstruct bid/ask, ask-side short stops, financing,\nintrabar jump execution or fill availability; neither model bounds loss.\n\n## Reporting and stop decision\nExport all cases including weak/empty rows; complete normalized accepted ledgers,\nsource candles, path table, five joined control ledgers, full-replay adds/removals\nagainst every parent, grid/memberships, family adjacency/distinct-signal counts,\ncalendar/era/recent figures, zero-entry years and rolling12/24/36month windows,\nCHF-event attribution and cost/exit sensitivity. No date deletion.\nEntry cohorts[start,end) eventual R differ from realized exits(start,end].\n2026/October partial; partialOctober never a complete rolling endpoint.\nR/closed DD are additive units, not NAV% or floating-risk drawdown.\n\nReview breadth at2pips and survival at4pips, frequency, weak eras and worst\nrolling windows. Recovered frequency must account for displaced accepted trades.\nNo automatic winner or portfolio score. If improvements remain isolated,\ncost-fragile or sparse, park this tested branch rather than promise more tuning.\nIf an interpretable region emerges, freeze a few distinct anchors before any\nconditional work. RR stays last; independent final ledgers/current live32\nportfolio admission and prospective execution remain later gates.\nThis runner cannot read accounts, send orders or alter live services.\n"
 
 
 def write_inputs(work, bars, features, paths, configs, memberships, dataset_kind, volumes=None):
@@ -743,7 +748,7 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
     outcome = {(model,cost):{i:r_value(paths[i][model],cost) for i in paths} for model in MODELS for cost in COSTS}
     refs = {}
     for config in configs:
-        if config['config_id'] in ('RAW_ENGULF','BASELINE_CONTROL'):
+        if config['config_id'] in PARENT_IDS:
             indices = selected_indices(config,features)
             for model in MODELS:
                 for cost in COSTS:
@@ -782,7 +787,7 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
                             exit_price=p['exit_price'],reason=p['reason'],r=rs_by_i[i])
                         sinks['accepted_trades.csv'].add({k:full[k] for k in definitions['accepted_trades.csv']})
                         digest.update((json.dumps(full,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
-                        if cid in ('RAW_ENGULF','BASELINE_CONTROL'):
+                        if cid in PARENT_IDS:
                             sinks['control_accepted_ledgers.csv'].add(full)
                         et,xt = path_times[(i,model)]
                         bucket = bisect.bisect_right(BOUNDS,et)-1
@@ -854,7 +859,7 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
                         rolled.update({f'worst_{width}m_realized_r':worst['realized_r'],
                                        f'worst_{width}m_start':worst['start'],f'worst_{width}m_end':worst['end'],
                                        f'zero_entry_{width}m_windows':empty})
-                    for reference in ('RAW_ENGULF','BASELINE_CONTROL'):
+                    for reference in PARENT_IDS:
                         reference_ids = refs.get((reference,model,cost))
                         if reference_ids is None:
                             continue  # only used by tiny synthetic subset tests
@@ -914,35 +919,45 @@ def analyze(work, bars, features, paths, configs, *, progress=True):
     return summaries,counts
 
 
-def write_neighbours(work, configs, summaries):
-    axes = {'lookback':LOOKBACKS,'distance_atr':DISTANCES,'body_min_atr':BODIES,'range_min_atr':RANGES}
-    grid = {config_key(c):c for c in configs if c['lookback'] in LOOKBACKS and c['close_max'] is None
-            and c['body_min_atr'] in BODIES and c['range_min_atr'] in RANGES and c['distance_atr'] in DISTANCES}
-    rows = []
-    for config in grid.values():
-        neighbours,edges = set(),[]
-        for name,levels in axes.items():
-            index = levels.index(config[name])
-            if index in (0,len(levels)-1):
-                edges.append(name+('=LOWER' if index==0 else '=UPPER'))
-            for adjacent in (index-1,index+1):
-                if 0 <= adjacent < len(levels):
-                    other = dict(config,**{name:levels[adjacent]})
-                    if config_key(other) in grid:
-                        neighbours.add(grid[config_key(other)]['config_id'])
-        for model in MODELS:
-            for cost in COSTS:
-                values = [summaries[(cid,model,cost)] for cid in sorted(neighbours)]
-                rows.append(dict(config_id=config['config_id'],execution_model=model,cost_ticks=cost,
-                    tested_boundaries=';'.join(edges),adjacent_configurations=len(values),
-                    positive_total_r_neighbours=sum(r['total_r'] > 0 for r in values),
-                    median_neighbour_total_r=quantile([r['total_r'] for r in values],.5),
-                    minimum_neighbour_total_r=min((r['total_r'] for r in values),default=None),
-                    minimum_neighbour_closed_trades=min((r['closed_trades'] for r in values),default=None),
-                    neighbour_ids=';'.join(sorted(neighbours))))
-    write_csv(work/'neighbourhood_summary.csv',rows,
-              CASE+['tested_boundaries','adjacent_configurations','positive_total_r_neighbours',
-                    'median_neighbour_total_r','minimum_neighbour_total_r','minimum_neighbour_closed_trades','neighbour_ids'])
+def write_neighbours(work,configs,summaries):
+    _,memberships=make_configs()
+    by_id={c['config_id']:c for c in configs};rows=[]
+    for family,definition in FAMILIES.items():
+        ids={r['config_id'] for r in memberships if r['stage_group']==family and r['config_id'] in by_id}
+        grid={config_key(by_id[cid]):by_id[cid] for cid in ids}
+        for config in sorted(grid.values(),key=lambda c:c['config_id']):
+            neighbours=set();edges=[]
+            for axis,levels in definition['axes'].items():
+                index=levels.index(config[axis])
+                if index in (0,len(levels)-1):edges.append(axis+('=LOWER' if index==0 else '=UPPER'))
+                for adjacent in (index-1,index+1):
+                    if 0<=adjacent<len(levels):
+                        other=dict(config,**{axis:levels[adjacent]})
+                        if config_key(other) in grid:neighbours.add(grid[config_key(other)]['config_id'])
+            for model in MODELS:
+                for cost in COSTS:
+                    values=[summaries[(cid,model,cost)] for cid in sorted(neighbours)]
+                    ours=summaries[(config['config_id'],model,cost)]['raw_signal_sha256']
+                    fingerprints={v['raw_signal_sha256'] for v in values}
+                    rows.append(dict(study_family=family,config_id=config['config_id'],execution_model=model,cost_ticks=cost,
+                        tested_boundaries=';'.join(edges),adjacent_configurations=len(values),
+                        distinct_neighbour_raw_streams=len(fingerprints),neighbours_identical_to_this_raw_stream=sum(v['raw_signal_sha256']==ours for v in values),
+                        positive_total_r_neighbours=sum(v['total_r']>0 for v in values),
+                        distinct_positive_neighbour_raw_streams=len({v['raw_signal_sha256'] for v in values if v['total_r']>0}),
+                        median_neighbour_total_r=quantile([v['total_r'] for v in values],.5),
+                        minimum_neighbour_total_r=min((v['total_r'] for v in values),default=None),
+                        minimum_neighbour_closed_trades=min((v['closed_trades'] for v in values),default=None),
+                        neighbour_ids=';'.join(sorted(neighbours))))
+    fields=['study_family']+CASE+['tested_boundaries','adjacent_configurations','distinct_neighbour_raw_streams',
+        'neighbours_identical_to_this_raw_stream','positive_total_r_neighbours','distinct_positive_neighbour_raw_streams',
+        'median_neighbour_total_r','minimum_neighbour_total_r','minimum_neighbour_closed_trades','neighbour_ids']
+    write_csv(work/'neighbourhood_summary.csv',rows,fields)
+    groups=defaultdict(list)
+    for config in configs:
+        digest=summaries[(config['config_id'],MODELS[0],COSTS[0])]['raw_signal_sha256']
+        groups[digest].append(config['config_id'])
+    write_csv(work/'distinct_raw_signal_groups.csv',[dict(raw_signal_sha256=digest,configuration_count=len(ids),
+        config_ids=';'.join(sorted(ids)),interpretation='Shared qualifying stream, not independent evidence; full p0 replay reported separately') for digest,ids in sorted(groups.items())])
 
 
 def self_checks():
@@ -966,7 +981,7 @@ def self_checks():
     atr = atr14(uniform)
     check(atr[:14] == [None]*14 and all(x == 2. for x in atr[14:]),'Wilder ATR seed and recursion')
     c,m = make_configs()
-    check(len(c)==619 and len(m)==644,'Complete grid and duplicate membership control')
+    check(len(c)==70 and len(m)==75,'Complete grid and duplicate membership control')
     check(len([x for x in c if x['config_id']=='BASELINE_CONTROL'])==1,'Predeclared baseline has one immutable geometry')
     # Signal close 10, stop 11.0001, target 6.9997. Both barriers; low nearer open.
     two = [(t,10.5,11.,9.,10.),(t+BAR,7.2,11.2,6.8,8.)]
@@ -1007,7 +1022,7 @@ def package(work, completed):
     allowed_on_error = {'protocol.md','run_manifest.json','error_report.csv','hard_controls.csv',
                         'software_checks.csv','coverage.csv','data_gaps.csv','runner_source.py',
                         'source_controls.csv','h1_m15_crosschecks.csv','yearly_data_coverage.csv',
-                        'coverage_crosscheck_summary.json','fetch_receipts.csv'}
+                        'coverage_crosscheck_summary.json','archived_pass1_fetch_receipts.csv','parent_pass1_parity.csv','parent_pass1_provenance.json'}
     members = [p for p in sorted(work.iterdir()) if p.is_file() and p.name != 'file_manifest.json' and
                (completed or p.name in allowed_on_error)]
     files = [dict(file=p.name,bytes=p.stat().st_size,sha256=file_sha(p)) for p in members]
@@ -1025,29 +1040,22 @@ def run_job():
     OUT.mkdir(parents=True,exist_ok=True)
     work=Path(tempfile.mkdtemp(prefix='working-',dir=OUT))
     manifest=dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,
-        dataset_kind='HISTORICAL_OANDA_MID',status='RUNNING',complete=False,
-        study='PASS1_ENTRY_DISCOVERY_ONLY',start=iso(START),end_exclusive=iso(END),
+        dataset_kind='COMPANION_ZIP_EXACT_PASS1_OANDA_MID',frozen_source_archive_sha256=EMBEDDED_PAYLOAD_SHA256,status='RUNNING',complete=False,
+        study='PASS1B_BOUNDED_STRUCTURE_BODY_EXTENSION',start=iso(START),end_exclusive=iso(END),
         rr=RR,cost_ticks=list(COSTS),execution_models=list(MODELS),
-        expected_configurations=619,expected_cases=3714,
+        expected_configurations=70,expected_cases=420,
         incumbent_target='PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1; admission deferred',
         template='FOREX_STRATEGY_RESEARCH_TEMPLATE_AUDJPY_2026-09-24.md',
-        source_policy='New M15 fingerprint recorded; broker H1 aggregation plus pinned pre-October H1 controls must pass',
+        source_policy='Exact Pass1 companion M15/H1/member pins; archived complete parent ledgers and aggregation must pass',
         user_clarification='Template is a guide; justified pair/timeframe adaptations allowed.',
         orders_supported=False,trading_enabled=False)
     try:
         (work/'protocol.md').write_text(PROTOCOL,encoding='utf-8')
         shutil.copyfile(__file__,work/'runner_source.py')
         write_csv(work/'software_checks.csv',self_checks())
-        set_status(state='validating',progress=1,message='Software checks passed; fetching full M15 source')
-        bars,volumes,m15_receipts=fetch_history('M15')
-        write_csv(work/'coverage.csv',[dict(pair=PAIR,timeframe=TIMEFRAME,candles=len(bars),
-                   first=iso(bars[0][0]),last=iso(bars[-1][0]),sha256=source_hash(bars))])
-        write_csv(work/'fetch_receipts.csv',m15_receipts)
-        h1,h1_volumes,h1_receipts=fetch_history('H1')
-        write_csv(work/'fetch_receipts.csv',m15_receipts+h1_receipts)
+        set_status(state='validating',progress=1,message='Software checks passed; verifying companion ZIP with exact Pass 1 source')
+        bars,volumes,h1,h1_volumes=load_frozen_history(work)
         crosscheck_history(work,bars,volumes,h1,h1_volumes)
-        write_csv(work/'source_h1_crosscheck_candles.csv',
-                  (dict(time=iso(t),open=op,high=hi,low=lo,close=cl,volume=h1_volumes[t]) for t,op,hi,lo,cl in h1))
         configs,memberships=make_configs()
         features=make_features(bars)
         paths={}
@@ -1062,19 +1070,20 @@ def run_job():
         write_csv(work/'hard_controls.csv',hard)
         if any(r['status']!='PASS' for r in hard):
             raise RuntimeError('Independent implementation control failed; no discovery conclusions are valid.')
+        archived_parent_parity(work,bars,features,paths,configs)
         write_inputs(work,bars,features,paths,configs,memberships,manifest['dataset_kind'],volumes)
         (work/'README.md').write_text(RESULT_README,encoding='utf-8')
         manifest.update(source_sha256=source_hash(bars),source_volume_csv_sha256=file_sha(work/'source_candles.csv'),
                         source_h1_sha256=source_hash(h1),source_candles=len(bars),raw_engulf_signals=len(features),
-                        source_controls='PASS',hard_controls='PASS',software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()))
+                        source_controls='PASS',hard_controls='PASS',parent_pass1_parity='PASS',software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()))
         _,counts=analyze(work,bars,features,paths,configs)
         manifest.update(status='COMPLETE',complete=True,output_row_counts=counts,
                         completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
         write_json(work/'run_manifest.json',manifest)
-        set_status(state='packaging',progress=96,message='All 3,714 cases complete; compressing ledgers and diagnostics')
+        set_status(state='packaging',progress=96,message='All 420 cases complete; compressing ledgers and diagnostics')
         package(work,True)
-        set_status(state='complete',progress=100,message='EUR/CHF M15 short Pass 1 complete; download the results ZIP',
-                   hard_controls='PASS',source_controls='PASS',configurations=619,cases=3714,result_path='/results',
+        set_status(state='complete',progress=100,message='EUR/CHF M15 short Pass 1B complete; download the results ZIP',
+                   hard_controls='PASS',source_controls='PASS',configurations=70,cases=420,result_path='/results',
                    result_bytes=(OUT/RESULT_NAME).stat().st_size)
         return True
     except Exception as exc:
@@ -1095,7 +1104,7 @@ def run_job():
             JOB_LOCK=None
 
 
-RESULT_README = "# EUR/CHF M15 SHORT Pass 1 results\n\nBegin with run_manifest.json: complete=true; source_controls.csv and hard_controls.csv\nmust all pass. Then read coverage.csv, yearly_data_coverage.csv, protocol.md and\nsummary.csv. An error ZIP has diagnostics and no partial performance results.\nfile_manifest.json hashes every other packaged artifact.\n\n619 unique geometries /3,714 cases. configuration_memberships.csv retains the\n644 requested study labels. neighbourhood_summary.csv shows adjacent cells and\nboundaries; overlapping neighbours are not independent evidence. No automatic winner.\n\nFull accepted ledger: select configuration/model/cost in accepted_trades.csv;\njoin signal_trade_paths.csv on (signal_index,execution_model), preserving\naccepted_sequence. Risk=stop-fill; short R=(fill-exit_price)/risk for closed trades.\nOrdinary STOP=-1. Open R is blank. control_accepted_ledgers.csv contains joined\nRAW/BASELINE controls. Summary ledger hash uses canonical sorted JSON lines of\nthe same joined fields, with separators=(',',':').\n\nCompare yearly/era/latest periods, every rolling 12/24/36-month window, empty\nwindows, costs, exit assumptions and event exposure. Entry-cohort eventual R is\nseparate from realized period R. The final October 2026 monthly row is explicitly\npartial; rolling months use complete month boundaries. No account compounding.\n\nNew M15 fingerprints are recorded. H1 overlap must match prior EURCHF history,\nand every native M15 hour's OHLC/price counts must match native H1. Broker-omitted\nwhole hours remain source gaps. No interpolation or manufactured candles.\nMID candles and assumed fills are not executable quote history.\n\nReview stressed regions before choosing a few anchors. RR selection, independent\nfinal strategy confirmation, exact live32 admission and forward execution checks\nremain later work. This research runner only requests candles; no orders/account reads.\n"
+RESULT_README = '# EUR/CHF M15 SHORT Pass 1B results\nBegin with run_manifest.json complete=true, source_controls.csv, hard_controls.csv\nand parent_pass1_parity.csv all PASS. Source and all five full archived parent\nledgers must reproduce before discovery. Error ZIPs contain no performance data.\n70 geometries /75 memberships /420 cases; fixed RR3, same 1/2/4-pip scenarios.\nKeep the companion data ZIP alongside app.py. No network calls. Original Pass1 receipts are labelled archived, not current.\nRead protocol.md, configuration_grid.csv and configuration_memberships.csv.\nReview every cost, year/era/recent and rolling12/24/36month window, empty years,\nfrequency and CHF event exposure. No auto winner; repeated history is exploratory.\nFull accepted_trades.csv joins signal_trade_paths.csv by signal_index/execution_model.\ncontrol_accepted_ledgers.csv includes all five parents. Full-replay comparisons\nreport added and displaced accepted entries against each parent.\nFamily-labelled neighbourhoods use only the frozen study axes; shared raw streams\nare explicitly counted and grouped. Positive edge cells do not prove a plateau.\nPartialOctober is excluded as a complete rolling endpoint. R/closed DD are additive\nunits, not NAV% or floating DD; MID/assumed fills are not executable bid/ask history.\nEntry rules freeze before RR/final independent implementation/portfolio/live gates.\n'
 
 
 def launch(background=True):
@@ -1123,9 +1132,9 @@ def launch(background=True):
                 JOB_LOCK.close()
                 JOB_LOCK = None
             return False
-        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 short discovery',runner_sha256=code_hash(),result_path=None)
+        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 short Pass 1B boundaries',runner_sha256=code_hash(),result_path=None)
     if background:
-        threading.Thread(target=run_job,name='eurchf-m15-pass1-research',daemon=True).start()
+        threading.Thread(target=run_job,name='eurchf-m15-pass1b-research',daemon=True).start()
         return True
     return run_job()
 
@@ -1144,7 +1153,7 @@ def app(environ, start_response):
         body = b'{"error":"Not found"}'
         start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
         return [] if method == 'HEAD' else [body]
-    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_PASS1_AUTOSTART','1')=='1'):
+    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_PASS1B_AUTOSTART','1')=='1'):
         launch()
     current = read_status()
     code = '200 OK'
@@ -1168,7 +1177,7 @@ def app(environ, start_response):
     elif path=='/health':
         current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
     elif path=='/':
-        current = dict(service='EUR/CHF M15 SHORT Pass 1 discovery',version=VERSION,status='/status',results='/results',
+        current = dict(service='EUR/CHF M15 SHORT Pass 1B boundaries',version=VERSION,status='/status',results='/results',
                        start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
     body = (json.dumps(current,allow_nan=False)+'\n').encode()
     start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
@@ -1192,12 +1201,17 @@ def main():
         return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
     port = int(os.getenv('PORT','8080'))
     with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
-        if os.getenv('EURCHF_M15_PASS1_AUTOSTART','1')=='1':
+        if os.getenv('EURCHF_M15_PASS1B_AUTOSTART','1')=='1':
             launch()
         print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
         server.serve_forever()
     return 0
 
+
+
+EMBEDDED_MEMBER_PINS = {'source_candles.csv': {'bytes': 31136287, 'sha256': '59f3a83fb838d9921f9f2433cd928a77ef451301bec466a3fedd67744ae2f707'}, 'source_h1_crosscheck_candles.csv': {'bytes': 7942356, 'sha256': 'ffaa24aa4c371b7885c61ef225f1846ccf5e133d444a45c438af3066cef702a3'}, 'fetch_receipts.csv': {'bytes': 19964, 'sha256': '52423125b321d3c25b5ae2adf89c8fd287b230764540847b375279cc92530890'}, 'parent_pass1_accepted_ledgers.csv': {'bytes': 23899883, 'sha256': '05bef6ac72de3d5d7c4a8e6ca0fc2dc52c13c684f956e9f3c88cf8f4aea4a706'}, 'parent_pass1_provenance.json': {'bytes': 71790, 'sha256': 'f11996dfcd59473762a35b3cd02ab627a3b9757d71f2021b593999f5ce60ea1c'}}
+EMBEDDED_PAYLOAD_SHA256 = '511215ae3b95e676829896d30baa1342bbca17e7be30745a22753dab5ba3b849'
+FROZEN_SOURCE_FILE = Path(__file__).resolve().with_name('EURCHF_M15_PASS1_FROZEN_DATA.zip')
 
 if __name__=='__main__':
     raise SystemExit(main())
