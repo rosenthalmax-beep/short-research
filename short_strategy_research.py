@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EUR/USD H4 LONG Pass 5. Standard-library Python 3.10+. Research ONLY.
+"""EUR/USD H4 LONG Pass 6. Standard-library Python 3.10+. Research ONLY.
 Save as app.py in a separate service. Start: python app.py
 GET /status -> COMPLETE; GET /results -> report ZIP. No order endpoints.
 """
@@ -27,7 +27,7 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = 'EURUSD_H4_LONG_PASS5_LOCAL_JOINT_CONFIRMATION_V1_2026_10_12'
+VERSION = 'EURUSD_H4_LONG_PASS6_FROZEN_ENTRY_RR_STUDY_V1_2026_10_12'
 UTC = dt.timezone.utc
 START = int(dt.datetime(2005, 1, 1, tzinfo=UTC).timestamp())
 END = int(dt.datetime(2026, 10, 12, tzinfo=UTC).timestamp())
@@ -43,8 +43,8 @@ MODELS = ('STOP_FIRST_GAP_STRESS', 'NEAREST_OPEN_SENSITIVITY')
 CASES = [(f'MID_{p}P_{m}', 'MID', p, m) for p in (1, 2, 4) for m in MODELS]
 CASES += [(f'BIDASK_BOUND10_{m}', 'BIDASK', 0, m) for m in MODELS]
 SOURCE_NAME = 'EURUSD_H4_PASS1_FROZEN_DATA.zip'
-RESULT_NAME = 'EURUSD_H4_LONG_PASS5_RESULTS.zip'
-PROTOCOL = '# EUR/USD H4 LONG — Pass 5 local joint confirmation\nVersion: EURUSD_H4_LONG_PASS5_LOCAL_JOINT_CONFIRMATION_V1_2026_10_12\n27 predeclared local joint geometries plus one unchanged frequency comparator.\nRR3, range>=1.50ATR and body/range>=.60 fixed; eight execution cases unchanged.\nRepeatedly inspected historical research, not unseen OOS or live admission.\n\n## Purpose and finite grid\nConfirm joint behaviour around the already examined LB40/distance.50/body1.40\ngeometry before deciding whether to freeze entries. This is no new filter hunt.\nLocal grid: lookbacks35/40/45 observed H4 bars x absolute prior-low distance caps\n.45/.50/.55 current H4 ATR x body floors1.30/1.40/1.50 ATR =27 settings.\nBoth directions around each central parameter are declared before new outcomes.\nRange stays1.50ATR, body/range stays.60, exact bullish engulf remains. At a body\nfloor1.50, range1.50 is mathematically redundant; it is preserved for comparability.\nNo strong-close/volatility/daily/momentum/day/session addition and no RR search.\nCommon first eligible signal index200 unchanged. New35/45 lookbacks use the same\ncausal previous-low calculation; the signal candle is excluded.\n\nLOCAL central reference: LB40/distance.50/body1.40/range1.50/body-to-range.60,\nexact Pass4 QUALITY__L40_D0.5. Its four-pip stop-first ledger is41 trades,\n+15.4549233572R, -5.2758620690R closed additive drawdown.\nFREQUENCY_ALT reference: LB20/distance.50/body1.40, same range/ratio/RR;\nexact Pass4 QUALITY__L20_D0.5. Its four-pip stop-first ledger is69 trades,\n+13.7966221391R, -9.0521978022R drawdown. Retain unchanged as a comparator only;\nits recent/rolling weaknesses and tested lookback boundary remain visible.\nTotal unique definitions28. Every LOCAL row compares with the SAME fixed central\nreference. The frequency comparator is neither combined with the local stream\nnor retuned; its own baseline row reproduces itself and an explicit central->\nfrequency comparison records the activity/risk tradeoff.\n\n## Controls and reproducibility\nSame requested source/cutoff as Pass1–4:2005-01-01 through2026-10-12 00:00UTC.\nPinned H4 MID/BID/ASK and H1 MID hashes; raw baseline; all16 original Pass1 anchor\nledgers;104 selected Pass2 control ledgers;16 Pass3 comparator ledgers;16 Pass4\ncentral/frequency reference ledgers must reproduce before new result reports.\nChanged source or reference mismatch stops the run. These are checks on already\nexamined history, not prospective validation. New local outcomes are not examined\nwhile delivering code; software tests use synthetic data for new selections.\n\n## Full replay, local neighbours and attribution\nRebuild P0 chronology for every setting and case. Full accepted/rejected/blocked/\nopen ledgers, raw memberships and own-central common/added/removed R identity.\nExtra eligibility may occupy the strategy and displace a later trade; never use\nnaive raw mask subtraction as realised attribution.\n55 predeclared paired comparisons:18 adjacent distance relaxations,18 adjacent\nlookback shortenings,18 adjacent body-floor relaxations and1 fixed central-to-\nfrequency comparator; eight cases each. Joint neighbours hold the other two\nparameters fixed. Complete marginal accepted-trade sets/R and displacement\nprovided for each pair. A shorter lookback changes the reference low and need\nnot simply add a nested signal set. Duplicates identified; overlapping grid\nsettings are not independent confirmations. No automatic best-row selection,\nnew acceptance threshold or confidence claim based on positive-grid counts.\n\nCalendar years, four eras, trailing1/2/3/5/10Y, monthly and complete monthly-ended\nrolling12/24/36M windows including zero-trade windows. 2026 and October are partial.\nInspect activity, blank years/months, recent periods, poor neighbours, cost/stop,\nopen-at-cutoff and isolated-versus-P0 outcomes alongside lifetime closed R.\nA local pass would support freezing an interpretable central geometry rather\nthan choosing the biggest historical total at a boundary. If the neighbourhood\nfails, document that failure rather than reopening unlimited entry-rule tuning.\nEntry freeze is an explicit later research decision; code does not auto-admit.\n\n## Inherited source, signals and execution (unchanged)\nNative completed unsmoothed OANDA EUR_USD H4 MID/BID/ASK, dailyAlignment0 and\nalignmentTimezoneUTC; independent native H1 MID reproduces each H4 MID bin.\nNative price precision retained. Missing bars/days never filled, partial market\nopening/closing bins retained and flagged. First eligible signal index200.\nPrevious strictly red/current strictly green, current open<=previous close and\ncurrent close>=previous open, both ranges positive. ATR14 mean TR1..14 seed then\nWilder through current signal. ABS(signal low-min prior LB low)/current ATR;\nprior window excludes signal. Body/range filters use completed signal only.\nInherited daily/volatility features remain descriptive; they do not filter this\npass. Daily contexts are completed UTC days END<=signal close, with200 completed\nobserved days for daily features. No unfinished daily context or future prices.\n\nStop=signal MID low-.0001; target=MID close+3*(MID close-stop).\nSix MID proxy cases: fill=MID signal close+1/+2/+4 assumed adverse pips, fixed\ntarget, R denominator=fill-stop. Four pips is stress, not measured normal cost.\nSTOP_FIRST_GAP_STRESS keeps adverse opening-stop gaps (loss can exceed1R), caps\ntarget opening gaps, stop-first dual touch. MID NEAREST_OPEN_SENSITIVITY ignores\nopening gaps and resolves dual touch by nearer low/high to open, stop on tie.\nTwo BIDASK cases: next observed H4 ASK open timed by earliest constituent H1;\nreject delay>120sec, adverse entry>10ticks (.0001), invalid stop/entry/target or\nno next bar. BID exits; both models keep adverse stop gaps and cap target gaps,\nonly dual touch differs. No extra entry slippage. Candle quote-side approximations\ncannot prove actual fills, latency, liquidity or intrabar ordering. Live price\nrounding, financing and fees unmodelled. No signal-bar exit; entry at/after cutoff\nrejected; one standalone position; exit-candle signal allowed; rejected entries\ndo not occupy. Open-at-cutoff retains occupation with blank R; no forced exit.\nEntries[start,end), realised exits(start,end] assigned by nominal exit-bin END,\nnot precise broker fill times. Drawdown is closed additive R, not NAV/marked risk.\nNo incumbent portfolio overlap/gates/sizing/currency-conversion admission in this\nstudy. Frozen independent confirmation, exact portfolio contribution and forward\nexecution evidence remain later gates.\n\n## Operation\nSingle-file Python3.10+ standard library; same separate read-only research service,\none process/worker. Original EURUSD_H4_PASS1_FROZEN_DATA.zip reused from current\nor prior Pass4/3/2/1 cache or beside app.py. If absent, refetch same source and\nrequire identical pinned price hashes. Explicit missing/corrupt archive fails.\nOptional EURUSD_H4_PASS5_FROZEN_DATA / EURUSD_H4_PASS5_OUTPUT_DIR; default\n/data/eurusd_h4_pass5_research if /data exists, otherwise temporary cache.\nGET/HEAD /status /health /results /source; no write/broker-order endpoints.\nCOMPLETE full ZIP or ERROR failure-only ZIP. No silent source extension.\nPortfolio reference PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1.\n'
+RESULT_NAME = 'EURUSD_H4_LONG_PASS6_RESULTS.zip'
+PROTOCOL = "# EUR/USD H4 LONG — Pass 6 frozen entries / limited RR study\nVersion: EURUSD_H4_LONG_PASS6_FROZEN_ENTRY_RR_STUDY_V1_2026_10_12\nEntries frozen before new RR outcomes. Same examined full history and source.\n18 definitions = two fixed entry versions x nine RRs; eight execution cases each.\n\n## Immutable entries and finite RR range\nPRIMARY: exact bullish engulf, LB40, ABS(signal low-minimum prior low)<=.50 current\nH4 ATR, body>=1.40ATR, range>=1.50ATR, body/range>=.60.\nFREQUENCY: identical except LB20. It remains a separate activity comparator, not\nan additional trigger or a combined strategy. Neither entry version is retuned.\nNo new conditions, structure/body/range/ratio changes, weekday/session hunt,\nmechanism search or adaptive RR. RR levels2.50/2.75/3.00/3.25/3.50/3.75/4.00/4.25/4.50.\nRR3 is the immutable within-version comparison control. Upper/lower tested RR\nboundaries are marked. No automatic winner selection or boundary extension.\nInspect a reproducible RR neighbourhood, activity, recent eras and weakest rolling\nwindows before choosing any final RR. Sparse/overlapping histories remain exploratory.\n\n## Targets, cost and full RR-dependent replay\nStop remains signal MID low-.0001. Target=MID signal close + tested RR*(MID close-\nstop). It is NOT moved with the assumed fill. Realised R denominator remains\nassumed/quote fill-stop. Thus realised target R differs from reference RR when\nentry costs/deviation occur. A new RR can change target-touch order, holding time,\nwhich signals are blocked/displaced, entry-validity rejections and unfinished\ntrades. Do not reprice the RR3 accepted ledger or reuse RR3 exit/block decisions.\nRaw qualification is identical across RRs for each frozen entry; execution\neligibility and accepted trade count can differ. Replay all signals at every RR\nand each execution case, retaining rejected/blocked/open positions explicitly.\n\nEach of the144 study replay cases must match a separate scalar implementation's\ncomplete signal/entry/stop/target/exit/outcome/R ledger, rejected entries and\nblocked-signal sequence. This independent implementation calculates ATR/pattern/\nprior-low/body/range/ratio and execution without calling production feature,\nmask/path/replay helpers. It checks the SAME examined history, not fresh OOS.\n\n## Source and reference gates\nSame native OANDA EUR_USD H4 MID/BID/ASK and independently crosschecked H1 MID,\n2005-01-01 through2026-10-12 00:00UTC exclusive. Source price hashes unchanged.\nReproduce prior raw and Pass1/2/3/4 reference controls, then both frozen Pass5 RR3\nledgers across all eight cases (16) before the RR study. A mismatch fails closed.\nRR3 control must also match the rebuilt study ledger. No partial performance\nreports after a source/reference/independent-replay failure.\n\n## Reports and attribution\nFull accepted/rejected/blocked/open ledgers at every RR/case, immutable entry\nmemberships and raw hashes, full accepted-ledger hashes and accepted/closed-signal\nhashes so chronology changes can be distinguished from changed payout alone.\nFrozen-signal paths for every RR retained, plus raw RR3 reference paths separately.\nCompare every RR with its OWN frozen-entry RR3 baseline. Common + added - removed\nR identity includes COMMON-trade R changes, which are expected when targets change.\nAdded/removed sets record blocking-signal displacement. No naive ledger subtraction.\n25 additional pairs:16 adjacent RR changes plus9 primary->frequency comparisons\nat matched RR, across eight cases. Full marginal trade/R attribution for all.\nMatched-version comparisons are research comparisons, not a combined portfolio.\n\nCalendar years, four eras, trailing1/2/3/5/10Y, monthly and every complete\nmonthly-ended rolling12/24/36M window including zeros. 2026 and October partial.\nInspect blank years/months, recent activity, inter-entry/wait times, median holding\nduration, costs/stop, isolated versus accepted outcomes and unfinished positions.\nNo automatic strategy selection, new entry tuning or claim that the highest total\nR predicts best future behaviour. Independent standalone frozen confirmation,\nexact incumbent portfolio comparison and prospective execution remain later gates.\n\n## Inherited clock, causal indicators and execution assumptions\nNative completed unsmoothed OANDA H4, dailyAlignment0/timezoneUTC. Native H1 MID\naggregation reproduces every H4 MID OHLC bin. Native price precision retained;\nmissing periods not filled; partial opening/closing bins retained and flagged.\nFirst eligible signal index200 observed H4 bars. Previous strictly red/current\nstrictly green, current open<=previous close, current close>=previous open,\npositive ranges. ATR14 mean TR1..14 then Wilder through current signal. Prior low\nexcludes signal. No future data. Other inherited daily/volatility features are\ndescriptive only and never filter this RR study.\n\nSix MID proxies: entry=MID signal close+1/+2/+4 assumed adverse pips, fixed target\nas above. Four pips is assumed stress, not measured normal cost. STOP_FIRST_GAP_\nSTRESS retains adverse opening-stop gaps (loss can exceed1R), caps favourable\ntarget gaps, stop-first dual-touch. MID NEAREST_OPEN_SENSITIVITY ignores opening\ngaps and uses nearer low/high to open for dual touch, stop on equal distance.\nTwo BIDASK cases: next observed H4 ASK open with earliest constituent H1 timestamp;\nreject delay>120sec, adverse entry>10ticks (.0001), invalid stop/entry/target or no\nnext bar. BID exits; both models retain adverse stop gaps and cap target gaps,\nonly simultaneous touch differs. No extra slippage. Quotes derived from candles\ncannot establish actual fills/timing/depth/intrabar order. Live price rounding,\nfinancing and account fees unmodelled. Entry at/after cutoff rejected; signal OHLC\nnot used for exits; exit-candle signal allowed; one open standalone position;\nrejections do not occupy. Open-at-cutoff retains occupation/blank R, no forced exit.\nEntries[start,end), realised exits(start,end] using nominal exit-bin END timestamps,\nnot precise broker fills. Drawdown is closed additive R, not NAV or marked risk.\nNo incumbent portfolio gates/exposure/sizing/currency conversion in this study.\n\n## Operation and delivery tests\nSingle-file Python3.10+ standard library; same separate read-only research service,\none process/worker. Reuse original EURUSD_H4_PASS1_FROZEN_DATA.zip from current or\nprior Pass5/4/3/2/1 cache or beside app.py. If absent, refetch same source and require\noriginal price hashes. Explicit missing/corrupt archive fails; no silent extension.\nOptional EURUSD_H4_PASS6_FROZEN_DATA / EURUSD_H4_PASS6_OUTPUT_DIR; default\n/data/eurusd_h4_pass6_research if /data exists, otherwise a temporary cache.\nGET/HEAD /status /health /results /source; no write/broker-order endpoints.\nCOMPLETE full report ZIP or ERROR failure-only ZIP. Delivery tests reproduce\nactual prior references only; new RR chronology, attribution and reports use\nsynthetic fixtures. New historical RR outcomes are not evaluated during delivery.\nPortfolio reference PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1.\n"
 
 PASS1_PINS = {'anchors': {'M_L40_D0.35_B0.75_R1': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '106', 'accepted_hash': 'd979d86a2d02e760a8a1c6fafb0bdae84bda735a0edfc7744d75ae817fcba29a', 'blocked': '3', 'net_r': '8.3450542151461', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '8'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '106', 'accepted_hash': 'd979d86a2d02e760a8a1c6fafb0bdae84bda735a0edfc7744d75ae817fcba29a', 'blocked': '3', 'net_r': '8.3450542151461', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '8'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '48f8a41dff9a17722f2de6fc36edc9ef1469b92049306d3f2a07ea4b907e699c', 'blocked': '3', 'net_r': '19.081030949268005', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': '78a2087e6dd35db8eecdd723d2c8ba75ff335a568aeacb543e395696ae236958', 'blocked': '3', 'net_r': '19.026589688523014', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '03161b82a37fe9af87cbe8f2c961718b18da7e1cea17d85e1bd80bf7a139e7a9', 'blocked': '3', 'net_r': '16.308044523646373', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': 'f6c9a160a4b082c827ae188a6230a19c9431c5d746c558c6ae204b2459efbb7a', 'blocked': '3', 'net_r': '16.254372207262186', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '40bba3c1fe2437e77333301b71d69137e459973c633fba67923e86a11fd218a3', 'blocked': '3', 'net_r': '11.152458563507945', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': '01b8778e70d74aa68df953647bea0649fedd55383dcd1847aa5d6efa475c0848', 'blocked': '3', 'net_r': '11.100260761310135', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}}, 'M_L40_D0.5_B1.25_R1.5': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '52', 'accepted_hash': '7af667268c5fda50ea8eaf3a902ac2e9868163f08bb4919e188cea8fc459d00d', 'blocked': '1', 'net_r': '7.355862354561232', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '5'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '52', 'accepted_hash': '7af667268c5fda50ea8eaf3a902ac2e9868163f08bb4919e188cea8fc459d00d', 'blocked': '1', 'net_r': '7.355862354561232', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '5'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': 'c7660408058093dd74beda9f4445e82cb3a9c934fd51ef9d957c669ab9adafa6', 'blocked': '1', 'net_r': '13.896274044063015', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': '3d2d17610f9ea033c348a76eb2dd1ed7b17e42afb0b02e45b18a7d25c8827c4a', 'blocked': '1', 'net_r': '13.841832783318022', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': '2237d6a869858b55476744b6c270088252e3915dbfbe9661f3adfc4c89d9c923', 'blocked': '1', 'net_r': '12.831981788009386', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': 'c1eccd64fd9c8dbfafeb1754e1e40388071d28fbef4845b9dc999aeab951dcb9', 'blocked': '1', 'net_r': '12.7783094716252', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': '8064ca9c491dad8154834cb65ae2ccb50291e1ff36c5ead6807d8634cda37405', 'blocked': '1', 'net_r': '10.81186068156517', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': '7ebb1926f01bda5d7bdc48dee803ee0a1f0dd80eee5bf901edf6b0eec994a02c', 'blocked': '1', 'net_r': '10.75966287936736', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}}}, 'raw_controls': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': 1407, 'blocked': 1065, 'independent_parity': 'PASS', 'ledger_sha256': '6dcb73d2b7ed43b9e6da129d40bed9af12693f58dba015af9808f1e30a9c6929', 'raw_signals': 2669, 'rejected': 197}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': 1407, 'blocked': 1065, 'independent_parity': 'PASS', 'ledger_sha256': 'a9ddf63bdce468287f3f8655f8da82e20a4e89638f07d3d764d130eb68ffdc36', 'raw_signals': 2669, 'rejected': 197}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '77659c43e40af3d7e14f392825771ea5331488e695165de183ddaef54df0329a', 'raw_signals': 2669, 'rejected': 0}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '3b56b148b22f70b7904e0d70ec391a48ae6897ce119340119c1d3f0989266ad5', 'raw_signals': 2669, 'rejected': 0}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': 'fe8932a92e7bcbc7c179d1f615fc787d970035555c01a715a1afbf02edfc29bf', 'raw_signals': 2669, 'rejected': 0}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': 'f690dd8becdf7df86835afa98ae4b30bc88ca719a82e01a1967a74a6e4973042', 'raw_signals': 2669, 'rejected': 0}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '163d14184269d601d935c3e68c7bf33540145b8b796889e5543dd9c9e3bbc27b', 'raw_signals': 2669, 'rejected': 0}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '5beec9478053c6350ede8faa8a00683c3c549b1779fb2bf4ea10e61e1650e7a6', 'raw_signals': 2669, 'rejected': 0}}, 'source': {'alignment': 'UTC_00_UNSMOOTHED', 'end': 1791763200, 'instrument': 'EUR_USD', 'members': {'h1.json': '258c40216bef3deb5a74bfaaa2403b4bd9f4a88533dc734c73f9e89a7f9569bb', 'h4.json': '5c7a5ced72379c5696251200c2447dcb142116ed97149d0d4379d42a06381087', 'receipts.json': '0f37599b041b5e45649c81ae6771745af0da3dfd456130c1cb5d3e17c9ae692d'}, 'start': 1104537600}}
 
@@ -53,6 +53,8 @@ PASS2_PINS = {'BROAD__CONTROL': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'ac
 PASS3_PINS = {'STRONG_BODY__BODY1.4_BR0.6': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '7e88868cb5fc83ff5332b14972bd39226ba832f46b6b2db7106e9ff37deef1cb', 'blocked': '0', 'net_r': '18.07828069221303', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '55ceca9c44c019799066e134038310f753069151982e12bec72011095a6b08f7', 'blocked': '0', 'net_r': '18.023839431468037', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '19fa19a6c5328b11702efc070c8306139f3269ae35e7c79f2cbff75c5623a3c0', 'blocked': '0', 'net_r': '17.1903591261877', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '3fd544859e72d87432818b411f43492f09df7e2fa0f22ddb3e0f79ea92df475e', 'blocked': '0', 'net_r': '17.13668680980351', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '0829b365b87cf7eec217df9a82fa2a6fc61e72e784adb15209156e9b69f441ff', 'blocked': '0', 'net_r': '15.507121159434266', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': 'd18e5ead650a3c3b92a34767b927fbc87e4c53ebce27825fef8057eb87b0a4eb', 'blocked': '0', 'net_r': '15.454923357236458', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}}, 'STRONG_BODY__BR0.6_CNONE': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '49', 'accepted_hash': '64e4bc2cd4cc5804bd014e8fbebd370e28846c028cc4feff7160f03a6f3fa30f', 'blocked': '1', 'net_r': '10.355862354561232', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '4'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '49', 'accepted_hash': '64e4bc2cd4cc5804bd014e8fbebd370e28846c028cc4feff7160f03a6f3fa30f', 'blocked': '1', 'net_r': '10.355862354561232', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '4'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '53', 'accepted_hash': 'f18aeccd8903e39b6f08cd24bb4d9a1b6e1f78bd1b5559cd6eac6487facfe603', 'blocked': '1', 'net_r': '17.896274044063013', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '53', 'accepted_hash': 'bb1d77df80edf62b5e7ea6dafb12171e6d020a4892623e21b92d1b626331eb8c', 'blocked': '1', 'net_r': '17.841832783318022', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '53', 'accepted_hash': 'f51eeb92dc1a030cbaa19e41e9f8093b6a78bcfb73dc36c674d3acdf65cc03a8', 'blocked': '1', 'net_r': '16.831981788009386', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '53', 'accepted_hash': '40896ca6503fda6285abf679ae2f4e640cf43d9efb7247a3f0c3cbb73f6fa972', 'blocked': '1', 'net_r': '16.7783094716252', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '53', 'accepted_hash': '9bdba292b9e7460db24243216a7d608d24922284f652e06918b77673db2df331', 'blocked': '1', 'net_r': '14.81186068156517', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '53', 'accepted_hash': 'dcfd5b1efb118c55eab67aa7aafd5d4768301b720593e53fdddaf23640f313c6', 'blocked': '1', 'net_r': '14.75966287936736', 'raw_signal_hash': '5e2c7e9f530a53aa458a8f513a1f67f69cfd0f7227b544d901162c7136008fff', 'rejected': '0'}}}
 
 PASS4_PINS = {'QUALITY__L20_D0.5': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '67', 'accepted_hash': '9810d9a3a7d5372aa029f5060e6a92d8a726333e9f61efbcce9c04c6b1b731c2', 'blocked': '4', 'net_r': '12.060247470015808', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '2'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '67', 'accepted_hash': '9810d9a3a7d5372aa029f5060e6a92d8a726333e9f61efbcce9c04c6b1b731c2', 'blocked': '4', 'net_r': '12.060247470015808', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '2'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': 'bd47367de09136a257d222b8b84638e8670a5ace3552edafb8a325477dbc507b', 'blocked': '4', 'net_r': '17.64051758865844', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': '78e0cb4ea059cab57e183666d6b3913dd6ad649efef426bee4580ec230b02228', 'blocked': '4', 'net_r': '17.586076327913446', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': '6aa948f04e5818bea2e1618cf3eed221bc13f8a3cec3b22828d0f474d14d48cb', 'blocked': '4', 'net_r': '16.330926790695298', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': '85ccb83881d45c7b8315fb491721cf3b95c8ede3077041be546d903ecc7d9dd8', 'blocked': '4', 'net_r': '16.27725447431111', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': '1b59562bb8fc2a2b8a7611ffb2ccfcd4c5e22cf1b72069922f74147edc0630f3', 'blocked': '4', 'net_r': '13.848819941249246', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': 'c2fab83caf668a6c72306c1ccd9693412ad73949c9276643731bb52d91c19e0a', 'blocked': '4', 'net_r': '13.796622139051436', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}}, 'QUALITY__L40_D0.5': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '7e88868cb5fc83ff5332b14972bd39226ba832f46b6b2db7106e9ff37deef1cb', 'blocked': '0', 'net_r': '18.07828069221303', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '55ceca9c44c019799066e134038310f753069151982e12bec72011095a6b08f7', 'blocked': '0', 'net_r': '18.023839431468037', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '19fa19a6c5328b11702efc070c8306139f3269ae35e7c79f2cbff75c5623a3c0', 'blocked': '0', 'net_r': '17.1903591261877', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '3fd544859e72d87432818b411f43492f09df7e2fa0f22ddb3e0f79ea92df475e', 'blocked': '0', 'net_r': '17.13668680980351', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '0829b365b87cf7eec217df9a82fa2a6fc61e72e784adb15209156e9b69f441ff', 'blocked': '0', 'net_r': '15.507121159434266', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': 'd18e5ead650a3c3b92a34767b927fbc87e4c53ebce27825fef8057eb87b0a4eb', 'blocked': '0', 'net_r': '15.454923357236458', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}}}
+
+PASS5_PINS = {'FREQUENCY_ALT__CONTROL': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '67', 'accepted_hash': '9810d9a3a7d5372aa029f5060e6a92d8a726333e9f61efbcce9c04c6b1b731c2', 'blocked': '4', 'net_r': '12.060247470015808', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '2'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '67', 'accepted_hash': '9810d9a3a7d5372aa029f5060e6a92d8a726333e9f61efbcce9c04c6b1b731c2', 'blocked': '4', 'net_r': '12.060247470015808', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '2'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': 'bd47367de09136a257d222b8b84638e8670a5ace3552edafb8a325477dbc507b', 'blocked': '4', 'net_r': '17.64051758865844', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': '78e0cb4ea059cab57e183666d6b3913dd6ad649efef426bee4580ec230b02228', 'blocked': '4', 'net_r': '17.586076327913446', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': '6aa948f04e5818bea2e1618cf3eed221bc13f8a3cec3b22828d0f474d14d48cb', 'blocked': '4', 'net_r': '16.330926790695298', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': '85ccb83881d45c7b8315fb491721cf3b95c8ede3077041be546d903ecc7d9dd8', 'blocked': '4', 'net_r': '16.27725447431111', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '69', 'accepted_hash': '1b59562bb8fc2a2b8a7611ffb2ccfcd4c5e22cf1b72069922f74147edc0630f3', 'blocked': '4', 'net_r': '13.848819941249246', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '69', 'accepted_hash': 'c2fab83caf668a6c72306c1ccd9693412ad73949c9276643731bb52d91c19e0a', 'blocked': '4', 'net_r': '13.796622139051436', 'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'rejected': '0'}}, 'LOCAL__L40_D0.5_B1.4': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '39', 'accepted_hash': '23eba4a6f8dc075b408a505c733cac5797bf942e769abbbd351117c30730019d', 'blocked': '0', 'net_r': '12.405531755949378', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '2'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '7e88868cb5fc83ff5332b14972bd39226ba832f46b6b2db7106e9ff37deef1cb', 'blocked': '0', 'net_r': '18.07828069221303', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '55ceca9c44c019799066e134038310f753069151982e12bec72011095a6b08f7', 'blocked': '0', 'net_r': '18.023839431468037', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '19fa19a6c5328b11702efc070c8306139f3269ae35e7c79f2cbff75c5623a3c0', 'blocked': '0', 'net_r': '17.1903591261877', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': '3fd544859e72d87432818b411f43492f09df7e2fa0f22ddb3e0f79ea92df475e', 'blocked': '0', 'net_r': '17.13668680980351', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '41', 'accepted_hash': '0829b365b87cf7eec217df9a82fa2a6fc61e72e784adb15209156e9b69f441ff', 'blocked': '0', 'net_r': '15.507121159434266', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '41', 'accepted_hash': 'd18e5ead650a3c3b92a34767b927fbc87e4c53ebce27825fef8057eb87b0a4eb', 'blocked': '0', 'net_r': '15.454923357236458', 'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'rejected': '0'}}}
 
 
 def stamp(t):
@@ -81,24 +83,22 @@ def require(ok, message):
 
 
 ANCHORS = (('BROAD','anchor',40,.35,.75,1.),('STRONG_BODY','anchor',40,.50,1.25,1.50))
-# Prior comparators retained only for exact Pass3 reproduction.
 COMPARATORS = (('FREQUENCY','comparator',40,.50,1.25,1.50),('QUALITY','comparator',40,.50,1.40,1.50))
 BASELINES = (('LOCAL','reference',40,.50,1.40,1.50),('FREQUENCY_ALT','reference',20,.50,1.40,1.50))
-STUDY_LOOKBACKS = (35,40,45)
-STUDY_DISTANCES = (.45,.50,.55)
-STUDY_BODIES = (1.30,1.40,1.50)
+FROZEN_ENTRIES = (('PRIMARY','frozen_entry',40,.50,1.40,1.50),('FREQUENCY','frozen_entry',20,.50,1.40,1.50))
+RR_LEVELS = tuple(2.50+.25*k for k in range(9))
 
 
 def study_definitions():
     rows=[]
-    for lookback,distance,body in itertools.product(STUDY_LOOKBACKS,STUDY_DISTANCES,STUDY_BODIES):
-        rows.append({'id':f'LOCAL__L{lookback}_D{distance:g}_B{body:g}','anchor':'LOCAL','family':'LOCAL_JOINT','body':body,'lookback':lookback,'distance':distance,'cap':None,'close':None,'ratio':.60})
-    rows.append({'id':'FREQUENCY_ALT__CONTROL','anchor':'FREQUENCY_ALT','family':'FROZEN_COMPARATOR','body':1.40,'lookback':20,'distance':.50,'cap':None,'close':None,'ratio':.60})
-    require(len(rows)==28 and len({r['id'] for r in rows})==28,'Pass5 study count')
+    for entry in FROZEN_ENTRIES:
+        for reward_risk in RR_LEVELS:
+            rows.append({'id':f'{entry[0]}__RR{reward_risk:g}','anchor':entry[0],'family':'FROZEN_ENTRY_RR','body':entry[4],'lookback':entry[2],'distance':entry[3],'rr':reward_risk,'cap':None,'close':None,'ratio':.60})
+    require(len(rows)==18 and len({r['id'] for r in rows})==18,'Pass6 RR definition count')
     return rows
 
 DEFINITIONS=study_definitions()
-DEFINITION_BY_ID={r['id']:r for r in DEFINITIONS}
+DEFINITION_BY_ID={d['id']:d for d in DEFINITIONS}
 
 
 def configs():
@@ -106,7 +106,7 @@ def configs():
 
 
 def anchor_for(cid):
-    return next(a for a in BASELINES if a[0]==cid.split('__')[0])
+    return next(a for a in FROZEN_ENTRIES if a[0]==cid.split('__')[0])
 
 
 def anchor_qualifies(f,anchor):
@@ -123,43 +123,43 @@ def conditions_of(d):return [('body_ratio','GE',.60)]
 
 def condition_metadata(cid,raw):
     d=DEFINITION_BY_ID[cid]
-    return {'anchor':d['anchor'],'conditions_json':'[["body_ratio","GE",0.6]]','h4_vol_cap':None,'close_floor':None,'body_ratio_floor':.60,'missing_feature_signals':0}
+    return {'anchor':d['anchor'],'conditions_json':'[["body_ratio","GE",0.6]]','h4_vol_cap':None,'close_floor':None,'body_ratio_floor':.60,'missing_feature_signals':0,'reward_risk':d['rr']}
 
 
 def study_boundaries(cid):
-    d=DEFINITION_BY_ID[cid]
-    if d['family']=='FROZEN_COMPARATOR':return 'FIXED_COMPARATOR'
-    flags=[]
-    for name,levels in (('lookback',STUDY_LOOKBACKS),('distance',STUDY_DISTANCES),('body',STUDY_BODIES)):
-        if d[name] in (levels[0],levels[-1]):flags.append(name)
-    return '|'.join(flags)
-
-
-def find_definition(lookback,distance,body):
-    return f'LOCAL__L{lookback}_D{distance:g}_B{body:g}'
+    return 'RR_BOUNDARY' if DEFINITION_BY_ID[cid]['rr'] in (RR_LEVELS[0],RR_LEVELS[-1]) else ''
 
 
 def comparison_pairs():
     pairs=[]
-    for lookback,body in itertools.product(STUDY_LOOKBACKS,STUDY_BODIES):
-        for a,b in zip(STUDY_DISTANCES,STUDY_DISTANCES[1:]):
-            pairs.append((find_definition(lookback,a,body),find_definition(lookback,b,body),'RELAX_DISTANCE'))
-    for distance,body in itertools.product(STUDY_DISTANCES,STUDY_BODIES):
-        for a,b in zip(STUDY_LOOKBACKS,STUDY_LOOKBACKS[1:]):
-            pairs.append((find_definition(b,distance,body),find_definition(a,distance,body),'SHORTEN_LOOKBACK'))
-    for lookback,distance in itertools.product(STUDY_LOOKBACKS,STUDY_DISTANCES):
-        for a,b in zip(STUDY_BODIES,STUDY_BODIES[1:]):
-            pairs.append((find_definition(lookback,distance,b),find_definition(lookback,distance,a),'RELAX_BODY'))
-    pairs.append((find_definition(40,.50,1.40),'FREQUENCY_ALT__CONTROL','FIXED_FREQUENCY20_VS40'))
-    require(len(pairs)==55,'Pass5 comparison count')
+    for entry in FROZEN_ENTRIES:
+        for a,b in zip(RR_LEVELS,RR_LEVELS[1:]):
+            pairs.append((f'{entry[0]}__RR{a:g}',f'{entry[0]}__RR{b:g}','CHANGE_RR'))
+    for value in RR_LEVELS:pairs.append((f'PRIMARY__RR{value:g}',f'FREQUENCY__RR{value:g}','MATCHED_RR_ENTRY_COMPARATOR'))
+    require(len(pairs)==25,'Pass6 paired comparison count')
     return sorted(pairs)
 
 
 def condition_neighbours():
-    for reference,candidate,question in comparison_pairs():
-        dimension={'RELAX_DISTANCE':'distance','SHORTEN_LOOKBACK':'lookback','RELAX_BODY':'body','FIXED_FREQUENCY20_VS40':'fixed_comparator_lookback'}[question]
-        yield reference,candidate,dimension
-        yield candidate,reference,dimension
+    for a,b,question in comparison_pairs():
+        dimension='reward_risk' if question=='CHANGE_RR' else 'fixed_entry_comparator'
+        yield a,b,dimension
+        yield b,a,dimension
+
+
+def verify_pass5(raw,paths):
+    rows=[]
+    for entry in FROZEN_ENTRIES:
+        oldid='LOCAL__L40_D0.5_B1.4' if entry[0]=='PRIMARY' else 'FREQUENCY_ALT__CONTROL'
+        signals=[i for i,f in raw.items() if comparator_qualifies(f,entry)]
+        for name,pin in PASS5_PINS[oldid].items():
+            a,r,b=replay(signals,paths[name]);sha=digest([core(p) for p in a])
+            require(digest(signals)==pin['raw_signal_hash'] and sha==pin['accepted_hash'],'Pinned Pass5 RR3 ledger mismatch '+oldid+' '+name)
+            require((len(a),len(r),len(b))==(int(pin['accepted']),int(pin['rejected']),int(pin['blocked'])),'Pinned Pass5 RR3 counts changed')
+            require(abs(sum(p['r'] for p in a if p['r'] is not None)-float(pin['net_r']))<1e-8,'Pinned Pass5 RR3 R changed')
+            rows.append({'entry_version':entry[0],'pass5_definition':oldid,'case':name,'accepted':len(a),'ledger_sha256':sha,'parity':'PASS'})
+    require(len(rows)==16,'Incomplete Pass5 reference controls')
+    return rows
 
 
 def verify_pass4(raw,paths):
@@ -225,8 +225,8 @@ def verify_pass2(raw,paths):
 
 def paired_reports(out,ledgers,masks):
     fields=['reference_config','candidate_config','question','case','reference_closed_r','candidate_closed_r','delta_r','common','added','removed','common_r_change','added_closed_r','removed_closed_r','identity_error']
-    summary=CSV(Path(out)/'joint_comparisons.csv',fields)
-    marginal=CSV(Path(out)/'joint_marginal_trades.csv',['reference_config','candidate_config','question','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
+    summary=CSV(Path(out)/'rr_comparisons.csv',fields)
+    marginal=CSV(Path(out)/'rr_marginal_trades.csv',['reference_config','candidate_config','question','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
     try:
         for reference,candidate,question in comparison_pairs():
             for case in CASES:
@@ -243,7 +243,7 @@ def paired_reports(out,ledgers,masks):
                 for kind,ids,lookup,blocks in (('ADDED',added,br,ab),('REMOVED',removed,ar,bb)):
                     for i in sorted(ids):marginal.add(dict(meta,kind=kind,signal_index=i,r=lookup[i]['r'],qualifies_candidate=i in masks[candidate],displaced_by_signal_index=blocks.get(i)))
     finally:summary.close();marginal.close()
-    return {'joint_comparisons':summary.count,'joint_marginal_trades':marginal.count}
+    return {'rr_comparisons':summary.count,'rr_marginal_trades':marginal.count}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -463,12 +463,12 @@ def verify_pass1(bars,raw,paths,controls):
             require(abs(sum(p['r'] for p in a if p['r'] is not None)-float(pin['net_r']))<1e-8,'Pinned anchor R mismatch')
 
 
-def path_for(bars, i, case):
+def path_for(bars, i, case, reward_risk=RR):
     _,scenario,cost,model=case
-    p=bars[i]['mid'];reference=p['c'];stop=p['l']-PIP;target=reference+RR*(reference-stop)
+    p=bars[i]['mid'];reference=p['c'];stop=p['l']-PIP;target=reference+reward_risk*(reference-stop)
     t=bars[i]['t']+H4
     base={'signal_index':i,'signal_start':stamp(bars[i]['t']),'signal_close':stamp(t),
-          'reference':reference,'stop':stop,'target':target,'rr_reference':RR,'reason':''}
+          'reference':reference,'stop':stop,'target':target,'rr_reference':reward_risk,'reason':''}
     if t>=END:return dict(base,reason='SIGNAL_AT_OR_AFTER_CUTOFF')
     nextbar=bars[i+1] if i+1<len(bars) else None
     base['next_observed_delay_seconds']=None if nextbar is None else nextbar['first_h1']-t
@@ -516,7 +516,7 @@ def replay(indices, paths):
     return accepted,rejected,blocked
 
 
-def independent_raw(bars, case, anchor=None):
+def independent_raw(bars, case, anchor=None, reward_risk=3.0, min_body_ratio=None):
     """Independent scalar signal, ATR and sequential raw execution control."""
     _,scenario,cost,model=case
     atr=None;seed=[];busy=-1;accepted=[];reject=[];blocked=[];signals=[]
@@ -532,9 +532,10 @@ def independent_raw(bars, case, anchor=None):
             _,_,lb,cap,bmin,rmin=anchor
             prior=min(z['mid']['l'] for z in bars[i-lb:i])
             if abs(now['l']-prior)/atr>cap or (now['c']-now['o'])/atr<bmin or (now['h']-now['l'])/atr<rmin:continue
+        if min_body_ratio is not None and (now['c']-now['o'])/(now['h']-now['l'])<min_body_ratio:continue
         signals.append(i)
         if i<busy:blocked.append((i,accepted[-1][0]));continue
-        st=now['l']-.0001;ref=now['c'];tp=ref+3*(ref-st);et=bars[i]['t']+14400
+        st=now['l']-.0001;ref=now['c'];tp=ref+reward_risk*(ref-st);et=bars[i]['t']+14400
         why='';fill=ref+cost*.0001
         if et>=END:
             reject.append((i,'SIGNAL_AT_OR_AFTER_CUTOFF'));continue
@@ -685,10 +686,14 @@ def analyse(bars, out, progress=lambda **k:None):
     write_json(out/'pass3_comparator_reconciliation.json',comparator_reconciliation)
     reference_reconciliation=verify_pass4(raw,paths)
     write_json(out/'pass4_reference_reconciliation.json',reference_reconciliation)
-    all_ledgers={};all_masks={}
-    baselines={(anchor[0],case[0]):replay([i for i,f in raw.items() if comparator_qualifies(f,anchor)],paths[case[0]]) for anchor in BASELINES for case in CASES}
+    rr3_reconciliation=verify_pass5(raw,paths)
+    write_json(out/'pass5_rr3_reconciliation.json',rr3_reconciliation)
+    frozen_indices=sorted({i for entry in FROZEN_ENTRIES for i,f in raw.items() if comparator_qualifies(f,entry)})
+    rr_paths={value:{case[0]:{i:path_for(bars,i,case,value) for i in frozen_indices} for case in CASES} for value in RR_LEVELS}
+    all_ledgers={};all_masks={};independent_rr_controls=[]
+    baselines={(anchor[0],case[0]):replay([i for i,f in raw.items() if comparator_qualifies(f,anchor)],paths[case[0]]) for anchor in FROZEN_ENTRIES for case in CASES}
     write_json(out/'independent_raw_controls.json',controls)
-    write_json(out/'protocol.json',{'version':VERSION,'start_utc':stamp(START),'cutoff_exclusive_utc':stamp(END),'cases':CASES,'rr':RR,'configurations':28,'source_h4_count':len(bars),'raw_indices_sha256':digest(indices)})
+    write_json(out/'protocol.json',{'version':VERSION,'start_utc':stamp(START),'cutoff_exclusive_utc':stamp(END),'cases':CASES,'rr':RR,'configurations':18,'source_h4_count':len(bars),'raw_indices_sha256':digest(indices)})
     (out/'PROTOCOL.md').write_text(PROTOCOL)
     shutil.copyfile(__file__,out/'research_runner.py')
     fields=list(path_for(bars,indices[0],CASES[0])) if indices else ['signal_index']
@@ -700,9 +705,10 @@ def analyse(bars, out, progress=lambda **k:None):
     rej=make('rejected_entries',['config','case']+fields)
     blk=make('blocked_signals',['config','case','signal_index','blocking_signal_index'])
     opn=make('open_at_cutoff',['config','case']+fields)
-    rawpaths=make('raw_independent_paths',['case']+fields)
+    rawpaths=make('raw_reference_rr3_paths',['case']+fields)
+    study_paths=make('frozen_rr_paths',['config','case']+fields)
     memberships=make('raw_memberships',['config','signal_index'])
-    cf=make('configurations',['config','family','lookback','distance_atr_max','body_atr_min','range_atr_min','boundary_dimensions','anchor','conditions_json','h4_vol_cap','close_floor','body_ratio_floor','missing_feature_signals'])
+    cf=make('configurations',['config','family','lookback','distance_atr_max','body_atr_min','range_atr_min','boundary_dimensions','anchor','conditions_json','h4_vol_cap','close_floor','body_ratio_floor','missing_feature_signals','reward_risk'])
     feature=make('raw_signal_features',['signal_index','signal_start','atr','body_atr','range_atr','close_location','body_ratio']+['distance_lb'+str(l) for l in LB]+CONTEXT_FIELDS)
     source=make('source_h4_features',['index','time','atr','first_observed_h1','h1_count']+[s+'_'+k for s in ('mid','bid','ask') for k in 'ohlc'])
     for i,b in enumerate(bars):source.add(dict(index=i,time=stamp(b['t']),atr=atr[i],first_observed_h1=stamp(b['first_h1']),h1_count=b['h1_count'],**{s+'_'+k:b[s][k] for s in ('mid','bid','ask') for k in 'ohlc'}))
@@ -712,13 +718,14 @@ def analyse(bars, out, progress=lambda **k:None):
     per,months,rolling=periods()
     periodfields=list(period_row([],per[0]));statfields=list(stats([]))
     periodwriters=[make(n,['config','case']+periodfields) for n in ('periods','monthly','rolling')]
-    sums=make('summary',['config','case','raw_signals','raw_signal_hash','accepted_hash','accepted','rejected','blocked','open_at_cutoff','isolated_eligible','isolated_closed','isolated_net_r','blank_complete_years','blank_complete_months','longest_blank_complete_months','worst_12m_r','worst_24m_r','worst_36m_r','median_stop_pips','median_cost_over_risk','median_entry_spread_pips','median_holding_hours','max_interentry_days','max_wait_including_edges_days']+statfields)
+    sums=make('summary',['config','case','reward_risk','entry_version','accepted_signal_hash','closed_signal_hash','raw_signals','raw_signal_hash','accepted_hash','accepted','rejected','blocked','open_at_cutoff','isolated_eligible','isolated_closed','isolated_net_r','blank_complete_years','blank_complete_months','longest_blank_complete_months','worst_12m_r','worst_24m_r','worst_36m_r','median_stop_pips','median_cost_over_risk','median_entry_spread_pips','median_holding_hours','max_interentry_days','max_wait_including_edges_days']+statfields)
     comparisons=make('baseline_comparisons',['config','case','baseline_closed_r','candidate_closed_r','delta_r','common','added','removed','common_r_change','added_closed_r','removed_closed_r','identity_error'])
     marginal=make('baseline_marginal_trades',['config','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
     summary_lookup={};rawhash={};acceptedhash={}
     try:
         for num,c in enumerate(grid):
             cid,family,l,d,b,r=c
+            reward_risk=DEFINITION_BY_ID[cid]['rr'];case_paths=rr_paths[reward_risk]
             boundaries=study_boundaries(cid)
             cf.add(dict(config=cid,family=family,lookback=l,distance_atr_max=d,body_atr_min=b,range_atr_min=r,boundary_dimensions=boundaries,**condition_metadata(cid,raw)))
             signals=[i for i,f in raw.items() if qualifies(f,c)];signalset=set(signals);rh=digest(signals);rawhash[cid]=rh
@@ -726,7 +733,13 @@ def analyse(bars, out, progress=lambda **k:None):
             for i in signals:memberships.add(dict(config=cid,signal_index=i))
             for case in CASES:
                 name=case[0];meta={'config':cid,'case':name}
-                accepted,rejected,blocked=replay(signals,paths[name]);all_ledgers[cid,name]=(accepted,rejected,blocked);ah=digest([core(p) for p in accepted]);acceptedhash[(cid,name)]=ah
+                accepted,rejected,blocked=replay(signals,case_paths[name]);all_ledgers[cid,name]=(accepted,rejected,blocked);ah=digest([core(p) for p in accepted]);acceptedhash[(cid,name)]=ah
+                check_signals,check_ledger,check_rejected,check_blocked=independent_raw(bars,case,anchor_for(cid),reward_risk,.60)
+                require(check_signals==signals and check_ledger==[core(p) for p in accepted],'Independent RR full-ledger parity failed '+cid+' '+name)
+                require(check_rejected==[(p['signal_index'],p['reason']) for p in rejected] and check_blocked==[(p['signal_index'],p['blocking_signal_index']) for p in blocked],'Independent RR rejection/block parity failed')
+                if reward_risk==3.0:require([core(p) for p in accepted]==[core(p) for p in baselines[anchor_for(cid)[0],name][0]],'RR3 study/reference parity failed')
+                independent_rr_controls.append({'config':cid,'case':name,'raw_signal_hash':rh,'accepted':len(accepted),'rejected':len(rejected),'blocked':len(blocked),'accepted_hash':ah,'parity':'PASS'})
+                for i in signals:study_paths.add(dict(meta,**case_paths[name][i]))
                 for p in accepted:
                     led.add(dict(meta,**p))
                     if p['r'] is None:opn.add(dict(meta,**p))
@@ -739,7 +752,7 @@ def analyse(bars, out, progress=lambda **k:None):
                         row=period_index.row(interval);writer.add(dict(meta,**row));group.append(row)
                     periodrows.append(group)
                 annual=periodrows[0][:22];complete_months=[p['entries'] for p in periodrows[1] if not p['partial']]
-                isolated=[paths[name][i] for i in signals if not paths[name][i]['reason']]
+                isolated=[case_paths[name][i] for i in signals if not case_paths[name][i]['reason']]
                 realised=stats(accepted);med=lambda seq:statistics.median(seq) if seq else None
                 entries=sorted(p['entry_epoch'] for p in accepted)
                 gaps=[(y-x)/86400 for x,y in zip(entries,entries[1:])]
@@ -750,6 +763,7 @@ def analyse(bars, out, progress=lambda **k:None):
                        median_stop_pips=med([p['stop_distance_pips'] for p in accepted]),median_cost_over_risk=med([p['cost_over_risk'] for p in accepted]),median_entry_spread_pips=med([p['entry_spread_pips'] for p in accepted if p['entry_spread_pips'] is not None]),
                        median_holding_hours=med([(p['exit_epoch']-p['entry_epoch'])/3600 for p in accepted if p['exit_epoch'] is not None]),max_interentry_days=max(gaps) if gaps else None,max_wait_including_edges_days=max((y-x)/86400 for x,y in zip(edge,edge[1:])),**realised)
                 for n in (12,24,36):s[f'worst_{n}m_r']=min(p['net_r'] for p in periodrows[2] if p['period'].startswith(str(n)+'M'))
+                s.update(reward_risk=reward_risk,entry_version=anchor_for(cid)[0],accepted_signal_hash=digest([p['signal_index'] for p in accepted]),closed_signal_hash=digest([p['signal_index'] for p in accepted if p['r'] is not None]))
                 sums.add(s);summary_lookup[(cid,name)]=s
                 ba={p['signal_index']:p for p in baselines[anchor_for(cid)[0],name][0]};ca={p['signal_index']:p for p in accepted}
                 added=ca.keys()-ba.keys();removed=ba.keys()-ca.keys();common=ba.keys()&ca.keys()
@@ -762,19 +776,21 @@ def analyse(bars, out, progress=lambda **k:None):
                 bb={x['signal_index']:x['blocking_signal_index'] for x in baselines[anchor_for(cid)[0],name][2]}
                 for kind,items,ledger,blocks in (('ADDED',added,ca,bb),('REMOVED',removed,ba,cb)):
                     for i in sorted(items):marginal.add(dict(meta,kind=kind,signal_index=i,r=ledger[i]['r'],qualifies_candidate=i in signalset,displaced_by_signal_index=blocks.get(i)))
-            progress(phase='REPLAY_AND_REPORTS',completed_configurations=num+1,total_configurations=28)
+            progress(phase='REPLAY_AND_REPORTS',completed_configurations=num+1,total_configurations=18)
         neighbours=make('neighbours',['config','neighbour','dimension','case','net_r','neighbour_net_r','accepted','neighbour_accepted','same_raw_stream','same_accepted_stream'])
         for cid,oid,dimension in condition_neighbours():
             for case in CASES:
                 name=case[0];x=summary_lookup[cid,name];y=summary_lookup[oid,name]
                 neighbours.add(dict(config=cid,neighbour=oid,dimension=dimension,case=name,net_r=x['net_r'],neighbour_net_r=y['net_r'],accepted=x['accepted'],neighbour_accepted=y['accepted'],same_raw_stream=rawhash[cid]==rawhash[oid],same_accepted_stream=acceptedhash[cid,name]==acceptedhash[oid,name]))
-        require(sums.count==224 and periodwriters[0].count==224*len(per) and periodwriters[1].count==224*len(months) and periodwriters[2].count==224*len(rolling),'Incomplete result matrix')
+        require(sums.count==144 and periodwriters[0].count==144*len(per) and periodwriters[1].count==144*len(months) and periodwriters[2].count==144*len(rolling),'Incomplete result matrix')
         duplicate=collections.defaultdict(list)
         for c,h in rawhash.items():duplicate[h].append(c)
         write_json(out/'duplicate_raw_streams.json',[v for v in duplicate.values() if len(v)>1])
+        require(len(independent_rr_controls)==144,'Incomplete independent RR controls')
+        write_json(out/'independent_rr_controls.json',independent_rr_controls)
         component_counts=paired_reports(out,all_ledgers,all_masks)
         write_json(out/'output_row_counts.json',dict({n:w.count for n,w in writers.items()},**component_counts))
-        write_json(out/'RUN_COMPLETE.json',{'version':VERSION,'status':'COMPLETE','configurations':28,'execution_cases':8,'fixed_anchors':2,'pass1_anchor_parity':'PASS','pass2_control_parity':'PASS','pass2_control_cases':104,'pass3_comparator_parity':'PASS','pass3_comparator_cases':16,'pass4_reference_parity':'PASS','pass4_reference_cases':16,'local_geometries':27,'fixed_frequency_comparators':1,'summary_rows':224,'independent_raw_parity':'PASS','scope':'Exploratory standalone historical research; not portfolio admission or prospective profitability'})
+        write_json(out/'RUN_COMPLETE.json',{'version':VERSION,'status':'COMPLETE','configurations':18,'execution_cases':8,'fixed_anchors':2,'pass1_anchor_parity':'PASS','pass2_control_parity':'PASS','pass2_control_cases':104,'pass3_comparator_parity':'PASS','pass3_comparator_cases':16,'pass4_reference_parity':'PASS','pass4_reference_cases':16,'frozen_entry_versions':2,'rr_levels':list(RR_LEVELS),'pass5_rr3_parity':'PASS','pass5_rr3_cases':16,'independent_rr_full_replay_cases':144,'summary_rows':144,'independent_raw_parity':'PASS','scope':'Exploratory standalone historical research; not portfolio admission or prospective profitability'})
     finally:
         for w in writers.values():w.close()
 
@@ -782,7 +798,7 @@ def analyse(bars, out, progress=lambda **k:None):
 STATE={'status':'IDLE','version':VERSION,'read_only':True,'orders_sent':False,'requested_start':stamp(START),'cutoff_exclusive':stamp(END)}
 STATE_LOCK=threading.Lock()
 START_LOCK=threading.Lock()
-OUTPUT=Path(os.environ.get('EURUSD_H4_PASS5_OUTPUT_DIR', '/data/eurusd_h4_pass5_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass5_research')))
+OUTPUT=Path(os.environ.get('EURUSD_H4_PASS6_OUTPUT_DIR', '/data/eurusd_h4_pass6_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass6_research')))
 
 
 def update(**kwargs):
@@ -806,14 +822,15 @@ def run():
         (OUTPUT/RESULT_NAME).unlink(missing_ok=True)
         self_test()
         work=Path(tempfile.mkdtemp(prefix='pass1_',dir=OUTPUT));reports=work/'reports';reports.mkdir()
-        explicit=os.environ.get('EURUSD_H4_PASS5_FROZEN_DATA')
+        explicit=os.environ.get('EURUSD_H4_PASS6_FROZEN_DATA')
         cached=OUTPUT/SOURCE_NAME
         beside=Path(__file__).resolve().parent/SOURCE_NAME
         prior=Path(os.environ.get('EURUSD_H4_PASS1_OUTPUT_DIR','/data/eurusd_h4_pass1_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass1_research')))/SOURCE_NAME
         prior2=Path(os.environ.get('EURUSD_H4_PASS2_OUTPUT_DIR','/data/eurusd_h4_pass2_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass2_research')))/SOURCE_NAME
         prior3=Path(os.environ.get('EURUSD_H4_PASS3_OUTPUT_DIR','/data/eurusd_h4_pass3_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass3_research')))/SOURCE_NAME
         prior4=Path(os.environ.get('EURUSD_H4_PASS4_OUTPUT_DIR','/data/eurusd_h4_pass4_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass4_research')))/SOURCE_NAME
-        source=Path(explicit) if explicit else next((p for p in (cached,beside,prior4,prior3,prior2,prior) if p.exists()),None)
+        prior5=Path(os.environ.get('EURUSD_H4_PASS5_OUTPUT_DIR','/data/eurusd_h4_pass5_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass5_research')))/SOURCE_NAME
+        source=Path(explicit) if explicit else next((p for p in (cached,beside,prior5,prior4,prior3,prior2,prior) if p.exists()),None)
         if source is not None:
             require(source.is_file(),'Explicit frozen source does not exist')
             h4,h1,receipts,manifest=read_source(source)
@@ -874,7 +891,7 @@ def response(method,path):
 
 
 def app(environ,start_response):
-    if os.environ.get('EURUSD_H4_PASS5_AUTOSTART','true').lower()!='false':start()
+    if os.environ.get('EURUSD_H4_PASS6_AUTOSTART','true').lower()!='false':start()
     method=environ.get('REQUEST_METHOD','GET');code,mime,body,path=response(method,environ.get('PATH_INFO','/'))
     size=path.stat().st_size if path else len(body)
     headers=[('Content-Type',mime),('Content-Length',str(size)),('Cache-Control','no-store')]
@@ -909,7 +926,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def self_test():
-    require(len(configs())==28 and len(CASES)==8,'Configuration count')
+    require(len(configs())==18 and len(CASES)==8,'Configuration count')
     require(tuple(map(len,periods()))==(31,262,714),'Period boundaries')
     def bar(t,o,h,l,c):
         p=dict(o=o,h=h,l=l,c=c)
@@ -928,7 +945,7 @@ def self_test():
     a,_,bl=replay([0,1,2],p);require([v['signal_index'] for v in a]==[0,2] and len(bl)==1,'P0 exit-candle handling')
     require(longest_zero([0,0,1,0,0,0])==3,'Zero-month drought')
     require(response('POST','/')[0]==405,'No writes allowed')
-    require(len(DEFINITIONS)==28 and len(comparison_pairs())==55 and len(ANCHORS)==2,'Pass3 study count')
+    require(len(DEFINITIONS)==18 and len(comparison_pairs())==25 and len(ANCHORS)==2,'Pass3 study count')
     return {'status':'PASS','scope':'Synthetic software checks only; no historical result'}
 
 
@@ -940,5 +957,5 @@ if __name__=='__main__':
     if args.self_test:print(json.dumps(self_test()));sys.exit(0)
     if args.run_once:
         run();print(json.dumps(snapshot()));sys.exit(0 if snapshot()['status']=='COMPLETE' else 1)
-    if os.environ.get('EURUSD_H4_PASS5_AUTOSTART','true').lower()!='false':start()
+    if os.environ.get('EURUSD_H4_PASS6_AUTOSTART','true').lower()!='false':start()
     ThreadingHTTPServer(('0.0.0.0',int(os.environ.get('PORT','8000'))),Handler).serve_forever()
