@@ -1,1506 +1,801 @@
-"""EURCHF M15 LONG Pass7: standalone structure-distance frequency research.
-Single Python3.10+ standard-library file. Keep EURCHF_M15_PASS1_FROZEN_DATA.zip
-alongside app.py. /status, /results; --run or --self-test. No broker/order calls.
+#!/usr/bin/env python3
+"""EUR/USD H4 LONG Pass 1. Standard-library Python 3.10+. Research ONLY.
+Save as app.py in a separate service. Start: python app.py
+GET /status -> COMPLETE; GET /results -> report ZIP. No order endpoints.
 """
-from __future__ import annotations
-import argparse,bisect,csv,hashlib,io,json,math,os,shutil,sys,tempfile,threading,time,traceback,zipfile
-from collections import defaultdict,deque
-from datetime import datetime,timedelta,timezone
+import argparse
+import bisect
+import collections
+import csv
+import datetime as dt
+import hashlib
+import io
+import itertools
+import json
+import math
+import os
 from pathlib import Path
-from socketserver import ThreadingMixIn
-from wsgiref.simple_server import WSGIServer,make_server
-VERSION='EURCHF_M15_LONG_PASS7_STRUCTURE_DISTANCE_FREQUENCY_V1_2026_10_12'
-PAIR,SIDE,TIMEFRAME='EUR_CHF','BUY','M15'
-UTC=timezone.utc
-START=datetime(2005,1,1,tzinfo=UTC)
-END=datetime(2026,10,8,tzinfo=UTC)
-BAR=timedelta(minutes=15)
-H1_BAR=timedelta(hours=1)
-PINNED_H1_END=datetime(2026,10,1,tzinfo=UTC)
-PINNED_H1_COUNT=137819
-PINNED_H1_SHA256='9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76feac'
-TICK,PIP,RR,WARMUP=.00001,.0001,3.,200
-COSTS=(10,20,40)
-MODELS=('NEAREST_OPEN_SENSITIVITY','STOP_FIRST_GAP_STRESS')
-RESULT_NAME='EURCHF_M15_LONG_PASS7_STRUCTURE_DISTANCE_FREQUENCY_RESULTS.zip'
-OUT=Path(os.getenv('EURCHF_M15_LONG_PASS7_OUTPUT_DIR',os.getenv('EURCHF_M15_LONG_PASS6_OUTPUT_DIR',os.getenv('EURCHF_M15_LONG_PASS2B_OUTPUT_DIR','/tmp/eurchf_m15_long_pass7')))).resolve()
-PREFIX='/eurchf-m15-long-pass7'
-LOCK=threading.RLock()
-STARTED=False
-JOB_LOCK=None
-RUN_CLOCK=None
-STATUS=dict(state='not_started',progress=0,message='Ready',version=VERSION,orders_supported=False,trading_enabled=False,pair=PAIR)
-CASE=['config_id', 'execution_model', 'cost_ticks']
-SUMMARY_FIELDS=['config_id', 'execution_model', 'cost_ticks', 'raw_signals', 'eligible_isolated_signals', 'isolated_completed', 'isolated_open', 'isolated_total_r', 'isolated_profit_factor', 'geometry_invalid_all_signals', 'p0_blocked_signals', 'invalid_unblocked_entries', 'open_at_data_end', 'closed_trades', 'wins', 'losses', 'win_rate_pct', 'total_r', 'expectancy_r', 'profit_factor', 'max_closed_dd_r', 'max_losing_streak', 'dual_touch_closed', 'gap_stop_closed', 'gap_target_closed', 'entry_next_open_gap_count', 'entries_before_market_closure', 'median_stop_pips', 'median_cost_fraction_reference_risk', 'p90_cost_fraction_reference_risk', 'median_holding_hours', 'max_holding_hours', 'maximum_inter_entry_gap_days', 'leading_no_entry_days', 'trailing_no_entry_days', 'zero_entry_months', 'max_consecutive_zero_entry_months', 'positive_complete_entry_years', 'negative_complete_entry_years', 'zero_entry_complete_years', 'raw_signal_sha256', 'accepted_ledger_sha256', 'worst_12m_realized_r', 'worst_12m_start', 'worst_12m_end', 'zero_entry_12m_windows', 'worst_24m_realized_r', 'worst_24m_start', 'worst_24m_end', 'zero_entry_24m_windows', 'worst_36m_realized_r', 'worst_36m_start', 'worst_36m_end', 'zero_entry_36m_windows']
-EMBEDDED_MEMBER_PINS={'source_candles.csv': {'bytes': 31136287, 'sha256': '59f3a83fb838d9921f9f2433cd928a77ef451301bec466a3fedd67744ae2f707'}, 'source_h1_crosscheck_candles.csv': {'bytes': 7942356, 'sha256': 'ffaa24aa4c371b7885c61ef225f1846ccf5e133d444a45c438af3066cef702a3'}, 'fetch_receipts.csv': {'bytes': 19964, 'sha256': '52423125b321d3c25b5ae2adf89c8fd287b230764540847b375279cc92530890'}, 'parent_pass1_accepted_ledgers.csv': {'bytes': 23899883, 'sha256': '05bef6ac72de3d5d7c4a8e6ca0fc2dc52c13c684f956e9f3c88cf8f4aea4a706'}, 'parent_pass1_provenance.json': {'bytes': 71790, 'sha256': 'f11996dfcd59473762a35b3cd02ab627a3b9757d71f2021b593999f5ce60ea1c'}}
-EMBEDDED_PAYLOAD_SHA256='511215ae3b95e676829896d30baa1342bbca17e7be30745a22753dab5ba3b849'
-FROZEN_SOURCE_FILE=Path(__file__).resolve().with_name('EURCHF_M15_PASS1_FROZEN_DATA.zip')
+import shutil
+import statistics
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-LOOKBACKS=(100,200)
-BODY_RATIOS=(1.,1.25,1.5,2.)
-FREQUENCY_RATIOS=(1.,1.25)
-DISTANCE_LEVELS={200:(.05,.075,.10),100:(.025,.05,.075)}
-PASS6_REFERENCE_JSON='[{"accepted_ledger_sha256":"0a77c7212e25cfa503511b13d615306dde720630e8a03308fe4ab6dfc0f6b8cc","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"1","p0_blocked_signals":"19003","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"19599445f83438f8fab82eb6dd574e796431cc4117dded74ac5341202a518584","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"1","p0_blocked_signals":"19003","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"398a15de61f4c199dfda2cc0057b4ee37ddebc02a1e2dc8cc59ec3d311bbbd75","closed_trades":"18077","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"16","open_at_data_end":"1","p0_blocked_signals":"19001","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"f788f50e5fcbf6062abaa38ae7208218d39eb0911e861cf51884ffc41945f161","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"1","p0_blocked_signals":"19003","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"ffbac0e7e8602d319eb34caa3bda2e16dc01001826cb2cf7a15eb5e6eda8cbe3","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"1","p0_blocked_signals":"19003","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"ba72a75089fe75eb0a6aac8115f871dd0dc1bab64d8be02ec3cb324b1be01254","closed_trades":"18077","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"16","open_at_data_end":"1","p0_blocked_signals":"19001","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095"},{"accepted_ledger_sha256":"a848920d4d3f9572e146fd8e057eb0b9e332a0e687168ea235629a10c1fa7035","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"4d6f22b463fc1de7fdede88379e198d9a1ef304ffde6ae91109e14b570572a49","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"6eeb94029eb81df2feb541def0476b309b0bd8335b5ca9251d36b480ba3cf256","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"4b12c9780b8c78a1f5dda220021cca8d9292e375e2a2b7790ad8af600175ae88","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"703eaf8be500e238b5573582f52924bd34dec439436587626caa2519f7b55803","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"7d2b91509b054097f0b0c348b788471895b44f3ffad5a1e4a9eb6e49be194aa9","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"47e659a0f64195343fea67df8ba90bd454db9c8cb5fd5db79c44853c9d481645","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"5a9ce8b8f3f0f622732ce183f48fd5524e406ba31eee0658529d19ffe2212cbd","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"4ae1c5c55b9f3f0cfe7ea9ec97851da3ebbb4e5599f227bb19cb4297ee144b87","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"0e66e3526fe2b55cead85ef3f93aed983eb3754098e7e22c79c541c817dba580","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"a3038d0626255935765f62c1b0b80ea95a31b56e3bd2019181d9888b3aba3ffc","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"73a76808d1b7f3313ba39975ed7bf075128fc2007c9e35fbffd413ccc021ef76","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"3eb14743f15446c065cc4c0e50025ad494802f1fccdd6adfa3c69f6650a8feb6","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"6411db59fdb4e9484c962adc21c2e01b33311dde1c6054c02ad6f3fdb0fdb811","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"5af00be79eac266547e984b4c7689c980dab90ea8237eac1a41294815a98875d","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"cf32b90cf1d08c5789e59752a8d8594ed773e324e736ed1df5a934bbfd925b19","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"7cb47bb82d91e482467962e2db4488b7cae2c9078fd0201efb4936d4a8e42d09","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"02140139e2e9a2e9bc942f646b1032d0ba4678ed86de8dbc6b5a9073c35f0fc2","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57"},{"accepted_ledger_sha256":"ed7b96e16101616c6a8da06c3d11e3f7a0466484305a5df0fdb10aef12cfb059","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"7ae97e2b004a890e33a9a2454acd8ced2672eeeb5337ed0f72ef6a116c56a499","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"ccc1c8ef4bbc6ae877a8886b01bdfa5b8d7c78e0aef7a2dbcc80ce5f0be91a81","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"03b83b267374462e7b5bbe210328100784c2fa4cd5da0e88fcae1506eef7f020","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"dc641efaf27edd2c73dfdec746f7ff72de3a8e04ee605e224a62a86cf34544f6","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"b9dc78e99aee3eac17458e866ecef4ef978308ab91cc4a06635b57ac3665cd41","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50"},{"accepted_ledger_sha256":"4eba5ef9907ff42686e3f770447cfd4817063638f244618e1243165cc586caa2","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"a72497028ba75d37b134e5338f1c9da8fd22e935032c2603c0dc1f52abfe766f","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"59f010629087551206c35f0c9a50851f2c01c865e21b02806d0adfbe8c6082c6","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"a1089a8548b4e453219e87e804811079f9805e71441f5eb54fe4ef0a7a07ca0a","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"7f3592fc7e0bd553f092a91becaf4074886ee4a951fc57863e9d166c3b135519","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"328546a3a02a5509b97cf76e665196292a73864d11e929c052c887d73472165e","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23"},{"accepted_ledger_sha256":"dfe290c1c0ac5a16267c967296d34ba6188f46f554beda005a9b0031815b6270","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"6b4b95e05269c088d108ca303bc748bd9bc760dfffcb986adb586d8c60910e19","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"810d3d734df3bfc04fd557f67b977e9f47e66b90f0e8113e23d1a900122bbad8","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"0b42d0efb1c433626b8852ab0955b10fc0d528ae156521cd93c29ccabb753c2a","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"0687cbb3be44548b4665069a3d40505863bf89223ecdd05f9773b1e979a37d3a","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"e64d9784c3eeb55be52cc31df31e9e309715eaff6c561e948e38c20ff139d99d","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19"},{"accepted_ledger_sha256":"fe0c8236a66927fecf8c7792e76d3876c39a73d4f6e16db84544a3adc5001dd2","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"0538e1de4ee8eaf9ebb468e1e4ebd57f245c32c1ad63ff82e5dae01127de09c5","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"78a39d8a5f189309e73025697c5536cf1f5e3607dbae72a63272f6125704fa12","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"d9f31a0b801a7636d1570c18f89b325e2e6650cc8ac73816c9885881a8ab8045","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"da8fafa191621d9ad8bda15708f5137cb20e3cace75f7e9435bc0d95fa4accac","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"b981f70464ba192edb0ba57437b2678a3aa651ec498293d3fe341d95076a7829","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"e802f533511d83a67fa7b33bc142cca2cc5b06bf861f5585991d9a7e4eefcb85","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"7bdc48183be7ae7c57f2ae586f890704316b8b13d293a7187d0275475c3701cd","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"8250f3a0833b19098c0453aab151b87ad6d69c36b9df86997d2f4036a16123ba","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"7efa5d0d6fc1b0ffdae1a59cfa1ab1c471195794e6ea12ba22a9623f53436aba","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"c372eadf877858330c1c892ac0d6a50fcb09c7377987def7678e5628af082c50","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"fc4a44026e724f8156cd3fbdbb544d9a922aea2993c277b90998431a9fec507a","closed_trades":"52","config_id":"M_L200_D0050_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"9998fc4d85c421b822c7ebc73e81b6aac36b55da35ff2a5d0a5d0a2a4c4defad","raw_signals":"52"},{"accepted_ledger_sha256":"b266271b63bc321b117b5d2bd52cb1c0e0b3bc366a5b719278038014baa02786","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"399b6672846e941f52a34a652d2605a05eff4bc8ffc0bd413cca62941e961438","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"2da26dc571caa2a97b5dc1217a4f8be3433eb9243712581a2f9cad985ec6cf1a","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"1b2e10b464d9d33b44da072904933f1590acb61def2ffa6d42ee0bdbd73a0369","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"d2b6f6189fb24eed099f8fde6599d9a40ebb827c7110062f99eb29ebccf6101c","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"0f24eca08d623a1397da6f1fc57dfda14add963c4fc365db2811d394234f6b58","closed_trades":"20","config_id":"M_L200_D0050_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fc5286b9c7fa0afe44f27b88d4075679d7f1251f52e00c5a616ec72614c90e08","raw_signals":"20"},{"accepted_ledger_sha256":"5938c0dea7a03b70be62dd00e17e17e7b4ce33120cac5afbcf1ff0c466171b32","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"d84ad3bbd6405527c9673332269f35703d7187f4820d7822e55bd3808f840608","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"cb3dd7b99384741ed7fcb3f73640dd08ff9db32a4e69088ca2e51fa73c8858bf","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"4deec3c47eaf8f3ead7f5b1af1468d20434d9041e09f21d888bfd1e09f979138","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"275e262601af9841603ff8364a9f25c02d8c05f977990bb7b7ad44b490cf0a29","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"3ed23b805b12ffd80ea2c35ce7dd171000e080ad95d24ce5e38deb020c671815","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"43d346052e2210102064cadca555459f3289963211187336c872d628bcac5086","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"148b3e4c6b1c4dd4077f4c01ce726d45e351eaefa74ccdf9c0955815ef359204","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"d66487bf9209668cccee05db61b9f675aabf6cb24940cb4ddc06c556a19ea1b1","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"0901a007ee5c5d9e5c2534b2c8481d6248085823fb4bdac4d6cee21c6552d2c2","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"a856d62dc7d73360bb09a8a7348f4ee5b712688f249e6ce3b553f5c24ce57623","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"9d02bd30ab8d4f2e3ce773e9840a028150a8b5971466b3375a7c6fa2d6f21536","closed_trades":"44","config_id":"M_L200_D0050_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f1b8e113e61abd2ddb6a08f061ffbd72660584936be1f2abb29d349a567d81","raw_signals":"44"},{"accepted_ledger_sha256":"39fd1da30ae0baff77ca8f9d19e27953700c984c59f3223948953b68a32cc61c","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"b5464c7535d235f0a1fa21c5af80daf7ddc2805a15723f1b276954805f72b015","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"d501eb278364f21ff2328cf6ed1c9a448028f7029d5e113894d4ea46722759f6","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"bfee961c93573e61d3793ab7c0f5dde4b257aca1524f73eb941d908f4d61e387","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"40aac37630f937f188dc1007fc5a9c0592da7b3bb17716f11a98e3e9efafaf8e","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"78da201909d6f387b402f0b1eb4ddf9bf10e9fd37fe346f3c58c2dc8e15cb089","closed_trades":"17","config_id":"M_L200_D0050_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"3298b133f0751d906d2f2a03ed3583891ea4f2b9c28b2a561a6d42d23a03c231","raw_signals":"17"},{"accepted_ledger_sha256":"dbc6bb61234bd189e3d9edc3d6b16c435ac1e67b8459f72c9532d08c3e93ad35","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"127f201d74cb7fd4ccab0011d0d728ebc41e94dcb48e26f79941e1ae869c5ff2","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"21652d78bdf41b514caf2ab8558ea257fa3d1b1efd1c1fe8440c21058ab5cac2","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"97b042703b3b6538261811078b1e2600056434594f2869ebd94b89b14b8999ee","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"837aad4956a7cbb98ce6ddf8e530cc56c166dc1909eb06b0d115db8244584be7","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"1ea8cf403caa60a59c8bb8893b14c06ab4cfd09f667f2b68b80df7b29b3362e0","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"e02fac7f64aed7f2674ee760cb5132c301199099837780f4656bb8b68e55f398","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"44caba2c1d8a60fb13d948d7aaaa5271b9a31376ce651996c8c15f2807deadef","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"960c752f3900b841981b406cdd48afc8ef0b42d9f980f6da492cf9f535f4a4f3","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"9144a2dfb9aaf9c2cb02c3d1e5383adad4f50864c722ec4bba2e379a832a6395","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"87a666b23d9571794d8d4c15945cde7613d2e5aaf723f075c0a4355a4e78db4a","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"0bc93411d8eddadf26601c5b30877ab1dad3adeb7b0fdd463e8bbb806d83d837","closed_trades":"33","config_id":"M_L200_D0050_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"52f424591b42d64702dc13f619681bc45e015b5c2844226b258f11c8926c94af","raw_signals":"33"},{"accepted_ledger_sha256":"838887e0035053d0a2f289b737d1c12fcfe6dfd244aae7195835ce9120dd8227","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"1e2814ee9fe50837eef79bd34562bcbb3b7a774948f8aa3d515658816f4a36d6","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"289c45052274aaee398b6a97e96042e8fcc978aea8f7730584195fe94be9b6f0","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"d67b4c977d33346d651eab34e1d633df6509d1caf1323c1ce644f88564412646","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"07d4fccc754bb5ad9a040f3122cf8aa053803bd338b8dc28974c3967e8de541b","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"905de0ed887cde31b18286e78e97b954b8ddfe753bbf2e8ae55d24dcd6a6e8ed","closed_trades":"12","config_id":"M_L200_D0050_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"bc5fe7e6eebfab3e9f32db18c6ad88bcf5832c8abe4390c74a5db3396da2489b","raw_signals":"12"},{"accepted_ledger_sha256":"3835b0e572cf60053fd8ce036ece7378d3ebe5fb418dee18b5719be2279d07fd","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"2e42e8fb397a03b62eda2652aef3123254dcfc256940d28ce4654fdcd8d3f450","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"94c18aa71b7242414405d54f6086e019edc1b6010aa69b33e4e7d3575dfe0f41","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"b4448310b650b6f9ea2d072ebf30c5d2e843a625783fb80703b95704d5efa3af","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"200bd3b82876357a8cb372ac6906432152f843ee19b40399b09fc10606a8002f","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"e0953dafc3e577fc9483d57e5c334c84766b647fbfab9429388453df852c677b","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"3da3de224e958a80da793c225906772b9a790b1b5c3e0af406cbcb4fc9256988","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"6e22069d62f4308fb910970bf128298a1d7b4a1789b764558c0fd914508e9f13","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"999e37d14ec505c6318f7fb6bf5d496128cd34b97a845db20485dbc38cdbc016","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"2b23f1b878a2169ab6d706ca723cec17390ea3a433f257a53ece8b7c19fad70d","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"a00c59a5e922c024ca53d558edaaed528aff62ad8d0b9f760aeec1c11af0d0d6","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"20edd4278907e72bd46853ca7e812f1faf11d2ce85974791f7d979404275c2da","closed_trades":"45","config_id":"M_L100_D0025_B125_R150__BR125__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"860b7a007b050ba97aa3851a35fa98e8c24d289fd935f30bda7db14a2907944d","raw_signals":"45"},{"accepted_ledger_sha256":"edd45de224b73f5126ce6ab932f0a55ca851e62dbdd9f2e4557a0ab56905ce37","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"883675b87f10fe345603c2c00d6f2e8f504c40b19f602e1242e802f1e8fe6791","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"c0f94d5b594d4fb260f45049d12d588645dadb3095756f4a24a645ef6b0c76de","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"8e524a0daa68ec81525060c4af857245ebe56ab98a19f32682639573437e77dc","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"ac40fa335773a9c1a123a740f813de0a9cb9172555a2652fbfa539d7447d9692","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"13b78d57392b5f21624331741476cd9fcc26d5fce2aa8cb68fe6ee398f70083a","closed_trades":"15","config_id":"M_L100_D0025_B125_R150__BR125__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"75db90e05dc521dde8cbed4af9cd90dc99855e27f2e3704967bd1f08c5a6dc74","raw_signals":"15"},{"accepted_ledger_sha256":"9fef35d5beba4831105119257e18b4b8e0031f358c98d41135fd89c676b01808","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"97b9a269bff13c50cdd4d07bb80456ca1bb23f145a0051718b6708e7cd9cd273","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"692a1817bd7ceef9af8a409ff1aa6a3af3a2877bef9d18ec8ed21efbf866595d","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"080db821b6f6235cd98737fdece4805b1cfe65a06a03b361bfa955edce270cef","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"dc68fc2e756a55cc647eb1cbd7b51acf66cadf9c2403b591925d4c1d8fdaec7f","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"4116ccfd5f9a630a671272b3850f1e4dbfc4f55ece7fd7988cd4212bc1618fcc","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"6a97eec40e076785ee0d5a1bb6a01e85ccf2973ffd2174ecddc9cd05fdf222da","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"bdc688757ea827773770b7d83d4547a170b6495fe16a248633f3a5ae437a114e","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"48d91e486162cd4dc43c36129ec8e1a3f9f55a05759f128e49ddbb25ff19a44f","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"ea886f377b6f8fffc38f610ae3c8a308fe242294b3c1925a50a81e7d57c2ecf1","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"cb0c1fd3b55b311642305970092450a84d30713b1a91b5403100adc3e234b4ee","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"b5fa7a6689126b18f3fbcdc96b49de062a346fe1ae104eb1bf6ab2496e18011b","closed_trades":"40","config_id":"M_L100_D0025_B125_R150__BR150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"341a63b04355431fa9e714c0e621b9186013dc76798d5795ba711ca54ef8b357","raw_signals":"40"},{"accepted_ledger_sha256":"9dfc1f0aadb0df980b57e00e2c75f02e41fcf9e3c7ff1ca6dafd4beb742403eb","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"ed96c49b2111cc2985a2c5937ba351be761a1b01a3786764bb0e1c603bb66940","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"968478e1c9b3d92cda13a580c4ed591ad95bf1dcaba35176cd896ae1885c9d09","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"b66b0bc9ca3b6148c2313db5ddabb71d19bacbeb9cc378915a9629e50b52b142","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"ef1c279bb2c5144ee80af70272de6be8ce4593d5b8331f80a64b02dac006da2a","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"afce176de6bb257901120a64db8bf1ba35e172c279e2abab440319f23e8ff0d0","closed_trades":"12","config_id":"M_L100_D0025_B125_R150__BR150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"e0a76123bcbe0986357a888cc068a1a8b8e931417a8fdbe4d057652ec28af6aa","raw_signals":"12"},{"accepted_ledger_sha256":"2295a2072007223fa81a05c2b69f09c401ee01925974ea0cd4ea02a2b36d8b2f","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"252e87964aaf098dcc6e47ade76c2d27ee07eaabc3e35fa64253e31edb322f2d","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"3dbdf19648af49ed1754644853dfb3b34a756a7f81639b9acb7fedbf2fc79ec4","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"5af937bb592cad47a70be2146a808b10167e7cd9148f9c8baf2fe344c8ffb2e6","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"2b284bc86d18814e631cb5e797230393c23f9d1da3bebea1d4fe42c442db4fa9","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"b06b4f21f86dad5190558f71ead1f22060752e7a2b7b883857485e3e7fd7da36","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"41e421069190d4cd2651d2474a0e1fc00035328f7808c7c7c82666fb71da187d","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"b8ec7fa9232e32eb9dfb5a16cae78608c1faaff2ace5d62f763ee90ffc9d1249","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"5f86f51576490cc5c5ecce657b324e9e044948d7c16a3ad27bb2029b5466f061","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"6960b6fc1922a47a9fafcc67d50dea1cc407e5369316156da6782c159f40accb","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"f6c0a65cdd3d8b13c51b34652c55756e88dddc99588caf122e70461b1ef1dd14","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"4aefcc0e20eb518b14117b124dd2a5b7ab234cc853e24f35f7e5a7da2c3a0689","closed_trades":"29","config_id":"M_L100_D0025_B125_R150__BR200__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"1411074a26293ac8d97b22d62bad663c76b2faf5585a7fa526f351423345f42b","raw_signals":"29"},{"accepted_ledger_sha256":"e8edf2802ddd3a05e9f39c57c3eb63682161e4974187b4885f2f05bd7d764e62","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"},{"accepted_ledger_sha256":"354abf4866d79fa22e859ff35a60c1d6b253bd78f6b585a883157b686c6c9fbc","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"},{"accepted_ledger_sha256":"8b8d8e2c7183e29e68a7552d3b307df96ae52c65dc305b8b0370aa9bda4f08af","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"NEAREST_OPEN_SENSITIVITY","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"},{"accepted_ledger_sha256":"0f26ec7ffaeb4226176a1b40abac9a98d152ea4901615dd1f56b0c94e79415d9","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"},{"accepted_ledger_sha256":"b424a4836549f5d2bdd3972dd97fb290dd2669a30f85a22b9e76b2b70f283813","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"},{"accepted_ledger_sha256":"b08e2023f604e8dc87151a057808019ded4679986b0697a285721469f54aded9","closed_trades":"8","config_id":"M_L100_D0025_B125_R150__BR200__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","execution_model":"STOP_FIRST_GAP_STRESS","invalid_unblocked_entries":"0","open_at_data_end":"0","p0_blocked_signals":"0","raw_signal_sha256":"fee2750468de5d28739bd7768738d084493160df134921b00bb91fffa807bb07","raw_signals":"8"}]'
-PASS6_REFERENCE_SHA256='df3a6a34021f2ce744e69171846053e1a5f0e966784a7a5f4b138a8a5870e0d9'
-PASS6_PARITY_IDS=tuple(dict.fromkeys(r['config_id'] for r in json.loads(PASS6_REFERENCE_JSON)))
-ANCHORS=[('M_L200_D0050_B125_R150', 200, 0.05), ('M_L100_D0025_B125_R150', 100, 0.025)]
-PARENT_IDS=()
-COMPARISON_IDS=PARENT_IDS
+VERSION = 'EURUSD_H4_LONG_PASS1_ENGULFING_DISCOVERY_V2_2026_10_12'
+UTC = dt.timezone.utc
+START = int(dt.datetime(2005, 1, 1, tzinfo=UTC).timestamp())
+END = int(dt.datetime(2026, 10, 12, tzinfo=UTC).timestamp())
+H4 = 14400
+PIP = .0001
+TICK = .00001
+RR = 3.0
+LB = (20, 40, 60, 100, 150, 200)
+DIST = (.05, .10, .20, .35, .50)
+BODY = (.50, .75, 1., 1.25)
+RANGE = (.75, 1., 1.50)
+MODELS = ('STOP_FIRST_GAP_STRESS', 'NEAREST_OPEN_SENSITIVITY')
+CASES = [(f'MID_{p}P_{m}', 'MID', p, m) for p in (1, 2, 4) for m in MODELS]
+CASES += [(f'BIDASK_BOUND10_{m}', 'BIDASK', 0, m) for m in MODELS]
+SOURCE_NAME = 'EURUSD_H4_PASS1_FROZEN_DATA.zip'
+RESULT_NAME = 'EURUSD_H4_LONG_PASS1_RESULTS.zip'
+PROTOCOL = r'''# EUR/USD H4 LONG — first engulfing discovery
+Version: EURUSD_H4_LONG_PASS1_ENGULFING_DISCOVERY_V2_2026_10_12
+Protocol fixed before viewing EUR/USD outcomes. All results exploratory, not OOS.
+
+## Source and clock
+Request OANDA EUR_USD native completed H4 MID/BID/ASK and independent H1 MID,
+2005-01-01 00:00 UTC through 2026-10-12 00:00 UTC exclusive. H4 dailyAlignment=0,
+alignmentTimezone=UTC, smooth=false. H4 starts 00/04/08/12/16/20 UTC. This may
+differ from your broker-day/TradingView chart. Price strings retain precision.
+H1 bins must reproduce every native H4 MID OHLC exactly (1e-10 tolerance).
+Partial market-opening/closing bins are retained when crosschecks pass; observed
+H1 count/first timestamp are reported. Missing periods are never filled. Source
+coverage must pass full-history minimums or the run fails, with no performance
+results. H4 minimum 25,000; H1 100,000; every completed calendar year at least
+1,000 H4 and 4,000 H1; partial 2026 minimum 650/2,600. First bar within seven days
+of requested start, last nominal close within four days of cutoff. These checks
+and source gaps are diagnostics, not proof of absence of every missing quote.
+Native OHLC cannot resolve tick ordering, latency, liquidity, or all data gaps.
+Archive all source data, API receipts, integrity hashes, and exact runner.
+
+## Signal and finite grid
+Common first eligible signal index 200. ATR14: TR index 1..14 mean at index14,
+then Wilder recurrence through the signal candle; no future data. Strict red
+previous candle and strict green current candle. Current open <= prior close;
+current close >= prior open; both ranges positive. Prior low excludes signal.
+Distance = ABS(signal low - minimum prior LB lows) / current ATR. Body and range
+use current ATR. No trend, session, weekday, previous momentum or close-location
+filter. Features may be reported descriptively, not searched.
+398 configurations: raw1, structure-only30, body-only4, range-only3,
+structure x body x range360. Lookbacks20/40/60/100/150/200; distance caps
+.05/.10/.20/.35/.50ATR; body floors .50/.75/1/1.25ATR; range floors .75/1/1.50ATR.
+All weak neighbours, boundaries and duplicate streams retained. No best-row
+selection or automatic admission. RR3 is a reference, not an optimised target.
+
+## Stops, entry, execution and eight cases
+Stop = signal MID low - .0001 (one pip); target = signal MID close + 3*(MID close
+- stop). R denominator = actual assumed fill - stop; target does not move with
+fill cost. Six MID cases: adverse entry +1/+2/+4 pips at signal nominal close,
+paired across two intrabar models. Four pips is an assumed stress, not a measured
+normal spread or a universal rejection threshold. No extra spread double-count.
+MID paths use future MID candles. They can posit non-executable weekend-close
+entries; next-observed delay flags make that assumption explicit.
+STOP_FIRST_GAP_STRESS: opening below stop exits at open (loss may exceed 1R),
+opening above target capped at target; if both hit inside a bar, stop first.
+NEAREST_OPEN_SENSITIVITY: for MID proxies only, ignore opening gaps and resolve
+simultaneous touch by nearer low/high distance from open (stop on tie). This is
+an alternative assumption, not known intrabar order.
+Two BIDASK cases: next observed H4 ASK open; earliest constituent H1 timestamp
+is the available entry-time proxy. Reject if later than nominal signal close
++120sec, if adverse fill exceeds 10ticks (=1pip), fill<=stop, fill>=target,
+or no next bar. Use BID exits, with gap losses/target caps in BOTH models;
+only dual-touch ordering differs. No extra slippage added. H1 time granularity
+means this is a historical quote-side approximation to the recorded execution
+limits, not actual fill parity or proof of tradeability. Adverse 10tick entry
+limit is not a total spread cap. Stop/target tick rounding is not imposed here;
+live price rounding and exact payload parity belong to later frozen validation.
+One open trade per standalone candidate (pyramiding zero), replayed separately
+for every case. Rejections do not occupy. A signal on an exit candle can enter
+after that candle closes. Entry is after signal; exits never inspect signal-bar
+high/low. Signals whose nominal close is at/after the cutoff are rejected.
+Open-at-cutoff trades occupy and carry blank realised R. Unfinished
+trades are not discarded as if never taken. No forced cutoff exit.
+
+## Reporting and interpretation
+Full accepted/rejected/blocked ledgers, raw candidate membership, raw independent
+paths, raw baseline control hashes, isolated-signal versus chronological results,
+calendar years, eras, trailing1/2/3/5/10years, monthly and every complete
+monthly-ended rolling12/24/36M window (including blank windows). Calendar2026
+and October2026 are marked partial. Period realised R is assigned by nominal
+exit-bar END in (start,end]; entries by [start,end). H4 exit times are bin-end
+proxies, not exact fills. Rolling final end=2026-10-01 (October incomplete).
+R drawdown is closed additive R in exit order, not compounded NAV or marked/open
+risk. Win/loss uses realised R. Open counts and cohort outcome R are separate.
+Baseline comparisons use full replay: common+added-removed R identity checked,
+including common outcome differences; extra entries can displace other signals.
+Neighbour report compares immediate coarse one-axis levels; duplicate raw and
+accepted ledgers explicitly identified and are not independent confirmations.
+Cost/stop, spread, holding time, inter-entry gaps, blank years/months and recent
+activity remain visible. Review economically credible regions, not highest R.
+
+Portfolio reference: PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1.
+No incumbent raw streams, risk sizing, currency conversion, financing, fees,
+portfolio gate replay or exact N->N+1 comparison in this discovery runner.
+Do not infer portfolio improvement from standalone R. All live code unchanged.
+A later candidate requires frozen independent implementation, exact portfolio
+comparison and prospective execution evidence. Reused history is exploratory.
+
+## Operational contract
+Standard-library Python3.10+, separate service/repository, one process/worker.
+GET-only broker candles endpoint; no account/order calls. GET/HEAD /status,
+/health, /results and /source. POST rejected. Background research auto-starts.
+Results only served after COMPLETE, or a failure-only ZIP after ERROR. No partial
+performance on failed source/control/parity gates. Frozen source reused without
+refresh. Explicit missing/corrupt source fails. /data cache if available; local
+temporary directory otherwise. No persisted cache means source refetch on restart.
+No performance conclusions from built-in or delivery synthetic software tests.
+API basis: https://github.com/oanda/v20-python/blob/master/src/v20/instrument.py
+and https://developer.oanda.com/rest-live-v20/instrument-df/
+'''
 
 
-
-ARCHIVED_REFERENCE_JSON='[{"accepted_ledger_sha256":"0a77c7212e25cfa503511b13d615306dde720630e8a03308fe4ab6dfc0f6b8cc","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"10","dual_touch_closed":"57","eligible_isolated_signals":"37095","entries_before_market_closure":"49","entry_next_open_gap_count":"14038","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.2592533845678326","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"37094","isolated_open":"1","isolated_profit_factor":"0.6255937976243057","isolated_total_r":"-10898.59014495401","leading_no_entry_days":"4.0","losses":"14083","max_closed_dd_r":"-4690.15298021666","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.17241379310347388","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19003","p90_cost_fraction_reference_risk":"0.37037037037038073","positive_complete_entry_years":"0","profit_factor":"0.666963503499493","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-4690.15298021666","trailing_no_entry_days":"0.03125","win_rate_pct":"22.154662539384223","wins":"4008","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-382.154615498013","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-669.5571548171639","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-846.3857851441394","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"19599445f83438f8fab82eb6dd574e796431cc4117dded74ac5341202a518584","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"20","dual_touch_closed":"57","eligible_isolated_signals":"37095","entries_before_market_closure":"49","entry_next_open_gap_count":"14038","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.3565844798494743","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"37094","isolated_open":"1","isolated_profit_factor":"0.4977261876261584","isolated_total_r":"-14620.688404390226","leading_no_entry_days":"4.0","losses":"14083","max_closed_dd_r":"-6450.969824956839","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.34482758620694776","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19003","p90_cost_fraction_reference_risk":"0.7407407407407615","positive_complete_entry_years":"0","profit_factor":"0.5419321291658862","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-6450.969824956839","trailing_no_entry_days":"0.03125","win_rate_pct":"22.154662539384223","wins":"4008","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-483.5905633410159","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-873.0267633982512","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-1142.3447267062445","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"398a15de61f4c199dfda2cc0057b4ee37ddebc02a1e2dc8cc59ec3d311bbbd75","closed_trades":"18077","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"40","dual_touch_closed":"57","eligible_isolated_signals":"37018","entries_before_market_closure":"49","entry_next_open_gap_count":"14028","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.48325527649419353","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"77","invalid_unblocked_entries":"16","isolated_completed":"37017","isolated_open":"1","isolated_profit_factor":"0.33617248071270645","isolated_total_r":"-19282.197952738068","leading_no_entry_days":"4.0","losses":"14071","max_closed_dd_r":"-8735.805633185537","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.6896551724138955","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19001","p90_cost_fraction_reference_risk":"1.481481481481523","positive_complete_entry_years":"0","profit_factor":"0.3791624168015396","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-8735.805633185537","trailing_no_entry_days":"0.03125","win_rate_pct":"22.16075676273718","wins":"4006","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-616.1620972491415","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-1135.9121702448801","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-1531.196964026576","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"f788f50e5fcbf6062abaa38ae7208218d39eb0911e861cf51884ffc41945f161","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"10","dual_touch_closed":"57","eligible_isolated_signals":"37095","entries_before_market_closure":"49","entry_next_open_gap_count":"14038","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.26923191106548433","gap_stop_closed":"159","gap_target_closed":"58","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"37094","isolated_open":"1","isolated_profit_factor":"0.6152507890136661","isolated_total_r":"-11342.85297729968","leading_no_entry_days":"4.0","losses":"14098","max_closed_dd_r":"-4870.674503085677","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.17241379310347388","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19003","p90_cost_fraction_reference_risk":"0.37037037037038073","positive_complete_entry_years":"0","profit_factor":"0.6577355691294657","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-4870.674503085677","trailing_no_entry_days":"0.03125","win_rate_pct":"22.071748383173954","wins":"3993","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-384.7314128836343","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-676.5055250743579","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-854.629530991146","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"ffbac0e7e8602d319eb34caa3bda2e16dc01001826cb2cf7a15eb5e6eda8cbe3","closed_trades":"18091","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"20","dual_touch_closed":"57","eligible_isolated_signals":"37095","entries_before_market_closure":"49","entry_next_open_gap_count":"14038","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.3650806622005727","gap_stop_closed":"159","gap_target_closed":"58","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"37094","isolated_open":"1","isolated_profit_factor":"0.4905279200526459","isolated_total_r":"-14992.04160453867","leading_no_entry_days":"4.0","losses":"14098","max_closed_dd_r":"-6604.674259870561","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.34482758620694776","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19003","p90_cost_fraction_reference_risk":"0.7407407407407615","positive_complete_entry_years":"0","profit_factor":"0.535266119654437","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-6604.674259870561","trailing_no_entry_days":"0.03125","win_rate_pct":"22.071748383173954","wins":"3993","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-485.9826268330798","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-878.9950173665053","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-1149.4489077104258","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"ba72a75089fe75eb0a6aac8115f871dd0dc1bab64d8be02ec3cb324b1be01254","closed_trades":"18077","config_id":"RAW_EXACT_BULLISH_ENGULF","cost_ticks":"40","dual_touch_closed":"57","eligible_isolated_signals":"37018","entries_before_market_closure":"49","entry_next_open_gap_count":"14028","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.4898818730589024","gap_stop_closed":"159","gap_target_closed":"58","geometry_invalid_all_signals":"77","invalid_unblocked_entries":"16","isolated_completed":"37017","isolated_open":"1","isolated_profit_factor":"0.3322081141189905","isolated_total_r":"-19565.057405132564","leading_no_entry_days":"4.0","losses":"14086","max_closed_dd_r":"-8855.59461928578","max_consecutive_zero_entry_months":"1","max_holding_hours":"1356.75","max_losing_streak":"31","maximum_inter_entry_gap_days":"56.760416666666664","median_cost_fraction_reference_risk":"0.6896551724138955","median_holding_hours":"1.5","median_stop_pips":"5.799999999999139","negative_complete_entry_years":"21","open_at_data_end":"1","p0_blocked_signals":"19001","p90_cost_fraction_reference_risk":"1.481481481481523","positive_complete_entry_years":"0","profit_factor":"0.37528655094891356","raw_signal_sha256":"0768cf73a8418dbc88829f53b831ee72acb548709a395ae20a1e813cad4fade8","raw_signals":"37095","total_r":"-8855.59461928578","trailing_no_entry_days":"0.03125","win_rate_pct":"22.07777839243237","wins":"3991","worst_12m_end":"2006-01-01T00:00:00Z","worst_12m_realized_r":"-618.2620972491418","worst_12m_start":"2005-01-01T00:00:00Z","worst_24m_end":"2007-01-01T00:00:00Z","worst_24m_realized_r":"-1140.6506623083724","worst_24m_start":"2005-01-01T00:00:00Z","worst_36m_end":"2008-01-01T00:00:00Z","worst_36m_realized_r":"-1536.8534745862996","worst_36m_start":"2005-01-01T00:00:00Z","zero_entry_12m_windows":"0","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"1"},{"accepted_ledger_sha256":"a848920d4d3f9572e146fd8e057eb0b9e332a0e687168ea235629a10c1fa7035","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.08914356408068075","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.12702957881497","isolated_total_r":"5.081183152598802","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-15.002304147465386","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.08620689655172044","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.13405405405405374","positive_complete_entry_years":"9","profit_factor":"1.12702957881497","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"5.081183152598802","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.444444444444445","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"4d6f22b463fc1de7fdede88379e198d9a1ef304ffde6ae91109e14b570572a49","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.004719493655705163","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.0067252784593799","isolated_total_r":"0.2690111383751943","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-16.542458572126613","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.17241379310344088","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2681081081081075","positive_complete_entry_years":"9","profit_factor":"1.0067252784593799","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"0.2690111383751943","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.8","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"6eeb94029eb81df2feb541def0476b309b0bd8335b5ca9251d36b480ba3cf256","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.1258107954829195","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"0.8207196164368398","isolated_total_r":"-7.171215342526413","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-18.76785178247647","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.34482758620688175","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"13","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.536216216216215","positive_complete_entry_years":"8","profit_factor":"0.8207196164368398","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"-7.171215342526413","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-7.333333333333332","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"4b12c9780b8c78a1f5dda220021cca8d9292e375e2a2b7790ad8af600175ae88","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.08914356408068075","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.12702957881497","isolated_total_r":"5.081183152598802","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-15.002304147465386","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.08620689655172044","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.13405405405405374","positive_complete_entry_years":"9","profit_factor":"1.12702957881497","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"5.081183152598802","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.444444444444445","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"703eaf8be500e238b5573582f52924bd34dec439436587626caa2519f7b55803","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.004719493655705163","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.0067252784593799","isolated_total_r":"0.2690111383751943","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-16.542458572126613","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.17241379310344088","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2681081081081075","positive_complete_entry_years":"9","profit_factor":"1.0067252784593799","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"0.2690111383751943","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.8","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"7d2b91509b054097f0b0c348b788471895b44f3ffad5a1e4a9eb6e49be194aa9","closed_trades":"57","config_id":"M_L200_D0050_B125_R150","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.1258107954829195","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"0.8207196164368398","isolated_total_r":"-7.171215342526413","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-18.76785178247647","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.34482758620688175","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"13","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.536216216216215","positive_complete_entry_years":"8","profit_factor":"0.8207196164368398","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"-7.171215342526413","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-7.333333333333332","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"47e659a0f64195343fea67df8ba90bd454db9c8cb5fd5db79c44853c9d481645","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.1034609877041315","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.147801411005902","isolated_total_r":"5.173049385206575","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-8.366006102076463","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.0885579937304015","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12225609756098264","positive_complete_entry_years":"7","profit_factor":"1.147801411005902","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"5.173049385206575","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"5a9ce8b8f3f0f622732ce183f48fd5524e406ba31eee0658529d19ffe2212cbd","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.023777267113728868","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.033967524448184","isolated_total_r":"1.1888633556864434","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-9.40418118466895","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.177115987460803","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2445121951219653","positive_complete_entry_years":"7","profit_factor":"1.033967524448184","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"1.1888633556864434","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"4ae1c5c55b9f3f0cfe7ea9ec97851da3ebbb4e5599f227bb19cb4297ee144b87","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.10142351005965797","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"0.8551092713433458","isolated_total_r":"-5.071175502982898","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-10.895993179880582","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.354231974921606","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4890243902439306","positive_complete_entry_years":"7","profit_factor":"0.8551092713433458","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"-5.071175502982898","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"0e66e3526fe2b55cead85ef3f93aed983eb3754098e7e22c79c541c817dba580","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.09946098770413446","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.141279812079737","isolated_total_r":"4.973049385206723","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-8.566006102076315","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.0885579937304015","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12225609756098264","positive_complete_entry_years":"7","profit_factor":"1.141279812079737","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"4.973049385206723","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.199999999999852","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.199999999999852","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"a3038d0626255935765f62c1b0b80ea95a31b56e3bd2019181d9888b3aba3ffc","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.020777267113731082","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.0295551452542406","isolated_total_r":"1.038863355686554","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-9.55418118466884","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.177115987460803","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2445121951219653","positive_complete_entry_years":"7","profit_factor":"1.0295551452542406","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"1.038863355686554","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.1499999999998884","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.1499999999998884","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"73a76808d1b7f3313ba39975ed7bf075128fc2007c9e35fbffd413ccc021ef76","closed_trades":"50","config_id":"M_L100_D0025_B125_R150","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.10342351005965648","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"0.8526730625930817","isolated_total_r":"-5.171175502982824","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-10.995993179880507","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.354231974921606","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4890243902439306","positive_complete_entry_years":"7","profit_factor":"0.8526730625930817","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"-5.171175502982824","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.099999999999926","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.099999999999926","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"3eb14743f15446c065cc4c0e50025ad494802f1fccdd6adfa3c69f6650a8feb6","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.08914356408068075","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.12702957881497","isolated_total_r":"5.081183152598802","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-15.002304147465386","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.08620689655172044","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.13405405405405374","positive_complete_entry_years":"9","profit_factor":"1.12702957881497","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"5.081183152598802","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.444444444444445","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"6411db59fdb4e9484c962adc21c2e01b33311dde1c6054c02ad6f3fdb0fdb811","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.004719493655705163","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.0067252784593799","isolated_total_r":"0.2690111383751943","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-16.542458572126613","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.17241379310344088","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2681081081081075","positive_complete_entry_years":"9","profit_factor":"1.0067252784593799","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"0.2690111383751943","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.8","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"5af00be79eac266547e984b4c7689c980dab90ea8237eac1a41294815a98875d","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.1258107954829195","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"0.8207196164368398","isolated_total_r":"-7.171215342526413","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-18.76785178247647","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.34482758620688175","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"13","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.536216216216215","positive_complete_entry_years":"8","profit_factor":"0.8207196164368398","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"-7.171215342526413","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-7.333333333333332","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"cf32b90cf1d08c5789e59752a8d8594ed773e324e736ed1df5a934bbfd925b19","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.08914356408068075","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.12702957881497","isolated_total_r":"5.081183152598802","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-15.002304147465386","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.08620689655172044","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.13405405405405374","positive_complete_entry_years":"9","profit_factor":"1.12702957881497","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"5.081183152598802","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.444444444444445","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"7cb47bb82d91e482467962e2db4488b7cae2c9078fd0201efb4936d4a8e42d09","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.004719493655705163","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"1.0067252784593799","isolated_total_r":"0.2690111383751943","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-16.542458572126613","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.17241379310344088","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2681081081081075","positive_complete_entry_years":"9","profit_factor":"1.0067252784593799","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"0.2690111383751943","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-6.8","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"02140139e2e9a2e9bc942f646b1032d0ba4678ed86de8dbc6b5a9073c35f0fc2","closed_trades":"57","config_id":"M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"57","entries_before_market_closure":"0","entry_next_open_gap_count":"45","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.1258107954829195","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"57","isolated_open":"0","isolated_profit_factor":"0.8207196164368398","isolated_total_r":"-7.171215342526413","leading_no_entry_days":"26.979166666666668","losses":"40","max_closed_dd_r":"-18.76785178247647","max_consecutive_zero_entry_months":"16","max_holding_hours":"1356.75","max_losing_streak":"11","maximum_inter_entry_gap_days":"496.0416666666667","median_cost_fraction_reference_risk":"0.34482758620688175","median_holding_hours":"5.25","median_stop_pips":"11.600000000000499","negative_complete_entry_years":"13","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.536216216216215","positive_complete_entry_years":"8","profit_factor":"0.8207196164368398","raw_signal_sha256":"6694fe6caffbe3e290268273e8a60d1380afe68ebc6d632bb36a373ec49a0b92","raw_signals":"57","total_r":"-7.171215342526413","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"29.82456140350877","wins":"17","worst_12m_end":"2010-05-01T00:00:00Z","worst_12m_realized_r":"-4.0","worst_12m_start":"2009-05-01T00:00:00Z","worst_24m_end":"2011-06-01T00:00:00Z","worst_24m_realized_r":"-7.0","worst_24m_start":"2009-06-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-7.333333333333332","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"8","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"0","zero_entry_months":"212"},{"accepted_ledger_sha256":"ed7b96e16101616c6a8da06c3d11e3f7a0466484305a5df0fdb10aef12cfb059","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.1034609877041315","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.147801411005902","isolated_total_r":"5.173049385206575","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-8.366006102076463","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.0885579937304015","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12225609756098264","positive_complete_entry_years":"7","profit_factor":"1.147801411005902","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"5.173049385206575","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"7ae97e2b004a890e33a9a2454acd8ced2672eeeb5337ed0f72ef6a116c56a499","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.023777267113728868","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.033967524448184","isolated_total_r":"1.1888633556864434","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-9.40418118466895","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.177115987460803","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2445121951219653","positive_complete_entry_years":"7","profit_factor":"1.033967524448184","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"1.1888633556864434","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"ccc1c8ef4bbc6ae877a8886b01bdfa5b8d7c78e0aef7a2dbcc80ce5f0be91a81","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"-0.10142351005965797","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"0.8551092713433458","isolated_total_r":"-5.071175502982898","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-10.895993179880582","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.25","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.354231974921606","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4890243902439306","positive_complete_entry_years":"7","profit_factor":"0.8551092713433458","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"-5.071175502982898","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"03b83b267374462e7b5bbe210328100784c2fa4cd5da0e88fcae1506eef7f020","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.09946098770413446","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.141279812079737","isolated_total_r":"4.973049385206723","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-8.566006102076315","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.0885579937304015","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12225609756098264","positive_complete_entry_years":"7","profit_factor":"1.141279812079737","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"4.973049385206723","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.199999999999852","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.199999999999852","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"dc641efaf27edd2c73dfdec746f7ff72de3a8e04ee605e224a62a86cf34544f6","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.020777267113731082","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"1.0295551452542406","isolated_total_r":"1.038863355686554","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-9.55418118466884","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.177115987460803","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.2445121951219653","positive_complete_entry_years":"7","profit_factor":"1.0295551452542406","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"1.038863355686554","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.1499999999998884","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.1499999999998884","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"b9dc78e99aee3eac17458e866ecef4ef978308ab91cc4a06635b57ac3665cd41","closed_trades":"50","config_id":"M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"50","entries_before_market_closure":"0","entry_next_open_gap_count":"32","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"-0.10342351005965648","gap_stop_closed":"1","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"50","isolated_open":"0","isolated_profit_factor":"0.8526730625930817","isolated_total_r":"-5.171175502982824","leading_no_entry_days":"23.510416666666668","losses":"35","max_closed_dd_r":"-10.995993179880507","max_consecutive_zero_entry_months":"20","max_holding_hours":"127.0","max_losing_streak":"7","maximum_inter_entry_gap_days":"626.9791666666666","median_cost_fraction_reference_risk":"0.354231974921606","median_holding_hours":"5.25","median_stop_pips":"11.300000000000754","negative_complete_entry_years":"12","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4890243902439306","positive_complete_entry_years":"7","profit_factor":"0.8526730625930817","raw_signal_sha256":"c0473c622ba0fe1d0913907678c17296617e45cd566aa374c1b6e64bfd032817","raw_signals":"50","total_r":"-5.171175502982824","trailing_no_entry_days":"365.1041666666667","win_rate_pct":"30.0","wins":"15","worst_12m_end":"2008-01-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2007-01-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-4.099999999999926","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-6.099999999999926","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"25","zero_entry_24m_windows":"0","zero_entry_36m_windows":"0","zero_entry_complete_years":"2","zero_entry_months":"221"},{"accepted_ledger_sha256":"4eba5ef9907ff42686e3f770447cfd4817063638f244618e1243165cc586caa2","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.46082658559874085","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.7570722477693599","isolated_total_r":"10.599011468771039","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-7.555555555555452","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.058823529411763505","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"7","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12794326241134482","positive_complete_entry_years":"8","profit_factor":"1.7570722477693599","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"10.599011468771039","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"a72497028ba75d37b134e5338f1c9da8fd22e935032c2603c0dc1f52abfe766f","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.37197131019242713","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.6110957238875587","isolated_total_r":"8.555340134425824","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-7.975609756097402","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.11764705882352701","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"7","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.25588652482268964","positive_complete_entry_years":"8","profit_factor":"1.6110957238875587","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"8.555340134425824","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"59f010629087551206c35f0c9a50851f2c01c865e21b02806d0adfbe8c6082c6","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.22735915162055656","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.3735186062337714","isolated_total_r":"5.229260487272801","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-8.568627450980188","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.23529411764705402","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"8","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.5117730496453793","positive_complete_entry_years":"7","profit_factor":"1.3735186062337714","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"5.229260487272801","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"a1089a8548b4e453219e87e804811079f9805e71441f5eb54fe4ef0a7a07ca0a","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.46082658559874085","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.7570722477693599","isolated_total_r":"10.599011468771039","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-7.555555555555452","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.058823529411763505","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"7","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.12794326241134482","positive_complete_entry_years":"8","profit_factor":"1.7570722477693599","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"10.599011468771039","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"7f3592fc7e0bd553f092a91becaf4074886ee4a951fc57863e9d166c3b135519","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.37197131019242713","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.6110957238875587","isolated_total_r":"8.555340134425824","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-7.975609756097402","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.11764705882352701","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"7","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.25588652482268964","positive_complete_entry_years":"8","profit_factor":"1.6110957238875587","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"8.555340134425824","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"328546a3a02a5509b97cf76e665196292a73864d11e929c052c887d73472165e","closed_trades":"23","config_id":"M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"23","entries_before_market_closure":"0","entry_next_open_gap_count":"20","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.22735915162055656","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"23","isolated_open":"0","isolated_profit_factor":"1.3735186062337714","isolated_total_r":"5.229260487272801","leading_no_entry_days":"257.3125","losses":"14","max_closed_dd_r":"-8.568627450980188","max_consecutive_zero_entry_months":"31","max_holding_hours":"99.25","max_losing_streak":"5","maximum_inter_entry_gap_days":"986.9479166666666","median_cost_fraction_reference_risk":"0.23529411764705402","median_holding_hours":"17.5","median_stop_pips":"17.000000000000348","negative_complete_entry_years":"8","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.5117730496453793","positive_complete_entry_years":"7","profit_factor":"1.3735186062337714","raw_signal_sha256":"99d1abd6404af4f6bc9f8dcfd33f1abf1ff930e51ffef714c2afaa9d57fef7df","raw_signals":"23","total_r":"5.229260487272801","trailing_no_entry_days":"212.63541666666666","win_rate_pct":"39.130434782608695","wins":"9","worst_12m_end":"2011-06-01T00:00:00Z","worst_12m_realized_r":"-3.0","worst_12m_start":"2010-06-01T00:00:00Z","worst_24m_end":"2012-03-01T00:00:00Z","worst_24m_realized_r":"-4.0","worst_24m_start":"2010-03-01T00:00:00Z","worst_36m_end":"2012-05-01T00:00:00Z","worst_36m_realized_r":"-4.0","worst_36m_start":"2009-05-01T00:00:00Z","zero_entry_12m_windows":"71","zero_entry_24m_windows":"15","zero_entry_36m_windows":"0","zero_entry_complete_years":"6","zero_entry_months":"241"},{"accepted_ledger_sha256":"dfe290c1c0ac5a16267c967296d34ba6188f46f554beda005a9b0031815b6270","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.9646757552808889","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"3.0365377055929876","isolated_total_r":"18.32883935033689","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.06249999999999821","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.10000000000001102","positive_complete_entry_years":"8","profit_factor":"3.0365377055929876","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"18.32883935033689","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"},{"accepted_ledger_sha256":"6b4b95e05269c088d108ca303bc748bd9bc760dfffcb986adb586d8c60910e19","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.8450600864814806","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"2.78401573812757","isolated_total_r":"16.05614164314813","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.12499999999999642","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.20000000000002205","positive_complete_entry_years":"8","profit_factor":"2.78401573812757","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"16.05614164314813","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"},{"accepted_ledger_sha256":"810d3d734df3bfc04fd557f67b977e9f47e66b90f0e8113e23d1a900122bbad8","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"NEAREST_OPEN_SENSITIVITY","expectancy_r":"0.650529749558262","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"2.3733405824007754","isolated_total_r":"12.360065241606979","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.24999999999999284","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4000000000000441","positive_complete_entry_years":"8","profit_factor":"2.3733405824007754","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"12.360065241606979","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"},{"accepted_ledger_sha256":"0b42d0efb1c433626b8852ab0955b10fc0d528ae156521cd93c29ccabb753c2a","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"10","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.9646757552808889","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"3.0365377055929876","isolated_total_r":"18.32883935033689","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.06249999999999821","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.10000000000001102","positive_complete_entry_years":"8","profit_factor":"3.0365377055929876","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"18.32883935033689","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"},{"accepted_ledger_sha256":"0687cbb3be44548b4665069a3d40505863bf89223ecdd05f9773b1e979a37d3a","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"20","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.8450600864814806","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"2.78401573812757","isolated_total_r":"16.05614164314813","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.12499999999999642","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.20000000000002205","positive_complete_entry_years":"8","profit_factor":"2.78401573812757","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"16.05614164314813","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"},{"accepted_ledger_sha256":"e64d9784c3eeb55be52cc31df31e9e309715eaff6c561e948e38c20ff139d99d","closed_trades":"19","config_id":"M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00","cost_ticks":"40","dual_touch_closed":"0","eligible_isolated_signals":"19","entries_before_market_closure":"0","entry_next_open_gap_count":"13","execution_model":"STOP_FIRST_GAP_STRESS","expectancy_r":"0.650529749558262","gap_stop_closed":"0","gap_target_closed":"0","geometry_invalid_all_signals":"0","invalid_unblocked_entries":"0","isolated_completed":"19","isolated_open":"0","isolated_profit_factor":"2.3733405824007754","isolated_total_r":"12.360065241606979","leading_no_entry_days":"192.15625","losses":"9","max_closed_dd_r":"-3.0","max_consecutive_zero_entry_months":"66","max_holding_hours":"99.25","max_losing_streak":"3","maximum_inter_entry_gap_days":"2025.8020833333333","median_cost_fraction_reference_risk":"0.24999999999999284","median_holding_hours":"14.75","median_stop_pips":"16.00000000000046","negative_complete_entry_years":"3","open_at_data_end":"0","p0_blocked_signals":"0","p90_cost_fraction_reference_risk":"0.4000000000000441","positive_complete_entry_years":"8","profit_factor":"2.3733405824007754","raw_signal_sha256":"ebf44e3e7cadacef4f480d694193c7a8309ffb3cb2d3c2e3e6d0ddcf420cd045","raw_signals":"19","total_r":"12.360065241606979","trailing_no_entry_days":"1083.65625","win_rate_pct":"52.63157894736842","wins":"10","worst_12m_end":"2007-11-01T00:00:00Z","worst_12m_realized_r":"-1.0","worst_12m_start":"2006-11-01T00:00:00Z","worst_24m_end":"2012-11-01T00:00:00Z","worst_24m_realized_r":"-1.0","worst_24m_start":"2010-11-01T00:00:00Z","worst_36m_end":"2013-11-01T00:00:00Z","worst_36m_realized_r":"-2.0","worst_36m_start":"2010-11-01T00:00:00Z","zero_entry_12m_windows":"123","zero_entry_24m_windows":"66","zero_entry_36m_windows":"31","zero_entry_complete_years":"10","zero_entry_months":"245"}]'
-ARCHIVED_REFERENCE_SHA256='1999c7113743a4f610941ed171ebe3b9891dcb5fc4caec54c701eb9ca449bc2e'
-PARITY_IDS=('RAW_EXACT_BULLISH_ENGULF', 'M_L200_D0050_B125_R150', 'M_L200_D0050_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY', 'M_L200_D0050_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00', 'M_L100_D0025_B125_R150', 'M_L100_D0025_B125_R150__AVAILABLE_H1_RELATIVE_VOLATILITY', 'M_L100_D0025_B125_R150__H1_RELATIVE_VOLATILITY_GE_P1P00')
+def stamp(t):
+    return dt.datetime.fromtimestamp(t, UTC).isoformat().replace('+00:00', 'Z')
 
 
-def iso(value):
-    return value.astimezone(UTC).isoformat().replace('+00:00', 'Z')
+def epoch(s):
+    return int(dt.datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp())
 
-def when(value):
-    return value if isinstance(value, datetime) else datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(UTC)
 
-def sha(data):
-    return hashlib.sha256(data).hexdigest()
+def canonical(x):
+    return json.dumps(x, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
-def file_sha(path):
-    digest = hashlib.sha256()
-    with path.open('rb') as source:
-        for block in iter(lambda: source.read(1024*1024), b''):
-            digest.update(block)
-    return digest.hexdigest()
 
-def code_hash():
-    return file_sha(Path(__file__))
+def digest(x):
+    return hashlib.sha256(canonical(x)).hexdigest()
 
-def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
-class CSVFile:
-    """Streaming outputs keep memory bounded for full configuration ledgers."""
-    def __init__(self, path, fields):
-        self.file = path.open('w', newline='', encoding='utf-8')
-        self.writer = csv.DictWriter(self.file, fieldnames=fields, extrasaction='raise')
-        self.writer.writeheader()
-        self.count = 0
+def write_json(p, x):
+    Path(p).write_text(json.dumps(x, indent=2, sort_keys=True, allow_nan=False)+'\n')
 
-    def add(self, row):
-        self.writer.writerow(row)
-        self.count += 1
 
-    def close(self):
-        self.file.close()
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
 
-def write_csv(path, rows, fields=None):
-    """Stream rows; never materialize the full multi-decade source or ledgers."""
-    iterator = iter(rows)
-    first = next(iterator, None)
-    if fields is None:
-        fields = list(first) if first is not None else []
-    sink = CSVFile(path, fields)
-    try:
-        if first is not None:
-            sink.add(first)
-        for row in iterator:
-            sink.add(row)
-    finally:
-        sink.close()
-    return sink.count
 
-def set_status(**values):
-    with LOCK:
-        STATUS.update(values, updated_at=iso(datetime.now(UTC)))
-        if RUN_CLOCK is not None:
-            STATUS['elapsed_seconds'] = round(time.monotonic() - RUN_CLOCK, 1)
-        OUT.mkdir(parents=True, exist_ok=True)
-        pending = OUT / f'.status-{os.getpid()}.tmp'
-        write_json(pending, STATUS)
-        os.replace(pending, OUT / 'status.json')
-    print(json.dumps({k: STATUS[k] for k in ('state', 'progress', 'message')}), flush=True)
+def configs():
+    rows = [('RAW', 'raw', 0, None, None, None)]
+    rows += [(f'S_L{l}_D{d:g}', 'structure', l, d, None, None) for l,d in itertools.product(LB,DIST)]
+    rows += [(f'B_{b:g}', 'body', 0, None, b, None) for b in BODY]
+    rows += [(f'R_{r:g}', 'range', 0, None, None, r) for r in RANGE]
+    rows += [(f'M_L{l}_D{d:g}_B{b:g}_R{r:g}', 'matrix', l,d,b,r) for l,d,b,r in itertools.product(LB,DIST,BODY,RANGE)]
+    require(len(rows)==398 and len({r[0] for r in rows})==398, 'Grid definition failure')
+    return rows
 
-def read_status():
-    try:
-        data = json.loads((OUT / 'status.json').read_text())
-        if data.get('version') == VERSION:
-            return data
-    except (OSError, ValueError):
-        pass
-    with LOCK:
-        return dict(STATUS)
 
-def atr14(bars):
-    out = [None] * len(bars)
-    tr = [None] * len(bars)
-    for i in range(1, len(bars)):
-        tr[i] = max(bars[i][2] - bars[i][3], abs(bars[i][2] - bars[i-1][4]), abs(bars[i][3] - bars[i-1][4]))
-    if len(bars) > 14:
-        out[14] = sum(tr[1:15]) / 14
-        for i in range(15, len(bars)):
-            out[i] = (out[i-1] * 13 + tr[i]) / 14
-    return out
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise ValueError('Broker redirects are disabled')
 
-def previous_high(highs, lookback):
-    """Monotonic queue; excludes the current signal candle."""
-    out, queue = [None] * len(highs), deque()
-    for i in range(len(highs)):
-        while queue and queue[0] < i - lookback:
-            queue.popleft()
-        if i >= lookback:
-            out[i] = highs[queue[0]]
-        while queue and highs[queue[-1]] <= highs[i]:
-            queue.pop()
-        queue.append(i)
-    return out
 
-def replay(indices, paths, model, cost):
-    """p0 per exact geometry and assumed cost, including unresolved positions."""
-    accepted, invalid, blocked = [], [], 0
-    occupied_until = -1
-    for i in indices:
-        if i < occupied_until:
-            blocked += 1
-            continue
-        path = paths[i][model]
-        _, problem = geometry(path, cost)
-        if problem:
-            invalid.append((i, problem))
-            continue
-        accepted.append(i)
-        occupied_until = path['exit_index'] if path['exit_index'] is not None else math.inf
-    return accepted, invalid, blocked
+def broker_settings():
+    token = next((os.environ[k].strip() for k in ('OANDA_API_KEY','OANDA_TOKEN','OANDA_API_TOKEN','OANDA_ACCESS_TOKEN') if os.environ.get(k,'').strip()), '')
+    require(bool(token), 'Missing OANDA_API_KEY (or OANDA_TOKEN/OANDA_API_TOKEN/OANDA_ACCESS_TOKEN)')
+    env = os.environ.get('OANDA_ENV',os.environ.get('OANDA_ENVIRONMENT','practice')).lower()
+    require(env in ('practice','demo','live'), 'OANDA_ENV must be practice, demo or live')
+    base = 'https://api-fxtrade.oanda.com' if env=='live' else 'https://api-fxpractice.oanda.com'
+    base = os.environ.get('OANDA_API_URL',os.environ.get('OANDA_BASE_URL',base)).rstrip('/')
+    if base.endswith('/v3'): base=base[:-3]
+    require(base in ('https://api-fxtrade.oanda.com','https://api-fxpractice.oanda.com'), 'Only official OANDA HTTPS API hosts allowed')
+    return token, base
 
-def source_hash(bars):
-    return sha('\n'.join(f'{iso(t)},{op:.5f},{hi:.5f},{lo:.5f},{cl:.5f}' for t,op,hi,lo,cl in bars).encode())
 
-def signal_hash(indices, bars):
-    return sha('\n'.join(iso(bars[i][0]) for i in indices).encode())
-
-def validate_bars(bars, step=BAR):
-    if not bars:
-        raise RuntimeError('Empty dataset.')
-    seconds=int(step.total_seconds())
-    for i,(t,op,hi,lo,cl) in enumerate(bars):
-        if t.tzinfo is None or t.second or t.microsecond or int(t.timestamp()) % seconds:
-            raise RuntimeError('Candle timestamp is not aligned to the requested granularity.')
-        if not all(math.isfinite(x) and x > 0 for x in (op,hi,lo,cl)) or not lo <= min(op,cl) <= max(op,cl) <= hi:
-            raise RuntimeError('Invalid OHLC at '+iso(t))
-        if i and t <= bars[i-1][0]:
-            raise RuntimeError('Unsorted or duplicate candle timestamp.')
-        if not START <= t < END:
-            raise RuntimeError('Candle outside the frozen study window.')
-
-def crosscheck_history(work, bars, volumes, h1, h1_volumes):
-    """All observed H1 bars must match grouped native M15 OHLC and price counts.
-
-    A sparse M15 hour is accepted only when its observed bars exhaust the H1
-    price count and reproduce its OHLC. No missing candle is manufactured.
-    """
-    grouped=defaultdict(list)
-    for bar in bars:
-        grouped[bar[0].replace(minute=0)].append(bar)
-    controls=[]
-    def check(name,actual,expected):
-        controls.append(dict(check=name,status='PASS' if actual==expected else 'FAIL',actual=actual,expected=expected))
-    old=[bar for bar in h1 if bar[0]<PINNED_H1_END]
-    check('historical_H1_count_matches_prior_research',len(old),PINNED_H1_COUNT)
-    check('historical_H1_OHLC_hash_matches_prior_research',source_hash(old),PINNED_H1_SHA256)
-    h1_times={b[0] for b in h1}
-    check('native_M15_hour_set_equals_H1_hour_set',set(grouped)==h1_times,True)
-    mismatch,sparse=0,0
-    out=CSVFile(work/'h1_m15_crosschecks.csv',['hour','m15_bars','m15_price_count','h1_price_count','max_ohlc_error_ticks','status'])
-    try:
-        for t,op,hi,lo,cl in h1:
-            rows=grouped.get(t,[])
-            if not rows:
-                count,error=0,None
-                okay=False
-            else:
-                aggregated=(rows[0][1],max(r[2] for r in rows),min(r[3] for r in rows),rows[-1][4])
-                error=max(abs(x-y)/TICK for x,y in zip(aggregated,(op,hi,lo,cl)))
-                count=sum(volumes[r[0]] for r in rows)
-                okay=len(rows)<=4 and error<=1e-6 and count==h1_volumes[t]
-            mismatch+=not okay
-            sparse+=bool(rows) and len(rows)<4
-            out.add(dict(hour=iso(t),m15_bars=len(rows),m15_price_count=count,h1_price_count=h1_volumes[t],
-                         max_ohlc_error_ticks=error,status='PASS_NATIVE_SPARSE_PRICE_INTERVALS' if okay and len(rows)<4 else ('PASS' if okay else 'FAIL')))
-    finally:
-        out.close()
-    check('all_H1_native_M15_aggregation_mismatches',mismatch,0)
-    check('first_M15_in_first_requested_week',START <= bars[0][0]<START+timedelta(days=7),True)
-    check('last_M15_in_final_requested_day',END-timedelta(days=1)<=bars[-1][0]<END,True)
-    annual=[]
-    for y in range(START.year,END.year+1):
-        subset=[b for b in bars if b[0].year==y]
-        annual.append(dict(year=y,candles=len(subset),first=iso(subset[0][0]) if subset else None,
-                           last=iso(subset[-1][0]) if subset else None,partial_year=int(y==END.year),
-                           first_month=subset[0][0].month if subset else None,last_month=subset[-1][0].month if subset else None))
-    write_csv(work/'yearly_data_coverage.csv',annual)
-    check('every_requested_year_contains_candles',all(r['candles']>0 for r in annual),True)
-    check('complete_years_reach_January_and_December',all(r['first_month']==1 and r['last_month']==12 for r in annual if not r['partial_year']),True)
-    write_csv(work/'source_controls.csv',controls)
-    write_json(work/'coverage_crosscheck_summary.json',dict(h1_hours=len(h1),native_m15_candles=len(bars),
-               aggregation_mismatches=mismatch,sparse_hours_verified_by_price_count=sparse,synthetic_candles=0,
-               h1_source_sha256=source_hash(h1),native_m15_source_sha256=source_hash(bars)))
-    if any(row['status']!='PASS' for row in controls):
-        raise RuntimeError('Full-history source/aggregation controls failed; inspect source_controls.csv and crosschecks. No discovery results are valid.')
-    return controls
-
-def stats(values):
-    values = list(values)
-    wins = [x for x in values if x > 0]
-    losses = [x for x in values if x < 0]
-    total = peak = dd = 0.
-    streak = worst_streak = 0
-    for x in values:
-        total += x
-        peak = max(peak,total)
-        dd = min(dd,total-peak)
-        streak = streak+1 if x < 0 else 0
-        worst_streak = max(worst_streak,streak)
-    return dict(closed_trades=len(values), wins=len(wins), losses=len(losses),
-                win_rate_pct=100*len(wins)/len(values) if values else None,
-                total_r=total, expectancy_r=total/len(values) if values else None,
-                profit_factor=sum(wins)/-sum(losses) if losses else None,
-                max_closed_dd_r=dd, max_losing_streak=worst_streak)
-
-def quantile(values, fraction):
-    if not values:
-        return None
-    values = sorted(values)
-    index = (len(values)-1)*fraction
-    lo, hi = math.floor(index), math.ceil(index)
-    return values[lo] + (values[hi]-values[lo])*(index-lo)
-
-def month_bounds():
-    result = []
-    year, month = START.year, START.month
-    while datetime(year,month,1,tzinfo=UTC) <= END:
-        result.append(datetime(year,month,1,tzinfo=UTC))
-        year,month = (year+1,1) if month==12 else (year,month+1)
-    if result[-1] < END:
-        result.append(END)  # explicit partial final month, never relabelled a full month
-    return result
-
-def period_definitions():
-    periods = []
-    for year in range(2005,2027):
-        periods.append((f'YEAR_{year}', 'calendar', datetime(year,1,1,tzinfo=UTC), min(datetime(year+1,1,1,tzinfo=UTC),END)))
-    for a,b in ((2005,2010),(2010,2016),(2016,2022),(2022,2027)):
-        periods.append((f'ERA_{a}_{b-1}', 'era', datetime(a,1,1,tzinfo=UTC),min(datetime(b,1,1,tzinfo=UTC),END)))
-    for years in (1,2,3,5,10):
-        periods.append((f'LATEST_{years}Y', 'recent', END.replace(year=END.year-years), END))
-    # Calendar-day boundaries are diagnostic labels, not intraday announcement times.
-    periods.extend([
-        ('CHF_PRE_FLOOR','policy_diagnostic',START,datetime(2011,9,6,tzinfo=UTC)),
-        ('CHF_FLOOR_PERIOD','policy_diagnostic',datetime(2011,9,6,tzinfo=UTC),datetime(2015,1,15,tzinfo=UTC)),
-        ('CHF_2015_01_15','policy_diagnostic',datetime(2015,1,15,tzinfo=UTC),datetime(2015,1,16,tzinfo=UTC)),
-        ('CHF_AFTER_2015_01_15','policy_diagnostic',datetime(2015,1,16,tzinfo=UTC),END),
-    ])
-    return periods
-
-def package(work, completed):
-    """Atomic publication. An error archive cannot include partial performance."""
-    allowed_on_error = {'parent_pass6_parity.csv','parent_pass6_reference.json','archived_control_parity.csv','archived_control_reference.json','baseline_parity.csv','protocol.md','run_manifest.json','error_report.csv','hard_controls.csv',
-                        'software_checks.csv','coverage.csv','data_gaps.csv','runner_source.py',
-                        'source_controls.csv','h1_m15_crosschecks.csv','yearly_data_coverage.csv',
-                        'coverage_crosscheck_summary.json','archived_pass1_fetch_receipts.csv','parent_pass1_parity.csv','parent_pass1_provenance.json','conditional_feature_controls.csv','archived_anchor_controls.csv','archived_anchor_reference.json'}
-    members = [p for p in sorted(work.iterdir()) if p.is_file() and p.name != 'file_manifest.json' and
-               (completed or p.name in allowed_on_error)]
-    files = [dict(file=p.name,bytes=p.stat().st_size,sha256=file_sha(p)) for p in members]
-    write_json(work/'file_manifest.json',files)
-    temporary = OUT / (RESULT_NAME+'.tmp')
-    with zipfile.ZipFile(temporary,'w',zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as z:
-        for p in members+[work/'file_manifest.json']:
-            z.write(p,p.name)
-    os.replace(temporary,OUT/RESULT_NAME)
-
-def launch(background=True):
-    global STARTED, JOB_LOCK
-    with LOCK:
-        if STARTED:
-            return False
-        OUT.mkdir(parents=True,exist_ok=True)
-        # Linux Railway/Gunicorn: avoid two workers writing one result archive.
-        if os.name == 'posix':
-            import fcntl
-            handle = (OUT/'run.lock').open('a+')
+def fetch(granularity, price, progress=lambda **k:None, transport=None):
+    token, base = broker_settings()
+    step = H4 if granularity=='H4' else 3600
+    opener = urllib.request.build_opener(NoRedirect())
+    cursor, rows, receipts = START, [], []
+    for page in range(200):
+        query = {'from':stamp(cursor),'count':5000,'granularity':granularity,'price':price,
+                 'smooth':'false','includeFirst':'true','dailyAlignment':0,'alignmentTimezone':'UTC'}
+        url = base+'/v3/instruments/EUR_USD/candles?'+urllib.parse.urlencode(query)
+        request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept-Datetime-Format':'RFC3339'})
+        data = None
+        for attempt in range(5):
             try:
-                fcntl.flock(handle,fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                handle.close()
-                STARTED = True
-                return False
-            JOB_LOCK = handle
-        STARTED = True
-        # Reuse an exact-version complete result across multiple WSGI workers.
-        previous = read_status()
-        if previous.get('state')=='complete' and previous.get('runner_sha256')==code_hash() and (OUT/RESULT_NAME).exists():
-            if JOB_LOCK is not None:
-                JOB_LOCK.close()
-                JOB_LOCK = None
-            return False
-        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 long Pass7 structure-distance frequency research',runner_sha256=code_hash(),result_path=None)
-    if background:
-        threading.Thread(target=run_job,name='eurchf-m15-long-pass7-research',daemon=True).start()
-        return True
-    return run_job()
-
-def app(environ, start_response):
-    """Dependency-free WSGI app, including status while the worker is busy."""
-    path = environ.get('PATH_INFO','/')
-    if path.startswith(PREFIX):
-        path = path[len(PREFIX):] or '/'
-    method = environ.get('REQUEST_METHOD','GET')
-    if method not in ('GET','HEAD'):
-        body = b'{"error":"GET or HEAD only; no order endpoints"}'
-        start_response('405 Method Not Allowed',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
-        return [] if method == 'HEAD' else [body]
-    if path not in ('/','/health','/start','/status','/results'):
-        body = b'{"error":"Not found"}'
-        start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
-        return [] if method == 'HEAD' else [body]
-    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_LONG_PASS7_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS6_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1')))=='1'):
-        launch()
-    current = read_status()
-    code = '200 OK'
-    if path=='/results':
-        bundle = OUT/RESULT_NAME
-        if current.get('state') in ('complete','error') and current.get('result_path') and bundle.exists():
-            start_response(code,[('Content-Type','application/zip'),('Content-Length',str(bundle.stat().st_size)),
-                                 ('Content-Disposition',f'attachment; filename="{RESULT_NAME}"'),('Cache-Control','no-store')])
-            if method=='HEAD':
-                return []
-            def chunks():
-                with bundle.open('rb') as stream:
-                    while True:
-                        block = stream.read(1024*1024)
-                        if not block:
-                            break
-                        yield block
-            return chunks()
-        current = dict(error='Results are not ready',**current)
-        code = '409 Conflict'
-    elif path=='/health':
-        current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
-    elif path=='/':
-        current = dict(service='EUR/CHF M15 LONG Pass7 structure-distance frequency research',version=VERSION,status='/status',results='/results',
-                       start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
-    body = (json.dumps(current,allow_nan=False)+'\n').encode()
-    start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
-    return [] if method=='HEAD' else [body]
-
-class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
-    daemon_threads = True
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--run',action='store_true',help='Run the historical study once without an HTTP server')
-    group.add_argument('--self-test',action='store_true',help='Synthetic mathematical/execution checks only; no OANDA request')
-    args = parser.parse_args()
-    if args.self_test:
-        print(json.dumps(dict(version=VERSION,market_data_used=False,checks=self_checks()),indent=2))
-        return 0
-    if args.run:
-        return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
-    port = int(os.getenv('PORT','8080'))
-    with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
-        if os.getenv('EURCHF_M15_LONG_PASS7_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS6_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1')))=='1':
-            launch()
-        print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
-        server.serve_forever()
-    return 0
-
-def load_frozen_history(work):
-    if not FROZEN_SOURCE_FILE.is_file():
-        raise RuntimeError('Missing EURCHF_M15_PASS1_FROZEN_DATA.zip. Upload this file alongside app.py in the same folder.')
-    payload=FROZEN_SOURCE_FILE.read_bytes()
-    if sha(payload)!=EMBEDDED_PAYLOAD_SHA256:
-        raise RuntimeError('Frozen source archive SHA mismatch.')
-    shutil.copyfile(FROZEN_SOURCE_FILE,work/'EURCHF_M15_PASS1_FROZEN_DATA.zip')
-    with zipfile.ZipFile(io.BytesIO(payload)) as bundle:
-        if set(bundle.namelist())!=set(EMBEDDED_MEMBER_PINS) or bundle.testzip() is not None:
-            raise RuntimeError('Frozen source archive members/CRC mismatch.')
-        for name,pin in EMBEDDED_MEMBER_PINS.items():
-            data=bundle.read(name)
-            if len(data)!=pin['bytes'] or sha(data)!=pin['sha256']:
-                raise RuntimeError('Frozen source member SHA/size mismatch: '+name)
-            destination='archived_pass1_fetch_receipts.csv' if name=='fetch_receipts.csv' else name
-            if name in ('source_candles.csv','source_h1_crosscheck_candles.csv','fetch_receipts.csv'):
-                (work/destination).write_bytes(data)
-    def read_source(name,step):
-        bars,volumes=[],{}
-        with (work/name).open(newline='') as stream:
-            for row in csv.DictReader(stream):
-                t=when(row['time']);v=int(row['volume'])
-                if v<0:raise RuntimeError('Negative archived price count.')
-                bars.append((t,*[float(row[k]) for k in ('open','high','low','close')]))
-                volumes[t]=v
-        validate_bars(bars,step)
-        return bars,volumes
-    bars,volumes=read_source('source_candles.csv',BAR)
-    h1,hvolumes=read_source('source_h1_crosscheck_candles.csv',H1_BAR)
-    if len(bars)!=546647 or source_hash(bars)!='63eeea194c7106cfe0ebe248e96a392ab876611da5fc2fb569e3b2f304eaaa22':
-        raise RuntimeError('Pinned Pass 1 M15 source mismatch.')
-    if len(h1)!=137939 or source_hash(h1)!='b3b686ad3a92569d971d2d9412c8afe64a5ad8f54b5d097840c4a2d6cebbd2c0':
-        raise RuntimeError('Pinned Pass 1 H1 source mismatch.')
-    return bars,volumes,h1,hvolumes
-
-def bullish_engulf(bars,i):
-    if i<1:return False
-    po,pc,op,cl=bars[i-1][1],bars[i-1][4],bars[i][1],bars[i][4]
-    return pc<po and cl>op and op<=pc and cl>=po
-
-def previous_low(lows,lookback):
-    return [None if x is None else -x for x in previous_high([-x for x in lows],lookback)]
-
-def find_paths(bars,i):
-    reference=bars[i][4];stop=bars[i][3]-10*TICK;target=reference+RR*(reference-stop)
-    common=dict(signal_index=i,signal=iso(bars[i][0]),entry=iso(bars[i][0]+BAR),
-        reference_entry=reference,stop=stop,target=target,
-        next_open=bars[i+1][1] if i+1<len(bars) else None,
-        next_candle_delay_hours=(bars[i+1][0]-bars[i][0]-BAR).total_seconds()/3600 if i+1<len(bars) else None)
-    for j in range(i+1,len(bars)):
-        op,hi,lo=bars[j][1:4];hs,ht=lo<=stop,hi>=target
-        if not hs and not ht:continue
-        both=hs and ht
-        reason=('TARGET' if hi-op<op-lo else 'STOP') if both else ('STOP' if hs else 'TARGET')
-        sensitivity=dict(common,exit_index=j,exit=iso(bars[j][0]+BAR),exit_price=stop if reason=='STOP' else target,
-            reason=reason,dual_touch=int(both),gap_stop=0,gap_target=0)
-        if op<=stop:reason,price,xt=('STOP_GAP' if op<stop else 'STOP'),min(op,stop),bars[j][0]
-        elif op>=target:reason,price,xt='TARGET_GAP_CAPPED',target,bars[j][0]
-        elif hs:reason,price,xt='STOP',stop,bars[j][0]+BAR
-        else:reason,price,xt='TARGET',target,bars[j][0]+BAR
-        stress=dict(common,exit_index=j,exit=iso(xt),exit_price=price,reason=reason,dual_touch=int(both),
-            gap_stop=int(op<stop),gap_target=int(op>=target))
-        return {MODELS[0]:sensitivity,MODELS[1]:stress}
-    opened=dict(common,exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END',dual_touch=0,gap_stop=0,gap_target=0)
-    return {model:dict(opened) for model in MODELS}
-
-def geometry(path,cost):
-    fill=path['reference_entry']+cost*TICK
-    if when(path['entry'])>=END:return None,'ENTRY_AT_OR_AFTER_CUTOFF'
-    if not 0<path['stop']<fill<path['target']:return None,'INVALID_FILL_STOP_TARGET_GEOMETRY'
-    return fill,None
-
-def r_value(path,cost):
-    fill,error=geometry(path,cost)
-    if error or path['exit'] is None:return None
-    if path['reason']=='STOP':return -1.
-    return (path['exit_price']-fill)/(fill-path['stop'])
-
-def base_features(bars):
-    atr=atr14(bars);prior={lb:previous_low([b[3] for b in bars],lb) for lb in LOOKBACKS}
-    engulf={}
-    for i in range(WARMUP,len(bars)):
-        t,op,hi,lo,cl=bars[i]
-        if atr[i] is None or atr[i]<=0 or hi<=lo or not bullish_engulf(bars,i):continue
-        previous_body=bars[i-1][1]-bars[i-1][4]
-        if previous_body<=0:raise RuntimeError('Strict bearish previous body must be positive')
-        row=dict(signal_index=i,signal=iso(t),entry=iso(t+BAR),open=op,high=hi,low=lo,close=cl,
-            atr14=atr[i],body_atr=(cl-op)/atr[i],range_atr=(hi-lo)/atr[i],
-            close_location=(cl-lo)/(hi-lo),reference_stop_pips=(cl-lo+10*TICK)/PIP,
-            previous_open=bars[i-1][1],previous_close=bars[i-1][4],previous_body=previous_body,
-            previous_body_ticks=previous_body/TICK,previous_body_atr=previous_body/atr[i],
-            body_ratio=(cl-op)/previous_body)
-        for lb in LOOKBACKS:
-            row[f'previous_low_{lb}']=prior[lb][i]
-            row[f'abs_distance_atr_{lb}']=abs(lo-prior[lb][i])/atr[i]
-        engulf[i]=row
-    return {'LONG_SIGNAL_LOW':engulf}
-
-
-def base_selected(config,features):
-    result=[]
-    for i,row in features[config['geometry_key']].items():
-        if row['body_atr']<config['body_min_atr'] or row['range_atr']<config['range_min_atr']:continue
-        if row['body_ratio']<config['body_ratio_min']:continue
-        if config['distance_max_atr'] is not None and row[f"abs_distance_atr_{config['lookback']}"]>config['distance_max_atr']:continue
-        result.append(i)
-    return result
-
-
-def build_paths(bars,features,configs):
-    cache={};result={}
-    for geo in dict.fromkeys(c['geometry_key'] for c in configs):
-        result[geo]={}
-        for i in features[geo]:
-            if i not in cache:cache[i]=find_paths(bars,i)
-            result[geo][i]=cache[i]
-    return result
-
-def hard_controls(bars,features,configs):
-    checks=[]
-    def check(name,ok):checks.append(dict(check=name,status='PASS' if ok else 'FAIL'))
-    check('33_unique_definitions_8_research_25_controls',len(configs)==33 and len({c['config_id'] for c in configs})==33 and sum(c['role']=='RESEARCH' for c in configs)==8 and sum(c['role']=='CONTROL' for c in configs)==25)
-    ref=[None]*len(bars)
-    if len(bars)>14:
-        trs=[max(b[2]-b[3],abs(b[2]-a[4]),abs(b[3]-a[4])) for a,b in zip(bars,bars[1:])]
-        ref[14]=math.fsum(trs[:14])/14
-        for i in range(15,len(bars)):ref[i]=(ref[i-1]*13+trs[i-1])/14
-    check('independent_full_ATR',all((a is None and b is None) or (a is not None and b is not None and abs(a-b)<1e-12) for a,b in zip(ref,atr14(bars))))
-    direct={}
-    for i in range(WARMUP,len(bars)):
-        _,op,hi,lo,cl=bars[i];po,pc=bars[i-1][1],bars[i-1][4]
-        if ref[i] is None or ref[i]<=0 or hi<=lo or not(pc<po and cl>op and op<=pc and cl>=po):continue
-        r=dict(body_atr=(cl-op)/ref[i],range_atr=(hi-lo)/ref[i],close_location=(cl-lo)/(hi-lo),
-            previous_open=po,previous_close=pc,previous_body=abs(pc-po),
-            previous_body_ticks=abs(pc-po)/TICK,previous_body_atr=abs(pc-po)/ref[i],body_ratio=abs(cl-op)/abs(pc-po))
-        for lb in LOOKBACKS:
-            low=min(b[3] for b in bars[i-lb:i]);r[f'previous_low_{lb}']=low;r[f'abs_distance_atr_{lb}']=abs(lo-low)/ref[i]
-        direct[i]=r
-    check('exact_engulf_independent_universe',list(direct)==list(features['LONG_SIGNAL_LOW']))
-    check('ratio_body_structure_independent_features',all(all(abs(v-features['LONG_SIGNAL_LOW'][i][k])<1e-9 for k,v in r.items()) for i,r in direct.items()))
-    check('no_doji_or_nonfinite_ratio',all(r['previous_body']>0 and math.isfinite(r['body_ratio']) and r['body_ratio']>=1. for r in features['LONG_SIGNAL_LOW'].values()))
-    for c in configs:
-        expected=[]
-        for i,r in direct.items():
-            if r['body_atr']<c['body_min_atr'] or r['range_atr']<c['range_min_atr'] or r['body_ratio']<c['body_ratio_min']:continue
-            if c['distance_max_atr'] is not None and r[f"abs_distance_atr_{c['lookback']}"]>c['distance_max_atr']:continue
-            expected.append(i)
-        check(c['config_id']+'_independent_base_mask',base_selected(c,features)==expected)
-    n=min(10000,len(bars));prefix=base_features(bars[:n])
-    check('engulf_ratio_prefix_causality',all(prefix['LONG_SIGNAL_LOW'][i]=={k:features['LONG_SIGNAL_LOW'][i][k] for k in prefix['LONG_SIGNAL_LOW'][i]} for i in prefix['LONG_SIGNAL_LOW']) and list(prefix['LONG_SIGNAL_LOW'])==[i for i in features['LONG_SIGNAL_LOW'] if i<n])
-    return checks
-
-
-
-def baseline_parity(work,bars,features,path_sets):
-    """Independent raw-control chronology/path implementation; no production helpers.
-    All fields of accepted paths and fills/R are compared across six cases.
-    """
-    ids=list(features['LONG_SIGNAL_LOW']);production=path_sets['LONG_SIGNAL_LOW'];reference={}
-    for i in ids:
-        close=bars[i][4];stop=bars[i][3]-.00010;target=close+3*(close-stop)
-        for model in MODELS:
-            row=dict(exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END',dual_touch=0,gap_stop=0,gap_target=0)
-            for j in range(i+1,len(bars)):
-                stamp,o,h,l,_=bars[j];hit_s=l<=stop;hit_t=h>=target
-                if not(hit_s or hit_t):continue
-                row['exit_index']=j;row['dual_touch']=int(hit_s and hit_t)
-                if model=='NEAREST_OPEN_SENSITIVITY':
-                    loss=hit_s and (not hit_t or o-l<=h-o)
-                    row.update(exit=iso(stamp+BAR),exit_price=stop if loss else target,reason='STOP' if loss else 'TARGET')
-                elif o<=stop:
-                    row.update(exit=iso(stamp),exit_price=o,reason='STOP_GAP' if o<stop else 'STOP',gap_stop=int(o<stop))
-                elif o>=target:row.update(exit=iso(stamp),exit_price=target,reason='TARGET_GAP_CAPPED',gap_target=1)
-                else:row.update(exit=iso(stamp+BAR),exit_price=stop if hit_s else target,reason='STOP' if hit_s else 'TARGET')
+                if transport is not None:
+                    data=transport(request)
+                else:
+                    with opener.open(request, timeout=90) as response:
+                        data=json.load(response)
                 break
-            row.update(signal_index=i,signal=iso(bars[i][0]),entry=iso(bars[i][0]+BAR),reference_entry=close,stop=stop,target=target,
-                next_open=bars[i+1][1] if i+1<len(bars) else None,
-                next_candle_delay_hours=(bars[i+1][0]-bars[i][0]-BAR).total_seconds()/3600 if i+1<len(bars) else None)
-            reference[i,model]=row
-    checks=[]
-    for model in MODELS:
-        for cost in COSTS:
-            accepted=[];invalid=[];occupied=-1;mismatch=0
-            for i in ids:
-                if i<occupied:continue
-                p=reference[i,model];fill=p['reference_entry']+cost*.00001
-                if when(p['entry'])>=END:invalid.append((i,'ENTRY_AT_OR_AFTER_CUTOFF'));continue
-                if not 0<p['stop']<fill<p['target']:invalid.append((i,'INVALID_FILL_STOP_TARGET_GEOMETRY'));continue
-                accepted.append(i);occupied=p['exit_index'] if p['exit_index'] is not None else math.inf
-                q=production[i][model]
-                for k,v in p.items():
-                    other=q[k]
-                    mismatch+=not (math.isclose(v,other,rel_tol=0,abs_tol=1e-12) if isinstance(v,float) and isinstance(other,(int,float)) else v==other)
-                rr=None if p['exit'] is None else (p['exit_price']-fill)/(fill-p['stop'])
-                got=r_value(q,cost);mismatch+=not((got is None and rr is None) or (got is not None and rr is not None and abs(got-rr)<=1e-11))
-            got,wrong,_=replay(ids,production,model,cost)
-            checks.append(dict(config_id=PARENT_IDS[0],execution_model=model,cost_ticks=cost,
-                accepted_entries=len(accepted),field_mismatches=mismatch,status='PASS' if got==accepted and wrong==invalid and mismatch==0 else 'FAIL'))
-    write_csv(work/'baseline_parity.csv',checks)
-    if any(c['status']!='PASS' for c in checks):raise RuntimeError('Independent raw-control full-ledger parity failed')
-    return checks
-
-def write_inputs(work,bars,features,path_sets,configs,memberships,dataset_kind,volumes=None):
-    write_csv(work/'configuration_grid.csv',configs);write_csv(work/'research_case_roles.csv',memberships)
-    write_csv(work/'period_definitions.csv',(dict(period=a,period_type=k,start=iso(s),end=iso(e)) for a,k,s,e in PERIODS))
-    write_csv(work/'coverage.csv',[dict(dataset_kind=dataset_kind,source_candles=len(bars),first=iso(bars[0][0]),last=iso(bars[-1][0]),
-        requested_start=iso(START),requested_end=iso(END),source_sha256=source_hash(bars))])
-    write_csv(work/'data_gaps.csv',(dict(previous=iso(a[0]),next=iso(b[0]),elapsed_minutes=(b[0]-a[0]).total_seconds()/60,
-        absent_intervals=round((b[0]-a[0]).total_seconds()/900)-1,interpretation='Observed gap; no invented bars/exclusions') for a,b in zip(bars,bars[1:]) if b[0]-a[0]!=BAR),
-        ['previous','next','elapsed_minutes','absent_intervals','interpretation'])
-    write_csv(work/'source_atr14.csv',(dict(signal_index=i,time=iso(bars[i][0]),atr14=x) for i,x in enumerate(atr14(bars))))
-    fields=['signal_index','signal','entry','open','high','low','close','atr14','body_atr','range_atr','reference_stop_pips']
-    fields += [k for lb in LOOKBACKS for k in (f'previous_low_{lb}',f'abs_distance_atr_{lb}')]
-    write_csv(work/'raw_bullish_engulf_features.csv',({k:r[k] for k in fields} for r in features['LONG_SIGNAL_LOW'].values()),fields)
-    write_csv(work/'relative_body_signal_features.csv',features['LONG_SIGNAL_LOW'].values())
-    fields=['geometry_key','execution_model','signal_index','signal','entry','reference_entry','stop','target','next_open',
-        'next_candle_delay_hours','exit_index','exit','exit_price','reason','dual_touch','gap_stop','gap_target']
-    write_csv(work/'signal_trade_paths.csv',(dict(geometry_key=g,execution_model=m,**p) for g,paths in path_sets.items() for v in paths.values() for m,p in v.items()),fields)
+            except urllib.error.HTTPError as e:
+                if e.code not in (429,500,502,503,504) or attempt==4:
+                    raise ValueError(f'OANDA candles HTTP {e.code}; check credentials/environment and retry') from None
+                time.sleep(2**attempt)
+            except (urllib.error.URLError, TimeoutError):
+                if attempt==4: raise ValueError('OANDA candles network timeout/failure') from None
+                time.sleep(2**attempt)
+        require(isinstance(data,dict) and data.get('instrument')=='EUR_USD' and data.get('granularity')==granularity, 'Broker response identity mismatch')
+        candles=data.get('candles'); require(isinstance(candles,list), 'Missing candle array')
+        times=[epoch(c['time']) for c in candles]
+        require(all(a<b for a,b in zip(times,times[1:])), 'Non-increasing broker page')
+        require(not times or times[0]>=cursor, 'Broker pagination moved backwards')
+        kept=[c for c,t in zip(candles,times) if c.get('complete') is True and t>=START and t+step<=END]
+        require(not rows or not kept or epoch(kept[0]['time'])>epoch(rows[-1]['time']), 'Duplicate broker page')
+        rows.extend(kept)
+        receipts.append({'granularity':granularity,'page':page,'query':query,'received':len(candles),'kept':len(kept),'payload_sha256':digest(data),'fetched_at_utc':stamp(time.time())})
+        progress(phase='FETCH_'+granularity, pages=page+1, candles=len(rows))
+        if not times or times[-1]+step>=END or len(candles)<5000: break
+        cursor=times[-1]+step
+    else: raise ValueError('Pagination limit reached')
+    return rows, receipts
 
 
-def write_neighbours(work,configs,summaries):
-    rows=[]
-    for c in configs:
-        if c['role']!='RESEARCH':continue
-        neighbours,edges=neighbour_ids(c,configs)
-        for model in MODELS:
-            for cost in COSTS:
-                ours=summaries[c['config_id'],model,cost];other=[summaries[n,model,cost] for n in neighbours]
-                rows.append(dict(config_id=c['config_id'],family=c['family'],execution_model=model,cost_ticks=cost,tested_boundaries=';'.join(edges),
-                    adjacent_configurations=len(other),distinct_neighbour_raw_streams=len({r['raw_signal_sha256'] for r in other}),
-                    neighbours_identical_to_this_raw_stream=sum(r['raw_signal_sha256']==ours['raw_signal_sha256'] for r in other),
-                    positive_total_r_neighbours=sum(r['total_r']>0 for r in other),
-                    distinct_positive_neighbour_raw_streams=len({r['raw_signal_sha256'] for r in other if r['total_r']>0}),
-                    median_neighbour_total_r=quantile([r['total_r'] for r in other],.5),minimum_neighbour_total_r=min((r['total_r'] for r in other),default=None),
-                    minimum_neighbour_closed_trades=min((r['closed_trades'] for r in other),default=None),neighbour_ids=';'.join(neighbours)))
-    write_csv(work/'neighbourhood_summary.csv',rows)
-
-def self_checks():
-    checks=[]
-    def check(ok,name):
-        if not ok:raise AssertionError(name)
-        checks.append(dict(check=name,status='PASS',evidence='SYNTHETIC_SOFTWARE_ONLY'))
-    configs,_=make_configs();check(len(configs)==33 and len({c['config_id'] for c in configs})==33,'Full predeclared grid')
-    check(len(BOUNDS)==263 and len(PERIODS)==35,'Zero-inclusive time universe')
-    t=datetime(2020,1,1,tzinfo=UTC)
-    pattern=[(t,1.001,1.0012,.9998,1.),(t+BAR,1.,1.0012,.9997,1.001)]
-    check(bullish_engulf(pattern,1),'Exact bullish boundary equalities accepted')
-    doji=pattern.copy();doji[0]=(t,1.,1.0012,.9998,1.);check(not bullish_engulf(doji,1),'Previous doji rejected')
-    doji=pattern.copy();doji[1]=(t+BAR,1.,1.0012,.9997,1.);check(not bullish_engulf(doji,1),'Signal doji rejected')
-    check(previous_low([3.,1.,2.,-100.,4.,5.],3)==[None,None,None,1.,-100.,-100.],'Prior low excludes current candle')
-    bars=[(t+i*BAR,1.,1.001,.999,1.) for i in range(204)]
-    bars[199]=(t+199*BAR,1.001,1.0012,.9998,1.)
-    bars[200]=(t+200*BAR,1.,1.0013,.9989,1.0011)
-    f=make_features(bars);check(200 in f['LONG_SIGNAL_LOW'],'Warmup and bullish feature')
-    check(f['LONG_SIGNAL_LOW'][200]['previous_low_100']==.999,'Prior structure excludes signal low')
-    row=dict(f['LONG_SIGNAL_LOW'][200]);row.update(body_atr=1.25,range_atr=1.5);row['abs_distance_atr_200']=.05
-    c=next(c for c in configs if c['family']=='ANCHOR' and c['lookback']==200)
-    fixture={'LONG_SIGNAL_LOW':{200:row}};check(selected_indices(c,fixture)==[200],'Inclusive structure/body/range thresholds')
-    row['abs_distance_atr_200']=.050001;check(not selected_indices(c,fixture),'Structure above maximum rejected')
-    dual=[(t,10.,10.5,9.,10.),(t+BAR,12.9,14.,8.,12.)]
-    paths=find_paths(dual,0);check(paths[MODELS[0]]['reason']=='TARGET' and paths[MODELS[1]]['reason']=='STOP','BUY dual-touch alternate/stop-first')
-    p=find_paths([(t,10.,10.5,9.,10.),(t+BAR,8.,8.5,7.5,8.2)],0)[MODELS[1]]
-    check(p['exit_price']==8. and r_value(p,10)<-1 and p['exit']==iso(t+BAR),'BUY adverse stop gap and open timestamp')
-    p=find_paths([(t,10.,10.5,9.,10.),(t+BAR,14.,14.5,13.5,14.1)],0)[MODELS[1]]
-    check(p['exit_price']==p['target'] and p['gap_target']==1,'BUY favourable target gap capped')
-    fixture=dict(signal_index=0,signal=iso(t),entry=iso(t+BAR),reference_entry=1.,stop=.999,target=1.003,
-        exit_index=None,exit=None,exit_price=None,reason='OPEN_AT_DATA_END',dual_touch=0,gap_stop=0,gap_target=0)
-    check(geometry(fixture,20)[0]==1.0002,'BUY adverse cost adds to fill')
-    normal=dict(fixture,exit=iso(t+2*BAR),exit_price=1.003,reason='TARGET')
-    check(abs(r_value(normal,20)-(1.003-1.0002)/(1.0002-.999))<1e-12,'BUY reward and fill-based denominator')
-    mapping={i:{m:dict(fixture,signal_index=i) for m in MODELS} for i in (0,1,2)}
-    check(replay([0,1,2],mapping,MODELS[0],10)[0]==[0],'Open trade blocks to cutoff')
-    mapping[0][MODELS[0]].update(exit_index=1,exit=iso(t+2*BAR),exit_price=.999,reason='STOP')
-    check(replay([0,1,2],mapping,MODELS[0],10)[0]==[0,1],'Exit-candle entry allowed')
-    mapping[0][MODELS[0]]['target']=1.0002;check(replay([0,1,2],mapping,MODELS[0],40)[0]==[1],'Invalid BUY geometry does not occupy')
-    check(geometry(dict(fixture,entry=iso(END)),10)[1]=='ENTRY_AT_OR_AFTER_CUTOFF','Exclusive entry cutoff')
-    check(r_value(fixture,10) is None,'Open trade has no invented R')
-    check(stats([])['total_r']==0 and stats([2.,-1.,-1.,-1.,2.])['max_closed_dd_r']==-3.,'Empty stats and chronological DD')
-    check(rolling_reference([None,2.,4.,6.,8.],2)==[None,None,None,3.,5.],'Trailing ATR reference excludes tested value')
-    for op,v,t,want in [('GE',.5,.5,True),('LE',.5,.5,True),('LT',0.,0.,False),('GT',0.,0.,False),('AVAILABLE',None,None,False)]:
-        check(condition_pass(dict(feature='x',operator=op,threshold=t),{'x':v})==want,'Condition boundary '+op)
-    check(not condition_pass(dict(feature='x',operator='GE',threshold=0.),{'x':float('nan')}),'Nonfinite feature unavailable')
-    check(ema_seeded([1.,2.,3.,4.],3)==[None,None,2.,3.],'Daily EMA period-mean seed')
-    cutoff=bars[200][0]+BAR
-    context=build_context(bars)
-    row=context_for_signal(context,200)
-    check(all(row[k] is None or when(row[k])<=cutoff for k in ('h1_context_close','d1_context_close')),'Only closed higher-timeframe context')
-    check(len(PARITY_IDS)==7 and len(json.loads(ARCHIVED_REFERENCE_JSON))==42,'Seven frozen controls /42 cases')
-    check(sum(c['role']=='RESEARCH' for c in configs)==8,'Eight new distance hypotheses')
-    row=dict(f['LONG_SIGNAL_LOW'][200]);row.update(body_atr=1.25,range_atr=1.5,body_ratio=1.25)
-    row['abs_distance_atr_200']=.05
-    rc=next(c for c in configs if c['family']=='BR_SINGLE' and c['lookback']==200 and c['body_ratio_min']==1.25)
-    check(selected_indices(rc,{'LONG_SIGNAL_LOW':{200:row}})==[200],'Inclusive relative-body threshold')
-    low=dict(row,body_ratio=1.249999)
-    check(not selected_indices(rc,{'LONG_SIGNAL_LOW':{200:low}}),'Below relative-body threshold rejected')
-    pair=pattern.copy();pair[0]=(pair[0][0],11.,11.5,9.5,10.);pair[1]=(pair[1][0],10.,11.5,9.5,11.25)
-    check(bullish_engulf(pair,1) and (pair[1][4]-pair[1][1])/(pair[0][1]-pair[0][4])==1.25,'Exact body ratio definition')
-    changed=list(bars);changed[199]=(bars[199][0],1.001,1.0012,.9998,1.001)
-    check(200 not in base_features(changed)['LONG_SIGNAL_LOW'],'Previous doji never assigned sentinel ratio')
-    changed=list(bars);changed[199]=(bars[199][0],1.00001,1.0012,.9998,1.)
-    tiny=base_features(changed)['LONG_SIGNAL_LOW'][200]
-    check(tiny['body_ratio']>100. and tiny['previous_body']>0,'Small positive previous body retained and audited')
-    middle=next(c for c in configs if not c['previously_tested'] and c['lookback']==200 and c['distance_max_atr']==.075 and c['body_ratio_min']==1.25)
-    check(len(neighbour_ids(middle,configs)[0])==3,'Three interior distance/ratio neighbours')
-    upper=next(c for c in configs if not c['previously_tested'] and c['lookback']==200 and c['distance_max_atr']==.10 and c['body_ratio_min']==1.25)
-    check(len(neighbour_ids(upper,configs)[0])==2 and 'distance_max_atr=UPPER' in neighbour_ids(upper,configs)[1],'Upper distance boundary explicit')
-    check(sum(c['in_frequency_grid'] for c in configs)==12,'Twelve core grid cells')
-    inter=next(c for c in configs if c['family']=='BR_H1_INTERACTION' and c['lookback']==200 and c['body_ratio_min']==1.25)
-    q=dict(row,h1_relative_volatility=1.1)
-    q['abs_distance_atr_200']=.075
-    check(selected_indices(middle,{'LONG_SIGNAL_LOW':{200:q}})==[200],'Inclusive wider distance boundary')
-    q['abs_distance_atr_200']=.075001
-    check(not selected_indices(middle,{'LONG_SIGNAL_LOW':{200:q}}),'Above wider distance rejected')
-    q['abs_distance_atr_200']=.065
-    check(selected_indices(middle,{'LONG_SIGNAL_LOW':{200:q}})==[200] and not selected_indices(inter,{'LONG_SIGNAL_LOW':{200:q}}),'Widening exposes additional qualifying signal')
-    check(len(reference_roles(upper))==3,'Baseline, preceding-distance and same-distance ratio parents')
-    check(len(PASS6_PARITY_IDS)==25 and len(json.loads(PASS6_REFERENCE_JSON))==150,'Complete parent Pass6 archive')
-    for value,want in [(None,False),(.999999,False),(1.,True),(1.000001,True)]:
-        q=dict(row,h1_relative_volatility=value)
-        check(bool(selected_indices(inter,{'LONG_SIGNAL_LOW':{200:q}}))==want,'H1 independent boundary '+str(value))
-    check(all(c['body_min_atr']==1.25 and c['range_min_atr']==1.5 for c in configs if c['family']!='RAW'),'Body/range anchors unchanged')
-    check(all(c['feature'] in ('','h1_relative_volatility') for c in configs),'No new context hunt')
-    return checks
-
-
-
-def analyze(work, bars, features, path_sets, configs, *, progress=True):
-    """Pure reporting/replay layer. Production calls this only after hard gates."""
-    sinks = {}
-    definitions = {
-        'summary.csv': SUMMARY_FIELDS,
-        'raw_signal_membership.csv': ['config_id','signal_index'],
-        'accepted_trades.csv': CASE+['accepted_sequence','signal_index','historical_fill','risk_price','r'],
-        'invalid_entries.csv': CASE+['signal_index','reason'],
-        'open_at_data_end.csv': CASE+['signal_index','entry','historical_fill','stop','target','held_hours_to_cutoff'],
-        'control_accepted_ledgers.csv': CASE+['accepted_sequence','signal_index','exit_index','signal','entry','exit',
-             'reference_entry','historical_fill','stop','target','risk_price','exit_price','reason','r'],
-        'accepted_ledgers.csv': CASE+['accepted_sequence','signal_index','exit_index','signal','entry','exit',
-             'reference_entry','historical_fill','stop','target','risk_price','exit_price','reason','r'],
-        'period_results.csv': CASE+['period','period_type','start','end','partial_calendar_year','entry_count',
-             'entry_cohort_completed','entry_cohort_eventual_r','entry_cohort_open',
-             'exit_count','realized_r','realized_max_dd_r','open_at_period_end'],
-        'monthly_results.csv': CASE+['month','start','end','partial_month','entry_count','exit_count','realized_r','entry_cohort_eventual_r','entry_cohort_open'],
-        'rolling_windows.csv': CASE+['months','start','end','entry_count','exit_count','realized_r','zero_entry_window','zero_exit_window'],
-        'accepted_comparisons.csv': CASE+['reference_config','common_entries','added_entries','removed_entries',
-             'common_completed_r_candidate','common_completed_r_reference','added_completed_r','removed_completed_r',
-             'candidate_total_r','reference_total_r','delta_total_r','candidate_open_count','reference_open_count'],
-        'chf_event_exposure.csv': CASE+['signal_index','entry','exit','entered_on_event_day','exited_on_event_day',
-             'held_across_event_day_start','eventual_r','outcome','attribution_warning'],
-    }
-    for name,fields in definitions.items():
-        sinks[name] = CSVFile(work/name,fields)
-    summaries = {}
-    times_cache={geo:{(i,model):(when(p['entry']),when(p['exit']) if p['exit'] else None)
-        for i,models in paths.items() for model,p in models.items()} for geo,paths in path_sets.items()}
-    outcome_cache={geo:{(model,cost):{i:r_value(paths[i][model],cost) for i in paths}
-        for model in MODELS for cost in COSTS} for geo,paths in path_sets.items()}
-    refs = {}
-    for config in configs:
-        if config['config_id'] in COMPARISON_IDS:
-            indices = selected_indices(config,features)
-            paths=path_sets[config['geometry_key']]
-            for model in MODELS:
-                for cost in COSTS:
-                    refs[(config['config_id'],model,cost)] = (replay(indices,paths,model,cost)[0], outcome_cache[config['geometry_key']][(model,cost)])
-    shock_start = datetime(2015,1,15,tzinfo=UTC)
-    shock_end = datetime(2015,1,16,tzinfo=UTC)
-    try:
-        for number,config in enumerate(configs,1):
-            cid = config['config_id']
-            paths=path_sets[config['geometry_key']]
-            path_times=times_cache[config['geometry_key']]
-            outcome=outcome_cache[config['geometry_key']]
-            indices = selected_indices(config,features)
-            raw_digest = signal_hash(indices,bars)
-            for i in indices:
-                sinks['raw_signal_membership.csv'].add(dict(config_id=cid,signal_index=i))
-            for model in MODELS:
-                for cost in COSTS:
-                    tag = dict(config_id=cid,execution_model=model,cost_ticks=cost)
-                    rs_by_i = outcome[(model,cost)]
-                    accepted,invalid,blocked = replay(indices,paths,model,cost)
-                    closed = [i for i in accepted if paths[i][model]['exit'] is not None]
-                    open_ids = [i for i in accepted if paths[i][model]['exit'] is None]
-                    isolated = [i for i in indices if geometry(paths[i][model],cost)[1] is None]
-                    isolated_rs = [rs_by_i[i] for i in isolated if rs_by_i[i] is not None]
-                    rs = [rs_by_i[i] for i in closed]
-                    digest = hashlib.sha256()
-                    month_entries = [0]*(len(BOUNDS)-1)
-                    month_exits = [0]*(len(BOUNDS)-1)
-                    month_cash = [0.]*(len(BOUNDS)-1)
-                    month_cohort = [0.]*(len(BOUNDS)-1)
-                    month_open = [0]*(len(BOUNDS)-1)
-                    for seq,i in enumerate(accepted,1):
-                        p = paths[i][model]
-                        fill = geometry(p,cost)[0]
-                        full = dict(tag,accepted_sequence=seq,signal_index=i,exit_index=p['exit_index'],
-                            signal=p['signal'],entry=p['entry'],exit=p['exit'],reference_entry=p['reference_entry'],
-                            historical_fill=fill,stop=p['stop'],target=p['target'],risk_price=fill-p['stop'],
-                            exit_price=p['exit_price'],reason=p['reason'],r=rs_by_i[i])
-                        sinks['accepted_trades.csv'].add({k:full[k] for k in definitions['accepted_trades.csv']})
-                        digest.update((json.dumps(full,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
-                        sinks['accepted_ledgers.csv'].add(full)
-                        if cid in PASS6_PARITY_IDS:
-                            sinks['control_accepted_ledgers.csv'].add(full)
-                        et,xt = path_times[(i,model)]
-                        bucket = bisect.bisect_right(BOUNDS,et)-1
-                        month_entries[bucket] += 1
-                        if xt is None:
-                            month_open[bucket] += 1
-                            sinks['open_at_data_end.csv'].add(dict(tag,signal_index=i,entry=p['entry'],historical_fill=fill,
-                                stop=p['stop'],target=p['target'],held_hours_to_cutoff=(END-et).total_seconds()/3600))
-                        else:
-                            month_cohort[bucket] += rs_by_i[i]
-                            exit_bucket = bisect.bisect_left(BOUNDS,xt)-1
-                            if not 0 <= exit_bucket < len(month_cash):
-                                raise RuntimeError('Exit outside the reporting months.')
-                            month_cash[exit_bucket] += rs_by_i[i]
-                            month_exits[exit_bucket] += 1
-                        if et < shock_end and (xt is None or xt >= shock_start):
-                            sinks['chf_event_exposure.csv'].add(dict(tag,signal_index=i,entry=p['entry'],exit=p['exit'],
-                                entered_on_event_day=int(shock_start <= et < shock_end),
-                                exited_on_event_day=int(xt is not None and shock_start < xt <= shock_end),
-                                held_across_event_day_start=int(et < shock_start and (xt is None or xt > shock_start)),
-                                eventual_r=rs_by_i[i],outcome=p['reason'],
-                                attribution_warning='Exposure attribution only; not an event-removal counterfactual'))
-                    for i,reason in invalid:
-                        sinks['invalid_entries.csv'].add(dict(tag,signal_index=i,reason=reason))
-                    for k in range(len(month_cash)):
-                        sinks['monthly_results.csv'].add(dict(tag,month=BOUNDS[k].strftime('%Y-%m'),
-                            start=iso(BOUNDS[k]),end=iso(BOUNDS[k+1]),partial_month=int(BOUNDS[k+1].day!=1),
-                            entry_count=month_entries[k],exit_count=month_exits[k],realized_r=month_cash[k],
-                            entry_cohort_eventual_r=month_cohort[k],entry_cohort_open=month_open[k]))
-                    positive_years = negative_years = empty_years = 0
-                    for label,kind,a,b in PERIODS:
-                        entry_ids = [i for i in accepted if a <= path_times[(i,model)][0] < b]
-                        exit_ids = [i for i in closed if a < path_times[(i,model)][1] <= b]
-                        cohort_closed = [i for i in entry_ids if rs_by_i[i] is not None]
-                        cohort_r = sum(rs_by_i[i] for i in cohort_closed)
-                        period_stats = stats(rs_by_i[i] for i in exit_ids)
-                        opened = sum(path_times[(i,model)][0] < b and
-                                     (path_times[(i,model)][1] is None or path_times[(i,model)][1] > b) for i in accepted)
-                        partial = int(kind == 'calendar' and b == END and (END.month != 1 or END.day != 1))
-                        sinks['period_results.csv'].add(dict(tag,period=label,period_type=kind,start=iso(a),end=iso(b),
-                            partial_calendar_year=partial,entry_count=len(entry_ids),entry_cohort_completed=len(cohort_closed),
-                            entry_cohort_eventual_r=cohort_r,entry_cohort_open=len(entry_ids)-len(cohort_closed),
-                            exit_count=len(exit_ids),realized_r=period_stats['total_r'],
-                            realized_max_dd_r=period_stats['max_closed_dd_r'],open_at_period_end=opened))
-                        if kind == 'calendar' and not partial:
-                            positive_years += cohort_r > 0
-                            negative_years += cohort_r < 0
-                            empty_years += not entry_ids
-                    prefixes = []
-                    for series in (month_entries,month_exits,month_cash):
-                        values = [0]
-                        for v in series:
-                            values.append(values[-1]+v)
-                        prefixes.append(values)
-                    rolled = {}
-                    for width in (12,24,36):
-                        worst, empty = None, 0
-                        for stop in range(width,len(BOUNDS)):
-                            if BOUNDS[stop].day != 1:
-                                continue  # rolling windows use complete calendar months
-                            start = stop-width
-                            en,ex,cash = [p[stop]-p[start] for p in prefixes]
-                            row = dict(tag,months=width,start=iso(BOUNDS[start]),end=iso(BOUNDS[stop]),
-                                entry_count=en,exit_count=ex,realized_r=cash,zero_entry_window=int(en==0),zero_exit_window=int(ex==0))
-                            sinks['rolling_windows.csv'].add(row)
-                            empty += en == 0
-                            if worst is None or cash < worst['realized_r']:
-                                worst = row
-                        rolled.update({f'worst_{width}m_realized_r':worst['realized_r'],
-                                       f'worst_{width}m_start':worst['start'],f'worst_{width}m_end':worst['end'],
-                                       f'zero_entry_{width}m_windows':empty})
-                    for reference in reference_roles(config):
-                        reference_case = refs.get((reference,model,cost))
-                        if reference_case is None:
-                            continue  # only used by tiny synthetic subset tests
-                        reference_ids,reference_rs=reference_case
-                        ours, theirs = set(accepted),set(reference_ids)
-                        common, added, removed = ours & theirs, ours-theirs, theirs-ours
-                        total = lambda ids: sum(rs_by_i[i] for i in sorted(ids) if rs_by_i[i] is not None)
-                        reference_total=lambda ids:sum(reference_rs[i] for i in sorted(ids) if reference_rs[i] is not None)
-                        reference_r = reference_total(theirs)
-                        sinks['accepted_comparisons.csv'].add(dict(tag,reference_config=reference,
-                            common_entries=len(common),added_entries=len(added),removed_entries=len(removed),
-                            common_completed_r_candidate=total(common),common_completed_r_reference=reference_total(common),
-                            added_completed_r=total(added),removed_completed_r=reference_total(removed),
-                            candidate_total_r=sum(rs),reference_total_r=reference_r,delta_total_r=sum(rs)-reference_r,
-                            candidate_open_count=len(open_ids),reference_open_count=sum(reference_rs[i] is None for i in reference_ids)))
-                    entry_times = [path_times[(i,model)][0] for i in accepted]
-                    holdings = [(path_times[(i,model)][1]-path_times[(i,model)][0]).total_seconds()/3600 for i in closed]
-                    risk_sizes = [paths[i][model]['reference_entry']-paths[i][model]['stop'] for i in accepted]
-                    fractions = [cost*TICK/v for v in risk_sizes]
-                    run = maxrun = 0
-                    for n in month_entries:
-                        run = run+1 if n == 0 else 0
-                        maxrun = max(maxrun,run)
-                    isolated_stats = stats(isolated_rs)
-                    row = dict(tag,raw_signals=len(indices),eligible_isolated_signals=len(isolated),
-                        isolated_completed=len(isolated_rs),isolated_open=len(isolated)-len(isolated_rs),
-                        isolated_total_r=isolated_stats['total_r'],isolated_profit_factor=isolated_stats['profit_factor'],
-                        geometry_invalid_all_signals=len(indices)-len(isolated),p0_blocked_signals=blocked,
-                        invalid_unblocked_entries=len(invalid),open_at_data_end=len(open_ids),**stats(rs),
-                        dual_touch_closed=sum(paths[i][model]['dual_touch'] for i in closed),
-                        gap_stop_closed=sum(paths[i][model]['gap_stop'] for i in closed),
-                        gap_target_closed=sum(paths[i][model]['gap_target'] for i in closed),
-                        entry_next_open_gap_count=sum(paths[i][model]['next_open'] is not None and
-                            abs(paths[i][model]['next_open']-paths[i][model]['reference_entry']) > .5*TICK for i in accepted),
-                        entries_before_market_closure=sum((paths[i][model]['next_candle_delay_hours'] or 0) > 0 for i in accepted),
-                        median_stop_pips=quantile([v/PIP for v in risk_sizes],.5),
-                        median_cost_fraction_reference_risk=quantile(fractions,.5),p90_cost_fraction_reference_risk=quantile(fractions,.9),
-                        median_holding_hours=quantile(holdings,.5),max_holding_hours=max(holdings) if holdings else None,
-                        maximum_inter_entry_gap_days=max(((b-a).total_seconds()/86400 for a,b in zip(entry_times,entry_times[1:])),default=None),
-                        leading_no_entry_days=((entry_times[0] if entry_times else END)-START).total_seconds()/86400,
-                        trailing_no_entry_days=(END-(entry_times[-1] if entry_times else START)).total_seconds()/86400,
-                        zero_entry_months=sum(n==0 for n in month_entries),max_consecutive_zero_entry_months=maxrun,
-                        positive_complete_entry_years=positive_years,negative_complete_entry_years=negative_years,
-                        zero_entry_complete_years=empty_years,raw_signal_sha256=raw_digest,accepted_ledger_sha256=digest.hexdigest(),**rolled)
-                    sinks['summary.csv'].add(row)
-                    summaries[(cid,model,cost)] = row
-            if progress and (number % 20 == 0 or number == len(configs)):
-                set_status(state='analyzing',progress=round(40+52*number/len(configs)),
-                           message=f'{number}/{len(configs)} entry configurations completed; all costs and exit assumptions')
-        expected = len(configs)*len(MODELS)*len(COSTS)
-        if sinks['summary.csv'].count != expected:
-            raise RuntimeError('Missing configuration/cost/model results.')
-    finally:
-        for sink in sinks.values():
-            sink.close()
-    write_neighbours(work,configs,summaries)
-    export_matched_comparisons(work,configs)
-    counts = {name:sink.count for name,sink in sinks.items()}
-    for extra in ('matched_raw_comparisons.csv',):
-        with (work/extra).open(newline='') as source:counts[extra]=sum(1 for _ in csv.DictReader(source))
-    counts.update(export_extra_diagnostics(work,bars,features,path_sets,configs))
-    write_json(work/'output_row_counts.json',counts)
-    return summaries,counts
-
-BOUNDS=month_bounds()
-PERIODS=period_definitions()
-
-PROTOCOL="# EURCHF M15 LONG Pass7 — bounded structure-distance frequency test\n\nPredeclared12October2026 before new wider-distance configuration returns. This\nadapts the template's limited interaction/frequency stage. Sequence number7 is\nnot a claim that final multidimensional confirmation has been reached.\nPass6 BR1.25 improved selectivity in both geometries while reducing activity;\nthis pass asks whether it can preserve quality when low-distance is relaxed.\nReclaim/compression remain parked. No new market filter or RR search.\n\n## Frozen source and execution\nUnchanged EURCHF_M15_PASS1_FROZEN_DATA.zip beside the research Python module.\n546647native MID M15/137939native H1 bars,2005-01-01 to2026-10-08T00:00Z exclusive.\nNo later-cutoff fetch, new credentials/packages, synthetic bars or excluded eras.\nSource/member SHA/size/native H1-M15 price-count and OHLC controls are mandatory.\nCommon warmup200observed M15 bars. ATR14 seeded TR1..14 then causal Wilder.\nExact bullish engulf: previous close<open, current close>open, current open<=\nprevious close and current close>=previous open. Positive range/current ATR.\nReference entry=signal close; stop=signal low−1pip; target=reference+3xreference\nrisk. RR3; assumed adverse BUY entries1/2/4pips; R denominator=assumed fill−stop.\nPrimary STOP_FIRST_GAP_STRESS preserves adverse stop gaps, capped target gaps,\nstop-first dual touch. NEAREST_OPEN_SENSITIVITY is separate sensitivity, not\ntick truth. Full chronological P0 per case; exit-candle reentry allowed; invalid\ngeometry never occupies; open-at-cutoff trades occupy with no invented R.\nEntries[start,end), exits(start,end]. MID costs omit observed bid/ask/financing.\n\n## Twelve core cells; eight new distance hypotheses\nOriginalLB200: absolute signal-low distance from min(low[i-200:i]) <=\n0.05/0.075/0.10current ATR. TightLB100: distance <=0.025/0.05/0.075ATR.\nPrior-low windows exclude the signal. Distances are absolute, not a new sweep\ndepth rule. Keep body>=1.25ATR/range>=1.50ATR throughout.\nAt each distance, paired relative-body floors1.00 and1.25, inclusive:\n(current close−open)/(previous open−close). Previous candle strictly bearish;\nno doji sentinel, epsilon denominator or small-body exclusion.\nEvery core cell retains H1relativevolatility>=1.00: last completed native H1\nATR14 divided by its preceding200ATR mean, excluding the tested H1 value,\navailable by signal close. Same H1 timing/seed/definition as all prior controls.\nNo H1 floor/window/timeframe, body/range/ratio ladder, stop, session, weekday,\ntrend, RR or extra context tuning.\n2lookbacks x3distances x2ratios=12core cells:4current-distance controls and\n8new widening hypotheses. Retain ALL25Pass6 definitions as archived controls\n(OFF/AVAILABLE/GE1 and all old ratio levels) for reproducibility, not selection.\nTotal33definitions/198cases,8research/25controls. New core cells use only GE1.\n\n## Fail-closed parent gates\nEmbedded Pass6 reference contains150raw/accepted ledger fingerprints/counts,\nwith an immutable reference SHA. All25parent definitions must reproduce every\ncase before any new wider-distance configurations are replayed/reported.\nOriginal42archive cases and independent raw-control6cases remain gates too.\nAll configurations share archived signal-low execution geometry: old raw paths\nnaturally cover new subset bars. Delivery does not evaluate/rank/replay new\nconfiguration returns, only source/features/masks and already-returned controls.\n\n## Frequency attribution and acceptance question\nFor each new cell, compare its full P0 accepted chronology against the same\nlookback/ratio at the current distance. Also compare its preceding distance;\nBR1.25 rows compare to BR1.0 at the SAME widened distance. Export complete\nADDED/REMOVED trade records with source ID, R and raw qualification flags so\ndisplaced entries cannot be mistaken for direct filter changes. No combining\nstandalone strategy ledgers or treating all raw signals as executable trades.\nReport actual added/removed R at every cost/model, yearly/era/latest1/2/3/5/10Y,\nzero-inclusive262months and714complete12/24/36M windows per case, blank years,\ndroughts, worst windows, equivalence, denominator/stop/cost/CHF diagnostics.\nUse frequency_parent_comparisons.csv, frequency_added_removed_ledgers.csv and\nfrequency_period_deltas.csv with the complete summary/period/month/rolling files.\n\nNeighbourhoods change one distance or paired ratio axis by one level with the\nlookback/H1 state held fixed. Four old core cells serve as neighbours; unrelated\narchived OFF/AVAILABLE/BR1.5/2 rows do not enter this new neighbourhood.\nRatio has two paired controls, not a newly established fine ratio plateau.\n\nRequire useful additional activity, supportive marginal accepted-trade returns\nunder2/4pip costs and both models, coherent neighbouring settings, plausible\nolder/recent periods and improved blank/drought behaviour. A positive combined\nheadline inherited from old winners cannot justify losing additions, as Pass3\ndemonstrated. Review rejected/weak/zero cells. No automatic ranking/winner.\nIf these bounded relaxations fail the added-trade/cost/temporal checks, stop\ntuning this family and retain BR1.25 only as a sparse research reference.\nNo post-hoc date/session exclusions, fine threshold hunt, new context stack or\nRR rescue. Full history is reused/in-sample, not untouched OOS; additive R/DD\nis not NAV%/marked-equity DD. Confirmation, exact portfolio replay and forward\nexecution observation are separate later gates. Research service only; no\nlive strategy/probe/executor activation changes or order endpoints.\n"
-RESULT_README='# EURCHF M15 LONG Pass7 results\nRead protocol.md and all source/software/feature/raw/archive gates first.\nParent Pass6:25definitions/150cases must match before new configuration replay.\n33totaldefinitions/198cases:25controls plus8new distance hypotheses.\nCore grid12cells: originalLB200 D.05/.075/.10; tightLB100 D.025/.05/.075;\npairedBR1/1.25, fixedH1vol>=1/body1.25/range1.5/RR3/allhistory/costs/models.\nReview complete summary/year/era/recent/monthly/rolling/blank/neighbourhood\nresults alongside frequency_parent_comparisons.csv and added/removed ledgers.\nAdded trades must earn their place; inherited positive totals are insufficient.\nNo automatic winner, hybrid, RR sweep, portfolio result or live activation.\n'
-
-
-def archived_controls(work,bars,features,path_sets,configs):
-    if sha(ARCHIVED_REFERENCE_JSON.encode())!=ARCHIVED_REFERENCE_SHA256:raise RuntimeError('Embedded archive reference SHA mismatch')
-    reference=json.loads(ARCHIVED_REFERENCE_JSON)
-    if len(reference)!=42 or {(r['config_id'],r['execution_model'],int(r['cost_ticks'])) for r in reference}!={(c,m,k) for c in PARITY_IDS for m in MODELS for k in COSTS}:
-        raise RuntimeError('Incomplete archived reference case set')
-    write_json(work/'archived_control_reference.json',reference)
-    byid={c['config_id']:c for c in configs};paths=path_sets['LONG_SIGNAL_LOW'];checks=[]
-    for row in reference:
-        cid,model,cost=row['config_id'],row['execution_model'],int(row['cost_ticks']);indices=selected_indices(byid[cid],features)
-        accepted,invalid,blocked=replay(indices,paths,model,cost);digest=hashlib.sha256()
-        for seq,i in enumerate(accepted,1):
-            p=paths[i][model];fill=geometry(p,cost)[0]
-            record=dict(config_id=cid,execution_model=model,cost_ticks=cost,accepted_sequence=seq,signal_index=i,exit_index=p['exit_index'],
-                signal=p['signal'],entry=p['entry'],exit=p['exit'],reference_entry=p['reference_entry'],historical_fill=fill,
-                stop=p['stop'],target=p['target'],risk_price=fill-p['stop'],exit_price=p['exit_price'],reason=p['reason'],r=r_value(p,cost))
-            digest.update((json.dumps(record,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
-        actual=digest.hexdigest();raw=signal_hash(indices,bars)
-        ok=actual==row['accepted_ledger_sha256'] and raw==row['raw_signal_sha256'] and len(indices)==int(row['raw_signals'])
-        ok=ok and len(accepted)==int(row['closed_trades'])+int(row['open_at_data_end']) and blocked==int(row['p0_blocked_signals']) and len(invalid)==int(row['invalid_unblocked_entries'])
-        checks.append(dict(config_id=cid,execution_model=model,cost_ticks=cost,status='PASS' if ok else 'FAIL',
-            accepted_entries=len(accepted),actual_ledger_sha256=actual,expected_ledger_sha256=row['accepted_ledger_sha256'],raw_signal_sha256=raw))
-    write_csv(work/'archived_control_parity.csv',checks)
-    if any(r['status']!='PASS' for r in checks):raise RuntimeError('Archived full-ledger parity failed; no new research conclusions')
-    return checks
-
-def parent_pass6_controls(work,bars,features,path_sets,configs):
-    if sha(PASS6_REFERENCE_JSON.encode())!=PASS6_REFERENCE_SHA256:raise RuntimeError('Embedded archive reference SHA mismatch')
-    reference=json.loads(PASS6_REFERENCE_JSON)
-    if len(reference)!=150 or {(r['config_id'],r['execution_model'],int(r['cost_ticks'])) for r in reference}!={(c,m,k) for c in PASS6_PARITY_IDS for m in MODELS for k in COSTS}:
-        raise RuntimeError('Incomplete archived reference case set')
-    write_json(work/'parent_pass6_reference.json',reference)
-    byid={c['config_id']:c for c in configs};paths=path_sets['LONG_SIGNAL_LOW'];checks=[]
-    for row in reference:
-        cid,model,cost=row['config_id'],row['execution_model'],int(row['cost_ticks']);indices=selected_indices(byid[cid],features)
-        accepted,invalid,blocked=replay(indices,paths,model,cost);digest=hashlib.sha256()
-        for seq,i in enumerate(accepted,1):
-            p=paths[i][model];fill=geometry(p,cost)[0]
-            record=dict(config_id=cid,execution_model=model,cost_ticks=cost,accepted_sequence=seq,signal_index=i,exit_index=p['exit_index'],
-                signal=p['signal'],entry=p['entry'],exit=p['exit'],reference_entry=p['reference_entry'],historical_fill=fill,
-                stop=p['stop'],target=p['target'],risk_price=fill-p['stop'],exit_price=p['exit_price'],reason=p['reason'],r=r_value(p,cost))
-            digest.update((json.dumps(record,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
-        actual=digest.hexdigest();raw=signal_hash(indices,bars)
-        ok=actual==row['accepted_ledger_sha256'] and raw==row['raw_signal_sha256'] and len(indices)==int(row['raw_signals'])
-        ok=ok and len(accepted)==int(row['closed_trades'])+int(row['open_at_data_end']) and blocked==int(row['p0_blocked_signals']) and len(invalid)==int(row['invalid_unblocked_entries'])
-        checks.append(dict(config_id=cid,execution_model=model,cost_ticks=cost,status='PASS' if ok else 'FAIL',
-            accepted_entries=len(accepted),actual_ledger_sha256=actual,expected_ledger_sha256=row['accepted_ledger_sha256'],raw_signal_sha256=raw))
-    write_csv(work/'parent_pass6_parity.csv',checks)
-    if any(r['status']!='PASS' for r in checks):raise RuntimeError('Parent Pass6 full-ledger parity failed; no new research conclusions')
-    return checks
-
-
-
-def export_matched_comparisons(work,configs):
-    byid={c['config_id']:c for c in configs}
-    with (work/'accepted_comparisons.csv').open(newline='') as f:
-        reader=csv.DictReader(f);fields=reader.fieldnames
-        count=write_csv(work/'matched_anchor_comparisons.csv',(r for r in reader if r['reference_config']==byid[r['config_id']]['matched_anchor']),fields)
-    # Preserve generic reporting harness filename; this copy is raw-only.
-    with (work/'accepted_comparisons.csv').open(newline='') as f:
-        reader=csv.DictReader(f);write_csv(work/'matched_raw_comparisons.csv',(r for r in reader if r['reference_config']==PARENT_IDS[0]),reader.fieldnames)
-    return count
-
-def export_extra_diagnostics(work,bars,features,path_sets,configs):
-    # Stream one case at a time. Retain all comparison references for matched-ledger attribution.
-    refs={};groups=defaultdict(list);byid={c['config_id']:c for c in configs}
-    marginal=CSVFile(work/'marginal_entry_differences.csv',CASE+['reference_config','change','signal_index','qualifies_in_candidate','qualifies_in_reference'])
-    buckets=CSVFile(work/'stop_cost_attribution.csv',CASE+['bucket_axis','bucket','accepted_entries','closed_trades','open_trades','total_r','winners','losers','interpretation'])
-    for c in configs:groups['RAW','ALL',0,signal_hash(selected_indices(c,features),bars)].append(c['config_id'])
-    def flush(key,ledger):
-        cid,model,cost=key;c=byid[cid];ours={int(r['signal_index']):r for r in ledger}
-        groups['ACCEPTED_SIGNAL',model,cost,sha('\n'.join(r['signal_index'] for r in ledger).encode())].append(cid)
-        groups['ACCEPTED_EXECUTION',model,cost,sha('\n'.join(json.dumps({k:v for k,v in r.items() if k!='config_id'},sort_keys=True,separators=(',',':')) for r in ledger).encode())].append(cid)
-        if cid in PARENT_IDS:refs[cid,model,cost]=ours
-        refid=c['matched_anchor'];theirs=refs[refid,model,cost]
-        if cid!=refid:
-            raw=set(selected_indices(c,features));rawref=set(selected_indices(byid[refid],features))
-            for change,ids in [('ADDED',ours.keys()-theirs.keys()),('REMOVED',theirs.keys()-ours.keys())]:
-                for i in sorted(ids):marginal.add(dict(config_id=cid,execution_model=model,cost_ticks=cost,reference_config=refid,change=change,
-                    signal_index=i,qualifies_in_candidate=int(i in raw),qualifies_in_reference=int(i in rawref)))
-        for axis,limits,labels in [('stop_pips',(5.,10.,20.,40.),('<=5','(5,10]','(10,20]','(20,40]','>40')),
-            ('cost_fraction_reference_risk',(.05,.1,.2,.4),('<=.05','(.05,.10]','(.10,.20]','(.20,.40]','>.40'))]:
-            assigned=[[] for _ in labels]
-            for r in ledger:
-                risk=float(r['reference_entry'])-float(r['stop']);v=risk/PIP if axis=='stop_pips' else cost*TICK/risk
-                assigned[bisect.bisect_left(limits,v)].append(r)
-            for label,subset in zip(labels,assigned):
-                rs=[float(r['r']) for r in subset if r['r']!='']
-                buckets.add(dict(config_id=cid,execution_model=model,cost_ticks=cost,bucket_axis=axis,bucket=label,
-                    accepted_entries=len(subset),closed_trades=len(rs),open_trades=len(subset)-len(rs),total_r=math.fsum(rs),
-                    winners=sum(r>0 for r in rs),losers=sum(r<0 for r in rs),interpretation='Fixed descriptive attribution; no optimized stop filter'))
-    with (work/'accepted_ledgers.csv').open(newline='') as f:
-        it=iter(csv.DictReader(f));pending=next(it,None)
-        for c in configs:
-            for model in MODELS:
-                for cost in COSTS:
-                    key=c['config_id'],model,cost;ledger=[]
-                    while pending and (pending['config_id'],pending['execution_model'],int(pending['cost_ticks']))==key:
-                        ledger.append(pending);pending=next(it,None)
-                    flush(key,ledger)
-        if pending is not None:raise RuntimeError('Unexpected ledger ordering')
-    marginal.close();buckets.close()
-    eq=[dict(equivalence_kind=k,execution_model=m,cost_ticks=c,fingerprint=h,configuration_count=len(ids),config_ids=';'.join(ids),
-        research_configuration_count=sum(byid[i]['role']=='RESEARCH' for i in ids),interpretation='Identical streams are not independent evidence') for (k,m,c,h),ids in sorted(groups.items())]
-    with (work/'matched_anchor_comparisons.csv').open(newline='') as f:count=sum(1 for _ in csv.DictReader(f))
-    return {'marginal_entry_differences.csv':marginal.count,'stop_cost_attribution.csv':buckets.count,
-        'equivalence_groups.csv':write_csv(work/'equivalence_groups.csv',eq),'matched_anchor_comparisons.csv':count}
-
-def run_job():
-    global RUN_CLOCK,JOB_LOCK
-    RUN_CLOCK=time.monotonic();OUT.mkdir(parents=True,exist_ok=True);work=Path(tempfile.mkdtemp(prefix='working-',dir=OUT))
-    manifest=dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,complete=False,status='RUNNING',
-        dataset_kind='ACTUAL_PINNED_NATIVE_OANDA_MID',requested_start=iso(START),requested_end_exclusive=iso(END),rr=RR,cost_ticks=COSTS,
-        models=MODELS,primary_model='STOP_FIRST_GAP_STRESS',stop_definition='UNCHANGED_SIGNAL_LOW_MINUS_1_PIP',
-        anchors=ANCHORS,frequency_distances=DISTANCE_LEVELS,frequency_body_ratios=FREQUENCY_RATIOS,frequency_h1_state='GE1',core_grid_cells=12,configurations=33,research_definitions=8,new_research_definitions=8,retained_research_definitions=0,controls=25,
-        cases=198,archived_parity_cases=42,parent_pass6_parity_cases=150,daily_alignment='UTC_OBSERVED_DAYS_NOT_BROKER_NY_D1',
-        portfolio_target='PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1; admission deferred',orders_supported=False,trading_enabled=False)
-    try:
-        (work/'protocol.md').write_text(PROTOCOL);shutil.copyfile(__file__,work/'runner_source.py')
-        write_csv(work/'software_checks.csv',self_checks())
-        set_status(state='validating',progress=2,message='Validating full frozen source and separate closed context features')
-        bars,volumes,h1,hvolumes=load_frozen_history(work);crosscheck_history(work,bars,volumes,h1,hvolumes)
-        configs,memberships=make_configs();features=make_features(bars,h1)
-        controls=hard_controls(bars,features,configs);write_csv(work/'hard_controls.csv',controls)
-        conditional=context_controls(bars,features,configs);write_csv(work/'conditional_feature_controls.csv',conditional)
-        if any(r['status']!='PASS' for r in controls+conditional):raise RuntimeError('Independent feature/conditional controls failed')
-        set_status(state='building_paths',progress=25,message='Verifying all25 Pass6 controls /150 archived cases')
-        oldconfigs=[c for c in configs if c['previously_tested']]
-        paths=build_paths(bars,features,oldconfigs)
-        baseline_parity(work,bars,features,paths);archived_controls(work,bars,features,paths,configs);parent_pass6_controls(work,bars,features,paths,configs)
-        # All ratio definitions use the same archived engulf geometry/path universe.
-        # New configuration replay starts ONLY after exact old-control gates.
-        write_inputs(work,bars,features,paths,configs,memberships,manifest['dataset_kind'],volumes);write_context_inputs(work,features)
-        (work/'README.md').write_text(RESULT_README)
-        _,counts=analyze(work,bars,features,paths,configs)
-        counts.update(export_conditional_attribution(work,bars,features,paths,configs));write_json(work/'output_row_counts.json',counts)
-        manifest.update(complete=True,status='COMPLETE',source_sha256=source_hash(bars),source_candles=len(bars),source_h1_sha256=source_hash(h1),
-            source_controls='PASS',hard_controls='PASS',conditional_controls='PASS',baseline_full_ledger_parity='PASS',archived_full_ledger_parity='PASS',
-            software_controls='PASS',parent_pass6_full_ledger_parity='PASS',protocol_sha256=sha(PROTOCOL.encode()),output_row_counts=counts,
-            completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
-        write_json(work/'run_manifest.json',manifest);set_status(state='packaging',progress=96,message='All198 structure-distance cases complete; packaging results')
-        package(work,True);set_status(state='complete',progress=100,message='EURCHF M15 LONG Pass7 complete; download results ZIP',
-            configurations=33,cases=198,result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
-        return True
-    except Exception as exc:
-        manifest.update(status='ERROR',complete=False,error_type=type(exc).__name__,error=str(exc));write_json(work/'run_manifest.json',manifest)
-        write_csv(work/'error_report.csv',[dict(error_type=type(exc).__name__,message=str(exc),traceback=traceback.format_exc())])
-        try:package(work,False);result_path='/results'
-        except Exception:result_path=None
-        set_status(state='error',progress=100,message=str(exc),result_path=result_path);return False
-    finally:
-        shutil.rmtree(work,ignore_errors=True)
-        if JOB_LOCK is not None:JOB_LOCK.close();JOB_LOCK=None
-
-
-
-CONTEXT_KEYS=('prior_move_16_atr', 'prior_move_64_atr', 'prior_move_192_atr', 'prior_move_16_wall_hours', 'prior_move_64_wall_hours', 'prior_move_192_wall_hours', 'previous_close_location', 'signal_close_location', 'm15_relative_volatility', 'h1_relative_volatility', 'd1_relative_volatility', 'd1_close_minus_ema100', 'd1_close_minus_ema200')
-CONTEXT_AUDIT_KEYS=('h1_context_index', 'd1_context_index', 'h1_context_close', 'd1_context_close', 'h1_context_age_hours', 'd1_context_age_hours')
-
-def rolling_reference(values, width):
-    """Mean of exactly width preceding observed values; excludes values[i]."""
-    total=0.;missing=0;result=[None]*len(values)
-    for i,value in enumerate(values):
-        if i>=width and missing==0:result[i]=total/width
-        if value is None:missing+=1
-        else:total+=value
-        if i>=width:
-            old=values[i-width]
-            if old is None:missing-=1
-            else:total-=old
-    return result
-
-def ema_seeded(values, period):
-    out=[None]*len(values)
-    if len(values)<period:return out
-    out[period-1]=math.fsum(values[:period])/period
-    alpha=2/(period+1)
-    for i in range(period,len(values)):out[i]=out[i-1]+alpha*(values[i]-out[i-1])
+def validate_native(rows, step, sides, full):
+    out=[]
+    for c in rows:
+        t=epoch(c['time'])
+        require(c.get('complete') is True and START<=t and t+step<=END and t%step==0, 'Incomplete, misaligned, or out-of-range candle')
+        require(not out or t>out[-1]['t'], 'Duplicate or non-increasing candles')
+        require(float(c.get('volume',0))>0, 'Nonpositive candle volume')
+        b={'t':t}
+        for side in sides:
+            p={k:float(c[side][k]) for k in 'ohlc'}
+            require(all(math.isfinite(x) and x>0 for x in p.values()), 'Nonfinite/nonpositive OHLC')
+            require(p['l']<=min(p['o'],p['c'])<=max(p['o'],p['c'])<=p['h'], 'Invalid OHLC range')
+            b[side]=p
+        if 'bid' in sides:
+            for k in 'ohlc':
+                require(b['bid'][k]<=b['ask'][k]+1e-10, 'Bid exceeds ask')
+                require(b['bid'][k]-1.1*TICK<=b['mid'][k]<=b['ask'][k]+1.1*TICK, 'Mid outside quote range')
+        out.append(b)
+    require(bool(out), 'Empty source')
+    if full:
+        require(len(out)>=(25000 if step==H4 else 100000), 'Incomplete full-history candle count')
+        require(out[0]['t']<=START+7*86400 and out[-1]['t']+step>=END-4*86400, 'Incomplete source endpoints')
+        years=collections.Counter(dt.datetime.fromtimestamp(b['t'],UTC).year for b in out)
+        for year in range(2005,2027):
+            minimum=(1000 if step==H4 else 4000)*(0.65 if year==2026 else 1)
+            require(years[year]>=minimum, f'Insufficient coverage {year} granularity {step}')
     return out
 
-def aggregate_hours(bars):
-    groups={}
-    for t,op,hi,lo,cl in bars:
-        key=t.replace(minute=0,second=0,microsecond=0)
-        if key not in groups:groups[key]=[key,op,hi,lo,cl]
-        else:
-            row=groups[key];row[2]=max(row[2],hi);row[3]=min(row[3],lo);row[4]=cl
-    # Used only by software fixtures; production uses pinned native H1.
-    cutoff=bars[-1][0]+BAR if bars else START
-    return [tuple(row) for key,row in sorted(groups.items()) if key+H1_BAR<=cutoff]
 
-def base_build_context(bars, h1=None):
-    if h1 is None:h1=aggregate_hours(bars)
-    cutoff=bars[-1][0]+BAR if bars else START
-    h1=[b for b in h1 if b[0]+H1_BAR<=cutoff]
-    a15=atr14(bars);v15=rolling_reference(a15,200)
-    ah=atr14(h1);vh=rolling_reference(ah,200)
-    hends=[b[0]+H1_BAR for b in h1]
-    groups={}
-    for t,op,hi,lo,cl in h1:
-        key=t.replace(hour=0,minute=0,second=0,microsecond=0)
-        if key not in groups:groups[key]=[key,op,hi,lo,cl,1,t,t]
-        else:
-            r=groups[key];r[2]=max(r[2],hi);r[3]=min(r[3],lo);r[4]=cl;r[5]+=1;r[7]=t
-    first_day=h1[0][0].replace(hour=0,minute=0,second=0,microsecond=0) if h1 else None
-    # Initial truncated UTC day is excluded. Later observed days, including
-    # short Sunday sessions, remain. UTC bins are not broker New-York D1 bars.
-    daily=[r for key,r in sorted(groups.items()) if key!=first_day and key+timedelta(days=1)<=cutoff]
-    dbars=[tuple(r[:5]) for r in daily];ad=atr14(dbars);vd=rolling_reference(ad,100)
-    em={p:ema_seeded([b[4] for b in dbars],p) for p in (100,200)}
-    dends=[b[0]+timedelta(days=1) for b in dbars]
-    return dict(bars=bars,h1=h1,atr_m15=a15,mean_m15=v15,atr_h1=ah,mean_h1=vh,
-        h1_ends=hends,daily=daily,dbars=dbars,atr_d1=ad,mean_d1=vd,ema_d1=em,d1_ends=dends)
+def validate_source(h4, h1, full=True):
+    bars=validate_native(h4,H4,('mid','bid','ask'),full)
+    hours=validate_native(h1,3600,('mid',),full)
+    groups=collections.defaultdict(list)
+    for h in hours: groups[h['t']//H4*H4].append(h)
+    require(set(groups)=={b['t'] for b in bars}, 'H1/H4 bin-set mismatch')
+    for b in bars:
+        g=groups[b['t']]
+        p={'o':g[0]['mid']['o'],'h':max(x['mid']['h'] for x in g),'l':min(x['mid']['l'] for x in g),'c':g[-1]['mid']['c']}
+        require(all(abs(p[k]-b['mid'][k])<=1e-10 for k in 'ohlc'), 'Native H4 vs H1 aggregate mismatch at '+stamp(b['t']))
+        b['first_h1']=g[0]['t']; b['h1_count']=len(g)
+    return bars
 
 
-def base_context_for_signal(ctx, i):
-    bars=ctx['bars'];entry=bars[i][0]+BAR;p=i-1;a=ctx['atr_m15'][p]
-    h=bisect.bisect_right(ctx['h1_ends'],entry)-1
-    d=bisect.bisect_right(ctx['d1_ends'],entry)-1
-    row={key:None for key in CONTEXT_KEYS}
-    row.update(h1_context_index=h if h>=0 else None,d1_context_index=d if d>=0 else None,
-        h1_context_close=iso(ctx['h1_ends'][h]) if h>=0 else None,
-        d1_context_close=iso(ctx['d1_ends'][d]) if d>=0 else None,
-        h1_context_age_hours=(entry-ctx['h1_ends'][h]).total_seconds()/3600 if h>=0 else None,
-        d1_context_age_hours=(entry-ctx['d1_ends'][d]).total_seconds()/3600 if d>=0 else None)
-    for n in (16,64,192):
-        if p>=n and a is not None and a>0:
-            row[f'prior_move_{n}_atr']=(bars[p][4]-bars[p-n][4])/a
-            row[f'prior_move_{n}_wall_hours']=(bars[p][0]-bars[p-n][0]).total_seconds()/3600
-    prev=bars[p];signal=bars[i]
-    if prev[2]>prev[3]:row['previous_close_location']=(prev[4]-prev[3])/(prev[2]-prev[3])
-    if signal[2]>signal[3]:row['signal_close_location']=(signal[4]-signal[3])/(signal[2]-signal[3])
-    mean=ctx['mean_m15'][p]
-    if a is not None and mean is not None and mean>0:row['m15_relative_volatility']=a/mean
-    if h>=0:
-        a,mean=ctx['atr_h1'][h],ctx['mean_h1'][h]
-        if a is not None and mean is not None and mean>0:row['h1_relative_volatility']=a/mean
-    if d>=0:
-        a,mean=ctx['atr_d1'][d],ctx['mean_d1'][d]
-        if a is not None and mean is not None and mean>0:row['d1_relative_volatility']=a/mean
-        for period in (100,200):
-            v=ctx['ema_d1'][period][d]
-            if v is not None:row[f'd1_close_minus_ema{period}']=ctx['dbars'][d][4]-v
-    return row
+def freeze_source(path, h4, h1, receipts):
+    payloads={'h4.json':canonical(h4),'h1.json':canonical(h1),'receipts.json':canonical(receipts)}
+    manifest={'instrument':'EUR_USD','start':START,'end':END,'alignment':'UTC_00_UNSMOOTHED','members':{n:hashlib.sha256(b).hexdigest() for n,b in payloads.items()}}
+    tmp=Path(str(path)+'.tmp')
+    with zipfile.ZipFile(tmp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        for n,b in payloads.items(): z.writestr(n,b)
+        z.writestr('manifest.json',canonical(manifest))
+    os.replace(tmp,path)
+    return manifest
 
 
-def make_features(bars, h1=None):
-    features=base_features(bars);ctx=build_context(bars,h1)
-    for i,row in features['LONG_SIGNAL_LOW'].items():row.update(context_for_signal(ctx,i))
-    features['CONTEXT']=ctx
-    return features
-
-def condition_pass(c, row):
-    field=c.get('feature')
-    if not field:return True
-    value=row.get(field)
-    if value is None or not math.isfinite(value):return False
-    op=c['operator'];level=c['threshold']
-    if op=='AVAILABLE':return True
-    if op=='GE':return value>=level
-    if op=='LE':return value<=level
-    if op=='GT':return value>level
-    if op=='LT':return value<level
-    raise RuntimeError('Unknown condition operator: '+op)
-
-def selected_indices(config,features):
-    return [i for i in base_selected(config,features) if condition_pass(config,features[config['geometry_key']][i])]
+def read_source(path):
+    with zipfile.ZipFile(path) as z:
+        require(set(z.namelist())=={'h4.json','h1.json','receipts.json','manifest.json'} and len(z.namelist())==4,'Unexpected source archive members')
+        require(sum(i.file_size for i in z.infolist())<500_000_000,'Source archive too large')
+        m=json.loads(z.read('manifest.json'))
+        require(m.get('instrument')=='EUR_USD' and m.get('start')==START and m.get('end')==END and m.get('alignment')=='UTC_00_UNSMOOTHED','Source archive protocol mismatch')
+        require(set(m.get('members',{}))=={'h4.json','h1.json','receipts.json'}, 'Incomplete source manifest')
+        values={}
+        for name,sha in m['members'].items():
+            data=z.read(name);require(hashlib.sha256(data).hexdigest()==sha,'Source hash mismatch: '+name)
+            values[name]=json.loads(data)
+    return values['h4.json'],values['h1.json'],values['receipts.json'],m
 
 
+def features(bars):
+    a=[None]*len(bars); tr=[0.]*len(bars)
+    for i in range(1,len(bars)):
+        p=bars[i]['mid'];prev=bars[i-1]['mid']['c']
+        tr[i]=max(p['h']-p['l'],abs(p['h']-prev),abs(p['l']-prev))
+    if len(bars)>14:
+        a[14]=sum(tr[1:15])/14
+        for i in range(15,len(bars)): a[i]=(a[i-1]*13+tr[i])/14
+    found={}
+    for i in range(200,len(bars)):
+        p=bars[i]['mid'];q=bars[i-1]['mid']
+        if not(q['c']<q['o'] and p['c']>p['o'] and p['o']<=q['c'] and p['c']>=q['o'] and p['h']>p['l'] and q['h']>q['l'] and a[i]>0):continue
+        r=p['h']-p['l']
+        found[i]={'atr':a[i],'body_atr':(p['c']-p['o'])/a[i],'range_atr':r/a[i],
+                  'close_location':(p['c']-p['l'])/r,'body_ratio':(p['c']-p['o'])/r,
+                  'distances':{l:abs(p['l']-min(b['mid']['l'] for b in bars[i-l:i]))/a[i] for l in LB}}
+    return a,found
 
 
-def context_controls(bars, features, configs):
-    """Independent direct-slice indicator and closed-context verification."""
-    checks=[];ctx=features['CONTEXT'];rows=features['LONG_SIGNAL_LOW']
-    def check(name,ok):checks.append(dict(check=name,status='PASS' if ok else 'FAIL'))
-    def independent_atr(series):
-        result=[None]*len(series)
-        if len(series)>14:
-            tr=[max(b[2]-b[3],abs(b[2]-a[4]),abs(b[3]-a[4])) for a,b in zip(series,series[1:])]
-            result[14]=math.fsum(tr[:14])/14
-            for j in range(15,len(series)):result[j]=(13*result[j-1]+tr[j-1])/14
-        return result
-    def same(a,b):return (a is None and b is None) or (a is not None and b is not None and abs(a-b)<=1e-9*max(1.,abs(a),abs(b)))
-    independent={key:independent_atr(series) for key,series in [('M15',bars),('H1',ctx['h1']),('D1',ctx['dbars'])]}
-    for label,key in [('M15','atr_m15'),('H1','atr_h1'),('D1','atr_d1')]:
-        check(label+'_independent_ATR',all(same(a,b) for a,b in zip(independent[label],ctx[key])))
-    # Independently rebuild UTC daily OHLC from grouped native H1. Initial day
-    # excluded; no future/incomplete UTC day can enter the aggregate.
-    days=defaultdict(list)
-    for b in ctx['h1']:days[b[0].date()].append(b)
-    first=min(days) if days else None;db=[]
-    for day,values in sorted(days.items()):
-        midnight=datetime.combine(day,datetime.min.time(),tzinfo=UTC)
-        if day==first or midnight+timedelta(days=1)>bars[-1][0]+BAR:continue
-        db.append((midnight,values[0][1],max(b[2] for b in values),min(b[3] for b in values),values[-1][4]))
-    check('UTC_daily_OHLC_independent',db==ctx['dbars'])
-    ema_ref={}
-    for period in (100,200):
-        closes=[b[4] for b in db];values=[None]*len(db)
-        if len(db)>=period:
-            value=math.fsum(closes[:period])/period;values[period-1]=value
-            for j in range(period,len(db)):
-                value=closes[j]*(2/(period+1))+value*(1-2/(period+1));values[j]=value
-        ema_ref[period]=values
-        check(f'D1_EMA{period}_independent',all(same(a,b) for a,b in zip(values,ctx['ema_d1'][period])))
-    mismatches=defaultdict(int);direct={}
-    hstarts=[b[0] for b in ctx['h1']];dstarts=[b[0] for b in db]
-    for i,row in rows.items():
-        p=i-1;entry=bars[i][0]+BAR;values={}
-        for n in (16,64,192):
-            den=independent['M15'][p]
-            values[f'prior_move_{n}_atr']=(bars[p][4]-bars[p-n][4])/den if p>=n and den is not None and den>0 else None
-            values[f'prior_move_{n}_wall_hours']=(bars[p][0]-bars[p-n][0]).total_seconds()/3600 if p>=n and den is not None and den>0 else None
-        for k,j in [('previous_close_location',p),('signal_close_location',i)]:
-            b=bars[j];values[k]=(b[4]-b[3])/(b[2]-b[3]) if b[2]>b[3] else None
-        # Lookup by completed context timestamps; independently check the next
-        # context is still in the future, including exact H1/day boundaries.
-        h=bisect.bisect_right(hstarts,entry-H1_BAR)-1
-        d=bisect.bisect_right(dstarts,entry-timedelta(days=1))-1
-        for label,j,width,key in [('M15',p,200,'m15_relative_volatility'),('H1',h,200,'h1_relative_volatility'),('D1',d,100,'d1_relative_volatility')]:
-            a=independent[label];prior=a[j-width:j] if j>=width else []
-            mean=math.fsum(prior)/width if len(prior)==width and all(v is not None for v in prior) else None
-            values[key]=a[j]/mean if j>=0 and mean is not None and mean>0 and a[j] is not None else None
-        for period in (100,200):
-            em=ema_ref[period][d] if d>=0 else None
-            values[f'd1_close_minus_ema{period}']=db[d][4]-em if em is not None else None
-        for label,j in [('M15',p),('H1',h)]:
-            a=independent[label]
-            for width in (100,300):
-                prior=a[j-width:j] if j>=width else []
-                mean=math.fsum(prior)/width if len(prior)==width and all(v is not None for v in prior) else None
-                values[vol_field(label,width)]=a[j]/mean if j>=0 and mean is not None and mean>0 and a[j] is not None else None
-        direct[i]=values
-        for k,value in values.items():mismatches[k]+=not same(value,row[k])
-        mismatches['closed_context_indices']+=row['h1_context_index']!=(h if h>=0 else None) or row['d1_context_index']!=(d if d>=0 else None)
-        mismatches['no_future_context']+=any(row[k] is not None and when(row[k])>entry for k in ('h1_context_close','d1_context_close'))
-    for k,n in sorted(mismatches.items()):check(k+'_all_signal_rows',n==0)
-    for c in configs:
-        if c['geometry_key']!='LONG_SIGNAL_LOW':continue
-        expected=[]
-        for i,row in rows.items():
-            if row['body_atr']<c['body_min_atr'] or row['range_atr']<c['range_min_atr'] or row['body_ratio']<c['body_ratio_min']:continue
-            if c['distance_max_atr'] is not None and row[f"abs_distance_atr_{c['lookback']}"]>c['distance_max_atr']:continue
-            field=c['feature'];op=c['operator'];v=direct[i].get(field) if field else None;t=c['threshold']
-            if field and (v is None or not math.isfinite(v)):continue
-            if field and not (op=='AVAILABLE' or (op=='GE' and v>=t) or (op=='LE' and v<=t)
-                or (op=='GT' and v>t) or (op=='LT' and v<t)):continue
-            expected.append(i)
-        check(c['config_id']+'_direct_conditional_mask',selected_indices(c,features)==expected)
-    n=min(10000,len(bars));cutoff=bars[n-1][0]+BAR
-    prefix=make_features(bars[:n],[b for b in ctx['h1'] if b[0]+H1_BAR<=cutoff])
-    check('full_context_prefix_causality',prefix['LONG_SIGNAL_LOW']=={i:r for i,r in rows.items() if i<n})
-    return checks
+def qualifies(f, config):
+    _,_,l,d,b,r=config
+    return (not l or f['distances'][l]<=d) and (b is None or f['body_atr']>=b) and (r is None or f['range_atr']>=r)
 
 
+def path_for(bars, i, case):
+    _,scenario,cost,model=case
+    p=bars[i]['mid'];reference=p['c'];stop=p['l']-PIP;target=reference+RR*(reference-stop)
+    t=bars[i]['t']+H4
+    base={'signal_index':i,'signal_start':stamp(bars[i]['t']),'signal_close':stamp(t),
+          'reference':reference,'stop':stop,'target':target,'rr_reference':RR,'reason':''}
+    if t>=END:return dict(base,reason='SIGNAL_AT_OR_AFTER_CUTOFF')
+    nextbar=bars[i+1] if i+1<len(bars) else None
+    base['next_observed_delay_seconds']=None if nextbar is None else nextbar['first_h1']-t
+    if scenario=='BIDASK':
+        if nextbar is None: return dict(base,reason='NO_NEXT_OBSERVED_OPEN')
+        fill=nextbar['ask']['o'];entry_t=nextbar['first_h1'];side='bid'
+        if entry_t<t or entry_t-t>120: return dict(base,reason='ENTRY_AGE_EXCEEDS_120S')
+        if fill-reference>10*TICK+1e-12:return dict(base,reason='ADVERSE_ENTRY_EXCEEDS_10_TICKS')
+        spread=(fill-nextbar['bid']['o'])/PIP
+    else:
+        fill=reference+cost*PIP;entry_t=t;side='mid';spread=None
+    if not (0<stop<fill<target):return dict(base,reason='INVALID_ENTRY_STOP_TARGET')
+    risk=fill-stop
+    base.update(fill=fill,entry_utc=stamp(entry_t),entry_epoch=entry_t,stop_distance_pips=risk/PIP,
+                cost_over_risk=(fill-reference)/risk,entry_spread_pips=spread,
+                exit_index=None,exit_utc=None,exit_epoch=None,exit_price=None,r=None,outcome='OPEN',dual_touch=False,exit_gap=False)
+    for j in range(i+1,len(bars)):
+        x=bars[j][side];o,h,l=x['o'],x['h'],x['l']
+        gap=(scenario=='BIDASK' or model=='STOP_FIRST_GAP_STRESS')
+        price=None;why='';dual=l<=stop and h>=target
+        if gap and o<=stop: price=o;why='STOP_GAP'
+        elif gap and o>=target:price=target;why='TARGET_GAP_CAPPED'
+        elif dual:
+            stop_first=model=='STOP_FIRST_GAP_STRESS' or abs(o-l)<=abs(h-o)
+            price=stop if stop_first else target;why='DUAL_STOP' if stop_first else 'DUAL_TARGET'
+        elif l<=stop:price=stop;why='STOP'
+        elif h>=target:price=target;why='TARGET'
+        if price is not None:
+            close=bars[j]['t']+H4
+            base.update(exit_index=j,exit_utc=stamp(close),exit_epoch=close,exit_price=price,r=(price-fill)/risk,
+                        outcome=why,dual_touch=dual,exit_gap='GAP' in why)
+            break
+    return base
 
-def export_conditional_attribution(work,bars,features,path_sets,configs):
-    byid={c['config_id']:c for c in configs};parents=[]
-    with (work/'accepted_comparisons.csv').open(newline='') as f:
-        for r in csv.DictReader(f):
-            c=byid[r['config_id']]
-            if c['previously_tested']:continue
-            refs=reference_roles(c)
-            if r['reference_config'] in refs:parents.append(dict(r,reference_role=refs[r['reference_config']],interpretation='Independent full P0 replay; added/removed R is not a combined strategy'))
-    parent_count=write_csv(work/'frequency_parent_comparisons.csv',parents)
-    # Keep one coherent copy of complete ledgers for explicit primary-baseline
-    # additions/removals. Archived raw control is included but never summed.
-    ledger=defaultdict(dict)
-    with (work/'accepted_ledgers.csv').open(newline='') as f:
-        fields=csv.DictReader(f).fieldnames
-    with (work/'accepted_ledgers.csv').open(newline='') as f:
-        for r in csv.DictReader(f):ledger[r['config_id'],r['execution_model'],int(r['cost_ticks'])][int(r['signal_index'])]=r
-    sink=CSVFile(work/'frequency_added_removed_ledgers.csv',fields+['source_config_id','reference_config','change','qualifies_in_candidate','qualifies_in_reference'])
+
+def replay(indices, paths):
+    accepted=[];rejected=[];blocked=[];occupied=-1
+    for i in indices:
+        if i<occupied:
+            blocked.append({'signal_index':i,'blocking_signal_index':accepted[-1]['signal_index']});continue
+        p=paths[i]
+        if p['reason']:rejected.append(p);continue
+        accepted.append(p)
+        occupied=p['exit_index'] if p['exit_index'] is not None else math.inf
+    return accepted,rejected,blocked
+
+
+def independent_raw(bars, case):
+    """Independent scalar signal, ATR and sequential raw execution control."""
+    _,scenario,cost,model=case
+    atr=None;seed=[];busy=-1;accepted=[];reject=[];blocked=[];signals=[]
+    for i in range(1,len(bars)):
+        now=bars[i]['mid'];prev=bars[i-1]['mid']
+        v=max(now['h']-now['l'],abs(now['h']-prev['c']),abs(now['l']-prev['c']))
+        if i<=14:
+            seed.append(v)
+            if i==14:atr=sum(seed)/14
+        else:atr=(13*atr+v)/14
+        if i<200 or atr<=0 or not(prev['o']>prev['c'] and now['c']>now['o'] and now['o']<=prev['c'] and now['c']>=prev['o'] and prev['h']>prev['l'] and now['h']>now['l']):continue
+        signals.append(i)
+        if i<busy:blocked.append((i,accepted[-1][0]));continue
+        st=now['l']-.0001;ref=now['c'];tp=ref+3*(ref-st);et=bars[i]['t']+14400
+        why='';fill=ref+cost*.0001
+        if et>=END:
+            reject.append((i,'SIGNAL_AT_OR_AFTER_CUTOFF'));continue
+        if scenario=='BIDASK':
+            if i+1>=len(bars):why='NO_NEXT_OBSERVED_OPEN'
+            else:
+                et=bars[i+1]['first_h1'];fill=bars[i+1]['ask']['o']
+                if et<bars[i]['t']+14400 or et-(bars[i]['t']+14400)>120:why='ENTRY_AGE_EXCEEDS_120S'
+                elif fill-ref>.000100000001:why='ADVERSE_ENTRY_EXCEEDS_10_TICKS'
+        if not why and not(0<st<fill<tp):why='INVALID_ENTRY_STOP_TARGET'
+        if why:reject.append((i,why));continue
+        exit_i=None;price=None;outcome='OPEN'
+        for j in range(i+1,len(bars)):
+            x=bars[j]['bid' if scenario=='BIDASK' else 'mid']
+            if (scenario=='BIDASK' or model=='STOP_FIRST_GAP_STRESS') and x['o']<=st:price=x['o'];outcome='STOP_GAP'
+            elif (scenario=='BIDASK' or model=='STOP_FIRST_GAP_STRESS') and x['o']>=tp:price=tp;outcome='TARGET_GAP_CAPPED'
+            elif x['l']<=st and x['h']>=tp:
+                lose=model=='STOP_FIRST_GAP_STRESS' or x['o']-x['l']<=x['h']-x['o']
+                price=st if lose else tp;outcome='DUAL_STOP' if lose else 'DUAL_TARGET'
+            elif x['l']<=st:price=st;outcome='STOP'
+            elif x['h']>=tp:price=tp;outcome='TARGET'
+            if price is not None:exit_i=j;break
+        r=None if price is None else (price-fill)/(fill-st)
+        accepted.append((i,et,fill,st,tp,exit_i,price,r,outcome))
+        busy=math.inf if exit_i is None else exit_i
+    return signals,accepted,reject,blocked
+
+
+def core(p):
+    return (p['signal_index'],p['entry_epoch'],p['fill'],p['stop'],p['target'],p['exit_index'],p['exit_price'],p['r'],p['outcome'])
+
+
+def stats(trades):
+    closed=sorted((p for p in trades if p['r'] is not None),key=lambda p:(p['exit_epoch'],p['signal_index']))
+    rs=[p['r'] for p in closed];wins=[r for r in rs if r>0];losses=[r for r in rs if r<0]
+    eq=peak=dd=0.;streak=worst=0
+    for r in rs:
+        eq+=r;peak=max(peak,eq);dd=min(dd,eq-peak)
+        streak=streak+1 if r<0 else 0;worst=max(worst,streak)
+    loss=-sum(losses)
+    return {'closed':len(rs),'wins':len(wins),'losses':len(losses),'flat':len(rs)-len(wins)-len(losses),
+            'net_r':sum(rs),'win_rate_pct':100*len(wins)/len(rs) if rs else None,
+            'expectancy_r':sum(rs)/len(rs) if rs else None,'profit_factor':sum(wins)/loss if loss else None,
+            'no_losing_trades':loss==0,'max_closed_r_drawdown':dd,'max_losing_streak':worst}
+
+
+def boundary(year, month=1, day=1):return int(dt.datetime(year,month,day,tzinfo=UTC).timestamp())
+
+
+def periods():
+    annual=[(str(y),boundary(y),min(boundary(y+1),END),y==2026) for y in range(2005,2027)]
+    eras=[(f'{a}-{b}',boundary(a),min(boundary(b+1),END),b==2026) for a,b in ((2005,2009),(2010,2015),(2016,2021),(2022,2026))]
+    trail=[(f'TRAILING_{n}Y',boundary(2026-n,10,12),END,False) for n in (1,2,3,5,10)]
+    months=[];bounds=[]
+    for y in range(2005,2027):
+        for m in range(1,13):
+            a=boundary(y,m)
+            if a>=END:break
+            b=boundary(y+1,1) if m==12 else boundary(y,m+1)
+            months.append((f'{y}-{m:02}',a,min(b,END),b>END));bounds.append(a)
+    rolls=[]
+    for k,b in enumerate(bounds):
+        for n in (12,24,36):
+            if k>=n:rolls.append((f'{n}M_TO_{stamp(b)[:10]}',bounds[k-n],b,False))
+    return annual+eras+trail,months,rolls
+
+
+def period_row(trades, interval):
+    label,a,b,partial=interval
+    exits=[p for p in trades if p['exit_epoch'] is not None and a<p['exit_epoch']<=b]
+    entries=[p for p in trades if a<=p['entry_epoch']<b]
+    out={'period':label,'start_utc':stamp(a),'end_utc':stamp(b),'partial':partial,
+         'entries':len(entries),'open_at_end':sum(p['entry_epoch']<b and (p['exit_epoch'] is None or p['exit_epoch']>b) for p in trades),
+         'cohort_closed_r':sum(p['r'] for p in entries if p['r'] is not None),
+         'cohort_open_at_cutoff':sum(p['r'] is None for p in entries)}
+    out.update(stats(exits));return out
+
+
+class PeriodIndex:
+    def __init__(self, trades):
+        self.entries=sorted(trades,key=lambda p:p['entry_epoch'])
+        self.exits=sorted((p for p in trades if p['exit_epoch'] is not None),key=lambda p:p['exit_epoch'])
+        self.et=[p['entry_epoch'] for p in self.entries]
+        self.xt=[p['exit_epoch'] for p in self.exits]
+    def row(self, interval):
+        label,a,b,partial=interval
+        lo=bisect.bisect_left(self.et,a);hi=bisect.bisect_left(self.et,b)
+        entries=self.entries[lo:hi]
+        exlo=bisect.bisect_right(self.xt,a);exhi=bisect.bisect_right(self.xt,b)
+        # Every exit has positive holding time, so exits <= b belong to entries < b.
+        row={'period':label,'start_utc':stamp(a),'end_utc':stamp(b),'partial':partial,
+             'entries':len(entries),'open_at_end':hi-exhi,
+             'cohort_closed_r':sum(p['r'] for p in entries if p['r'] is not None),
+             'cohort_open_at_cutoff':sum(p['r'] is None for p in entries)}
+        row.update(stats(self.exits[exlo:exhi]));return row
+
+
+def longest_zero(counts):
+    run=best=0
+    for n in counts:run=0 if n else run+1;best=max(best,run)
+    return best
+
+
+class CSV:
+    def __init__(self,path,fields):
+        self.handle=open(path,'w',newline='');self.writer=csv.DictWriter(self.handle,fields,extrasaction='raise');self.writer.writeheader();self.count=0
+    def add(self,row):self.writer.writerow(row);self.count+=1
+    def close(self):self.handle.close()
+
+
+def package(directory, destination):
+    directory=Path(directory);destination=Path(destination)
+    require(directory.resolve()!=destination.parent.resolve(), 'ZIP must be outside report directory')
+    manifest={}
+    for p in sorted(directory.iterdir()):
+        if not p.is_file() or p.name=='file_manifest.json':continue
+        h=hashlib.sha256()
+        with p.open('rb') as f:
+            for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+        manifest[p.name]={'bytes':p.stat().st_size,'sha256':h.hexdigest()}
+    write_json(directory/'file_manifest.json',manifest)
+    temp=Path(str(destination)+'.tmp')
+    with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        for p in sorted(directory.iterdir()):
+            if p.is_file():z.write(p,p.name)
+    with zipfile.ZipFile(temp) as z:require(z.testzip() is None,'Output archive CRC failure')
+    os.replace(temp,destination)
+
+
+def analyse(bars, out, progress=lambda **k:None):
+    out=Path(out);out.mkdir(parents=True,exist_ok=True)
+    atr,raw=features(bars);indices=list(raw);grid=configs()
+    paths={case[0]:{i:path_for(bars,i,case) for i in indices} for case in CASES}
+    controls={};baseline={}
+    for case in CASES:
+        accepted,rejected,blocked=replay(indices,paths[case[0]])
+        si,aa,rr,bb=independent_raw(bars,case)
+        require(si==indices,'Raw signal independent parity failed')
+        require([core(p) for p in accepted]==aa,'Raw full-ledger independent parity failed: '+case[0])
+        require([(p['signal_index'],p['reason']) for p in rejected]==rr,'Raw rejection independent parity failed')
+        require([(p['signal_index'],p['blocking_signal_index']) for p in blocked]==bb,'Raw blocking independent parity failed')
+        baseline[case[0]]=accepted
+        controls[case[0]]={'raw_signals':len(indices),'accepted':len(aa),'ledger_sha256':digest(aa),'rejected':len(rr),'blocked':len(bb),'independent_parity':'PASS'}
+    write_json(out/'independent_raw_controls.json',controls)
+    write_json(out/'protocol.json',{'version':VERSION,'start_utc':stamp(START),'cutoff_exclusive_utc':stamp(END),'cases':CASES,'rr':RR,'configurations':398,'source_h4_count':len(bars),'raw_indices_sha256':digest(indices)})
+    (out/'PROTOCOL.md').write_text(PROTOCOL)
+    shutil.copyfile(__file__,out/'research_runner.py')
+    fields=list(path_for(bars,indices[0],CASES[0])) if indices else ['signal_index']
+    # Fixed superset handles runs where the first path is rejected or where no signals exist.
+    fields=['signal_index','signal_start','signal_close','reference','stop','target','rr_reference','reason','next_observed_delay_seconds','fill','entry_utc','entry_epoch','stop_distance_pips','cost_over_risk','entry_spread_pips','exit_index','exit_utc','exit_epoch','exit_price','r','outcome','dual_touch','exit_gap']
+    writers={}
+    def make(name, fs):writers[name]=CSV(out/(name+'.csv'),fs);return writers[name]
+    led=make('accepted_trades',['config','case']+fields)
+    rej=make('rejected_entries',['config','case']+fields)
+    blk=make('blocked_signals',['config','case','signal_index','blocking_signal_index'])
+    opn=make('open_at_cutoff',['config','case']+fields)
+    rawpaths=make('raw_independent_paths',['case']+fields)
+    memberships=make('raw_memberships',['config','signal_index'])
+    cf=make('configurations',['config','family','lookback','distance_atr_max','body_atr_min','range_atr_min','boundary_dimensions'])
+    feature=make('raw_signal_features',['signal_index','signal_start','atr','body_atr','range_atr','close_location','body_ratio']+['distance_lb'+str(l) for l in LB])
+    source=make('source_h4_features',['index','time','atr','first_observed_h1','h1_count']+[s+'_'+k for s in ('mid','bid','ask') for k in 'ohlc'])
+    for i,b in enumerate(bars):source.add(dict(index=i,time=stamp(b['t']),atr=atr[i],first_observed_h1=stamp(b['first_h1']),h1_count=b['h1_count'],**{s+'_'+k:b[s][k] for s in ('mid','bid','ask') for k in 'ohlc'}))
+    for i,f in raw.items():feature.add(dict(signal_index=i,signal_start=stamp(bars[i]['t']),**{k:v for k,v in f.items() if k!='distances'},**{'distance_lb'+str(l):f['distances'][l] for l in LB}))
+    for case in CASES:
+        for p in paths[case[0]].values():rawpaths.add(dict(case=case[0],**p))
+    per,months,rolling=periods()
+    periodfields=list(period_row([],per[0]));statfields=list(stats([]))
+    periodwriters=[make(n,['config','case']+periodfields) for n in ('periods','monthly','rolling')]
+    sums=make('summary',['config','case','raw_signals','raw_signal_hash','accepted_hash','accepted','rejected','blocked','open_at_cutoff','isolated_eligible','isolated_closed','isolated_net_r','blank_complete_years','blank_complete_months','longest_blank_complete_months','worst_12m_r','worst_24m_r','worst_36m_r','median_stop_pips','median_cost_over_risk','median_entry_spread_pips','median_holding_hours','max_interentry_days','max_wait_including_edges_days']+statfields)
+    comparisons=make('baseline_comparisons',['config','case','baseline_closed_r','candidate_closed_r','delta_r','common','added','removed','common_r_change','added_closed_r','removed_closed_r','identity_error'])
+    marginal=make('baseline_marginal_trades',['config','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
+    summary_lookup={};rawhash={};acceptedhash={}
     try:
-        for c in configs:
-            if c['previously_tested']:continue
-            cid=c['config_id'];ref=c['matched_anchor'];raw=set(selected_indices(c,features));rawref=set(selected_indices(byid[ref],features))
-            for model in MODELS:
-                for cost in COSTS:
-                    ours=ledger[cid,model,cost];theirs=ledger[ref,model,cost]
-                    for change,ids,origin in [('ADDED',ours.keys()-theirs.keys(),ours),('REMOVED',theirs.keys()-ours.keys(),theirs)]:
-                        for i in sorted(ids):
-                            row=dict(origin[i]);source=row['config_id'];row.update(config_id=cid,source_config_id=source,reference_config=ref,change=change,
-                                qualifies_in_candidate=int(i in raw),qualifies_in_reference=int(i in rawref))
-                            sink.add(row)
-    finally:sink.close()
-    pp={}
-    with (work/'period_results.csv').open(newline='') as f:
-        for r in csv.DictReader(f):pp[r['config_id'],r['execution_model'],int(r['cost_ticks']),r['period']]=r
-    changes=[]
-    for c in configs:
-        if c['previously_tested']:continue
-        for model in MODELS:
-            for cost in COSTS:
-                for label,_,_,_ in PERIODS:
-                    a=pp[c['config_id'],model,cost,label];b=pp[c['matched_anchor'],model,cost,label]
-                    changes.append(dict(config_id=c['config_id'],execution_model=model,cost_ticks=cost,reference_config=c['matched_anchor'],
-                        period=label,period_type=a['period_type'],start=a['start'],end=a['end'],partial_calendar_year=a['partial_calendar_year'],
-                        candidate_entry_count=int(a['entry_count']),reference_entry_count=int(b['entry_count']),delta_entry_count=int(a['entry_count'])-int(b['entry_count']),
-                        candidate_cohort_r=float(a['entry_cohort_eventual_r']),reference_cohort_r=float(b['entry_cohort_eventual_r']),
-                        delta_cohort_r=float(a['entry_cohort_eventual_r'])-float(b['entry_cohort_eventual_r']),
-                        candidate_realized_r=float(a['realized_r']),reference_realized_r=float(b['realized_r']),delta_realized_r=float(a['realized_r'])-float(b['realized_r'])))
-    audit=[]
-    for c in configs:
-        if not c['in_frequency_grid']:continue
-        rr=[features['LONG_SIGNAL_LOW'][i] for i in selected_indices(c,features)]
-        audit.append(dict(config_id=c['config_id'],raw_signals=len(rr),previous_body_one_tick_or_less=sum(r['previous_body_ticks']<=1.000001 for r in rr),
-            previous_body_two_ticks_or_less=sum(r['previous_body_ticks']<=2.000001 for r in rr),maximum_body_ratio=max((r['body_ratio'] for r in rr),default=None),
-            interpretation='Descriptive only; no additional denominator exclusion'))
-    return {'frequency_parent_comparisons.csv':parent_count,'frequency_added_removed_ledgers.csv':sink.count,
-        'frequency_period_deltas.csv':write_csv(work/'frequency_period_deltas.csv',changes),
-        'relative_body_denominator_audit.csv':write_csv(work/'relative_body_denominator_audit.csv',audit)}
-
-VOL_WINDOWS=(100,200,300)
-VOL_FLOORS=(.75,1.,1.25)
-
-def vol_field(timeframe,window):
-    base=timeframe.lower()+'_relative_volatility'
-    return base if window==200 else base+'_w'+str(window)
-
-def build_context(bars,h1=None):
-    ctx=base_build_context(bars,h1)
-    ctx['vol_means_m15']={w:rolling_reference(ctx['atr_m15'],w) for w in VOL_WINDOWS}
-    ctx['vol_means_h1']={w:rolling_reference(ctx['atr_h1'],w) for w in VOL_WINDOWS}
-    return ctx
-
-def context_for_signal(ctx,i):
-    row=base_context_for_signal(ctx,i)
-    for tf,j,atr,means in [('M15',i-1,ctx['atr_m15'],ctx['vol_means_m15']),
-                          ('H1',row['h1_context_index'],ctx['atr_h1'],ctx['vol_means_h1'])]:
-        for w in (100,300):
-            name=vol_field(tf,w);row[name]=None
-            if j is not None and j>=0:
-                a,mean=atr[j],means[w][j]
-                if a is not None and mean is not None and mean>0:row[name]=a/mean
-    return row
-
-def retained_pass2b_configs():
-    base=dict(geometry_key='LONG_SIGNAL_LOW',body_min_atr=1.25,range_min_atr=1.5,
-        close_min=0.,feature='',operator='',threshold=None,previously_tested=True,
-        retained_anchor=True,volatility_timeframe='',volatility_window=None,
-        mechanism='EXACT_BULLISH_ENGULF',research_question='ARCHIVED_CONTROL',body_ratio_min=1.,volatility_state='OFF',geometry_anchor='',frozen_h1_control='')
-    raw=dict(base,config_id='RAW_EXACT_BULLISH_ENGULF',role='CONTROL',family='RAW',
-        lookback=0,distance_max_atr=None,body_min_atr=0.,range_min_atr=0.,
-        matched_anchor='RAW_EXACT_BULLISH_ENGULF',parent_anchor='RAW_EXACT_BULLISH_ENGULF')
-    anchors=[dict(base,config_id=cid,role='CONTROL',family='ANCHOR',lookback=lb,
-        distance_max_atr=d,matched_anchor=cid,parent_anchor=cid) for cid,lb,d in ANCHORS]
-    available=[dict(c,config_id=c['config_id']+'__AVAILABLE_H1_RELATIVE_VOLATILITY',
-        family='AVAILABILITY',feature='h1_relative_volatility',operator='AVAILABLE',
-        matched_anchor=c['config_id'],volatility_timeframe='H1',volatility_window=200) for c in anchors]
-    filtered=[dict(c,config_id=c['config_id']+'__H1_RELATIVE_VOLATILITY_GE_P1P00',
-        family='ARCHIVED_FILTERED',feature='h1_relative_volatility',operator='GE',threshold=1.,
-        matched_anchor=c['config_id']+'__AVAILABLE_H1_RELATIVE_VOLATILITY',
-        volatility_timeframe='H1',volatility_window=200) for c in anchors]
-    return [raw]+anchors+available+filtered,[]
-
-def ratio_id(anchor,ratio,state):
-    if ratio==1.:
-        return anchor+({'OFF':'','AVAILABLE':'__AVAILABLE_H1_RELATIVE_VOLATILITY','GE1':'__H1_RELATIVE_VOLATILITY_GE_P1P00'}[state])
-    return anchor+f'__BR{round(ratio*100):03}'+({'OFF':'','AVAILABLE':'__AVAILABLE_H1_RELATIVE_VOLATILITY','GE1':'__H1_RELATIVE_VOLATILITY_GE_P1P00'}[state])
-
-def retained_pass6_configs():
-    configs,_=retained_pass2b_configs();byid={c['config_id']:c for c in configs}
-    for c in configs:
-        if c['family']=='RAW':continue
-        anchor=next(cid for cid,_,_ in ANCHORS if c['config_id'].startswith(cid))
-        state='AVAILABLE' if c['operator']=='AVAILABLE' else ('GE1' if c['feature'] else 'OFF')
-        c.update(volatility_state=state,geometry_anchor=anchor,frozen_h1_control=ratio_id(anchor,1.,'GE1'))
-    for anchor,_,_ in ANCHORS:
-        for ratio in BODY_RATIOS[1:]:
-            for state in ('OFF','AVAILABLE','GE1'):
-                old=byid[ratio_id(anchor,1.,state)]
-                c=dict(old,config_id=ratio_id(anchor,ratio,state),body_ratio_min=ratio,
-                    role='CONTROL' if state=='AVAILABLE' else 'RESEARCH',
-                    family='BR_AVAILABILITY' if state=='AVAILABLE' else ('BR_SINGLE' if state=='OFF' else 'BR_H1_INTERACTION'),
-                    matched_anchor=old['config_id'],parent_anchor=anchor,previously_tested=False,
-                    retained_anchor=False,research_question='ONE_FACTOR_RELATIVE_BODY_STRENGTH')
-                configs.append(c)
-    fields=('config_id','role','family','mechanism','previously_tested','matched_anchor','parent_anchor','retained_anchor','volatility_state','geometry_anchor','frozen_h1_control','body_ratio_min','research_question')
-    return configs,[{k:c[k] for k in fields} for c in configs]
-
-def frequency_id(anchor,distance,ratio):
-    lb=next(lb for cid,lb,_ in ANCHORS if cid==anchor)
-    if distance==DISTANCE_LEVELS[lb][0]:return ratio_id(anchor,ratio,'GE1')
-    return f'STRUCT_L{lb:03}_D{round(distance*10000):04}_BR{round(ratio*100):03}_H1GE1'
-
-def make_configs():
-    configs,_=retained_pass6_configs()
-    for c in configs:
-        c.update(previously_tested=True,role='CONTROL',research_question='ARCHIVED_PASS6_CONTROL',
-            in_frequency_grid=c['volatility_state']=='GE1' and c['body_ratio_min'] in FREQUENCY_RATIOS)
-    old={c['config_id']:c for c in configs}
-    for anchor,lb,_ in ANCHORS:
-        for distance in DISTANCE_LEVELS[lb][1:]:
-            for ratio in FREQUENCY_RATIOS:
-                baseline=old[ratio_id(anchor,ratio,'GE1')]
-                configs.append(dict(baseline,config_id=frequency_id(anchor,distance,ratio),distance_max_atr=distance,
-                    role='RESEARCH',family='STRUCTURE_FREQUENCY',previously_tested=False,retained_anchor=False,
-                    matched_anchor=baseline['config_id'],parent_anchor=baseline['config_id'],
-                    research_question='BOUNDED_DISTANCE_FREQUENCY_RECOVERY',in_frequency_grid=True))
-    keys=('config_id','role','family','mechanism','previously_tested','matched_anchor','parent_anchor','retained_anchor',
-        'volatility_state','geometry_anchor','frozen_h1_control','body_ratio_min','distance_max_atr','in_frequency_grid','research_question')
-    return configs,[{k:c[k] for k in keys} for c in configs]
-
-def reference_roles(c):
-    if c['previously_tested']:return {c['matched_anchor']:'ARCHIVED_MATCHED_CONTROL'}
-    refs={c['matched_anchor']:'SAME_RATIO_CURRENT_DISTANCE_BASELINE'}
-    lb=c['lookback'];anchor=c['geometry_anchor'];d=c['distance_max_atr'];ratio=c['body_ratio_min']
-    pos=DISTANCE_LEVELS[lb].index(d)
-    refs[frequency_id(anchor,DISTANCE_LEVELS[lb][pos-1],ratio)]='SAME_RATIO_PREVIOUS_DISTANCE'
-    if ratio==1.25:refs[frequency_id(anchor,d,1.)]='SAME_DISTANCE_RATIO1_PARENT'
-    return refs
-
-def neighbour_ids(c,configs):
-    if not c['in_frequency_grid']:return [],[]
-    axes=(('distance_max_atr',DISTANCE_LEVELS[c['lookback']]),('body_ratio_min',FREQUENCY_RATIOS))
-    neighbours=[];edges=[]
-    for axis,levels in axes:
-        pos=levels.index(c[axis]);adj={levels[j] for j in (pos-1,pos+1) if 0<=j<len(levels)}
-        if pos==0:edges.append(axis+'=LOWER')
-        if pos==len(levels)-1:edges.append(axis+'=UPPER')
-        neighbours.extend(x['config_id'] for x in configs if x['in_frequency_grid']
-            and x['geometry_anchor']==c['geometry_anchor'] and x[axis] in adj
-            and all(x[k]==c[k] for k,_ in axes if k!=axis))
-    return neighbours,edges
-
-def write_context_inputs(work,features):
-    ctx=features['CONTEXT']
-    write_csv(work/'conditional_signal_features.csv',features['LONG_SIGNAL_LOW'].values())
-    write_csv(work/'context_h1.csv',(dict(time=iso(b[0]),close_utc=iso(b[0]+H1_BAR),open=b[1],high=b[2],low=b[3],close=b[4],
-        atr14=ctx['atr_h1'][j],preceding_100_atr_mean=ctx['vol_means_h1'][100][j],
-        preceding_200_atr_mean=ctx['mean_h1'][j],preceding_300_atr_mean=ctx['vol_means_h1'][300][j]) for j,b in enumerate(ctx['h1'])))
-    fields=['time','close_utc','open','high','low','close','observed_hours','first_hour','last_hour','atr14','preceding_100_atr_mean','ema100','ema200']
-    write_csv(work/'context_utc_daily.csv',(dict(time=iso(b[0]),close_utc=iso(b[0]+timedelta(days=1)),open=b[1],high=b[2],low=b[3],close=b[4],
-        observed_hours=b[5],first_hour=iso(b[6]),last_hour=iso(b[7]),atr14=ctx['atr_d1'][j],
-        preceding_100_atr_mean=ctx['mean_d1'][j],ema100=ctx['ema_d1'][100][j],ema200=ctx['ema_d1'][200][j]) for j,b in enumerate(ctx['daily'])),fields)
-
-CONTEXT_KEYS=CONTEXT_KEYS+tuple(vol_field(tf,w) for tf in ('M15','H1') for w in (100,300))
-
-PARENT_IDS=tuple(c['config_id'] for c in make_configs()[0])
-COMPARISON_IDS=PARENT_IDS
+        for num,c in enumerate(grid):
+            cid,family,l,d,b,r=c
+            boundaries=[]
+            for name,value,levels in (('lookback',l,LB),('distance',d,DIST),('body',b,BODY),('range',r,RANGE)):
+                if value is not None and value!=0 and value in (levels[0],levels[-1]):boundaries.append(name)
+            cf.add(dict(config=cid,family=family,lookback=l,distance_atr_max=d,body_atr_min=b,range_atr_min=r,boundary_dimensions='|'.join(boundaries)))
+            signals=[i for i,f in raw.items() if qualifies(f,c)];signalset=set(signals);rh=digest(signals);rawhash[cid]=rh
+            for i in signals:memberships.add(dict(config=cid,signal_index=i))
+            for case in CASES:
+                name=case[0];meta={'config':cid,'case':name}
+                accepted,rejected,blocked=replay(signals,paths[name]);ah=digest([core(p) for p in accepted]);acceptedhash[(cid,name)]=ah
+                for p in accepted:
+                    led.add(dict(meta,**p))
+                    if p['r'] is None:opn.add(dict(meta,**p))
+                for p in rejected:rej.add(dict(meta,**p))
+                for p in blocked:blk.add(dict(meta,**p))
+                periodrows=[];period_index=PeriodIndex(accepted)
+                for writer,intervals in zip(periodwriters,(per,months,rolling)):
+                    group=[]
+                    for interval in intervals:
+                        row=period_index.row(interval);writer.add(dict(meta,**row));group.append(row)
+                    periodrows.append(group)
+                annual=periodrows[0][:22];complete_months=[p['entries'] for p in periodrows[1] if not p['partial']]
+                isolated=[paths[name][i] for i in signals if not paths[name][i]['reason']]
+                realised=stats(accepted);med=lambda seq:statistics.median(seq) if seq else None
+                entries=sorted(p['entry_epoch'] for p in accepted)
+                gaps=[(y-x)/86400 for x,y in zip(entries,entries[1:])]
+                edge=[START]+entries+[END]
+                s=dict(meta,raw_signals=len(signals),raw_signal_hash=rh,accepted_hash=ah,accepted=len(accepted),rejected=len(rejected),blocked=len(blocked),open_at_cutoff=sum(p['r'] is None for p in accepted),
+                       isolated_eligible=len(isolated),isolated_closed=sum(p['r'] is not None for p in isolated),isolated_net_r=sum(p['r'] for p in isolated if p['r'] is not None),
+                       blank_complete_years=sum(p['entries']==0 for p in annual if not p['partial']),blank_complete_months=complete_months.count(0),longest_blank_complete_months=longest_zero(complete_months),
+                       median_stop_pips=med([p['stop_distance_pips'] for p in accepted]),median_cost_over_risk=med([p['cost_over_risk'] for p in accepted]),median_entry_spread_pips=med([p['entry_spread_pips'] for p in accepted if p['entry_spread_pips'] is not None]),
+                       median_holding_hours=med([(p['exit_epoch']-p['entry_epoch'])/3600 for p in accepted if p['exit_epoch'] is not None]),max_interentry_days=max(gaps) if gaps else None,max_wait_including_edges_days=max((y-x)/86400 for x,y in zip(edge,edge[1:])),**realised)
+                for n in (12,24,36):s[f'worst_{n}m_r']=min(p['net_r'] for p in periodrows[2] if p['period'].startswith(str(n)+'M'))
+                sums.add(s);summary_lookup[(cid,name)]=s
+                ba={p['signal_index']:p for p in baseline[name]};ca={p['signal_index']:p for p in accepted}
+                added=ca.keys()-ba.keys();removed=ba.keys()-ca.keys();common=ba.keys()&ca.keys()
+                val=lambda p:0. if p['r'] is None else p['r']
+                ar=sum(val(ca[i]) for i in added);rr=sum(val(ba[i]) for i in removed);cr=sum(val(ca[i])-val(ba[i]) for i in common)
+                br=sum(val(p) for p in ba.values());delta=realised['net_r']-br
+                err=delta-(ar-rr+cr);require(abs(err)<1e-8,'Marginal replay R identity failed')
+                comparisons.add(dict(meta,baseline_closed_r=br,candidate_closed_r=realised['net_r'],delta_r=delta,common=len(common),added=len(added),removed=len(removed),common_r_change=cr,added_closed_r=ar,removed_closed_r=rr,identity_error=err))
+                cb={x['signal_index']:x['blocking_signal_index'] for x in blocked}
+                bb={x['signal_index']:x['blocking_signal_index'] for x in replay(indices,paths[name])[2]}
+                for kind,items,ledger,blocks in (('ADDED',added,ca,bb),('REMOVED',removed,ba,cb)):
+                    for i in sorted(items):marginal.add(dict(meta,kind=kind,signal_index=i,r=ledger[i]['r'],qualifies_candidate=i in signalset,displaced_by_signal_index=blocks.get(i)))
+            progress(phase='REPLAY_AND_REPORTS',completed_configurations=num+1,total_configurations=398)
+        neighbours=make('neighbours',['config','neighbour','dimension','case','net_r','neighbour_net_r','accepted','neighbour_accepted','same_raw_stream','same_accepted_stream'])
+        byparams={c[2:]:c[0] for c in grid}
+        for c in grid:
+            for pos,levels,dimension in ((2,LB,'lookback'),(3,DIST,'distance'),(4,BODY,'body'),(5,RANGE,'range')):
+                if c[pos] not in levels:continue
+                j=levels.index(c[pos])
+                for k in (j-1,j+1):
+                    if k<0 or k>=len(levels):continue
+                    other=list(c);other[pos]=levels[k];oid=byparams.get(tuple(other[2:]))
+                    if not oid:continue
+                    for case in CASES:
+                        name=case[0];x=summary_lookup[c[0],name];y=summary_lookup[oid,name]
+                        neighbours.add(dict(config=c[0],neighbour=oid,dimension=dimension,case=name,net_r=x['net_r'],neighbour_net_r=y['net_r'],accepted=x['accepted'],neighbour_accepted=y['accepted'],same_raw_stream=rawhash[c[0]]==rawhash[oid],same_accepted_stream=acceptedhash[c[0],name]==acceptedhash[oid,name]))
+        require(sums.count==3184 and periodwriters[0].count==3184*len(per) and periodwriters[1].count==3184*len(months) and periodwriters[2].count==3184*len(rolling),'Incomplete result matrix')
+        duplicate=collections.defaultdict(list)
+        for c,h in rawhash.items():duplicate[h].append(c)
+        write_json(out/'duplicate_raw_streams.json',[v for v in duplicate.values() if len(v)>1])
+        write_json(out/'output_row_counts.json',{n:w.count for n,w in writers.items()})
+        write_json(out/'RUN_COMPLETE.json',{'version':VERSION,'status':'COMPLETE','configurations':398,'execution_cases':8,'summary_rows':3184,'independent_raw_parity':'PASS','scope':'Exploratory standalone historical research; not portfolio admission or prospective profitability'})
+    finally:
+        for w in writers.values():w.close()
 
 
+STATE={'status':'IDLE','version':VERSION,'read_only':True,'orders_sent':False,'requested_start':stamp(START),'cutoff_exclusive':stamp(END)}
+STATE_LOCK=threading.Lock()
+START_LOCK=threading.Lock()
+OUTPUT=Path(os.environ.get('EURUSD_H4_PASS1_OUTPUT_DIR', '/data/eurusd_h4_pass1_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass1_research')))
+
+
+def update(**kwargs):
+    with STATE_LOCK:STATE.update(kwargs,updated_at_utc=stamp(time.time()))
+
+
+def snapshot():
+    with STATE_LOCK:return dict(STATE)
+
+
+def run():
+    lock=None;work=None
+    try:
+        OUTPUT.mkdir(parents=True,exist_ok=True)
+        import fcntl
+        lock=open(OUTPUT/'research.lock','a')
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            update(status='OTHER_WORKER_RUNNING',message='Use one process/worker');return
+        update(status='RUNNING',phase='SELF_TEST')
+        (OUTPUT/RESULT_NAME).unlink(missing_ok=True)
+        self_test()
+        work=Path(tempfile.mkdtemp(prefix='pass1_',dir=OUTPUT));reports=work/'reports';reports.mkdir()
+        explicit=os.environ.get('EURUSD_H4_PASS1_FROZEN_DATA')
+        cached=OUTPUT/SOURCE_NAME
+        beside=Path(__file__).resolve().parent/SOURCE_NAME
+        source=Path(explicit) if explicit else (cached if cached.exists() else beside if beside.exists() else None)
+        if source is not None:
+            require(source.is_file(),'Explicit frozen source does not exist')
+            h4,h1,receipts,manifest=read_source(source)
+            update(phase='VALIDATE_FROZEN_SOURCE')
+            bars=validate_source(h4,h1)
+            if source.resolve()!=cached.resolve():shutil.copyfile(source,cached)
+        else:
+            h4,r4=fetch('H4','MBA',update);h1,r1=fetch('H1','M',update);receipts=r4+r1
+            update(phase='VALIDATE_FETCHED_SOURCE')
+            bars=validate_source(h4,h1);manifest=freeze_source(cached,h4,h1,receipts)
+        write_json(reports/'source_manifest.json',manifest)
+        write_json(reports/'fetch_receipts.json',receipts)
+        gaps=[{'previous_start':stamp(a['t']),'next_start':stamp(b['t']),'hours_between_starts':(b['t']-a['t'])/3600} for a,b in zip(bars,bars[1:]) if b['t']-a['t']!=H4]
+        write_json(reports/'source_coverage.json',{'first_start':stamp(bars[0]['t']),'last_nominal_close':stamp(bars[-1]['t']+H4),'h4_count':len(h4),'h1_count':len(h1),'h1_h4_parity':'PASS','partial_h4_bins':sum(b['h1_count']<4 for b in bars),'year_counts':dict(collections.Counter(str(dt.datetime.fromtimestamp(b['t'],UTC).year) for b in bars)),'gaps':gaps})
+        analyse(bars,reports,update)
+        shutil.copyfile(cached,reports/SOURCE_NAME)
+        update(phase='PACKAGE_RESULTS')
+        package(reports,OUTPUT/RESULT_NAME)
+        update(status='COMPLETE',phase='COMPLETE',results='/results',source='/source')
+    except Exception as e:
+        # Only controlled validation errors are exposed. Broker exception bodies/token URLs never logged.
+        msg=str(e) if isinstance(e,ValueError) else type(e).__name__+'; see source/protocol and retry'
+        update(status='ERROR',phase='ERROR',error=msg)
+        try:
+            if work is None:work=Path(tempfile.mkdtemp(prefix='pass1_error_',dir=OUTPUT))
+            errors=work/'failure_only';errors.mkdir(exist_ok=True)
+            write_json(errors/'ERROR.json',snapshot());(errors/'PROTOCOL.md').write_text(PROTOCOL)
+            package(errors,OUTPUT/RESULT_NAME)
+        except Exception:pass
+    finally:
+        if lock:lock.close()
+        if work:shutil.rmtree(work,ignore_errors=True)
+
+
+def start():
+    with START_LOCK:
+        if snapshot()['status']=='IDLE':
+            update(status='STARTING')
+            threading.Thread(target=run,daemon=True).start()
+
+
+def response(method,path):
+    if method not in ('GET','HEAD'):return 405,'application/json',canonical({'error':'Read-only: GET/HEAD only'}),None
+    path=urllib.parse.urlsplit(path).path
+    if path in ('/','/health','/status'):
+        return 200,'application/json',canonical(snapshot()),None
+    s=snapshot()['status']
+    if path=='/results':
+        if s not in ('COMPLETE','ERROR'):return 409,'application/json',canonical({'status':s,'message':'Results not ready; poll /status'}),None
+        p=OUTPUT/RESULT_NAME
+    elif path=='/source':
+        if s!='COMPLETE':return 409,'application/json',canonical({'status':s,'message':'Validated source not ready'}),None
+        p=OUTPUT/SOURCE_NAME
+    else:return 404,'application/json',canonical({'error':'Use /status, /results or /source'}),None
+    if not p.is_file():return 404,'application/json',canonical({'error':'Archive unavailable'}),None
+    return 200,'application/zip',None,p
+
+
+def app(environ,start_response):
+    if os.environ.get('EURUSD_H4_PASS1_AUTOSTART','true').lower()!='false':start()
+    method=environ.get('REQUEST_METHOD','GET');code,mime,body,path=response(method,environ.get('PATH_INFO','/'))
+    size=path.stat().st_size if path else len(body)
+    headers=[('Content-Type',mime),('Content-Length',str(size)),('Cache-Control','no-store')]
+    if path:headers.append(('Content-Disposition','attachment; filename="'+path.name+'"'))
+    start_response(str(code)+' '+{200:'OK',404:'Not Found',405:'Method Not Allowed',409:'Conflict'}[code],headers)
+    if method=='HEAD':return []
+    if not path:return [body]
+    def chunks():
+        with path.open('rb') as f:
+            for chunk in iter(lambda:f.read(1024*1024),b''):yield chunk
+    return chunks()
+
+
+application=app
+
+
+class Handler(BaseHTTPRequestHandler):
+    def handle_request(self):
+        def headers(status,values):
+            self.send_response(int(status.split()[0]))
+            for k,v in values:self.send_header(k,v)
+            self.end_headers()
+        try:
+            for chunk in app({'REQUEST_METHOD':self.command,'PATH_INFO':self.path},headers):self.wfile.write(chunk)
+        except (BrokenPipeError,ConnectionResetError):pass
+    do_GET=handle_request
+    do_HEAD=handle_request
+    do_POST=handle_request
+    do_PUT=handle_request
+    do_DELETE=handle_request
+    def log_message(self,*args):pass
+
+
+def self_test():
+    require(len(configs())==398 and len(CASES)==8,'Configuration count')
+    require(tuple(map(len,periods()))==(31,262,714),'Period boundaries')
+    def bar(t,o,h,l,c):
+        p=dict(o=o,h=h,l=l,c=c)
+        return {'t':t,'mid':dict(p),'bid':dict(p),'ask':dict(p),'first_h1':t,'h1_count':4}
+    b=[bar(START,1.1,1.1006,1.099,1.1005),bar(START+H4,1.1006,1.11,1.09,1.1)]
+    p=path_for(b,0,CASES[0]);require(p['outcome']=='DUAL_STOP' and abs(p['r']+1)<1e-12,'Dual stop-first')
+    b[1]=bar(START+H4,1.098,1.11,1.09,1.1)
+    require(path_for(b,0,CASES[0])['r']<-1,'Gap loss must exceed -1R')
+    b[1]=bar(START+H4,1.1005,1.1006,1.1004,1.1005)
+    require(path_for(b,0,CASES[-2])['outcome']=='OPEN','Open cutoff retention')
+    b[1]['first_h1']+=3600
+    require(path_for(b,0,CASES[-2])['reason']=='ENTRY_AGE_EXCEEDS_120S','Age rejection')
+    b[1]['first_h1']-=3600;b[1]['ask']['o']=1.10061
+    require(path_for(b,0,CASES[-2])['reason']=='ADVERSE_ENTRY_EXCEEDS_10_TICKS','Adverse rejection')
+    p={0:{'signal_index':0,'reason':'','exit_index':2},1:{'signal_index':1,'reason':'','exit_index':3},2:{'signal_index':2,'reason':'','exit_index':None}}
+    a,_,bl=replay([0,1,2],p);require([v['signal_index'] for v in a]==[0,2] and len(bl)==1,'P0 exit-candle handling')
+    require(longest_zero([0,0,1,0,0,0])==3,'Zero-month drought')
+    require(response('POST','/')[0]==405,'No writes allowed')
+    return {'status':'PASS','scope':'Synthetic software checks only; no historical result'}
 
 
 if __name__=='__main__':
-    raise SystemExit(main())
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--self-test',action='store_true');parser.add_argument('--run-once',action='store_true');parser.add_argument('--output-dir')
+    args=parser.parse_args()
+    if args.output_dir:OUTPUT=Path(args.output_dir)
+    if args.self_test:print(json.dumps(self_test()));sys.exit(0)
+    if args.run_once:
+        run();print(json.dumps(snapshot()));sys.exit(0 if snapshot()['status']=='COMPLETE' else 1)
+    if os.environ.get('EURUSD_H4_PASS1_AUTOSTART','true').lower()!='false':start()
+    ThreadingHTTPServer(('0.0.0.0',int(os.environ.get('PORT','8000'))),Handler).serve_forever()
