@@ -1,4 +1,4 @@
-"""EURCHF M15 LONG Pass5: standalone compression-breakout research.
+"""EURCHF M15 LONG Pass6: standalone relative engulfing-body-strength research.
 Single Python3.10+ standard-library file. Keep EURCHF_M15_PASS1_FROZEN_DATA.zip
 alongside app.py. /status, /results; --run or --self-test. No broker/order calls.
 """
@@ -9,7 +9,7 @@ from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer,make_server
-VERSION='EURCHF_M15_LONG_PASS5_COMPRESSION_BREAKOUT_V1_2026_10_11'
+VERSION='EURCHF_M15_LONG_PASS6_RELATIVE_BODY_STRENGTH_V1_2026_10_12'
 PAIR,SIDE,TIMEFRAME='EUR_CHF','BUY','M15'
 UTC=timezone.utc
 START=datetime(2005,1,1,tzinfo=UTC)
@@ -22,9 +22,9 @@ PINNED_H1_SHA256='9c8b5279629daee868ad924f52e998be7f6ce638a15e106ffb4851a2df76fe
 TICK,PIP,RR,WARMUP=.00001,.0001,3.,200
 COSTS=(10,20,40)
 MODELS=('NEAREST_OPEN_SENSITIVITY','STOP_FIRST_GAP_STRESS')
-RESULT_NAME='EURCHF_M15_LONG_PASS5_COMPRESSION_BREAKOUT_RESULTS.zip'
-OUT=Path(os.getenv('EURCHF_M15_LONG_PASS5_OUTPUT_DIR',os.getenv('EURCHF_M15_LONG_PASS2B_OUTPUT_DIR','/tmp/eurchf_m15_long_pass5'))).resolve()
-PREFIX='/eurchf-m15-long-pass5'
+RESULT_NAME='EURCHF_M15_LONG_PASS6_RELATIVE_BODY_STRENGTH_RESULTS.zip'
+OUT=Path(os.getenv('EURCHF_M15_LONG_PASS6_OUTPUT_DIR',os.getenv('EURCHF_M15_LONG_PASS2B_OUTPUT_DIR','/tmp/eurchf_m15_long_pass6'))).resolve()
+PREFIX='/eurchf-m15-long-pass6'
 LOCK=threading.RLock()
 STARTED=False
 JOB_LOCK=None
@@ -37,10 +37,7 @@ EMBEDDED_PAYLOAD_SHA256='511215ae3b95e676829896d30baa1342bbca17e7be30745a22753da
 FROZEN_SOURCE_FILE=Path(__file__).resolve().with_name('EURCHF_M15_PASS1_FROZEN_DATA.zip')
 
 LOOKBACKS=(100,200)
-BREAKOUT_LOOKBACKS=(5,10,20)
-COMPRESSION_LEVELS=(.6,.8,1.)
-BODY_LEVELS=(0.,1.)
-H4_BAR=timedelta(hours=4)
+BODY_RATIOS=(1.,1.25,1.5,2.)
 ANCHORS=[('M_L200_D0050_B125_R150', 200, 0.05), ('M_L100_D0025_B125_R150', 100, 0.025)]
 PARENT_IDS=()
 COMPARISON_IDS=PARENT_IDS
@@ -337,9 +334,9 @@ def launch(background=True):
                 JOB_LOCK.close()
                 JOB_LOCK = None
             return False
-        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 long Pass5 compression-breakout research',runner_sha256=code_hash(),result_path=None)
+        set_status(state='starting',progress=0,message='Starting EUR/CHF M15 long Pass6 relative engulfing-body-strength research',runner_sha256=code_hash(),result_path=None)
     if background:
-        threading.Thread(target=run_job,name='eurchf-m15-long-pass5-research',daemon=True).start()
+        threading.Thread(target=run_job,name='eurchf-m15-long-pass6-research',daemon=True).start()
         return True
     return run_job()
 
@@ -357,7 +354,7 @@ def app(environ, start_response):
         body = b'{"error":"Not found"}'
         start_response('404 Not Found',[('Content-Type','application/json'),('Content-Length',str(len(body)))])
         return [] if method == 'HEAD' else [body]
-    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_LONG_PASS5_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1'))=='1'):
+    if path=='/start' or (not STARTED and os.getenv('EURCHF_M15_LONG_PASS6_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1'))=='1'):
         launch()
     current = read_status()
     code = '200 OK'
@@ -381,7 +378,7 @@ def app(environ, start_response):
     elif path=='/health':
         current = dict(ok=True,state=current['state'],version=VERSION,orders_supported=False)
     elif path=='/':
-        current = dict(service='EUR/CHF M15 LONG Pass5 compression-breakout research',version=VERSION,status='/status',results='/results',
+        current = dict(service='EUR/CHF M15 LONG Pass6 relative engulfing-body-strength research',version=VERSION,status='/status',results='/results',
                        start='/start',research_state=current['state'],orders_supported=False,trading_enabled=False)
     body = (json.dumps(current,allow_nan=False)+'\n').encode()
     start_response(code,[('Content-Type','application/json'),('Content-Length',str(len(body))),('Cache-Control','no-store')])
@@ -403,7 +400,7 @@ def main():
         return 0 if launch(background=False) else (0 if read_status().get('state')=='complete' else 1)
     port = int(os.getenv('PORT','8080'))
     with make_server('0.0.0.0',port,app,server_class=ThreadedWSGIServer) as server:
-        if os.getenv('EURCHF_M15_LONG_PASS5_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1'))=='1':
+        if os.getenv('EURCHF_M15_LONG_PASS6_AUTOSTART',os.getenv('EURCHF_M15_LONG_PASS2B_AUTOSTART','1'))=='1':
             launch()
         print(f'{VERSION}: listening on {port}; /status and /results',flush=True)
         server.serve_forever()
@@ -488,50 +485,32 @@ def r_value(path,cost):
     return (path['exit_price']-fill)/(fill-path['stop'])
 
 def base_features(bars):
-    atr=atr14(bars)
-    prior_lows={lb:previous_low([b[3] for b in bars],lb) for lb in LOOKBACKS}
-    prior_highs={lb:previous_high([b[2] for b in bars],lb) for lb in BREAKOUT_LOOKBACKS}
-    engulf={};breakout={}
+    atr=atr14(bars);prior={lb:previous_low([b[3] for b in bars],lb) for lb in LOOKBACKS}
+    engulf={}
     for i in range(WARMUP,len(bars)):
         t,op,hi,lo,cl=bars[i]
-        if atr[i] is None or atr[i]<=0:continue
-        bull=cl>op and hi>lo
-        is_engulf=bullish_engulf(bars,i)
-        broken=[lb for lb in BREAKOUT_LOOKBACKS if bull and cl>prior_highs[lb][i]]
-        if not is_engulf and not broken:continue
+        if atr[i] is None or atr[i]<=0 or hi<=lo or not bullish_engulf(bars,i):continue
+        previous_body=bars[i-1][1]-bars[i-1][4]
+        if previous_body<=0:raise RuntimeError('Strict bearish previous body must be positive')
         row=dict(signal_index=i,signal=iso(t),entry=iso(t+BAR),open=op,high=hi,low=lo,close=cl,
             atr14=atr[i],body_atr=(cl-op)/atr[i],range_atr=(hi-lo)/atr[i],
-            close_location=(cl-lo)/(hi-lo) if hi>lo else None,
-            reference_stop_pips=(cl-lo+10*TICK)/PIP)
-        if is_engulf:
-            er=dict(row)
-            for lb in LOOKBACKS:
-                er[f'previous_low_{lb}']=prior_lows[lb][i]
-                er[f'abs_distance_atr_{lb}']=abs(lo-prior_lows[lb][i])/atr[i]
-            engulf[i]=er
-        if broken:
-            br=dict(row);p=i-1;values=atr[p-20:p]
-            mean=math.fsum(values)/20 if len(values)==20 and all(v is not None for v in values) else None
-            br.update(previous_atr14=atr[p],preceding_20_atr_mean=mean,
-                compression_ratio=atr[p]/mean if mean is not None and mean>0 else None,
-                compression_numerator_index=p,compression_reference_first_index=p-20,
-                compression_reference_last_index=p-1)
-            for lb in BREAKOUT_LOOKBACKS:
-                br[f'previous_high_{lb}']=prior_highs[lb][i]
-                br[f'breakout_{lb}']=int(lb in broken)
-            breakout[i]=br
-    return {'LONG_SIGNAL_LOW':engulf,'BREAKOUT_SIGNAL_LOW':breakout}
+            close_location=(cl-lo)/(hi-lo),reference_stop_pips=(cl-lo+10*TICK)/PIP,
+            previous_open=bars[i-1][1],previous_close=bars[i-1][4],previous_body=previous_body,
+            previous_body_ticks=previous_body/TICK,previous_body_atr=previous_body/atr[i],
+            body_ratio=(cl-op)/previous_body)
+        for lb in LOOKBACKS:
+            row[f'previous_low_{lb}']=prior[lb][i]
+            row[f'abs_distance_atr_{lb}']=abs(lo-prior[lb][i])/atr[i]
+        engulf[i]=row
+    return {'LONG_SIGNAL_LOW':engulf}
 
 
 def base_selected(config,features):
     result=[]
     for i,row in features[config['geometry_key']].items():
         if row['body_atr']<config['body_min_atr'] or row['range_atr']<config['range_min_atr']:continue
-        if config['geometry_key']=='BREAKOUT_SIGNAL_LOW':
-            if not row[f"breakout_{config['lookback']}"]:continue
-            cap=config['compression_max']
-            if cap is not None and (row['compression_ratio'] is None or row['compression_ratio']>cap):continue
-        elif config['distance_max_atr'] is not None and row[f"abs_distance_atr_{config['lookback']}"]>config['distance_max_atr']:continue
+        if row['body_ratio']<config['body_ratio_min']:continue
+        if config['distance_max_atr'] is not None and row[f"abs_distance_atr_{config['lookback']}"]>config['distance_max_atr']:continue
         result.append(i)
     return result
 
@@ -548,50 +527,35 @@ def build_paths(bars,features,configs):
 def hard_controls(bars,features,configs):
     checks=[]
     def check(name,ok):checks.append(dict(check=name,status='PASS' if ok else 'FAIL'))
-    check('55_unique_definitions_45_research_10_controls',len(configs)==55 and len({c['config_id'] for c in configs})==55 and sum(c['role']=='RESEARCH' for c in configs)==45)
+    check('25_unique_definitions_12_research_13_controls',len(configs)==25 and len({c['config_id'] for c in configs})==25 and sum(c['role']=='RESEARCH' for c in configs)==12 and sum(c['role']=='CONTROL' for c in configs)==13)
     ref=[None]*len(bars)
     if len(bars)>14:
         trs=[max(b[2]-b[3],abs(b[2]-a[4]),abs(b[3]-a[4])) for a,b in zip(bars,bars[1:])]
         ref[14]=math.fsum(trs[:14])/14
         for i in range(15,len(bars)):ref[i]=(ref[i-1]*13+trs[i-1])/14
     check('independent_full_ATR',all((a is None and b is None) or (a is not None and b is not None and abs(a-b)<1e-12) for a,b in zip(ref,atr14(bars))))
-    direct={'LONG_SIGNAL_LOW':{},'BREAKOUT_SIGNAL_LOW':{}}
+    direct={}
     for i in range(WARMUP,len(bars)):
-        _,op,hi,lo,cl=bars[i]
-        if ref[i] is None or ref[i]<=0:continue
-        engulf=bars[i-1][4]<bars[i-1][1] and cl>op and op<=bars[i-1][4] and cl>=bars[i-1][1]
-        highs={lb:max(b[2] for b in bars[i-lb:i]) for lb in BREAKOUT_LOOKBACKS} if cl>op and hi>lo else {}
-        broken=[lb for lb in BREAKOUT_LOOKBACKS if highs and cl>highs[lb]]
-        if not engulf and not broken:continue
-        row=dict(body_atr=(cl-op)/ref[i],range_atr=(hi-lo)/ref[i],close_location=(cl-lo)/(hi-lo) if hi>lo else None)
-        if engulf:
-            er=dict(row)
-            for lb in LOOKBACKS:
-                low=min(b[3] for b in bars[i-lb:i]);er[f'previous_low_{lb}']=low;er[f'abs_distance_atr_{lb}']=abs(lo-low)/ref[i]
-            direct['LONG_SIGNAL_LOW'][i]=er
-        if broken:
-            br=dict(row);j=i-1;values=ref[j-20:j]
-            mean=math.fsum(values)/20 if len(values)==20 and all(v is not None for v in values) else None
-            br.update(previous_atr14=ref[j],preceding_20_atr_mean=mean,
-                compression_ratio=ref[j]/mean if mean is not None and mean>0 else None)
-            for lb in BREAKOUT_LOOKBACKS:br[f'previous_high_{lb}']=highs[lb];br[f'breakout_{lb}']=int(lb in broken)
-            direct['BREAKOUT_SIGNAL_LOW'][i]=br
-    for geo,rows in direct.items():
-        check(geo+'_independent_universe',list(rows)==list(features[geo]))
-        check(geo+'_direct_features',all(all((v is None and features[geo][i][k] is None) or (v is not None and abs(v-features[geo][i][k])<1e-9) for k,v in r.items()) for i,r in rows.items()))
+        _,op,hi,lo,cl=bars[i];po,pc=bars[i-1][1],bars[i-1][4]
+        if ref[i] is None or ref[i]<=0 or hi<=lo or not(pc<po and cl>op and op<=pc and cl>=po):continue
+        r=dict(body_atr=(cl-op)/ref[i],range_atr=(hi-lo)/ref[i],close_location=(cl-lo)/(hi-lo),
+            previous_open=po,previous_close=pc,previous_body=abs(pc-po),
+            previous_body_ticks=abs(pc-po)/TICK,previous_body_atr=abs(pc-po)/ref[i],body_ratio=abs(cl-op)/abs(pc-po))
+        for lb in LOOKBACKS:
+            low=min(b[3] for b in bars[i-lb:i]);r[f'previous_low_{lb}']=low;r[f'abs_distance_atr_{lb}']=abs(lo-low)/ref[i]
+        direct[i]=r
+    check('exact_engulf_independent_universe',list(direct)==list(features['LONG_SIGNAL_LOW']))
+    check('ratio_body_structure_independent_features',all(all(abs(v-features['LONG_SIGNAL_LOW'][i][k])<1e-9 for k,v in r.items()) for i,r in direct.items()))
+    check('no_doji_or_nonfinite_ratio',all(r['previous_body']>0 and math.isfinite(r['body_ratio']) and r['body_ratio']>=1. for r in features['LONG_SIGNAL_LOW'].values()))
     for c in configs:
         expected=[]
-        for i,r in direct[c['geometry_key']].items():
-            if r['body_atr']<c['body_min_atr'] or r['range_atr']<c['range_min_atr']:continue
-            if c['geometry_key']=='BREAKOUT_SIGNAL_LOW':
-                if not r[f"breakout_{c['lookback']}"]:continue
-                if c['compression_max'] is not None and (r['compression_ratio'] is None or r['compression_ratio']>c['compression_max']):continue
-            elif c['distance_max_atr'] is not None and r[f"abs_distance_atr_{c['lookback']}"]>c['distance_max_atr']:continue
+        for i,r in direct.items():
+            if r['body_atr']<c['body_min_atr'] or r['range_atr']<c['range_min_atr'] or r['body_ratio']<c['body_ratio_min']:continue
+            if c['distance_max_atr'] is not None and r[f"abs_distance_atr_{c['lookback']}"]>c['distance_max_atr']:continue
             expected.append(i)
         check(c['config_id']+'_independent_base_mask',base_selected(c,features)==expected)
     n=min(10000,len(bars));prefix=base_features(bars[:n])
-    for geo in direct:
-        check(geo+'_prefix_causality',all(prefix[geo][i]=={k:features[geo][i][k] for k in prefix[geo][i]} for i in prefix[geo]) and list(prefix[geo])==[i for i in features[geo] if i<n])
+    check('engulf_ratio_prefix_causality',all(prefix['LONG_SIGNAL_LOW'][i]=={k:features['LONG_SIGNAL_LOW'][i][k] for k in prefix['LONG_SIGNAL_LOW'][i]} for i in prefix['LONG_SIGNAL_LOW']) and list(prefix['LONG_SIGNAL_LOW'])==[i for i in features['LONG_SIGNAL_LOW'] if i<n])
     return checks
 
 
@@ -656,7 +620,7 @@ def write_inputs(work,bars,features,path_sets,configs,memberships,dataset_kind,v
     fields=['signal_index','signal','entry','open','high','low','close','atr14','body_atr','range_atr','reference_stop_pips']
     fields += [k for lb in LOOKBACKS for k in (f'previous_low_{lb}',f'abs_distance_atr_{lb}')]
     write_csv(work/'raw_bullish_engulf_features.csv',({k:r[k] for k in fields} for r in features['LONG_SIGNAL_LOW'].values()),fields)
-    write_csv(work/'raw_breakout_features.csv',features['BREAKOUT_SIGNAL_LOW'].values())
+    write_csv(work/'relative_body_signal_features.csv',features['LONG_SIGNAL_LOW'].values())
     fields=['geometry_key','execution_model','signal_index','signal','entry','reference_entry','stop','target','next_open',
         'next_candle_delay_hours','exit_index','exit','exit_price','reason','dual_touch','gap_stop','gap_target']
     write_csv(work/'signal_trade_paths.csv',(dict(geometry_key=g,execution_model=m,**p) for g,paths in path_sets.items() for v in paths.values() for m,p in v.items()),fields)
@@ -684,7 +648,7 @@ def self_checks():
     def check(ok,name):
         if not ok:raise AssertionError(name)
         checks.append(dict(check=name,status='PASS',evidence='SYNTHETIC_SOFTWARE_ONLY'))
-    configs,_=make_configs();check(len(configs)==55 and len({c['config_id'] for c in configs})==55,'Full predeclared grid')
+    configs,_=make_configs();check(len(configs)==25 and len({c['config_id'] for c in configs})==25,'Full predeclared grid')
     check(len(BOUNDS)==263 and len(PERIODS)==35,'Zero-inclusive time universe')
     t=datetime(2020,1,1,tzinfo=UTC)
     pattern=[(t,1.001,1.0012,.9998,1.),(t+BAR,1.,1.0012,.9997,1.001)]
@@ -730,42 +694,31 @@ def self_checks():
     row=context_for_signal(context,200)
     check(all(row[k] is None or when(row[k])<=cutoff for k in ('h1_context_close','d1_context_close')),'Only closed higher-timeframe context')
     check(len(PARITY_IDS)==7 and len(json.loads(ARCHIVED_REFERENCE_JSON))==42,'Seven frozen controls /42 cases')
-    check(sum(c['role']=='RESEARCH' for c in configs)==45,'45 new research definitions')
-    bars=[(datetime(2020,1,1,tzinfo=UTC)+i*BAR,1.,1.001,.999,1.0001) for i in range(204)]
-    bars[200]=(bars[200][0],1.,1.003,.9995,1.002)
-    raw=next(c for c in configs if c['geometry_key']=='BREAKOUT_SIGNAL_LOW' and c['lookback']==20 and c['role']=='CONTROL')
-    f=base_features(bars)
-    check(200 in selected_indices(raw,f) and 200 not in f['LONG_SIGNAL_LOW'],'Breakout without engulf requirement')
-    changed=list(bars);changed[200]=(bars[200][0],1.,1.003,.9995,1.001)
-    check(200 not in selected_indices(raw,base_features(changed)),'Breakout equality rejected')
-    changed[200]=(bars[200][0],1.002,1.003,.9995,1.002)
-    check(200 not in selected_indices(raw,base_features(changed)),'Breakout doji rejected')
-    check(previous_high([3.,1.,2.,100.,4.,5.],3)==[None,None,None,3.,100.,100.],'Prior high excludes current candle')
-    c=next(c for c in configs if c['geometry_key']=='BREAKOUT_SIGNAL_LOW' and c['lookback']==10 and c['compression_max']==.8 and c['body_min_atr']==1. and not c['trend_h4'])
-    row=dict(f['BREAKOUT_SIGNAL_LOW'][200]);row.update(compression_ratio=.8,body_atr=1.)
-    check(selected_indices(c,{'BREAKOUT_SIGNAL_LOW':{200:row}})==[200],'Inclusive compression and body thresholds')
-    for key,v in [('compression_ratio',.800001),('body_atr',.999999)]:
-        q=dict(row);q[key]=v
-        check(not selected_indices(c,{'BREAKOUT_SIGNAL_LOW':{200:q}}),'Rejected breakout threshold '+key)
-    q=dict(row,compression_ratio=None)
-    check(not selected_indices(c,{'BREAKOUT_SIGNAL_LOW':{200:q}}),'Missing compression rejects')
-    trend=dict(c,feature='h4_close_minus_ema100',operator='GT',threshold=0.,trend_h4=True)
-    for value,want in [(None,False),(0.,False),(-.01,False),(.01,True)]:
-        q=dict(row,h4_close_minus_ema100=value)
-        check(bool(selected_indices(trend,{'BREAKOUT_SIGNAL_LOW':{200:q}}))==want,'H4 trend boundary '+str(value))
-    check(row['compression_reference_last_index']<row['compression_numerator_index']==199,'Compression fully excludes signal and numerator from reference')
-    middle=next(c for c in configs if c['geometry_key']=='BREAKOUT_SIGNAL_LOW' and c['lookback']==10 and c['compression_max']==.8 and c['body_min_atr']==0. and not c['trend_h4'])
-    check(len(neighbour_ids(middle,configs)[0])==5,'Five continuous-axis neighbours with H4 branch fixed')
-    check(all(c['range_min_atr']==0. and c['distance_max_atr'] is None for c in configs if c['geometry_key']=='BREAKOUT_SIGNAL_LOW'),'No transplanted range/structure restrictions')
-    ht=datetime(2020,1,2,4,tzinfo=UTC)
-    hctx=dict(h4=[[ht-H4_BAR,1.,1.2,.8,1.1,4,ht-H4_BAR,ht-H1_BAR],[ht,1.1,1.3,1.,1.2,4,ht,ht+3*H1_BAR]],
-        h4_ends=[ht,ht+H4_BAR],ema100=[1.,1.1])
-    exact=breakout_context_for_signal(hctx,[(ht,1.,1.2,.9,1.1)],0)
-    before=breakout_context_for_signal(hctx,[(ht-BAR,1.,1.2,.9,1.1)],0)
-    check(exact['h4_context_index']==0 and before['h4_context_index'] is None,'H4 completion exact boundary and before')
-    partial=breakout_context_for_signal(hctx,[(ht+3*H1_BAR,1.,1.2,.9,1.1)],0)
-    check(partial['h4_context_index']==0,'In-progress H4 cannot enter context')
-    check(len(reference_roles(next(c for c in configs if c['family']=='BREAKOUT_TRIPLE')))==4,'Three ablation parents plus own raw')
+    check(sum(c['role']=='RESEARCH' for c in configs)==12,'12 new research definitions /6 availability controls')
+    row=dict(f['LONG_SIGNAL_LOW'][200]);row.update(body_atr=1.25,range_atr=1.5,body_ratio=1.25)
+    row['abs_distance_atr_200']=.05
+    rc=next(c for c in configs if c['family']=='BR_SINGLE' and c['lookback']==200 and c['body_ratio_min']==1.25)
+    check(selected_indices(rc,{'LONG_SIGNAL_LOW':{200:row}})==[200],'Inclusive relative-body threshold')
+    low=dict(row,body_ratio=1.249999)
+    check(not selected_indices(rc,{'LONG_SIGNAL_LOW':{200:low}}),'Below relative-body threshold rejected')
+    pair=pattern.copy();pair[0]=(pair[0][0],11.,11.5,9.5,10.);pair[1]=(pair[1][0],10.,11.5,9.5,11.25)
+    check(bullish_engulf(pair,1) and (pair[1][4]-pair[1][1])/(pair[0][1]-pair[0][4])==1.25,'Exact body ratio definition')
+    changed=list(bars);changed[199]=(bars[199][0],1.001,1.0012,.9998,1.001)
+    check(200 not in base_features(changed)['LONG_SIGNAL_LOW'],'Previous doji never assigned sentinel ratio')
+    changed=list(bars);changed[199]=(bars[199][0],1.00001,1.0012,.9998,1.)
+    tiny=base_features(changed)['LONG_SIGNAL_LOW'][200]
+    check(tiny['body_ratio']>100. and tiny['previous_body']>0,'Small positive previous body retained and audited')
+    middle=next(c for c in configs if c['family']=='BR_SINGLE' and c['lookback']==200 and c['body_ratio_min']==1.5)
+    check(len(neighbour_ids(middle,configs)[0])==2,'Two one-axis relative-body neighbours')
+    upper=next(c for c in configs if c['family']=='BR_SINGLE' and c['lookback']==200 and c['body_ratio_min']==2.)
+    check(len(neighbour_ids(upper,configs)[0])==1 and neighbour_ids(upper,configs)[1]==['body_ratio_min=UPPER'],'Upper body-ratio boundary explicit')
+    inter=next(c for c in configs if c['family']=='BR_H1_INTERACTION' and c['lookback']==200 and c['body_ratio_min']==1.25)
+    check(set(reference_roles(inter))=={rc['config_id'],ratio_id(rc['geometry_anchor'],1.25,'AVAILABLE'),inter['frozen_h1_control']},'Matched ratio and H1 parents')
+    for value,want in [(None,False),(.999999,False),(1.,True),(1.000001,True)]:
+        q=dict(row,h1_relative_volatility=value)
+        check(bool(selected_indices(inter,{'LONG_SIGNAL_LOW':{200:q}}))==want,'H1 independent boundary '+str(value))
+    check(all(c['body_min_atr']==1.25 and c['range_min_atr']==1.5 for c in configs if c['family']!='RAW'),'Body/range anchors unchanged')
+    check(all(c['feature'] in ('','h1_relative_volatility') for c in configs),'No new context hunt')
     return checks
 
 
@@ -987,8 +940,8 @@ def analyze(work, bars, features, path_sets, configs, *, progress=True):
 BOUNDS=month_bounds()
 PERIODS=period_definitions()
 
-PROTOCOL="# EURCHF M15 LONG Pass5 — standalone compression/upside-breakout discovery\n\nPredeclared 11 October 2026 before new actual-history outcomes. This is a new\nmechanism-discovery pass, NOT template Stage5 plateau confirmation merely because\nits sequence number is5. Prior engulfing/body/range/volatility work stays frozen;\nsame-bar reclaim failed broadly and is parked. USD/CAD M15 long compression+H4\nwork supplies a hypothesis, not settings or performance transferable to EURCHF.\nNo automatic winner, portfolio addition or live change.\n\n## Frozen source and execution\nSame EURCHF_M15_PASS1_FROZEN_DATA.zip beside app.py. 546647 native MID M15 and\n137939 native H1 observations, 2005-01-01 to 2026-10-08T00:00Z exclusive.\nThis cutoff stays fixed despite the later delivery date. Source SHA, member\nreceipts, native M15/H1 OHLC/price-count crosschecks and prior-control parity\nmust pass. No fetch, credentials, packages, synthesized candles or removed eras.\nCommon warmup200 observed M15 bars; current ATR14 seeded TR1..14 then causal\nWilder recurrence. Reference entry=signal close; stop=signal low minus1pip;\ntarget=reference entry+3xreference stop distance. RR3.0 throughout. Assumed BUY\nadverse entries1/2/4pips; R uses assumed fill-minus-stop denominator, so target\nwins are below3R after costs. Full chronological P0 per definition/model/cost.\nExit-candle reentry allowed; invalid entries do not occupy; unresolved positions\noccupy through cutoff with no invented return. Primary STOP_FIRST_GAP_STRESS:\nadverse stop gaps may lose more than1R, target gaps capped, dual-touch stop-first.\nNEAREST_OPEN_SENSITIVITY is separate intrabar sensitivity, not tick truth.\nEntries[start,end); exits(start,end]. MID data omit measured bid/ask and financing.\n\n## Predeclared mechanism and bounded grid\nRequire positive-range bullish M15 candle: close>open. Require strict\nclose>max(high[i-L:i]) for L5/10/20 observed M15 bars, excluding the signal.\nNo crossing-from-below, engulfing, sweep or signal-low structure condition.\nCompression ratio=ATR14[i-1]/mean(ATR14[i-21:i-1]); the reference contains exactly\n20 preceding ATR observations and excludes both numerator and signal candle.\nCompression upper bounds0.60/0.80/1.00, inclusive, plus no-compression controls.\nBody floors0/1.00 current ATR14, inclusive. No range floor, strong-close or\nrelative-body-ratio test. These body levels are a coarse quality comparison,\nnot a claimed body plateau; future refinement requires supported evidence.\n\nEvery setting has a no-trend and one fixed trend branch: last completed UTC H4\nclose>its EMA100. H4 is derived from pinned native H1, UTC bins00/04/08/12/16/20.\nIts bin must have ended by SIGNAL OPEN, so it cannot contain the signal candle.\nEMA100 uses first100 observed completed bins' mean then causal2/101 recurrence.\nInitial observed H4 bin excluded; later observed partial market bins retained\nwith observed-hour counts and context ages. Missing hours never manufactured.\nUTC H4 differs from broker New-York H4. No alternate EMA, timeframe or freshness\nthreshold sweep. Missing/unseeded context rejects trend rows and is reported;\ntrend/no-trend comparisons include this availability difference.\n\n3lookbacks x4compression states(including NONE) x2body states x2trend states=\n48 new definitions. Three raw bullish-breakout rows are controls;45research.\nOf these36 definitions use compression and12 isolate raw/body/trend effects.\nSeven exact archived engulf controls(raw, original/tight, their H1-availability\nand H1vol200>=1) retain42prior canonical raw/accepted ledger fingerprints.\n55total definitions/330cases;45research/10controls. Verify old42cases BEFORE\nbuilding any new actual-history breakout trade paths.\n\n## Reporting and decisions\nExport all rows, masks, compression inputs, previous highs, H4 context provenance,\npaths, accepted/invalid/open ledgers, isolated vs full P0 outcomes, yearly/era/\nlatest1/2/3/5/10Y, all262months and714complete-month12/24/36M windows per case.\nKeep zeros, partial2026/October, CHF policy periods, worst windows, blank years,\nentry droughts, stream equivalence and descriptive stop/cost/event attribution.\nEach row compares to its own lookback raw and each applicable remove-one-feature\nparent(compression/body/H4). Report actual common/added/removed full P0 entries\nand their returns; filtering can displace later trades. These are independently\nreplayed standalone comparisons, NOT a hybrid formed by adding ledger returns.\nNeighbourhoods change one continuous axis by one level with H4 branch held fixed;\nbody has two coarse endpoints, not an established body plateau. No-compression\ncontrols sit outside the numerical compression-neighbourhood ladder.\n\nRead raw, single, joint then triple rows. Require coherent neighbouring support,\nuseful activity/recent windows, plausible older eras and2/4pip support in BOTH\nmodels. Report weak and zero results. Do not rank/select automatically or tune\nRR/session/weekday/date exclusions to repair a spike. Full history has been\nreused: this is exploratory/in-sample, not untouched OOS. Additive R drawdown\nis not NAV% or marked-equity DD. Only if a supported region emerges: bounded\nconfirmation, independent parity, then combined engulf+breakout replay accounting\nfor overlap/displacement; portfolio admission/prospective execution are later.\nSeparate research service only. Live Portfolio32/EURCHF H1 SHORT unchanged.\nDelivery validation checks software, actual features/masks and already-returned\nold control results; new actual breakout returns are left to the user's run.\n"
-RESULT_README='# EURCHF M15 LONG Pass5 results\nRead protocol.md and all source/software/feature/H4/parity gates first.\n55definitions/330cases,48new breakout definitions and7archived engulf controls.\nFixed RR3, assumed1/2/4pip costs, full2005–2026Oct8frozen history, two models.\nInspect summary.csv, period_results.csv, monthly_results.csv, rolling_windows.csv,\nneighbourhood_summary.csv and equivalence_groups.csv together. No automatic winner.\nUse breakout_parent_comparisons.csv for own raw and remove-one-feature full P0\ndifferences. H4 context availability/UTC alignment are explicit diagnostic limits.\nNo combined A+B replay or portfolio/live activation. Return this complete ZIP\nfor assessment before changing geometry or sweeping RR.\n'
+PROTOCOL='# EURCHF M15 LONG Pass6 — relative engulfing-body strength\n\nPredeclared 12 October 2026 before new body-ratio configuration returns. This is\na bounded one-factor/conditional comparison in the existing engulfing family,\nNOT template Stage6 RR selection merely because this runner is sequence Pass6.\nReclaim and compression breakout remain parked. Prior USD/CAD relative-body\nwork motivates the factor, not a setting to copy. No automatic winner or orders.\n\n## Frozen history and replay\nUse the unchanged EURCHF_M15_PASS1_FROZEN_DATA.zip beside the research module.\n546647 native MID M15 /137939 native H1 observations, requested2005-01-01 through\n2026-10-08T00:00Z exclusive. Keep the cutoff despite the later delivery date.\nSource SHA, member sizes/hashes, native H1/M15 aggregation/price counts, independent\nfeature masks and all42 archived canonical raw/accepted control cases must pass\nbefore replay/reporting any new relative-body configurations. No broker fetch,\ncredentials, packages, removed eras or manufactured candles. Common warmup200.\nCurrent ATR14 seeded TR1..14 then causal Wilder recurrence; exact bullish engulf:\nprevious close<previous open, current close>open, open<=previous close,\nclose>=previous open, positive candle range.\nReference entry=signal close; stop=signal low−1pip; target=reference+3xreference\nrisk. RR3.0 throughout. Assumed adverse BUY entry1/2/4pips; R denominator is\nassumed fill−stop. Primary STOP_FIRST_GAP_STRESS retains adverse stop gaps,\ncapped target gaps and stop-first dual touches; NEAREST_OPEN_SENSITIVITY is\nseparate intrabar sensitivity, not tick truth. Full P0 per case; exit-candle\nreentry allowed; invalid geometry never occupies; unfinished positions occupy\nthrough cutoff with no invented R. Entries[start,end), exits(start,end]. MID\ncosts omit measured executable bid/ask spreads and financing.\n\n## Fixed geometries and one ratio ladder\nOriginal: prior200-bar low, absolute signal-low distance<=0.05 current ATR.\nTight comparator: prior100-bar low, distance<=0.025 ATR.\nBoth: body>=1.25 ATR and range>=1.50 ATR. Prior-low windows exclude the signal.\nNo changes to lookback/distance/body/range, stops, sessions, weekdays or RR.\n\nRelative body ratio=(current close−current open)/(previous open−previous close).\nPrevious candle must be strictly bearish, so denominator>0. Previous dojis are\nrejected by engulf logic; no sentinel, epsilon denominator or invented ratio.\nSmall positive previous bodies remain eligible; export previous body in ticks\nand audit one-/two-tick exposures descriptively without introducing a filter.\nRatio floors1.00/1.25/1.50/2.00, inclusive.1.00 reproduces the archived controls.\n\nFor each geometry and ratio, report three explicitly separate H1 states:\nOFF; AVAILABLE (H1 relative volatility finite); GE1 (H1 volatility>=1.00).\nThe inherited H1 measure is completed native H1 ATR14 divided by the mean of\nits preceding200 ATR observations, excluding the tested H1 value. The H1 candle\nmust have completed by signal close, matching the archived implementation.\nNo new timeframe, volatility window, floor, trend or H4 condition is tested.\nAVAILABLE is a diagnostic control, not a strategy to select as the winner.\nOFF tests ratio alone; GE1 tests ratio within the already studied H1 branch.\n\n2geometries x4ratios x3H1states=24 definitions plus archived raw engulf=25.\nSeven are old controls;18 are new definitions:12research and6availability controls.\nTotal25definitions/150cases,12research/13controls. Old raw/accepted42case hashes\nmust match before new ratio configuration replay. The old raw path universe\nnaturally contains prospective ratio-subset bars; delivery does not replay,\nevaluate or rank their new conditional configuration returns.\n\n## Attribution, frequency and plateau criteria\nCompare each new row with its same-geometry/same-H1-state ratio1 baseline, and\nwith the frozen H1-filtered geometry (23/19 trades at4pips). GE1 additionally\ncompares to same-ratio OFF and AVAILABLE, separating availability from the\nvolatility threshold. Report common/added/removed accepted entries and their R\nafter full independent P0 replay; filters can displace later trades. New OFF\nrows may recover activity relative to the old H1-filtered references, but a\nratio restriction cannot be assumed to manufacture activity relative to OFF.\nInspect genuinely added trade R, blank years and recent1/2/3/5/10Y together.\n\nNeighbourhoods change ONLY one adjacent ratio level, holding geometry and H1\nstate fixed. Baseline1 and upper2 are explicit tested boundaries. Identical and\noverlapping streams are not independent evidence. Preserve full features,\npaths, accepted/invalid/open ledgers,25case definitions atallcosts/models,\n35periods/262months/714rolling windows per case incl.zeros/partial2026/October,\nworst windows, blank years, droughts, equivalence, stop/cost and CHF-event\nattribution. Read relative_body_parent_comparisons.csv alongside all summaries.\n\nRequire coherent neighbour support, usable activity and stressed2/4pip results\nin both models, including older and recent periods. Better PF obtained only by\nremoving most trades does not solve frequency. No automatic ranking, RR rescue,\ndenominator cutoff, context stacking, session/date exclusions or revival of\nfailed mechanisms. If this bounded factor fails cost/activity/temporal tests,\nrecord that failure and park EURCHF M15 long pending a distinct new hypothesis.\nAll history has been reused; this is exploratory/in-sample, not untouched OOS.\nAdditive R/DD is not NAV% or marked-equity DD. Confirmation, portfolio admission\nand prospective execution are separate later gates. Research service only;\nno live strategy/probe/executor or activation changes.\n'
+RESULT_README='# EURCHF M15 LONG Pass6 results\nRead protocol.md and all source/software/feature/parity gates first.\n25definitions/150cases:7archived controls+18new ratio rows(12research/6availability).\nFixed RR3, assumed1/2/4pip adverse entries, full2005–2026Oct8frozen history.\nReview summary/period/monthly/rolling/neighbour/equivalence outputs together.\nUse relative_body_parent_comparisons.csv for same-H1 ratio baselines, separate\nH1 effects and actual frequency adds/removals versus the old filtered anchors.\nAVAILABLE rows are diagnostics, not selectable strategies. Read the previous-\nbody denominator audit; no extra denominator cutoff has been introduced.\nNo automatic winner, hybrid, portfolio result or live activation.\n'
 
 
 def archived_controls(work,bars,features,path_sets,configs):
@@ -1079,8 +1032,8 @@ def run_job():
     manifest=dict(version=VERSION,runner_sha256=code_hash(),pair=PAIR,side=SIDE,timeframe=TIMEFRAME,complete=False,status='RUNNING',
         dataset_kind='ACTUAL_PINNED_NATIVE_OANDA_MID',requested_start=iso(START),requested_end_exclusive=iso(END),rr=RR,cost_ticks=COSTS,
         models=MODELS,primary_model='STOP_FIRST_GAP_STRESS',stop_definition='UNCHANGED_SIGNAL_LOW_MINUS_1_PIP',
-        anchors=ANCHORS,breakout_lookbacks=BREAKOUT_LOOKBACKS,compression_caps=COMPRESSION_LEVELS,body_floors=BODY_LEVELS,h4_trend='UTC_COMPLETED_BY_SIGNAL_OPEN_CLOSE_GT_EMA100',configurations=55,research_definitions=45,new_research_definitions=45,retained_research_definitions=0,controls=10,
-        cases=330,archived_parity_cases=42,daily_alignment='UTC_OBSERVED_DAYS_NOT_BROKER_NY_D1',
+        anchors=ANCHORS,body_ratio_floors=BODY_RATIOS,h1_states=('OFF','AVAILABLE','GE1'),configurations=25,research_definitions=12,new_research_definitions=12,retained_research_definitions=0,new_availability_controls=6,controls=13,
+        cases=150,archived_parity_cases=42,daily_alignment='UTC_OBSERVED_DAYS_NOT_BROKER_NY_D1',
         portfolio_target='PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1; admission deferred',orders_supported=False,trading_enabled=False)
     try:
         (work/'protocol.md').write_text(PROTOCOL);shutil.copyfile(__file__,work/'runner_source.py')
@@ -1089,14 +1042,14 @@ def run_job():
         bars,volumes,h1,hvolumes=load_frozen_history(work);crosscheck_history(work,bars,volumes,h1,hvolumes)
         configs,memberships=make_configs();features=make_features(bars,h1)
         controls=hard_controls(bars,features,configs);write_csv(work/'hard_controls.csv',controls)
-        conditional=context_controls(bars,features,configs)+breakout_context_controls(bars,features,configs);write_csv(work/'conditional_feature_controls.csv',conditional)
+        conditional=context_controls(bars,features,configs);write_csv(work/'conditional_feature_controls.csv',conditional)
         if any(r['status']!='PASS' for r in controls+conditional):raise RuntimeError('Independent feature/conditional controls failed')
         set_status(state='building_paths',progress=25,message='Verifying seven unchanged controls /42 archived cases')
         oldconfigs=[c for c in configs if c['previously_tested']]
         paths=build_paths(bars,features,oldconfigs)
         baseline_parity(work,bars,features,paths);archived_controls(work,bars,features,paths,configs)
-        # New actual breakout paths start ONLY after exact old-control gates.
-        paths.update(build_paths(bars,features,[c for c in configs if not c['previously_tested']]))
+        # All ratio definitions use the same archived engulf geometry/path universe.
+        # New configuration replay starts ONLY after exact old-control gates.
         write_inputs(work,bars,features,paths,configs,memberships,manifest['dataset_kind'],volumes);write_context_inputs(work,features)
         (work/'README.md').write_text(RESULT_README)
         _,counts=analyze(work,bars,features,paths,configs)
@@ -1105,9 +1058,9 @@ def run_job():
             source_controls='PASS',hard_controls='PASS',conditional_controls='PASS',baseline_full_ledger_parity='PASS',archived_full_ledger_parity='PASS',
             software_controls='PASS',protocol_sha256=sha(PROTOCOL.encode()),output_row_counts=counts,
             completed_at=iso(datetime.now(UTC)),elapsed_seconds=round(time.monotonic()-RUN_CLOCK,1))
-        write_json(work/'run_manifest.json',manifest);set_status(state='packaging',progress=96,message='All330 standalone cases complete; packaging results')
-        package(work,True);set_status(state='complete',progress=100,message='EURCHF M15 LONG Pass5 complete; download results ZIP',
-            configurations=55,cases=330,result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
+        write_json(work/'run_manifest.json',manifest);set_status(state='packaging',progress=96,message='All150 relative-body cases complete; packaging results')
+        package(work,True);set_status(state='complete',progress=100,message='EURCHF M15 LONG Pass6 complete; download results ZIP',
+            configurations=25,cases=150,result_path='/results',result_bytes=(OUT/RESULT_NAME).stat().st_size)
         return True
     except Exception as exc:
         manifest.update(status='ERROR',complete=False,error_type=type(exc).__name__,error=str(exc));write_json(work/'run_manifest.json',manifest)
@@ -1211,75 +1164,11 @@ def base_context_for_signal(ctx, i):
     return row
 
 
-def make_features(bars,h1=None):
+def make_features(bars, h1=None):
     features=base_features(bars);ctx=build_context(bars,h1)
     for i,row in features['LONG_SIGNAL_LOW'].items():row.update(context_for_signal(ctx,i))
-    bctx=build_breakout_context(bars,ctx['h1'])
-    for i,row in features['BREAKOUT_SIGNAL_LOW'].items():row.update(breakout_context_for_signal(bctx,bars,i))
-    features['CONTEXT']=ctx;features['BREAKOUT_CONTEXT']=bctx
+    features['CONTEXT']=ctx
     return features
-
-def build_breakout_context(bars,h1):
-    cutoff=bars[-1][0]+BAR if bars else START
-    groups={}
-    for t,op,hi,lo,cl in h1:
-        key=t.replace(hour=(t.hour//4)*4,minute=0,second=0,microsecond=0)
-        if key not in groups:groups[key]=[key,op,hi,lo,cl,1,t,t]
-        else:
-            r=groups[key];r[2]=max(r[2],hi);r[3]=min(r[3],lo);r[4]=cl;r[5]+=1;r[7]=t
-    first=min(groups) if groups else None
-    # Exclude initial truncated bin. Later observed partial market bins remain;
-    # never fill missing hours. These are UTC bins, not broker NY H4 candles.
-    rows=[r for key,r in sorted(groups.items()) if key!=first and key+H4_BAR<=cutoff]
-    return dict(h4=rows,h4_ends=[r[0]+H4_BAR for r in rows],ema100=ema_seeded([r[4] for r in rows],100))
-
-def breakout_context_for_signal(ctx,bars,i):
-    # Require completion by signal OPEN, so the context cannot contain any
-    # portion of the signal candle. Equals-at-boundary is causal and available.
-    stamp=bars[i][0];j=bisect.bisect_right(ctx['h4_ends'],stamp)-1
-    row=dict(h4_context_index=j if j>=0 else None,h4_context_close=None,h4_context_age_hours=None,
-        h4_close=None,h4_ema100=None,h4_close_minus_ema100=None,h4_observed_hours=None)
-    if j>=0:
-        b=ctx['h4'][j];e=ctx['ema100'][j]
-        row.update(h4_context_close=iso(ctx['h4_ends'][j]),h4_context_age_hours=(stamp-ctx['h4_ends'][j]).total_seconds()/3600,
-            h4_close=b[4],h4_ema100=e,h4_close_minus_ema100=b[4]-e if e is not None else None,h4_observed_hours=b[5])
-    return row
-
-def breakout_context_controls(bars,features,configs):
-    ctx=features['BREAKOUT_CONTEXT'];checks=[]
-    def check(name,ok):checks.append(dict(check=name,status='PASS' if ok else 'FAIL'))
-    groups=defaultdict(list)
-    for b in features['CONTEXT']['h1']:
-        hour=b[0].hour-b[0].hour%4;groups[b[0].replace(hour=hour,minute=0,second=0,microsecond=0)].append(b)
-    first=min(groups) if groups else None;cutoff=bars[-1][0]+BAR
-    direct=[]
-    for stamp,values in sorted(groups.items()):
-        if stamp==first or stamp+timedelta(hours=4)>cutoff:continue
-        direct.append([stamp,values[0][1],max(b[2] for b in values),min(b[3] for b in values),values[-1][4],len(values),values[0][0],values[-1][0]])
-    check('UTC_H4_independent_native_H1_aggregation',direct==ctx['h4'])
-    em=[None]*len(direct)
-    if len(direct)>=100:
-        em[99]=sum(r[4] for r in direct[:100])/100
-        for j in range(100,len(direct)):em[j]=direct[j][4]*(2/101)+em[j-1]*(99/101)
-    check('H4_EMA100_independent',all((x is None and y is None) or (x is not None and y is not None and abs(x-y)<1e-10) for x,y in zip(em,ctx['ema100'])))
-    mismatches=0;future=0;direct_values={};starts=[r[0] for r in direct]
-    for i,r in features['BREAKOUT_SIGNAL_LOW'].items():
-        j=bisect.bisect_right(starts,bars[i][0]-timedelta(hours=4))-1
-        val=direct[j][4]-em[j] if j>=0 and em[j] is not None else None
-        direct_values[i]=val
-        mismatches+=r['h4_context_index']!=(j if j>=0 else None)
-        mismatches+=not ((val is None and r['h4_close_minus_ema100'] is None) or (val is not None and r['h4_close_minus_ema100'] is not None and abs(val-r['h4_close_minus_ema100'])<1e-10))
-        future+=r['h4_context_close'] is not None and when(r['h4_context_close'])>bars[i][0]
-    check('H4_context_all_signal_rows_independent',mismatches==0)
-    check('H4_context_completed_before_signal_open',future==0)
-    for c in configs:
-        if c['geometry_key']!='BREAKOUT_SIGNAL_LOW':continue
-        expected=[i for i in base_selected(c,features) if not c['trend_h4'] or (direct_values[i] is not None and direct_values[i]>0)]
-        check(c['config_id']+'_independent_H4_mask',selected_indices(c,features)==expected)
-    n=min(10000,len(bars));cutoff=bars[n-1][0]+BAR
-    pref=make_features(bars[:n],[b for b in features['CONTEXT']['h1'] if b[0]+H1_BAR<=cutoff])
-    check('breakout_full_context_prefix_causality',pref['BREAKOUT_SIGNAL_LOW']=={i:r for i,r in features['BREAKOUT_SIGNAL_LOW'].items() if i<n})
-    return checks
 
 def condition_pass(c, row):
     field=c.get('feature')
@@ -1370,7 +1259,7 @@ def context_controls(bars, features, configs):
         if c['geometry_key']!='LONG_SIGNAL_LOW':continue
         expected=[]
         for i,row in rows.items():
-            if row['body_atr']<c['body_min_atr'] or row['range_atr']<c['range_min_atr']:continue
+            if row['body_atr']<c['body_min_atr'] or row['range_atr']<c['range_min_atr'] or row['body_ratio']<c['body_ratio_min']:continue
             if c['distance_max_atr'] is not None and row[f"abs_distance_atr_{c['lookback']}"]>c['distance_max_atr']:continue
             field=c['feature'];op=c['operator'];v=direct[i].get(field) if field else None;t=c['threshold']
             if field and (v is None or not math.isfinite(v)):continue
@@ -1386,22 +1275,25 @@ def context_controls(bars, features, configs):
 
 
 def export_conditional_attribution(work,bars,features,path_sets,configs):
-    byid={c['config_id']:c for c in configs};rows=[]
+    byid={c['config_id']:c for c in configs};parents=[]
     with (work/'accepted_comparisons.csv').open(newline='') as f:
         for r in csv.DictReader(f):
             c=byid[r['config_id']]
-            if c['geometry_key']!='BREAKOUT_SIGNAL_LOW':continue
+            if c['previously_tested']:continue
             refs=reference_roles(c)
-            if r['reference_config'] in refs:rows.append(dict(r,reference_role=refs[r['reference_config']],interpretation='Independent standalone full P0 replay; no combined strategy'))
-    availability=[]
+            if r['reference_config'] in refs:parents.append(dict(r,reference_role=refs[r['reference_config']],interpretation='Independent full P0 replay difference; availability controls are not candidate strategies'))
+    audit=[]
     for c in configs:
-        if c['geometry_key']!='BREAKOUT_SIGNAL_LOW' or not c['trend_h4']:continue
-        ids=base_selected(c,features);missing=[i for i in ids if features['BREAKOUT_SIGNAL_LOW'][i]['h4_close_minus_ema100'] is None]
-        availability.append(dict(config_id=c['config_id'],pretrend_signals=len(ids),context_unavailable_signals=len(missing),
-            first_unavailable_signal=iso(bars[missing[0]][0]) if missing else None,last_unavailable_signal=iso(bars[missing[-1]][0]) if missing else None,
-            interpretation='Unavailable EMA context rejects signal; trend effect includes availability, not a matched-availability counterfactual'))
-    return {'breakout_parent_comparisons.csv':write_csv(work/'breakout_parent_comparisons.csv',rows),
-        'h4_context_availability.csv':write_csv(work/'h4_context_availability.csv',availability)}
+        if c['previously_tested']:continue
+        ids=selected_indices(c,features);values=[features['LONG_SIGNAL_LOW'][i] for i in ids]
+        audit.append(dict(config_id=c['config_id'],raw_signals=len(ids),
+            previous_body_one_tick_or_less=sum(r['previous_body_ticks']<=1.000001 for r in values),
+            previous_body_two_ticks_or_less=sum(r['previous_body_ticks']<=2.000001 for r in values),
+            maximum_body_ratio=max((r['body_ratio'] for r in values),default=None),
+            median_previous_body_ticks=quantile([r['previous_body_ticks'] for r in values],.5),
+            interpretation='Descriptive denominator audit only; no extra small-body exclusion or optimized filter'))
+    return {'relative_body_parent_comparisons.csv':write_csv(work/'relative_body_parent_comparisons.csv',parents),
+            'relative_body_denominator_audit.csv':write_csv(work/'relative_body_denominator_audit.csv',audit)}
 
 VOL_WINDOWS=(100,200,300)
 VOL_FLOORS=(.75,1.,1.25)
@@ -1431,7 +1323,7 @@ def retained_pass2b_configs():
     base=dict(geometry_key='LONG_SIGNAL_LOW',body_min_atr=1.25,range_min_atr=1.5,
         close_min=0.,feature='',operator='',threshold=None,previously_tested=True,
         retained_anchor=True,volatility_timeframe='',volatility_window=None,
-        mechanism='EXACT_BULLISH_ENGULF',research_question='ARCHIVED_CONTROL',compression_max=None,trend_h4=False)
+        mechanism='EXACT_BULLISH_ENGULF',research_question='ARCHIVED_CONTROL',body_ratio_min=1.,volatility_state='OFF',geometry_anchor='',frozen_h1_control='')
     raw=dict(base,config_id='RAW_EXACT_BULLISH_ENGULF',role='CONTROL',family='RAW',
         lookback=0,distance_max_atr=None,body_min_atr=0.,range_min_atr=0.,
         matched_anchor='RAW_EXACT_BULLISH_ENGULF',parent_anchor='RAW_EXACT_BULLISH_ENGULF')
@@ -1446,53 +1338,47 @@ def retained_pass2b_configs():
         volatility_timeframe='H1',volatility_window=200) for c in anchors]
     return [raw]+anchors+available+filtered,[]
 
-def breakout_id(lb,cap,body,trend):
-    comp='NONE' if cap is None else f'{round(cap*100):03}'
-    return f'BREAKOUT_L{lb:03}_C{comp}_B{round(body*100):03}_H4{int(trend)}'
+def ratio_id(anchor,ratio,state):
+    if ratio==1.:
+        return anchor+({'OFF':'','AVAILABLE':'__AVAILABLE_H1_RELATIVE_VOLATILITY','GE1':'__H1_RELATIVE_VOLATILITY_GE_P1P00'}[state])
+    return anchor+f'__BR{round(ratio*100):03}'+({'OFF':'','AVAILABLE':'__AVAILABLE_H1_RELATIVE_VOLATILITY','GE1':'__H1_RELATIVE_VOLATILITY_GE_P1P00'}[state])
 
 def make_configs():
-    configs,_=retained_pass2b_configs();grid=[]
-    for lb in BREAKOUT_LOOKBACKS:
-        for cap in (None,)+COMPRESSION_LEVELS:
-            for body in BODY_LEVELS:
-                for trend in (False,True):
-                    raw=breakout_id(lb,None,0.,False)
-                    axes=int(cap is not None)+int(body>0)+int(trend)
-                    grid.append(dict(config_id=breakout_id(lb,cap,body,trend),geometry_key='BREAKOUT_SIGNAL_LOW',lookback=lb,
-                        body_min_atr=body,range_min_atr=0.,close_min=0.,distance_max_atr=None,
-                        compression_max=cap,trend_h4=trend,mechanism='COMPRESSION_UPSIDE_BREAKOUT',
-                        role='CONTROL' if axes==0 else 'RESEARCH',family=('BREAKOUT_RAW','BREAKOUT_SINGLE','BREAKOUT_JOINT','BREAKOUT_TRIPLE')[axes],
-                        matched_anchor=raw,parent_anchor=raw,previously_tested=False,retained_anchor=False,
-                        feature='h4_close_minus_ema100' if trend else '',operator='GT' if trend else '',threshold=0. if trend else None,
-                        volatility_timeframe='',volatility_window=None,research_question='STANDALONE_COMPRESSION_BREAKOUT_DISCOVERY'))
-    # All lower-order parent rows precede their joint/triple children.
-    configs+=sorted(grid,key=lambda c:(int(c['compression_max'] is not None)+int(c['body_min_atr']>0)+int(c['trend_h4']),
-        c['lookback'],c['compression_max'] if c['compression_max'] is not None else -1,c['body_min_atr'],c['trend_h4']))
-    fields=('config_id','role','family','mechanism','previously_tested','matched_anchor','parent_anchor','retained_anchor','research_question')
+    configs,_=retained_pass2b_configs();byid={c['config_id']:c for c in configs}
+    for c in configs:
+        if c['family']=='RAW':continue
+        anchor=next(cid for cid,_,_ in ANCHORS if c['config_id'].startswith(cid))
+        state='AVAILABLE' if c['operator']=='AVAILABLE' else ('GE1' if c['feature'] else 'OFF')
+        c.update(volatility_state=state,geometry_anchor=anchor,frozen_h1_control=ratio_id(anchor,1.,'GE1'))
+    for anchor,_,_ in ANCHORS:
+        for ratio in BODY_RATIOS[1:]:
+            for state in ('OFF','AVAILABLE','GE1'):
+                old=byid[ratio_id(anchor,1.,state)]
+                c=dict(old,config_id=ratio_id(anchor,ratio,state),body_ratio_min=ratio,
+                    role='CONTROL' if state=='AVAILABLE' else 'RESEARCH',
+                    family='BR_AVAILABILITY' if state=='AVAILABLE' else ('BR_SINGLE' if state=='OFF' else 'BR_H1_INTERACTION'),
+                    matched_anchor=old['config_id'],parent_anchor=anchor,previously_tested=False,
+                    retained_anchor=False,research_question='ONE_FACTOR_RELATIVE_BODY_STRENGTH')
+                configs.append(c)
+    fields=('config_id','role','family','mechanism','previously_tested','matched_anchor','parent_anchor','retained_anchor','volatility_state','geometry_anchor','frozen_h1_control','body_ratio_min','research_question')
     return configs,[{k:c[k] for k in fields} for c in configs]
 
 def reference_roles(c):
-    if c['geometry_key']!='BREAKOUT_SIGNAL_LOW':return {c['matched_anchor']:'ARCHIVED_MATCHED_CONTROL'}
-    lb,cap,body,trend=c['lookback'],c['compression_max'],c['body_min_atr'],c['trend_h4']
-    refs={c['matched_anchor']:'OWN_LOOKBACK_RAW'}
-    if cap is not None:refs[breakout_id(lb,None,body,trend)]='REMOVE_COMPRESSION_PARENT'
-    if body>0:refs[breakout_id(lb,cap,0.,trend)]='REMOVE_BODY_PARENT'
-    if trend:refs[breakout_id(lb,cap,body,False)]='REMOVE_H4_TREND_PARENT'
+    if c['previously_tested']:return {c['matched_anchor']:'ARCHIVED_MATCHED_CONTROL'}
+    refs={c['matched_anchor']:'SAME_H1_STATE_BR1_BASELINE',c['frozen_h1_control']:'FROZEN_H1_FILTERED_FREQUENCY_REFERENCE'}
+    anchor=c['geometry_anchor'];ratio=c['body_ratio_min'];state=c['volatility_state']
+    if state in ('AVAILABLE','GE1'):refs[ratio_id(anchor,ratio,'OFF')]='SAME_BR_NO_H1_GATE'
+    if state=='GE1':refs[ratio_id(anchor,ratio,'AVAILABLE')]='SAME_BR_H1_AVAILABLE_PARENT'
     return refs
 
 def neighbour_ids(c,configs):
-    if c['geometry_key']!='BREAKOUT_SIGNAL_LOW':return [],[]
-    axes=[('lookback',BREAKOUT_LOOKBACKS),('body_min_atr',BODY_LEVELS)]
-    if c['compression_max'] is not None:axes.append(('compression_max',COMPRESSION_LEVELS))
-    neighbours=[];edges=[]
-    for axis,levels in axes:
-        pos=levels.index(c[axis])
-        if pos in (0,len(levels)-1):edges.append(axis+('=LOWER' if pos==0 else '=UPPER'))
-        adjacent={levels[j] for j in (pos-1,pos+1) if 0<=j<len(levels)}
-        neighbours.extend(x['config_id'] for x in configs if x['geometry_key']=='BREAKOUT_SIGNAL_LOW'
-            and x[axis] in adjacent and x['trend_h4']==c['trend_h4']
-            and all(x[k]==c[k] for k in ('lookback','body_min_atr','compression_max') if k!=axis))
-    return neighbours,edges
+    if not c['geometry_anchor']:return [],[]
+    pos=BODY_RATIOS.index(c['body_ratio_min']);levels={BODY_RATIOS[j] for j in (pos-1,pos+1) if 0<=j<len(BODY_RATIOS)}
+    adjacent=[x['config_id'] for x in configs if x['geometry_anchor']==c['geometry_anchor'] and x['volatility_state']==c['volatility_state'] and x['body_ratio_min'] in levels]
+    edges=[]
+    if pos==0:edges.append('body_ratio_min=LOWER')
+    if pos==len(BODY_RATIOS)-1:edges.append('body_ratio_min=UPPER')
+    return adjacent,edges
 
 def write_context_inputs(work,features):
     ctx=features['CONTEXT']
@@ -1505,16 +1391,9 @@ def write_context_inputs(work,features):
         observed_hours=b[5],first_hour=iso(b[6]),last_hour=iso(b[7]),atr14=ctx['atr_d1'][j],
         preceding_100_atr_mean=ctx['mean_d1'][j],ema100=ctx['ema_d1'][100][j],ema200=ctx['ema_d1'][200][j]) for j,b in enumerate(ctx['daily'])),fields)
 
-_legacy_write_context_inputs=write_context_inputs
-
-def write_context_inputs(work,features):
-    _legacy_write_context_inputs(work,features)
-    ctx=features['BREAKOUT_CONTEXT']
-    write_csv(work/'context_utc_h4.csv',(dict(time=iso(b[0]),close_utc=iso(b[0]+H4_BAR),open=b[1],high=b[2],low=b[3],close=b[4],observed_hours=b[5],first_hour=iso(b[6]),last_hour=iso(b[7]),ema100=ctx['ema100'][j]) for j,b in enumerate(ctx['h4'])))
-
 CONTEXT_KEYS=CONTEXT_KEYS+tuple(vol_field(tf,w) for tf in ('M15','H1') for w in (100,300))
 
-PARENT_IDS=tuple(c['config_id'] for c in make_configs()[0] if c['config_id'] in {ref for row in make_configs()[0] for ref in reference_roles(row)})
+PARENT_IDS=tuple(c['config_id'] for c in make_configs()[0])
 COMPARISON_IDS=PARENT_IDS
 
 
