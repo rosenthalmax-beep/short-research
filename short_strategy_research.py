@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EUR/USD H4 LONG Pass 6. Standard-library Python 3.10+. Research ONLY.
+"""EUR/USD H4 LONG Pass 7. Standard-library Python 3.10+. Research ONLY.
 Save as app.py in a separate service. Start: python app.py
 GET /status -> COMPLETE; GET /results -> report ZIP. No order endpoints.
 """
@@ -27,7 +27,7 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = 'EURUSD_H4_LONG_PASS6_FROZEN_ENTRY_RR_STUDY_V1_2026_10_12'
+VERSION = 'EURUSD_H4_LONG_PASS7_VOLATILITY_FREQUENCY_V1_2026_10_12'
 UTC = dt.timezone.utc
 START = int(dt.datetime(2005, 1, 1, tzinfo=UTC).timestamp())
 END = int(dt.datetime(2026, 10, 12, tzinfo=UTC).timestamp())
@@ -43,8 +43,8 @@ MODELS = ('STOP_FIRST_GAP_STRESS', 'NEAREST_OPEN_SENSITIVITY')
 CASES = [(f'MID_{p}P_{m}', 'MID', p, m) for p in (1, 2, 4) for m in MODELS]
 CASES += [(f'BIDASK_BOUND10_{m}', 'BIDASK', 0, m) for m in MODELS]
 SOURCE_NAME = 'EURUSD_H4_PASS1_FROZEN_DATA.zip'
-RESULT_NAME = 'EURUSD_H4_LONG_PASS6_RESULTS.zip'
-PROTOCOL = "# EUR/USD H4 LONG — Pass 6 frozen entries / limited RR study\nVersion: EURUSD_H4_LONG_PASS6_FROZEN_ENTRY_RR_STUDY_V1_2026_10_12\nEntries frozen before new RR outcomes. Same examined full history and source.\n18 definitions = two fixed entry versions x nine RRs; eight execution cases each.\n\n## Immutable entries and finite RR range\nPRIMARY: exact bullish engulf, LB40, ABS(signal low-minimum prior low)<=.50 current\nH4 ATR, body>=1.40ATR, range>=1.50ATR, body/range>=.60.\nFREQUENCY: identical except LB20. It remains a separate activity comparator, not\nan additional trigger or a combined strategy. Neither entry version is retuned.\nNo new conditions, structure/body/range/ratio changes, weekday/session hunt,\nmechanism search or adaptive RR. RR levels2.50/2.75/3.00/3.25/3.50/3.75/4.00/4.25/4.50.\nRR3 is the immutable within-version comparison control. Upper/lower tested RR\nboundaries are marked. No automatic winner selection or boundary extension.\nInspect a reproducible RR neighbourhood, activity, recent eras and weakest rolling\nwindows before choosing any final RR. Sparse/overlapping histories remain exploratory.\n\n## Targets, cost and full RR-dependent replay\nStop remains signal MID low-.0001. Target=MID signal close + tested RR*(MID close-\nstop). It is NOT moved with the assumed fill. Realised R denominator remains\nassumed/quote fill-stop. Thus realised target R differs from reference RR when\nentry costs/deviation occur. A new RR can change target-touch order, holding time,\nwhich signals are blocked/displaced, entry-validity rejections and unfinished\ntrades. Do not reprice the RR3 accepted ledger or reuse RR3 exit/block decisions.\nRaw qualification is identical across RRs for each frozen entry; execution\neligibility and accepted trade count can differ. Replay all signals at every RR\nand each execution case, retaining rejected/blocked/open positions explicitly.\n\nEach of the144 study replay cases must match a separate scalar implementation's\ncomplete signal/entry/stop/target/exit/outcome/R ledger, rejected entries and\nblocked-signal sequence. This independent implementation calculates ATR/pattern/\nprior-low/body/range/ratio and execution without calling production feature,\nmask/path/replay helpers. It checks the SAME examined history, not fresh OOS.\n\n## Source and reference gates\nSame native OANDA EUR_USD H4 MID/BID/ASK and independently crosschecked H1 MID,\n2005-01-01 through2026-10-12 00:00UTC exclusive. Source price hashes unchanged.\nReproduce prior raw and Pass1/2/3/4 reference controls, then both frozen Pass5 RR3\nledgers across all eight cases (16) before the RR study. A mismatch fails closed.\nRR3 control must also match the rebuilt study ledger. No partial performance\nreports after a source/reference/independent-replay failure.\n\n## Reports and attribution\nFull accepted/rejected/blocked/open ledgers at every RR/case, immutable entry\nmemberships and raw hashes, full accepted-ledger hashes and accepted/closed-signal\nhashes so chronology changes can be distinguished from changed payout alone.\nFrozen-signal paths for every RR retained, plus raw RR3 reference paths separately.\nCompare every RR with its OWN frozen-entry RR3 baseline. Common + added - removed\nR identity includes COMMON-trade R changes, which are expected when targets change.\nAdded/removed sets record blocking-signal displacement. No naive ledger subtraction.\n25 additional pairs:16 adjacent RR changes plus9 primary->frequency comparisons\nat matched RR, across eight cases. Full marginal trade/R attribution for all.\nMatched-version comparisons are research comparisons, not a combined portfolio.\n\nCalendar years, four eras, trailing1/2/3/5/10Y, monthly and every complete\nmonthly-ended rolling12/24/36M window including zeros. 2026 and October partial.\nInspect blank years/months, recent activity, inter-entry/wait times, median holding\nduration, costs/stop, isolated versus accepted outcomes and unfinished positions.\nNo automatic strategy selection, new entry tuning or claim that the highest total\nR predicts best future behaviour. Independent standalone frozen confirmation,\nexact incumbent portfolio comparison and prospective execution remain later gates.\n\n## Inherited clock, causal indicators and execution assumptions\nNative completed unsmoothed OANDA H4, dailyAlignment0/timezoneUTC. Native H1 MID\naggregation reproduces every H4 MID OHLC bin. Native price precision retained;\nmissing periods not filled; partial opening/closing bins retained and flagged.\nFirst eligible signal index200 observed H4 bars. Previous strictly red/current\nstrictly green, current open<=previous close, current close>=previous open,\npositive ranges. ATR14 mean TR1..14 then Wilder through current signal. Prior low\nexcludes signal. No future data. Other inherited daily/volatility features are\ndescriptive only and never filter this RR study.\n\nSix MID proxies: entry=MID signal close+1/+2/+4 assumed adverse pips, fixed target\nas above. Four pips is assumed stress, not measured normal cost. STOP_FIRST_GAP_\nSTRESS retains adverse opening-stop gaps (loss can exceed1R), caps favourable\ntarget gaps, stop-first dual-touch. MID NEAREST_OPEN_SENSITIVITY ignores opening\ngaps and uses nearer low/high to open for dual touch, stop on equal distance.\nTwo BIDASK cases: next observed H4 ASK open with earliest constituent H1 timestamp;\nreject delay>120sec, adverse entry>10ticks (.0001), invalid stop/entry/target or no\nnext bar. BID exits; both models retain adverse stop gaps and cap target gaps,\nonly simultaneous touch differs. No extra slippage. Quotes derived from candles\ncannot establish actual fills/timing/depth/intrabar order. Live price rounding,\nfinancing and account fees unmodelled. Entry at/after cutoff rejected; signal OHLC\nnot used for exits; exit-candle signal allowed; one open standalone position;\nrejections do not occupy. Open-at-cutoff retains occupation/blank R, no forced exit.\nEntries[start,end), realised exits(start,end] using nominal exit-bin END timestamps,\nnot precise broker fills. Drawdown is closed additive R, not NAV or marked risk.\nNo incumbent portfolio gates/exposure/sizing/currency conversion in this study.\n\n## Operation and delivery tests\nSingle-file Python3.10+ standard library; same separate read-only research service,\none process/worker. Reuse original EURUSD_H4_PASS1_FROZEN_DATA.zip from current or\nprior Pass5/4/3/2/1 cache or beside app.py. If absent, refetch same source and require\noriginal price hashes. Explicit missing/corrupt archive fails; no silent extension.\nOptional EURUSD_H4_PASS6_FROZEN_DATA / EURUSD_H4_PASS6_OUTPUT_DIR; default\n/data/eurusd_h4_pass6_research if /data exists, otherwise a temporary cache.\nGET/HEAD /status /health /results /source; no write/broker-order endpoints.\nCOMPLETE full report ZIP or ERROR failure-only ZIP. Delivery tests reproduce\nactual prior references only; new RR chronology, attribution and reports use\nsynthetic fixtures. New historical RR outcomes are not evaluated during delivery.\nPortfolio reference PORTFOLIO32_2026_10_05_EURCHF_H1_SHORT_PRIMARY_RR3P50_V1.\n"
+RESULT_NAME = 'EURUSD_H4_LONG_PASS7_RESULTS.zip'
+PROTOCOL = "# EUR/USD H4 LONG — Pass 7 bounded volatility / frequency study\nVersion: EURUSD_H4_LONG_PASS7_VOLATILITY_FREQUENCY_V1_2026_10_12\nProtocol specified before evaluating new historical conditional returns.\nSame 2005-01-01 through 2026-10-12 00:00 UTC exclusive frozen source.\nThis is additional exploratory conditional research after the RR study,\nnot fresh out-of-sample confirmation or an admission/deployment result.\n\n## Fixed entries, RR and bounded hypotheses\nPRIMARY: exact bullish engulf, LB40, absolute signal-low/prior-low distance\n<=0.50 current H4 ATR, body>=1.40ATR, range>=1.50ATR, body/range>=0.60.\nFREQUENCY: identical except LB20. Common warmup200 H4 bars; prior low excludes\nsignal. Exact previous strictly red/current strictly green; inclusive body engulf;\nboth candle ranges positive. Current signal ATR14 seeded mean TR1..14 then Wilder.\nAll new study definitions use fixed reference RR2.75. RR3 is used ONLY to\nreproduce legacy controls. No RR sweep or body/structure/range/ratio changes.\n\nTwo condition families, tested independently; no stacked volatility filters:\nH4_VOL: current signal H4 ATR14 / mean previous60 H4 ATR14; caps1.10/1.25/1.40.\nDAILY_VOL: latest completed UTC day's ATR14 / mean previous60 daily ATR14;\ncaps0.75/1.00/1.25. Denominator excludes numerator. No calendar-day filling.\nDaily OHLC aggregated from frozen observed H4 bins, preserving inherited UTC\nday convention and observed partial days including the initial day. Daily TR1..14\nmean at day index14, then Wilder. Latest day END<=signal CLOSE; require at least\n200 observed completed days, as in Pass2. No unfinished daily candle used.\nDaily dates, observed H1 counts, availability and age exported. Four-H4 volatility\nand daily volatility can include the signal candle once it has completed.\n\nEach family/cap is evaluated in TWO scopes:\nALL: FREQUENCY qualifying signal AND condition passes.\nEXTRAS (HYBRID): PRIMARY qualifying signal OR (FREQUENCY signal AND condition).\nThus a primary signal bypasses the volatility condition, including missing data.\nNo assumption that PRIMARY raw membership is a subset of FREQUENCY; union is\nexplicit. Shared signal is submitted once. All orders use identical stop/target\nand P0 chronology. No future primary reservation or hindsight trade priority.\nExtra earlier entries can still block later primary signals, which is reported.\n\n18 definitions = two unfiltered controls + twelve new conditional definitions\n(two families x three caps x two scopes) + four availability-only controls\n(two families x two scopes). Availability is a diagnostic, not another threshold.\nALL availability: FREQUENCY AND feature present; EXTRAS availability: PRIMARY OR\n(FREQUENCY AND feature present). Compare filters to matched availability and\nboth unfiltered controls to distinguish warmup effects from economic filtering.\nOne shared position per stream; HYBRID is not two independent pyramiding slots.\nNo complementary trigger, trend/session/weekday search or live changes in this pass.\n\n## Source, integrity and independent reproduction\nNative unsmoothed OANDA EUR_USD H4 MID/BID/ASK, UTC dailyAlignment0, and native\nH1 MID; require original Pass1 source hashes,35952H4/138197H1, full H1/H4 MID\naggregation parity. Reuse EURUSD_H4_PASS1_FROZEN_DATA.zip from earlier caches.\nRefetch only same interval/alignment, requiring same pinned prices; no extension.\nOld raw, Pass1 anchors,104Pass2,16Pass3,16Pass4,16Pass5 RR3 controls retained.\nAdditionally require sixteen archived Pass6 RR2.75 control masks/counts/full\naccepted-ledger hashes/R before accepting new conditional outcomes.\nIndependent scalar H4/daily ATR, explicit low-slices/body/range/ratio masks and\ncausal daily selection check ALL18 masks; independently rebuild full accepted,\nrejected and blocked chronology for ALL144 study cases. Raw/old control mismatch\nor source failure produces ERROR failure-only ZIP; no performance conclusions.\nImplementation parity is on the same previously examined history, not fresh OOS.\n\n## Unchanged execution conventions\nStop=signal MID low-0.0001. Target=MID signal close +2.75*(MID close-stop), fixed\nbefore entry costs; realised R=(exit-fill)/(fill-stop). Six MID cases use assumed\nBUY penalties1/2/4pips, not measured normal spreads. STOP_FIRST_GAP_STRESS keeps\nadverse opening stop gaps (loss can exceed1R), caps favourable target gaps, and\nresolves dual touch stop-first. MID NEAREST_OPEN_SENSITIVITY ignores opening gaps\nand uses nearer low/high to open (stop on tie); a sensitivity, not known sequencing.\nTwo BIDASK approximations enter at next observed H4 ASK open, first constituent\nH1 timestamp proxy. Reject age>120s, adverse entry>10ticks (1pip), invalid\nentry/stop/target or missing next bar. BID exits; both models keep stop gaps and\ntarget-gap caps, differing only on dual touch. Signal bar never inspected for exit.\nEntry at/after cutoff rejected; one open trade, exit-candle signal allowed;\nrejections do not occupy. Open-at-cutoff retains occupation and blank realised R.\nHistorical candle quotes do not prove executable live fills/latency/intrabar order.\nNo financing, commissions or live tick rounding model; no account/order calls.\n\n## Reporting and decision discipline\nComplete raw memberships with PRIMARY/FREQUENCY provenance, raw context audit,\npaths, accepted/rejected/blocked/open ledgers, fingerprints and counts.\nFull P0 comparisons against both controls, matched availability and corresponding\nALL/EXTRAS version: common/added/removed R, displacement flags and identities.\n53 comparison pairs x8cases; annual/era/trailing period deltas per comparison.\n18 definitions x8cases =144 summary rows,4464period rows,37728monthly rows,\n102816rolling12/24/36M rows. Include zero-trade windows/years and partial2026/\nOctober; entry periods[start,end), realised exit periods(start,end]; exit time\nis nominal H4 bin END. Drawdown is closed additive R, not NAV/marked risk.\nReport primary signals blocked and accepted primary versus extra trades.\nWithin each family/scope, show adjacent cap settings, weak settings and duplicate\nstreams. Caps at tested extremes are boundaries; availability/control is not a\nnumeric neighbour. No automatic best-row selection, stacked filter rescue or\nautomatic boundary expansion. Reject sample-thinning gains resting on a couple\nof removed losers, inspect marginal/recent/era/rolling/cost results. These checks\nreduce selection freedom but cannot erase the search history or prove an edge.\nPortfolio contribution/forward execution are separate later gates.\n\n## Operation\nSingle-file Python3.10+ standard library. Save as app.py in the separate research\nservice; python app.py, or existing WSGI app/application with one worker.\nNo new required variables/packages. Optional EURUSD_H4_PASS7_FROZEN_DATA,\nEURUSD_H4_PASS7_OUTPUT_DIR and EURUSD_H4_PASS7_AUTOSTART (defaulttrue).\nDefault /data/eurusd_h4_pass7_research if /data exists, otherwise temp cache.\nExisting Pass6/5/4/3/2/1 source cache locations searched before same-history fetch.\nGET/HEAD /status /health /results /source; other methods405. Wait COMPLETE before\ndownloading /results. Delivery validation uses real previously examined controls\nand synthetic new-condition outcomes, not new historical strategy performance.\n"
 
 PASS1_PINS = {'anchors': {'M_L40_D0.35_B0.75_R1': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '106', 'accepted_hash': 'd979d86a2d02e760a8a1c6fafb0bdae84bda735a0edfc7744d75ae817fcba29a', 'blocked': '3', 'net_r': '8.3450542151461', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '8'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '106', 'accepted_hash': 'd979d86a2d02e760a8a1c6fafb0bdae84bda735a0edfc7744d75ae817fcba29a', 'blocked': '3', 'net_r': '8.3450542151461', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '8'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '48f8a41dff9a17722f2de6fc36edc9ef1469b92049306d3f2a07ea4b907e699c', 'blocked': '3', 'net_r': '19.081030949268005', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': '78a2087e6dd35db8eecdd723d2c8ba75ff335a568aeacb543e395696ae236958', 'blocked': '3', 'net_r': '19.026589688523014', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '03161b82a37fe9af87cbe8f2c961718b18da7e1cea17d85e1bd80bf7a139e7a9', 'blocked': '3', 'net_r': '16.308044523646373', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': 'f6c9a160a4b082c827ae188a6230a19c9431c5d746c558c6ae204b2459efbb7a', 'blocked': '3', 'net_r': '16.254372207262186', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '114', 'accepted_hash': '40bba3c1fe2437e77333301b71d69137e459973c633fba67923e86a11fd218a3', 'blocked': '3', 'net_r': '11.152458563507945', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '114', 'accepted_hash': '01b8778e70d74aa68df953647bea0649fedd55383dcd1847aa5d6efa475c0848', 'blocked': '3', 'net_r': '11.100260761310135', 'raw_signal_hash': 'a71abfe98810cbfc9c70c3318de13705cc519a03b71ef82c75a309b329cceaf6', 'rejected': '0'}}, 'M_L40_D0.5_B1.25_R1.5': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': '52', 'accepted_hash': '7af667268c5fda50ea8eaf3a902ac2e9868163f08bb4919e188cea8fc459d00d', 'blocked': '1', 'net_r': '7.355862354561232', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '5'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': '52', 'accepted_hash': '7af667268c5fda50ea8eaf3a902ac2e9868163f08bb4919e188cea8fc459d00d', 'blocked': '1', 'net_r': '7.355862354561232', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '5'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': 'c7660408058093dd74beda9f4445e82cb3a9c934fd51ef9d957c669ab9adafa6', 'blocked': '1', 'net_r': '13.896274044063015', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': '3d2d17610f9ea033c348a76eb2dd1ed7b17e42afb0b02e45b18a7d25c8827c4a', 'blocked': '1', 'net_r': '13.841832783318022', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': '2237d6a869858b55476744b6c270088252e3915dbfbe9661f3adfc4c89d9c923', 'blocked': '1', 'net_r': '12.831981788009386', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': 'c1eccd64fd9c8dbfafeb1754e1e40388071d28fbef4845b9dc999aeab951dcb9', 'blocked': '1', 'net_r': '12.7783094716252', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': '57', 'accepted_hash': '8064ca9c491dad8154834cb65ae2ccb50291e1ff36c5ead6807d8634cda37405', 'blocked': '1', 'net_r': '10.81186068156517', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': '57', 'accepted_hash': '7ebb1926f01bda5d7bdc48dee803ee0a1f0dd80eee5bf901edf6b0eec994a02c', 'blocked': '1', 'net_r': '10.75966287936736', 'raw_signal_hash': 'efeaae913dde8cb9f9916a786da056fa67bdc2dcde84e435a22552180cc38497', 'rejected': '0'}}}, 'raw_controls': {'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'accepted': 1407, 'blocked': 1065, 'independent_parity': 'PASS', 'ledger_sha256': '6dcb73d2b7ed43b9e6da129d40bed9af12693f58dba015af9808f1e30a9c6929', 'raw_signals': 2669, 'rejected': 197}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'accepted': 1407, 'blocked': 1065, 'independent_parity': 'PASS', 'ledger_sha256': 'a9ddf63bdce468287f3f8655f8da82e20a4e89638f07d3d764d130eb68ffdc36', 'raw_signals': 2669, 'rejected': 197}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '77659c43e40af3d7e14f392825771ea5331488e695165de183ddaef54df0329a', 'raw_signals': 2669, 'rejected': 0}, 'MID_1P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '3b56b148b22f70b7904e0d70ec391a48ae6897ce119340119c1d3f0989266ad5', 'raw_signals': 2669, 'rejected': 0}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': 'fe8932a92e7bcbc7c179d1f615fc787d970035555c01a715a1afbf02edfc29bf', 'raw_signals': 2669, 'rejected': 0}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': 'f690dd8becdf7df86835afa98ae4b30bc88ca719a82e01a1967a74a6e4973042', 'raw_signals': 2669, 'rejected': 0}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '163d14184269d601d935c3e68c7bf33540145b8b796889e5543dd9c9e3bbc27b', 'raw_signals': 2669, 'rejected': 0}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'accepted': 1512, 'blocked': 1157, 'independent_parity': 'PASS', 'ledger_sha256': '5beec9478053c6350ede8faa8a00683c3c549b1779fb2bf4ea10e61e1650e7a6', 'raw_signals': 2669, 'rejected': 0}}, 'source': {'alignment': 'UTC_00_UNSMOOTHED', 'end': 1791763200, 'instrument': 'EUR_USD', 'members': {'h1.json': '258c40216bef3deb5a74bfaaa2403b4bd9f4a88533dc734c73f9e89a7f9569bb', 'h4.json': '5c7a5ced72379c5696251200c2447dcb142116ed97149d0d4379d42a06381087', 'receipts.json': '0f37599b041b5e45649c81ae6771745af0da3dfd456130c1cb5d3e17c9ae692d'}, 'start': 1104537600}}
 
@@ -86,66 +86,126 @@ ANCHORS = (('BROAD','anchor',40,.35,.75,1.),('STRONG_BODY','anchor',40,.50,1.25,
 COMPARATORS = (('FREQUENCY','comparator',40,.50,1.25,1.50),('QUALITY','comparator',40,.50,1.40,1.50))
 BASELINES = (('LOCAL','reference',40,.50,1.40,1.50),('FREQUENCY_ALT','reference',20,.50,1.40,1.50))
 FROZEN_ENTRIES = (('PRIMARY','frozen_entry',40,.50,1.40,1.50),('FREQUENCY','frozen_entry',20,.50,1.40,1.50))
-RR_LEVELS = tuple(2.50+.25*k for k in range(9))
+STUDY_RR = 2.75
+RR_LEVELS = (STUDY_RR,)
+VOL_LEVELS = {"H4_VOL":(1.10,1.25,1.40),"DAILY_VOL":(.75,1.00,1.25)}
+VOL_FEATURES = {"H4_VOL":"h4_atr_ratio","DAILY_VOL":"daily_atr_ratio"}
+PASS6_PINS = {'PRIMARY__CONTROL': {'MID_1P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '41943df7be9b08027b99db153a0ade4a6d21c375eefe73e255f61b750b4c4a56', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '18.00762799056702'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '5b8f87b7d0ff59c295deb34333697a9f8579cbda008d6496418607852a85a73b', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '18.062069251312014'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': 'f3ef005161c0a14111121497881f0252917b7e0420b5988a11e429c8afb55299', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '17.105001719629232'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '964845b2124c188b32db84c21570c8fd4245f762ba5f5b39a2f7daa840f0796f', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '17.158674036013423'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': 'b96bc84cc280d81e44979870bb9449e597583cb1537ef0fef63b0201edfd0135', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '15.39441787584999'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '069e29be5e2f7a341727ecc9f5cbbbbd0c1f3c46d5699353a284de2208d81a95', 'raw_signals': '41', 'accepted': '41', 'rejected': '0', 'blocked': '0', 'net_r': '15.446615678047799'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '86618f514c1cedf08adaa1e4954459498845ae6fcf581c9b62795ca9ffa1089e', 'raw_signals': '41', 'accepted': '39', 'rejected': '2', 'blocked': '0', 'net_r': '12.883601506636053'}, 'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '0de60e2d51497a55312762176208ddffab195901b27845d0be3fd71fdf42b411', 'accepted_hash': '86618f514c1cedf08adaa1e4954459498845ae6fcf581c9b62795ca9ffa1089e', 'raw_signals': '41', 'accepted': '39', 'rejected': '2', 'blocked': '0', 'net_r': '12.883601506636053'}}, 'FREQUENCY__CONTROL': {'MID_1P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': '52ba52ac3f29dbcdf9539b1cca09af6f80832a0e0d794a82830e9000a3476491', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '18.55040860158382'}, 'MID_1P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': 'bdc8c385c313cc43720dd417dabd7acee222d23b1b22f16d3a0e46f8c4c28440', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '18.604849862328813'}, 'MID_2P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': 'e0437a164e6c790dc25c10da93b9ede0abce3c66e50bcea58b49b6a006a07859', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '17.206805483403485'}, 'MID_2P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': 'a22a45d60cc0a7f379c68521307bf94480d2d2ca06c4531a82e7eb442a668a34', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '17.260477799787672'}, 'MID_4P_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': '4cad414a518a789197158a2d92238dcab7828b676571d4ad688e5f5ab2c7b5a7', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '14.659255068639068'}, 'MID_4P_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': '51c241a8ef729bc48b465509765de69254e589af4ff0727e87ab80122a4dfa58', 'raw_signals': '73', 'accepted': '70', 'rejected': '0', 'blocked': '3', 'net_r': '14.711452870836876'}, 'BIDASK_BOUND10_STOP_FIRST_GAP_STRESS': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': 'e155b07f8c17a8e39ed85a08949b6c796a1466f765746d7ad77471da9d549d52', 'raw_signals': '73', 'accepted': '68', 'rejected': '2', 'blocked': '3', 'net_r': '13.522350554906184'}, 'BIDASK_BOUND10_NEAREST_OPEN_SENSITIVITY': {'raw_signal_hash': '7258c58334d0f0a8c787601b82340d064cd5a92f0869587e26148bff63787853', 'accepted_hash': 'e155b07f8c17a8e39ed85a08949b6c796a1466f765746d7ad77471da9d549d52', 'raw_signals': '73', 'accepted': '68', 'rejected': '2', 'blocked': '3', 'net_r': '13.522350554906184'}}}
 
 
 def study_definitions():
-    rows=[]
-    for entry in FROZEN_ENTRIES:
-        for reward_risk in RR_LEVELS:
-            rows.append({'id':f'{entry[0]}__RR{reward_risk:g}','anchor':entry[0],'family':'FROZEN_ENTRY_RR','body':entry[4],'lookback':entry[2],'distance':entry[3],'rr':reward_risk,'cap':None,'close':None,'ratio':.60})
-    require(len(rows)==18 and len({r['id'] for r in rows})==18,'Pass6 RR definition count')
+    rows=[{'id':'PRIMARY__CONTROL','anchor':'PRIMARY','family':'CONTROL','scope':'PRIMARY','feature':None,'cap':None,'availability':False},
+          {'id':'FREQUENCY__CONTROL','anchor':'FREQUENCY','family':'CONTROL','scope':'ALL','feature':None,'cap':None,'availability':False}]
+    for family,levels in VOL_LEVELS.items():
+        for scope,label in (('ALL','FREQUENCY'),('EXTRAS','HYBRID')):
+            common={'anchor':'FREQUENCY' if scope=='ALL' else 'PRIMARY','family':family,'scope':scope,'feature':VOL_FEATURES[family]}
+            rows.append(dict(common,id=f'{label}__{family}_AVAILABLE',cap=None,availability=True))
+            for cap in levels:rows.append(dict(common,id=f'{label}__{family}_LE_{cap:g}',cap=cap,availability=False))
+    for d in rows:d.update(body=1.40,lookback=40 if d['scope']=='PRIMARY' else 20,distance=.50,rr=STUDY_RR,ratio=.60)
+    require(len(rows)==18 and len({r['id'] for r in rows})==18,'Pass7 definition count')
     return rows
 
 DEFINITIONS=study_definitions()
 DEFINITION_BY_ID={d['id']:d for d in DEFINITIONS}
 
-
-def configs():
-    return [(d['id'],d['family'],d['lookback'],d['distance'],d['body'],1.50) for d in DEFINITIONS]
-
+def configs():return [(d['id'],d['family'],d['lookback'],d['distance'],d['body'],1.50) for d in DEFINITIONS]
 
 def anchor_for(cid):
-    return next(a for a in FROZEN_ENTRIES if a[0]==cid.split('__')[0])
-
+    return next(a for a in FROZEN_ENTRIES if a[0]==DEFINITION_BY_ID[cid]['anchor'])
 
 def anchor_qualifies(f,anchor):
     _,_,l,d,b,r=anchor
     return f['distances'][l]<=d and f['body_atr']>=b and f['range_atr']>=r
 
+def comparator_qualifies(f,comparator):return anchor_qualifies(f,comparator) and f['body_ratio']>=.60
 
-def comparator_qualifies(f,comparator):
-    return anchor_qualifies(f,comparator) and f['body_ratio']>=.60
-
-
-def conditions_of(d):return [('body_ratio','GE',.60)]
-
+def condition_passes(f,d):
+    if d['feature'] is None:return True
+    v=f[d['feature']]
+    return v is not None and (d['availability'] or v<=d['cap'])
 
 def condition_metadata(cid,raw):
-    d=DEFINITION_BY_ID[cid]
-    return {'anchor':d['anchor'],'conditions_json':'[["body_ratio","GE",0.6]]','h4_vol_cap':None,'close_floor':None,'body_ratio_floor':.60,'missing_feature_signals':0,'reward_risk':d['rr']}
-
+    d=DEFINITION_BY_ID[cid];extra_only=d['scope']=='EXTRAS'
+    missing=sum(comparator_qualifies(f,FROZEN_ENTRIES[1]) and (not extra_only or not comparator_qualifies(f,FROZEN_ENTRIES[0])) and d['feature'] is not None and f[d['feature']] is None for f in raw.values())
+    return {'anchor':d['anchor'],'conditions_json':json.dumps({'body_range_floor':.60,'scope':d['scope'],'feature':d['feature'],'cap':d['cap'],'availability_only':d['availability'],'primary_bypasses_condition':extra_only},sort_keys=True),
+            'h4_vol_cap':d['cap'] if d['family']=='H4_VOL' else None,'daily_vol_cap':d['cap'] if d['family']=='DAILY_VOL' else None,'condition_scope':d['scope'],'availability_only':d['availability'],'body_ratio_floor':.60,'missing_feature_signals':missing,'reward_risk':STUDY_RR}
 
 def study_boundaries(cid):
-    return 'RR_BOUNDARY' if DEFINITION_BY_ID[cid]['rr'] in (RR_LEVELS[0],RR_LEVELS[-1]) else ''
-
+    d=DEFINITION_BY_ID[cid]
+    return 'CAP_BOUNDARY' if d['cap'] is not None and d['cap'] in (VOL_LEVELS[d['family']][0],VOL_LEVELS[d['family']][-1]) else ''
 
 def comparison_pairs():
-    pairs=[]
-    for entry in FROZEN_ENTRIES:
-        for a,b in zip(RR_LEVELS,RR_LEVELS[1:]):
-            pairs.append((f'{entry[0]}__RR{a:g}',f'{entry[0]}__RR{b:g}','CHANGE_RR'))
-    for value in RR_LEVELS:pairs.append((f'PRIMARY__RR{value:g}',f'FREQUENCY__RR{value:g}','MATCHED_RR_ENTRY_COMPARATOR'))
-    require(len(pairs)==25,'Pass6 paired comparison count')
+    pairs=[('PRIMARY__CONTROL','FREQUENCY__CONTROL','UNFILTERED_FREQUENCY')]
+    for d in DEFINITIONS[2:]:
+        for control in ('PRIMARY__CONTROL','FREQUENCY__CONTROL'):pairs.append((control,d['id'],'VS_UNFILTERED'))
+        if not d['availability']:
+            label='FREQUENCY' if d['scope']=='ALL' else 'HYBRID'
+            pairs.append((f'{label}__{d["family"]}_AVAILABLE',d['id'],'VS_MATCHED_AVAILABILITY'))
+    for family,levels in VOL_LEVELS.items():
+        for suffix in ['AVAILABLE']+[f'LE_{v:g}' for v in levels]:
+            pairs.append((f'FREQUENCY__{family}_{suffix}',f'HYBRID__{family}_{suffix}','ALL_VS_EXTRAS'))
+    require(len(pairs)==53 and len(set(pairs))==53,'Pass7 comparison count')
     return sorted(pairs)
 
-
 def condition_neighbours():
-    for a,b,question in comparison_pairs():
-        dimension='reward_risk' if question=='CHANGE_RR' else 'fixed_entry_comparator'
-        yield a,b,dimension
-        yield b,a,dimension
+    for family,levels in VOL_LEVELS.items():
+        for label in ('FREQUENCY','HYBRID'):
+            for a,b in zip(levels,levels[1:]):
+                x=f'{label}__{family}_LE_{a:g}';y=f'{label}__{family}_LE_{b:g}'
+                yield x,y,family+'_cap';yield y,x,family+'_cap'
 
+def verify_pass6(raw,paths):
+    rows=[]
+    for cid,cases in PASS6_PINS.items():
+        entry=next(a for a in FROZEN_ENTRIES if a[0]==cid.split('__')[0])
+        ids=[i for i,f in raw.items() if comparator_qualifies(f,entry)]
+        for name,pin in cases.items():
+            a,r,b=replay(ids,paths[name]);sha=digest([core(p) for p in a])
+            require(digest(ids)==pin['raw_signal_hash'] and sha==pin['accepted_hash'],'Pinned Pass6 RR2.75 ledger mismatch '+cid+' '+name)
+            require((len(ids),len(a),len(r),len(b))==tuple(int(pin[k]) for k in ('raw_signals','accepted','rejected','blocked')),'Pinned Pass6 counts changed')
+            require(abs(sum(p['r'] for p in a if p['r'] is not None)-float(pin['net_r']))<1e-8,'Pinned Pass6 R changed')
+            rows.append({'config':cid,'case':name,'raw_signal_hash':digest(ids),'accepted_hash':sha,'accepted':len(a),'parity':'PASS'})
+    require(len(rows)==16,'Incomplete Pass6 controls')
+    return rows
+
+def independent_study_masks(bars):
+    """Separate scalar H4/daily ATR/context and direct entry masks. No feature helpers."""
+    daily_groups={}
+    for b in bars:daily_groups.setdefault(b['t']//86400*86400,[]).append(b)
+    days=[];day_atrs=[];seed=[];atr=None;previous_close=None
+    for k,(t,group) in enumerate(sorted(daily_groups.items())):
+        high=max(b['mid']['h'] for b in group);low=min(b['mid']['l'] for b in group);close=group[-1]['mid']['c']
+        if k:
+            tr=max(high-low,abs(high-previous_close),abs(low-previous_close))
+            if k<=14:seed.append(tr)
+            if k==14:atr=sum(seed)/14
+            elif k>14:atr=(atr*13+tr)/14
+        history=day_atrs[k-60:k] if k>=60 else []
+        ratio=atr/(sum(history)/60) if atr is not None and len(history)==60 and all(v is not None and v>0 for v in history) else None
+        days.append((t+86400,ratio if k+1>=200 else None,k+1,sum(b['h1_count'] for b in group)))
+        day_atrs.append(atr);previous_close=close
+    day_ends=[d[0] for d in days];h4_atrs=[None]*len(bars);seed=[];atr=None
+    masks={d['id']:[] for d in DEFINITIONS};audit={}
+    for i in range(1,len(bars)):
+        p=bars[i]['mid'];q=bars[i-1]['mid'];tr=max(p['h']-p['l'],abs(p['h']-q['c']),abs(p['l']-q['c']))
+        if i<=14:seed.append(tr)
+        if i==14:atr=sum(seed)/14
+        elif i>14:atr=(13*atr+tr)/14
+        h4_atrs[i]=atr
+        if i<200 or not(q['c']<q['o'] and p['c']>p['o'] and p['o']<=q['c'] and p['c']>=q['o'] and p['h']>p['l'] and q['h']>q['l']):continue
+        history=h4_atrs[i-60:i];h4ratio=atr/(sum(history)/60) if all(v is not None and v>0 for v in history) else None
+        k=bisect.bisect_right(day_ends,bars[i]['t']+14400)-1;daily=days[k] if k>=0 else None
+        dratio=daily[1] if daily is not None else None
+        quality=(p['c']-p['o'])/atr>=1.40 and (p['h']-p['l'])/atr>=1.50 and (p['c']-p['o'])/(p['h']-p['l'])>=.60
+        primary=quality and abs(p['l']-min(z['mid']['l'] for z in bars[i-40:i]))/atr<=.50
+        frequency=quality and abs(p['l']-min(z['mid']['l'] for z in bars[i-20:i]))/atr<=.50
+        audit[i]={'h4_atr_ratio':h4ratio,'daily_atr_ratio':dratio,'daily_completed_count':daily[2] if daily else 0,'daily_end_utc':stamp(daily[0]) if daily else None,'daily_observed_h1_count':daily[3] if daily else None,'primary':primary,'frequency':frequency}
+        for d in DEFINITIONS:
+            v=h4ratio if d['family']=='H4_VOL' else dratio
+            passed=d['feature'] is None or (v is not None and (d['availability'] or v<=d['cap']))
+            keep=primary if d['scope']=='PRIMARY' else ((primary or (frequency and passed)) if d['scope']=='EXTRAS' else frequency and passed)
+            if keep:masks[d['id']].append(i)
+    return masks,audit
 
 def verify_pass5(raw,paths):
     rows=[]
@@ -225,8 +285,9 @@ def verify_pass2(raw,paths):
 
 def paired_reports(out,ledgers,masks):
     fields=['reference_config','candidate_config','question','case','reference_closed_r','candidate_closed_r','delta_r','common','added','removed','common_r_change','added_closed_r','removed_closed_r','identity_error']
-    summary=CSV(Path(out)/'rr_comparisons.csv',fields)
-    marginal=CSV(Path(out)/'rr_marginal_trades.csv',['reference_config','candidate_config','question','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
+    summary=CSV(Path(out)/'volatility_comparisons.csv',fields)
+    marginal=CSV(Path(out)/'volatility_marginal_trades.csv',['reference_config','candidate_config','question','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
+    period_delta=CSV(Path(out)/'volatility_period_deltas.csv',['reference_config','candidate_config','question','case','period','start_utc','end_utc','partial','reference_entries','candidate_entries','entry_delta','reference_net_r','candidate_net_r','net_r_delta'])
     try:
         for reference,candidate,question in comparison_pairs():
             for case in CASES:
@@ -239,11 +300,15 @@ def paired_reports(out,ledgers,masks):
                 err=rb-ra-(add-rem+change);require(abs(err)<1e-8,'Component marginal R identity failed')
                 meta={'reference_config':reference,'candidate_config':candidate,'question':question,'case':name}
                 summary.add(dict(meta,reference_closed_r=ra,candidate_closed_r=rb,delta_r=rb-ra,common=len(common),added=len(added),removed=len(removed),common_r_change=change,added_closed_r=add,removed_closed_r=rem,identity_error=err))
+                ix=PeriodIndex(a[0]);iy=PeriodIndex(b[0])
+                for interval in periods()[0]:
+                    x=ix.row(interval);y=iy.row(interval)
+                    period_delta.add(dict(meta,**{k:x[k] for k in ('period','start_utc','end_utc','partial')},reference_entries=x['entries'],candidate_entries=y['entries'],entry_delta=y['entries']-x['entries'],reference_net_r=x['net_r'],candidate_net_r=y['net_r'],net_r_delta=y['net_r']-x['net_r']))
                 ab={p['signal_index']:p['blocking_signal_index'] for p in a[2]};bb={p['signal_index']:p['blocking_signal_index'] for p in b[2]}
                 for kind,ids,lookup,blocks in (('ADDED',added,br,ab),('REMOVED',removed,ar,bb)):
                     for i in sorted(ids):marginal.add(dict(meta,kind=kind,signal_index=i,r=lookup[i]['r'],qualifies_candidate=i in masks[candidate],displaced_by_signal_index=blocks.get(i)))
-    finally:summary.close();marginal.close()
-    return {'rr_comparisons':summary.count,'rr_marginal_trades':marginal.count}
+    finally:summary.close();marginal.close();period_delta.close()
+    return {'volatility_comparisons':summary.count,'volatility_marginal_trades':marginal.count,'volatility_period_deltas':period_delta.count}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -438,12 +503,11 @@ def features(bars):
 
 
 def qualifies(f,config):
-    _,_,l,d,b,r=config
-    if not(f['distances'][l]<=d and f['body_atr']>=b and f['range_atr']>=r):return False
-    for key,op,value in conditions_of(DEFINITION_BY_ID[config[0]]):
-        actual=f[key]
-        if actual is None or (actual>value if op=='LE' else actual<value):return False
-    return True
+    d=DEFINITION_BY_ID[config[0]]
+    primary=comparator_qualifies(f,FROZEN_ENTRIES[0]);frequency=comparator_qualifies(f,FROZEN_ENTRIES[1])
+    if d['scope']=='PRIMARY':return primary
+    if d['scope']=='EXTRAS' and primary:return True
+    return frequency and condition_passes(f,d)
 
 
 def verify_pass1(bars,raw,paths,controls):
@@ -516,7 +580,7 @@ def replay(indices, paths):
     return accepted,rejected,blocked
 
 
-def independent_raw(bars, case, anchor=None, reward_risk=3.0, min_body_ratio=None):
+def independent_raw(bars, case, anchor=None, reward_risk=3.0, min_body_ratio=None, selected_indices=None):
     """Independent scalar signal, ATR and sequential raw execution control."""
     _,scenario,cost,model=case
     atr=None;seed=[];busy=-1;accepted=[];reject=[];blocked=[];signals=[]
@@ -533,6 +597,7 @@ def independent_raw(bars, case, anchor=None, reward_risk=3.0, min_body_ratio=Non
             prior=min(z['mid']['l'] for z in bars[i-lb:i])
             if abs(now['l']-prior)/atr>cap or (now['c']-now['o'])/atr<bmin or (now['h']-now['l'])/atr<rmin:continue
         if min_body_ratio is not None and (now['c']-now['o'])/(now['h']-now['l'])<min_body_ratio:continue
+        if selected_indices is not None and i not in selected_indices:continue
         signals.append(i)
         if i<busy:blocked.append((i,accepted[-1][0]));continue
         st=now['l']-.0001;ref=now['c'];tp=ref+reward_risk*(ref-st);et=bars[i]['t']+14400
@@ -689,11 +754,22 @@ def analyse(bars, out, progress=lambda **k:None):
     rr3_reconciliation=verify_pass5(raw,paths)
     write_json(out/'pass5_rr3_reconciliation.json',rr3_reconciliation)
     frozen_indices=sorted({i for entry in FROZEN_ENTRIES for i,f in raw.items() if comparator_qualifies(f,entry)})
+    independent_masks,independent_audit=independent_study_masks(bars)
+    require(set(independent_audit)==set(raw),"Independent context raw coverage mismatch")
+    for i,f in raw.items():
+        for key in ("h4_atr_ratio","daily_atr_ratio"):
+            a=f[key];b=independent_audit[i][key]
+            require((a is None and b is None) or (a is not None and b is not None and abs(a-b)<1e-12),"Independent volatility context mismatch "+key)
+        for key in ("daily_completed_count","daily_end_utc","daily_observed_h1_count"):
+            require(f[key]==independent_audit[i][key],"Independent daily provenance mismatch")
+    for c in grid:require(independent_masks[c[0]]==[i for i,f in raw.items() if qualifies(f,c)],"Independent volatility mask mismatch "+c[0])
     rr_paths={value:{case[0]:{i:path_for(bars,i,case,value) for i in frozen_indices} for case in CASES} for value in RR_LEVELS}
+    pass6_reconciliation=verify_pass6(raw,rr_paths[STUDY_RR])
+    write_json(out/"pass6_rr275_reconciliation.json",pass6_reconciliation)
     all_ledgers={};all_masks={};independent_rr_controls=[]
-    baselines={(anchor[0],case[0]):replay([i for i,f in raw.items() if comparator_qualifies(f,anchor)],paths[case[0]]) for anchor in FROZEN_ENTRIES for case in CASES}
+    baselines={(anchor[0],case[0]):replay([i for i,f in raw.items() if comparator_qualifies(f,anchor)],rr_paths[STUDY_RR][case[0]]) for anchor in FROZEN_ENTRIES for case in CASES}
     write_json(out/'independent_raw_controls.json',controls)
-    write_json(out/'protocol.json',{'version':VERSION,'start_utc':stamp(START),'cutoff_exclusive_utc':stamp(END),'cases':CASES,'rr':RR,'configurations':18,'source_h4_count':len(bars),'raw_indices_sha256':digest(indices)})
+    write_json(out/'protocol.json',{'version':VERSION,'start_utc':stamp(START),'cutoff_exclusive_utc':stamp(END),'cases':CASES,'reference_rr':STUDY_RR,'legacy_control_rr':RR,'configurations':18,'definitions':DEFINITIONS,'source_h4_count':len(bars),'raw_indices_sha256':digest(indices)})
     (out/'PROTOCOL.md').write_text(PROTOCOL)
     shutil.copyfile(__file__,out/'research_runner.py')
     fields=list(path_for(bars,indices[0],CASES[0])) if indices else ['signal_index']
@@ -706,11 +782,15 @@ def analyse(bars, out, progress=lambda **k:None):
     blk=make('blocked_signals',['config','case','signal_index','blocking_signal_index'])
     opn=make('open_at_cutoff',['config','case']+fields)
     rawpaths=make('raw_reference_rr3_paths',['case']+fields)
-    study_paths=make('frozen_rr_paths',['config','case']+fields)
-    memberships=make('raw_memberships',['config','signal_index'])
-    cf=make('configurations',['config','family','lookback','distance_atr_max','body_atr_min','range_atr_min','boundary_dimensions','anchor','conditions_json','h4_vol_cap','close_floor','body_ratio_floor','missing_feature_signals','reward_risk'])
+    study_paths=make('study_paths',['config','case']+fields)
+    memberships=make('raw_memberships',['config','signal_index','qualifies_primary','qualifies_frequency','signal_branch','feature','feature_value','condition_passed'])
+    cf=make('configurations',['config','family','lookback','distance_atr_max','body_atr_min','range_atr_min','boundary_dimensions','anchor','conditions_json','h4_vol_cap','daily_vol_cap','condition_scope','availability_only','body_ratio_floor','missing_feature_signals','reward_risk'])
     feature=make('raw_signal_features',['signal_index','signal_start','atr','body_atr','range_atr','close_location','body_ratio']+['distance_lb'+str(l) for l in LB]+CONTEXT_FIELDS)
     source=make('source_h4_features',['index','time','atr','first_observed_h1','h1_count']+[s+'_'+k for s in ('mid','bid','ask') for k in 'ohlc'])
+    va=make('volatility_signal_audit',['signal_index','signal_close','qualifies_primary','qualifies_frequency','h4_atr_ratio','daily_atr_ratio','daily_completed_count','daily_end_utc','daily_observed_h1_count','daily_context_age_seconds'])
+    for i in frozen_indices:
+        f=raw[i];row=independent_audit[i]
+        va.add(dict(signal_index=i,signal_close=stamp(bars[i]['t']+H4),qualifies_primary=row['primary'],qualifies_frequency=row['frequency'],**{k:f[k] for k in ('h4_atr_ratio','daily_atr_ratio','daily_completed_count','daily_end_utc','daily_observed_h1_count')},daily_context_age_seconds=bars[i]['t']+H4-epoch(f['daily_end_utc']) if f['daily_end_utc'] else None))
     for i,b in enumerate(bars):source.add(dict(index=i,time=stamp(b['t']),atr=atr[i],first_observed_h1=stamp(b['first_h1']),h1_count=b['h1_count'],**{s+'_'+k:b[s][k] for s in ('mid','bid','ask') for k in 'ohlc'}))
     for i,f in raw.items():feature.add(dict(signal_index=i,signal_start=stamp(bars[i]['t']),**{k:v for k,v in f.items() if k!='distances'},**{'distance_lb'+str(l):f['distances'][l] for l in LB}))
     for case in CASES:
@@ -718,7 +798,7 @@ def analyse(bars, out, progress=lambda **k:None):
     per,months,rolling=periods()
     periodfields=list(period_row([],per[0]));statfields=list(stats([]))
     periodwriters=[make(n,['config','case']+periodfields) for n in ('periods','monthly','rolling')]
-    sums=make('summary',['config','case','reward_risk','entry_version','accepted_signal_hash','closed_signal_hash','raw_signals','raw_signal_hash','accepted_hash','accepted','rejected','blocked','open_at_cutoff','isolated_eligible','isolated_closed','isolated_net_r','blank_complete_years','blank_complete_months','longest_blank_complete_months','worst_12m_r','worst_24m_r','worst_36m_r','median_stop_pips','median_cost_over_risk','median_entry_spread_pips','median_holding_hours','max_interentry_days','max_wait_including_edges_days']+statfields)
+    sums=make('summary',['config','case','reward_risk','entry_version','condition_scope','availability_only','primary_accepted','extra_accepted','primary_signals_blocked','accepted_signal_hash','closed_signal_hash','raw_signals','raw_signal_hash','accepted_hash','accepted','rejected','blocked','open_at_cutoff','isolated_eligible','isolated_closed','isolated_net_r','blank_complete_years','blank_complete_months','longest_blank_complete_months','worst_12m_r','worst_24m_r','worst_36m_r','median_stop_pips','median_cost_over_risk','median_entry_spread_pips','median_holding_hours','max_interentry_days','max_wait_including_edges_days']+statfields)
     comparisons=make('baseline_comparisons',['config','case','baseline_closed_r','candidate_closed_r','delta_r','common','added','removed','common_r_change','added_closed_r','removed_closed_r','identity_error'])
     marginal=make('baseline_marginal_trades',['config','case','kind','signal_index','r','qualifies_candidate','displaced_by_signal_index'])
     summary_lookup={};rawhash={};acceptedhash={}
@@ -730,13 +810,15 @@ def analyse(bars, out, progress=lambda **k:None):
             cf.add(dict(config=cid,family=family,lookback=l,distance_atr_max=d,body_atr_min=b,range_atr_min=r,boundary_dimensions=boundaries,**condition_metadata(cid,raw)))
             signals=[i for i,f in raw.items() if qualifies(f,c)];signalset=set(signals);rh=digest(signals);rawhash[cid]=rh
             all_masks[cid]=set(signals)
-            for i in signals:memberships.add(dict(config=cid,signal_index=i))
+            for i in signals:
+                f=raw[i];de=DEFINITION_BY_ID[cid];pr=comparator_qualifies(f,FROZEN_ENTRIES[0]);fr=comparator_qualifies(f,FROZEN_ENTRIES[1])
+                memberships.add(dict(config=cid,signal_index=i,qualifies_primary=pr,qualifies_frequency=fr,signal_branch='PRIMARY' if pr else 'EXTRA',feature=de['feature'],feature_value=f[de['feature']] if de['feature'] else None,condition_passed=condition_passes(f,de)))
             for case in CASES:
                 name=case[0];meta={'config':cid,'case':name}
                 accepted,rejected,blocked=replay(signals,case_paths[name]);all_ledgers[cid,name]=(accepted,rejected,blocked);ah=digest([core(p) for p in accepted]);acceptedhash[(cid,name)]=ah
-                check_signals,check_ledger,check_rejected,check_blocked=independent_raw(bars,case,anchor_for(cid),reward_risk,.60)
-                require(check_signals==signals and check_ledger==[core(p) for p in accepted],'Independent RR full-ledger parity failed '+cid+' '+name)
-                require(check_rejected==[(p['signal_index'],p['reason']) for p in rejected] and check_blocked==[(p['signal_index'],p['blocking_signal_index']) for p in blocked],'Independent RR rejection/block parity failed')
+                check_signals,check_ledger,check_rejected,check_blocked=independent_raw(bars,case,reward_risk=STUDY_RR,selected_indices=set(independent_masks[cid]))
+                require(check_signals==signals and check_ledger==[core(p) for p in accepted],'Independent conditional full-ledger parity failed '+cid+' '+name)
+                require(check_rejected==[(p['signal_index'],p['reason']) for p in rejected] and check_blocked==[(p['signal_index'],p['blocking_signal_index']) for p in blocked],'Independent conditional rejection/block parity failed')
                 if reward_risk==3.0:require([core(p) for p in accepted]==[core(p) for p in baselines[anchor_for(cid)[0],name][0]],'RR3 study/reference parity failed')
                 independent_rr_controls.append({'config':cid,'case':name,'raw_signal_hash':rh,'accepted':len(accepted),'rejected':len(rejected),'blocked':len(blocked),'accepted_hash':ah,'parity':'PASS'})
                 for i in signals:study_paths.add(dict(meta,**case_paths[name][i]))
@@ -763,7 +845,7 @@ def analyse(bars, out, progress=lambda **k:None):
                        median_stop_pips=med([p['stop_distance_pips'] for p in accepted]),median_cost_over_risk=med([p['cost_over_risk'] for p in accepted]),median_entry_spread_pips=med([p['entry_spread_pips'] for p in accepted if p['entry_spread_pips'] is not None]),
                        median_holding_hours=med([(p['exit_epoch']-p['entry_epoch'])/3600 for p in accepted if p['exit_epoch'] is not None]),max_interentry_days=max(gaps) if gaps else None,max_wait_including_edges_days=max((y-x)/86400 for x,y in zip(edge,edge[1:])),**realised)
                 for n in (12,24,36):s[f'worst_{n}m_r']=min(p['net_r'] for p in periodrows[2] if p['period'].startswith(str(n)+'M'))
-                s.update(reward_risk=reward_risk,entry_version=anchor_for(cid)[0],accepted_signal_hash=digest([p['signal_index'] for p in accepted]),closed_signal_hash=digest([p['signal_index'] for p in accepted if p['r'] is not None]))
+                s.update(reward_risk=reward_risk,entry_version=cid.split('__')[0],condition_scope=DEFINITION_BY_ID[cid]['scope'],availability_only=DEFINITION_BY_ID[cid]['availability'],primary_accepted=sum(independent_audit[p['signal_index']]['primary'] for p in accepted),extra_accepted=sum(not independent_audit[p['signal_index']]['primary'] for p in accepted),primary_signals_blocked=sum(independent_audit[p['signal_index']]['primary'] for p in blocked),accepted_signal_hash=digest([p['signal_index'] for p in accepted]),closed_signal_hash=digest([p['signal_index'] for p in accepted if p['r'] is not None]))
                 sums.add(s);summary_lookup[(cid,name)]=s
                 ba={p['signal_index']:p for p in baselines[anchor_for(cid)[0],name][0]};ca={p['signal_index']:p for p in accepted}
                 added=ca.keys()-ba.keys();removed=ba.keys()-ca.keys();common=ba.keys()&ca.keys()
@@ -787,10 +869,10 @@ def analyse(bars, out, progress=lambda **k:None):
         for c,h in rawhash.items():duplicate[h].append(c)
         write_json(out/'duplicate_raw_streams.json',[v for v in duplicate.values() if len(v)>1])
         require(len(independent_rr_controls)==144,'Incomplete independent RR controls')
-        write_json(out/'independent_rr_controls.json',independent_rr_controls)
+        write_json(out/'independent_conditional_controls.json',independent_rr_controls)
         component_counts=paired_reports(out,all_ledgers,all_masks)
         write_json(out/'output_row_counts.json',dict({n:w.count for n,w in writers.items()},**component_counts))
-        write_json(out/'RUN_COMPLETE.json',{'version':VERSION,'status':'COMPLETE','configurations':18,'execution_cases':8,'fixed_anchors':2,'pass1_anchor_parity':'PASS','pass2_control_parity':'PASS','pass2_control_cases':104,'pass3_comparator_parity':'PASS','pass3_comparator_cases':16,'pass4_reference_parity':'PASS','pass4_reference_cases':16,'frozen_entry_versions':2,'rr_levels':list(RR_LEVELS),'pass5_rr3_parity':'PASS','pass5_rr3_cases':16,'independent_rr_full_replay_cases':144,'summary_rows':144,'independent_raw_parity':'PASS','scope':'Exploratory standalone historical research; not portfolio admission or prospective profitability'})
+        write_json(out/'RUN_COMPLETE.json',{'version':VERSION,'status':'COMPLETE','configurations':18,'execution_cases':8,'fixed_anchors':2,'pass1_anchor_parity':'PASS','pass2_control_parity':'PASS','pass2_control_cases':104,'pass3_comparator_parity':'PASS','pass3_comparator_cases':16,'pass4_reference_parity':'PASS','pass4_reference_cases':16,'frozen_entry_versions':2,'fixed_study_rr':STUDY_RR,'new_conditional_definitions':12,'availability_definitions':4,'volatility_levels':VOL_LEVELS,'pass6_rr275_parity':'PASS','pass6_rr275_cases':16,'pass5_rr3_parity':'PASS','pass5_rr3_cases':16,'independent_conditional_full_replay_cases':144,'independent_volatility_context_and_masks':'PASS','summary_rows':144,'independent_raw_parity':'PASS','scope':'Exploratory standalone historical research; not portfolio admission or prospective profitability'})
     finally:
         for w in writers.values():w.close()
 
@@ -798,7 +880,7 @@ def analyse(bars, out, progress=lambda **k:None):
 STATE={'status':'IDLE','version':VERSION,'read_only':True,'orders_sent':False,'requested_start':stamp(START),'cutoff_exclusive':stamp(END)}
 STATE_LOCK=threading.Lock()
 START_LOCK=threading.Lock()
-OUTPUT=Path(os.environ.get('EURUSD_H4_PASS6_OUTPUT_DIR', '/data/eurusd_h4_pass6_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass6_research')))
+OUTPUT=Path(os.environ.get('EURUSD_H4_PASS7_OUTPUT_DIR', '/data/eurusd_h4_pass7_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass7_research')))
 
 
 def update(**kwargs):
@@ -822,7 +904,7 @@ def run():
         (OUTPUT/RESULT_NAME).unlink(missing_ok=True)
         self_test()
         work=Path(tempfile.mkdtemp(prefix='pass1_',dir=OUTPUT));reports=work/'reports';reports.mkdir()
-        explicit=os.environ.get('EURUSD_H4_PASS6_FROZEN_DATA')
+        explicit=os.environ.get('EURUSD_H4_PASS7_FROZEN_DATA')
         cached=OUTPUT/SOURCE_NAME
         beside=Path(__file__).resolve().parent/SOURCE_NAME
         prior=Path(os.environ.get('EURUSD_H4_PASS1_OUTPUT_DIR','/data/eurusd_h4_pass1_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass1_research')))/SOURCE_NAME
@@ -830,7 +912,8 @@ def run():
         prior3=Path(os.environ.get('EURUSD_H4_PASS3_OUTPUT_DIR','/data/eurusd_h4_pass3_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass3_research')))/SOURCE_NAME
         prior4=Path(os.environ.get('EURUSD_H4_PASS4_OUTPUT_DIR','/data/eurusd_h4_pass4_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass4_research')))/SOURCE_NAME
         prior5=Path(os.environ.get('EURUSD_H4_PASS5_OUTPUT_DIR','/data/eurusd_h4_pass5_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass5_research')))/SOURCE_NAME
-        source=Path(explicit) if explicit else next((p for p in (cached,beside,prior5,prior4,prior3,prior2,prior) if p.exists()),None)
+        prior6=Path(os.environ.get('EURUSD_H4_PASS6_OUTPUT_DIR','/data/eurusd_h4_pass6_research' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'eurusd_h4_pass6_research')))/SOURCE_NAME
+        source=Path(explicit) if explicit else next((p for p in (cached,beside,prior6,prior5,prior4,prior3,prior2,prior) if p.exists()),None)
         if source is not None:
             require(source.is_file(),'Explicit frozen source does not exist')
             h4,h1,receipts,manifest=read_source(source)
@@ -891,7 +974,7 @@ def response(method,path):
 
 
 def app(environ,start_response):
-    if os.environ.get('EURUSD_H4_PASS6_AUTOSTART','true').lower()!='false':start()
+    if os.environ.get('EURUSD_H4_PASS7_AUTOSTART','true').lower()!='false':start()
     method=environ.get('REQUEST_METHOD','GET');code,mime,body,path=response(method,environ.get('PATH_INFO','/'))
     size=path.stat().st_size if path else len(body)
     headers=[('Content-Type',mime),('Content-Length',str(size)),('Cache-Control','no-store')]
@@ -945,7 +1028,7 @@ def self_test():
     a,_,bl=replay([0,1,2],p);require([v['signal_index'] for v in a]==[0,2] and len(bl)==1,'P0 exit-candle handling')
     require(longest_zero([0,0,1,0,0,0])==3,'Zero-month drought')
     require(response('POST','/')[0]==405,'No writes allowed')
-    require(len(DEFINITIONS)==18 and len(comparison_pairs())==25 and len(ANCHORS)==2,'Pass3 study count')
+    require(len(DEFINITIONS)==18 and len(comparison_pairs())==53 and len(ANCHORS)==2,'Pass3 study count')
     return {'status':'PASS','scope':'Synthetic software checks only; no historical result'}
 
 
@@ -957,5 +1040,5 @@ if __name__=='__main__':
     if args.self_test:print(json.dumps(self_test()));sys.exit(0)
     if args.run_once:
         run();print(json.dumps(snapshot()));sys.exit(0 if snapshot()['status']=='COMPLETE' else 1)
-    if os.environ.get('EURUSD_H4_PASS6_AUTOSTART','true').lower()!='false':start()
+    if os.environ.get('EURUSD_H4_PASS7_AUTOSTART','true').lower()!='false':start()
     ThreadingHTTPServer(('0.0.0.0',int(os.environ.get('PORT','8000'))),Handler).serve_forever()
