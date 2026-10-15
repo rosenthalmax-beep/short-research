@@ -1,2 +1,0 @@
-# ZoneInfo uses system timezone data on Linux; this also supports Windows.
-tzdata
