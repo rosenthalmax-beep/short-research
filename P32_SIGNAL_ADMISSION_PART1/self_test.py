@@ -256,7 +256,7 @@ class FullPipelineTests(unittest.TestCase):
                 return result
             def export(self,z):z.writestr('available_seed_source_index.json','[]')
             def close(self):pass
-        with tempfile.TemporaryDirectory() as tmp,patch.object(app,'HistoryStore',FakeHistory),patch.object(e,'CandleStore',FakeStore),patch.dict(os.environ,{'OANDA_TOKEN':'FAKE','OANDA_ENV':'live'}),patch('urllib.request.OpenerDirector.open',side_effect=AssertionError('No external network')):
+        with tempfile.TemporaryDirectory() as tmp,patch('gap_audit.import_baseline_sources'),patch('gap_audit.run',return_value=({},[],[])),patch('gap_audit.export_evidence'),patch.object(app,'HistoryStore',FakeHistory),patch.object(e,'CandleStore',FakeStore),patch.dict(os.environ,{'OANDA_TOKEN':'FAKE','OANDA_ENV':'live'}),patch('urllib.request.OpenerDirector.open',side_effect=AssertionError('No external network')):
             result=app.run(pathlib.Path(tmp))
             self.assertEqual(result['strategy_streams_scanned'],32);self.assertGreater(result['raw_signals'],0);self.assertFalse(result['full_portfolio_validated'])
             with zipfile.ZipFile(pathlib.Path(tmp)/app.RESULT) as z:

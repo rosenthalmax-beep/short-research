@@ -12,6 +12,7 @@ import locked_rules as rules
 
 GRANS={'M15':900,'H1':3600,'H4':14400,'D':86400}
 START=e.dt('2005-01-01T00:00:00Z')
+WARMUP_START=e.dt('2002-01-01T00:00:00Z')
 END=e.dt('2026-09-20T18:29:00Z')
 
 def align(t,gran):
@@ -161,23 +162,35 @@ class HistoryStore:
             rows.append(dict(time=e.stamp(t),complete=True,mid={k:float(v) for k,v in p.items()}))
         return rows
     def series(self,pair,gran):
-        result=Bars();cursor=align(START,gran);end=align(END,gran)
+        result=Bars();cursor=align(WARMUP_START,gran);end=align(END,gran);boundary=align(START,gran)
+        warmup_count=0;warmup_errors=[]
         expected,missing,weekends=0,0,0
         while cursor<end:
-            finish=min(end,advance(cursor,gran,4800))
+            segment_end=boundary if cursor<boundary else end
+            finish=min(segment_end,advance(cursor,gran,4800))
             e.require(finish>cursor,'Native history cursor did not advance')
             self.progress(phase='DOWNLOAD_CONTINUOUS_HISTORY',pair=pair,granularity=gran,timeframe=gran,
                           bars_evaluated=None,bars_required=None,signals_found=None,
                           through_utc=e.stamp(cursor),native_bars=len(result),mid_downloads=self.downloads,mid_cache_hits=self.hits,
-                          history_timing_fix='NY17_H4_DST_V1_2026_10_16',last_history_update_utc=e.stamp(datetime.now(e.UTC)))
+                          history_timing_fix='NY17_H4_DST_V1_2026_10_16',history_segment='INDICATOR_WARMUP' if cursor<boundary else 'TEST_PERIOD',last_history_update_utc=e.stamp(datetime.now(e.UTC)))
             ident=dict(schema='MID_HISTORY_NY17_V1',broker='https://api-fxtrade.oanda.com',pair=pair,granularity=gran,start=e.stamp(cursor),end=e.stamp(finish),price='M',smooth=False,dailyAlignment=17,alignmentTimezone='America/New_York')
             key=e.sha(e.canon(ident));cached=self.db.execute('SELECT body,sha256 FROM history WHERE key=?',(key,)).fetchone()
             if cached:
                 raw=zlib.decompress(cached[0]);e.require(e.sha(raw)==cached[1],'MID cache checksum mismatch');obj=json.loads(raw);rows=self.validate(obj,ident);self.hits+=1
             else:
                 if self.reader is None:raise e.NeedData(ident)
-                obj=self.reader.get(ident);rows=self.validate(obj,ident);raw=e.canon(dict(instrument=pair,granularity=gran,candles=rows))
-                self.db.execute('INSERT INTO history VALUES(?,?,?,?)',(key,e.canon(ident).decode(),zlib.compress(raw,6),e.sha(raw)));self.db.commit();self.downloads+=1
+                try:obj=self.reader.get(ident)
+                except e.CandleFetchError as exc:
+                    # A broker can reject an older unavailable date range. Keep
+                    # this explicitly unknown; never save a failure as an empty
+                    # successful candle response or hide in-period/auth errors.
+                    if cursor>=boundary or str(exc)!='MID candles: HTTP 400':raise
+                    warmup_errors.append(dict(start=e.stamp(cursor),end=e.stamp(finish),error=str(exc)))
+                    rows=[]
+                    self.progress(warmup_unavailable_blocks=len(warmup_errors))
+                else:
+                    rows=self.validate(obj,ident);raw=e.canon(dict(instrument=pair,granularity=gran,candles=rows))
+                    self.db.execute('INSERT INTO history VALUES(?,?,?,?)',(key,e.canon(ident).decode(),zlib.compress(raw,6),e.sha(raw)));self.db.commit();self.downloads+=1
             available={e.dt(c['time']) for c in rows};t=cursor
             while t<finish:
                 expected+=1
@@ -187,13 +200,15 @@ class HistoryStore:
                 next_slot=advance(t,gran,1)
                 e.require(next_slot>t,'Native history coverage cursor did not advance: '+pair+' '+gran+' '+e.stamp(t))
                 t=next_slot
-            for c in rows:result.append(c)
+            for c in rows:
+                result.append(c)
+                if bar_end(e.dt(c['time']),gran)<=START:warmup_count+=1
             cursor=finish
             self.progress(phase='DOWNLOAD_CONTINUOUS_HISTORY',pair=pair,granularity=gran,through_utc=e.stamp(cursor),native_bars=len(result),mid_downloads=self.downloads,mid_cache_hits=self.hits,last_history_update_utc=e.stamp(datetime.now(e.UTC)))
         self.coverage.append(dict(pair=pair,granularity=gran,observed_bars=len(result),expected_calendar_slots=expected,
                                   missing_nonweekend_slots=missing,assumed_weekend_slots=weekends,
                                   first_observed=e.stamp(result[0]['time']) if len(result) else None,last_observed=e.stamp(result[-1]['time']) if len(result) else None,
-                                  start=e.stamp(align(START,gran)),end=e.stamp(end),interpretation='Missing slots can be scheduled closure/holidays/zero quotes or missing observations; no synthetic candles.'))
+                                  start=e.stamp(align(WARMUP_START,gran)),evaluation_start=e.stamp(START),warmup_observed_bars=warmup_count,warmup_unavailable_blocks=warmup_errors,warmup_sufficient=warmup_count>=({'D':250,'H4':250,'H1':250,'M15':250}[gran]),end=e.stamp(end),interpretation='Missing slots can be scheduled closure/holidays/zero quotes or missing observations; no synthetic candles. Failed warm-up requests are unknown, not verified empty history.'))
         return result
     def export(self,z):
         index=[]

@@ -9,21 +9,22 @@ from datetime import datetime
 from pathlib import Path
 from wsgiref.simple_server import make_server,WSGIRequestHandler
 import execution as e
-from history import HistoryStore,MidReader,START,END
+from history import HistoryStore,MidReader,START,END,WARMUP_START
 import signals as recovery
 import admissions
+import gap_audit
 
-VERSION='P32_SIGNAL_ADMISSION_V1_2026_10_15'
-RESULT='P32_SIGNAL_ADMISSION_RESULTS.zip'
-SOURCES='P32_SIGNAL_ADMISSION_SOURCES.zip'
+VERSION='P32_WARMUP_GAP_AUDIT_V1_2026_10_16'
+RESULT='P32_WARMUP_GAP_AUDIT_RESULTS.zip'
+SOURCES='P32_WARMUP_GAP_AUDIT_SOURCES.zip'
 LOCK=threading.RLock()
-STATE=dict(status='IDLE',version=VERSION,orders_supported=False,scope='ALL32_OBSERVED_BAR_SIGNALS_AND_CONDITIONAL_ADMISSIONS')
+STATE=dict(status='IDLE',version=VERSION,orders_supported=False,scope='ALL32_PRE2005_WARMUP_AND_171_GAP_SOURCE_INVESTIGATION')
 DIRECTORY=None
 
 PROTOCOL={
  'scope':'Regenerate all 32 locked current Python predicate streams on observed native bars, before position filtering; replay current nonhedging account gates.',
- 'history':'2005-01-01 through 2026-09-20T18:29Z. MID native H1/M15/H4/D, unsmoothed; NY17 daily/H4 alignment; no synthetic bars.',
- 'indicators':'Full observed-history SMA-seeded EMA/RMA. EURCHF retains research TR1..14 ATR. This canonical historical initialization is not asserted identical to live rolling fetch-window initialization.',
+ 'history':'Indicator warm-up from 2002-01-01; signal evaluation remains 2005-01-01 through 2026-09-20T18:29Z. MID native H1/M15/H4/D, unsmoothed; NY17 daily/H4 alignment; no synthetic bars.',
+ 'indicators':'Pre-2005 observed-history SMA-seeded EMA/RMA; missing warm-up is explicitly flagged. EURCHF retains research TR1..14 ATR. This canonical historical initialization is not asserted identical to live rolling fetch-window initialization.',
  'causality':'M15 HTF eligible only when next actual HTF open <= M15 signal OPEN, exactly as supplied probe. H1 daily filters use previous NY session only.',
  'rules':'Thresholds, sessions, filters, RR and core/complement priority extracted from supplied probe unchanged. No rule search or optimization.',
  'signals':'Every observed-bar qualification retained before pyramiding/opposition filtering. Native missing observations can hide additional qualifications.',
@@ -33,18 +34,23 @@ PROTOCOL={
  'uncertainty':'Gaps, unresolved barrier order and uncertain admission lineage remain explicit. Original accepted book and 456 archived EURUSD isolated paths are reconciliation controls, not forced targets.',
  'accounting':'Illustrative price-only research units: initial 100, 1% of closed balance reserved per entry, EURJPY M15 short .75%, P/L from worst-entry-bound budget R. No GBP conversion, units, margin, live NAV sizing, financing or open-equity drawdown.',
  'ambiguous_prices':'Separate STOP_FIRST and TARGET_FIRST values for unresolved same-S5 both-barrier candles. Earlier gaps use observed-barrier scenario, never asserted actual first exit.',
+ 'gap_diagnostics':'Investigate all 171 prior gap paths separately. Requery missing native/fine windows, inspect finer quotes and one control pair when empty. No absence is certified as a closure, and diagnostic quotes never automatically change exits.',
  'validation':'All32 observed streams can be recovered while source identity/coverage remains qualified. Conditional closed-equity CAGR/DD must not be presented as validated broker returns.',
 }
 
 def progress(**values):
-    with LOCK:STATE.update(values)
+    with LOCK:
+        if values.get('phase') and values['phase']!=STATE.get('phase'):
+            for key in ('bars_evaluated','bars_required','signals_found','granularity','timeframe','through_utc','native_bars','gap_query_pair','gap_query_granularity','gap_query_start','gap_query_end'):
+                STATE.pop(key,None)
+        STATE.update(values,last_progress_utc=e.stamp(datetime.now(e.UTC)))
 
 def output_dir():
     if DIRECTORY:return Path(DIRECTORY).resolve()
     return Path(os.getenv('P32_SIGNAL_OUTPUT_DIR','/data/p32_signal_admission' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'p32_signal_admission'))).resolve()
 
 def fingerprint():
-    return e.sha(e.canon({p:e.sha((Path(__file__).parent/p).read_bytes()) for p in ('app.py','history.py','signals.py','admissions.py','locked_rules.py','m15_adapter.py','execution.py','reference_payload.py')}))
+    return e.sha(e.canon({p:e.sha((Path(__file__).parent/p).read_bytes()) for p in ('app.py','history.py','signals.py','admissions.py','locked_rules.py','m15_adapter.py','execution.py','reference_payload.py','gap_audit.py')}))
 
 def normalized_source_hash(path):
     # Windows upload/editing can change CRLF/BOM without changing Python code.
@@ -91,6 +97,8 @@ def atomic_json(path,data):
 
 def run(directory=None,offline=False):
     directory=Path(directory or output_dir());directory.mkdir(parents=True,exist_ok=True)
+    baseline_path=Path(__file__).parent/'prior_signal_admission_results.zip'
+    baseline=gap_audit.load_baseline(baseline_path)
     data=e.load_reference();registry=recovery.validate_registry(data['registry']);signature=fingerprint()
     provenance=json.loads((Path(__file__).parent/'rules_provenance.json').read_text())
     e.require(normalized_source_hash(Path(__file__).parent/'locked_rules.py')==provenance['pure_rules_sha256'],'Locked rules file changed')
@@ -109,6 +117,9 @@ def run(directory=None,offline=False):
     progress(status='RUNNING',phase='IMPORT_SAVED_EXECUTION_CANDLES',version=VERSION,pairs_required=9,started_at_utc=e.stamp(datetime.now(e.UTC)))
     try:
         store.import_seeds(Path(__file__).parent)
+        gap_audit.import_baseline_sources(baseline_path,store)
+        gap_summary,gap_paths,gap_windows=gap_audit.run(directory,baseline,store,price_reader,progress)
+        atomic_json(directory/'gap_investigation_checkpoint.json',dict(summary=gap_summary,paths=gap_paths,windows=gap_windows))
         for number,pair in enumerate(e.PAIRS,1):
             checkpoint=directory/('signals_'+pair+'_'+signature+'.json')
             if checkpoint.exists():
@@ -132,7 +143,9 @@ def run(directory=None,offline=False):
             progress(pairs_completed=number,raw_signals_recovered=len(raw))
         raw.sort(key=lambda r:(r['entry_utc'],r['strategy_id'],r['same_strategy_trigger_priority']))
         e.require(len({x['signal_key'] for x in raw})==len(raw),'Raw signal keys duplicated across pairs')
+        e.require(all(e.dt(s['signal_start_utc'])>=START for s in raw),'Warm-up signal leaked into evaluation period')
         archive_control,old_raw_control=recovery.reconcile(data,raw)
+        warmup_summary,warmup_changes,missing_followup=gap_audit.compare(baseline,raw,archive_control)
         for scenario in admissions.SCENARIOS:
             ledger=admissions.replay(raw,scenario,paths.get,progress,hedging=False);ledgers.extend(ledger)
             for ambiguity in ('STOP_FIRST','TARGET_FIRST'):
@@ -157,14 +170,19 @@ def run(directory=None,offline=False):
                                   resolved_only_mean_price_r=sum(values)/len(values) if values else None,
                                   admitted_with_uncertain_lineage=sum(r['decision_has_uncertain_lineage'] for r in admitted),max_modeled_open_positions=max((r['active_positions'] for r in subset),default=0)))
         status='COMPLETE_WITH_LIMITATIONS'
-        summary=dict(status=status,version=VERSION,scope=STATE['scope'],orders_sent=False,live_services_contacted=False,
-                     historical_cutoff=e.stamp(END),strategy_streams_scanned=32,observed_bar_signal_recovery_finished=True,
+        summary=dict(status=status,version=VERSION,scope=STATE['scope'],prior_admission_result_sha256=gap_audit.BASELINE_SHA,orders_sent=False,live_services_contacted=False,
+                     historical_cutoff=e.stamp(END),evaluation_start=e.stamp(START),warmup_start=e.stamp(WARMUP_START),
+                     warmup_coverage_insufficient=[dict(pair=r['pair'],granularity=r['granularity'],warmup_observed_bars=r.get('warmup_observed_bars',0)) for r in coverage if not r.get('warmup_sufficient',False)],
+                     gap_investigation=gap_summary,warmup_comparison=warmup_summary,strategy_streams_scanned=32,observed_bar_signal_recovery_finished=True,
                      historical_original_stream_identity_confirmed=False,full_portfolio_validated=False,signature=signature,
                      raw_signals=len(raw),candidate_paths_priced=len(paths.rows),price_path_status_counts=dict(collections.Counter(r['status'] for r in paths.rows.values())),
                      archived_control_counts=dict(collections.Counter(r['status'] for r in archive_control)),eurusd_raw_control_counts=dict(collections.Counter(r['status'] for r in old_raw_control)),
                      mid_downloads=history.downloads,new_execution_blocks=store.downloads,scenarios=summaries,
                      finished_at_utc=e.stamp(datetime.now(e.UTC)),offline=offline)
-        files={'RUN_COMPLETE.json':e.canon(summary),'protocol.json':e.canon(PROTOCOL),'rules_provenance.json':e.canon(provenance),
+        files={'gap_investigation_summary.json':e.canon(gap_summary),'gap_path_investigation.csv':csv_bytes(gap_paths),
+               'gap_window_evidence.csv':csv_bytes(gap_windows),'warmup_comparison_summary.json':e.canon(warmup_summary),
+               'warmup_signal_changes.csv':csv_bytes(warmup_changes),'prior_missing_32_followup.csv':csv_bytes(missing_followup),
+               'prior_run_summary.json':e.canon(baseline['summary']),'RUN_COMPLETE.json':e.canon(summary),'protocol.json':e.canon(PROTOCOL),'rules_provenance.json':e.canon(provenance),
                'raw_signal_witnesses.jsonl':jsonl(raw),'raw_signals.csv':csv_bytes([{k:v for k,v in r.items() if k!='diagnostics'} for r in raw]),
                'strategy_stream_coverage.csv':csv_bytes(streams),'native_history_coverage.csv':csv_bytes(coverage),
                'archived_3391_signal_reconciliation.csv':csv_bytes(archive_control),'archived_eurusd_raw_reconciliation.csv':csv_bytes(old_raw_control),
@@ -174,7 +192,18 @@ def run(directory=None,offline=False):
                'mid_history_source_index.json':e.canon(history.index()),'request_receipts.json':e.canon({'mid':mid_reader.receipts if mid_reader else [],'execution':price_reader.receipts if price_reader else []}),
                'frozen_original_accepted_book.csv':csv_bytes(data['reference']['book']),
                'prior_frozen_baseline_controls.json':e.canon(data['baseline_controls'])}
-        text='''# P32 observed-bar signal and admission replay
+        text='''# P32 pre-2005 warm-up and gap source investigation
+
+Indicators now use observed history from 2002-01-01; signal evaluation starts
+on 2005-01-01 as before. Native_history_coverage.csv records available warm-up
+and flags insufficient observations. Warmup_signal_changes.csv records added,
+removed and changed signals, without forcing agreement with old trades.
+
+Gap_path_investigation.csv covers all 171 prior uncertain paths.
+Gap_window_evidence.csv distinguishes native, M1 and S5 gaps and reports fresh
+source/finer quote checks. Empty quotes in one or two pairs do not establish
+a historical closure. These diagnostics do not automatically promote exits
+or mix new source revisions into the frozen execution cache.
 
 All32 current locked predicate streams are evaluated on continuous native MID
 history before any position filter. Thresholds were not optimized. Compare the
@@ -216,14 +245,14 @@ No trading service was modified or contacted, and no orders can be submitted.
         temp=directory/(RESULT+'.tmp')
         with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
             for n,b in sorted(files.items()):z.writestr(n,b)
-            store.export(z)
+            store.export(z);gap_audit.export_evidence(directory,z)
         temp.replace(directory/RESULT)
         report_written=True
         progress(phase='PACKAGE_NATIVE_SOURCE_ARCHIVE',result_ready=True,result='/results.zip')
         temp=directory/(SOURCES+'.tmp')
         with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
-            history.export(z);store.export(z)
-            z.writestr('source_provenance.json',e.canon(dict(signature=signature,seeds=e.SEED_MANIFEST,original_reference_sha256=e.REFERENCE_SHA256)))
+            history.export(z);store.export(z);gap_audit.export_evidence(directory,z)
+            z.writestr('source_provenance.json',e.canon(dict(signature=signature,seeds=e.SEED_MANIFEST,original_reference_sha256=e.REFERENCE_SHA256,prior_admission_result_sha256=gap_audit.BASELINE_SHA)))
         temp.replace(directory/SOURCES)
         atomic_json(directory/'completion.json',summary)
         progress(**summary,phase='FINISHED',result='/results.zip',source_archive='/sources.zip',result_ready=True)
@@ -262,7 +291,10 @@ def application(environ,start_response):
     elif path in ('/','/health'):code,body='200 OK',e.canon(dict(service=VERSION,orders_supported=False,scope=STATE['scope'],start_once='/status',result='/results.zip',native_sources='/sources.zip'))
     elif path=='/status':
         if method=='GET':start()
-        with LOCK:body=e.canon(dict(STATE))
+        with LOCK:
+            snapshot=dict(STATE)
+        if snapshot.get('last_progress_utc'):snapshot['seconds_since_last_progress']=round((datetime.now(e.UTC)-e.dt(snapshot['last_progress_utc'])).total_seconds(),1)
+        body=e.canon(snapshot)
         code='200 OK'
     elif path in ('/results.zip','/results','/download','/sources.zip'):
         name=SOURCES if path=='/sources.zip' else RESULT;file=output_dir()/name
