@@ -1,90 +1,162 @@
-# P32 warm-up and gap audit update — 16 October 2026
+# P32 GBP account replay update — 16 October 2026
 
-Apply to the SAME SEPARATE RESEARCH/AUDIT SERVICE that ran the signal admission
-replay. Upload every file from this outer update ZIP, replacing matching files.
-Keep all five existing seed_01.zip through seed_05.zip files and the existing
-persistent data directory. Keep prior_signal_admission_results.zip zipped too.
-Do not upload this application to the live executor or live strategy probe.
+Upload this update to the SAME SEPARATE RESEARCH/AUDIT SERVICE that ran the
+warm-up/gap audit. Extract this outer ZIP locally and upload all its contents,
+replacing matching files. Keep the five existing seed_01.zip through seed_05.zip
+files, your existing data directory/volume and environment variables. Keep all
+inner input ZIPs zipped. Do not delete the existing files first.
 
-Existing settings remain:
-  OANDA_TOKEN = your existing broker API token (do not put it in source files)
-  OANDA_ENV = live
-  P32_SIGNAL_OUTPUT_DIR = /data/p32_signal_admission
-  P32_SIGNAL_OFFLINE = unset
-Start command: python app.py
-No account ID, executor URL, probe URL or webhook secret is required.
-Only historical OANDA candle GETs are supported.
+Start command remains `python app.py`. Python 3.10+ and system timezone data
+are required; no third-party Python packages are required.
 
-1. Deploy/restart with this update.
-2. Open /health and verify service P32_WARMUP_GAP_AUDIT_V1_2026_10_16.
-3. Open /status once to start; refresh to follow progress.
-4. When result_ready is true, download /results.zip and upload that file for
-   review. Its filename is P32_WARMUP_GAP_AUDIT_RESULTS.zip.
-   Status COMPLETE_WITH_LIMITATIONS is expected. It does not mean fully
-   validated historical account returns. /sources.zip is a larger optional
-   reproduction archive, available when packaging has finished.
+Keep these settings:
 
-What runs:
-- Verify the supplied prior result ZIP, import its 89 execution-source blocks,
-  and investigate all 171 original uncertain price paths.
-- Reconstruct native, M1 and S5 missing windows before observed exits. Requery
-  each window in a separate evidence cache, inspect finer quotes, and check one
-  other pair when both the original and finer tiers return no candles.
-- Report recovered barrier candidates, finer coverage, partial observations
-  and coincident/pair-specific absence. Empty responses do not certify a
-  historical closure. Evidence is diagnostic; original exits are not
-  automatically promoted, repaired or mixed with newly revised quote data.
-- Download indicator warm-up history from 2002-01-01 through the existing
-  evaluation boundary. Signal evaluation remains 2005-01-01 through
-  2026-09-20T18:29Z. No pre-2005 trades enter the results.
-- If older history is unavailable, keep that explicit. A rejected pre-2005
-  range is recorded as unknown rather than saved as an empty candle response.
-  Authentication, in-period and other source errors still stop the run.
-- Recover all 32 locked strategies and rerun the four admission chronologies.
-- Compare qualifications with the prior 3,600 signals and show what happened
-  to the 32 archived signals previously missing in 2005. Exact agreement is
-  not forced. Missing/insufficient warm-up remains explicit in coverage.
+| Variable | Value |
+|---|---|
+| OANDA_TOKEN | Existing token, stored in service variables only |
+| OANDA_ENV | live |
+| P32_SIGNAL_OUTPUT_DIR | /data/p32_signal_admission, on the existing persistent volume |
+| P32_SIGNAL_OFFLINE | Unset for the historical run |
 
-Progress/cache details:
-- INVESTIGATE_171_PRIOR_GAPS uses gap_paths_completed / gap_paths_required.
-- DOWNLOAD_CONTINUOUS_HISTORY uses history_segment INDICATOR_WARMUP or
-  TEST_PERIOD, pair/granularity, cache hits and download counts.
-- RECOVER_RAW_SIGNALS and REPLAY_ADMISSIONS follow the warm-up download.
-- last_progress_utc and seconds_since_last_progress describe real updates;
-  they are not fabricated progress or a guarantee of timely broker responses.
-- Old 2005–2026 history request boundaries are retained to reuse the old cache.
-  Signal checkpoints are deliberately regenerated because indicator inputs
-  changed. Existing candidate source quotes remain reusable.
-- Each completed gap case is checkpointed. Restarting with the same code,
-  data directory and baseline reuses it. Source requests also persist.
-- If the persistent volume was lost, some history must be downloaded again;
-  the five seed ZIPs and embedded prior replay still supply saved execution
-  candles. Do not delete the data folder to reset counters.
+No account ID, executor URL, probe URL or webhook secret is required. This
+update uses the saved 14 October broker records included with the package.
+Its only network capability is historical candle GETs for the nine approved
+portfolio instruments. The live executor and strategy probe are not contacted.
 
-New report files:
-  gap_investigation_summary.json
-  gap_path_investigation.csv
-  gap_window_evidence.csv
-  warmup_comparison_summary.json
-  warmup_signal_changes.csv
-  prior_missing_32_followup.csv
-The usual signal reconciliation, admissions, price paths and conditional
-accounting remain included. The gap cohort is the ORIGINAL 171 paths; added
-warm-up signals can introduce other unresolved paths outside that cohort.
+1. Check that the service has a persistent volume mounted at `/data`. Keep
+   P32_SIGNAL_OUTPUT_DIR pointed at the previous data directory. `/health`
+   reports its containing mount and a marker after the run starts; neither is
+   a guarantee that a hosting provider will preserve it across redeployment.
+2. Deploy the extracted files with the existing five seed ZIPs still present.
+3. Open `/health`; service must be `P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16`.
+4. Open `/status` once to start. Refresh this address to follow the run.
+   Progress includes the scenario, financing mode, qualifications processed,
+   valuation quote windows and the last real progress timestamp.
+5. When `result_ready` is true, download `/results.zip` and send that ZIP back.
+   Its filename is `P32_GBP_ACCOUNT_REPLAY_RESULTS.zip`. Download `/equity.zip`
+   too if requested during review. `/sources.zip` is the larger raw price
+   archive, ready after packaging; keep it or keep the persistent data volume.
 
-Limits:
-This pass adds warm-up and investigates source gaps. It does not establish
-historical broker closures, fills or net account returns. Financing, GBP
-conversion, whole-unit/margin effects and open-equity drawdown are still not
-part of the illustrative account model. No strategy thresholds, risk targets,
-10-tick guard, live services or live trading settings are changed.
+The code update is under 25 MB. Results, full equity samples and raw sources
+are separated so you do not need to upload the larger source archive initially.
+No warm-up regeneration or MID-history download is repeated. The 3,629 raw
+qualifications and 3,506 saved price paths are pinned to your completed warm-up
+result. The original 170 gap-qualified paths and 11 unknown entries remain
+explicit. Additional price paths are computed only if changed margin admissions
+allow a qualification that was previously blocked.
 
-Validation performed locally:
-  python3 -m unittest self_test test_execution test_gap_warmup
-  103 offline tests passed, including the DST regression, prefix cache reuse,
-  exclusion of warm-up trades, gap tiers, recovered barrier flags, refusal to
-  infer closure from empty candles, checkpoint reuse and service plumbing.
-  All 171 prior paths were traced from saved source candles, reconstructing
-  403 gap windows: 26 native, 346 M1 and 31 S5.
-The fresh historical broker rechecks and 2002–2004 download have not been run
-locally. They start on your research service through /status.
+The first run may still require substantial new MBA history: overlapping open
+positions and their GBP conversions need valuation prices between entries and
+exits. Fourteen-day requests are cached; later scenarios and restarts reuse them.
+All finished account scenarios are checkpointed. Keep the data directory.
+
+## What the default run does
+
+* Reconcile 82 arithmetic checks against the supplied broker evidence: ten
+  openings/closed outcomes, four daily financing allocations, quote P/L,
+  home conversion and account balance changes. These do not prove exact live
+  preview/NAV sizing; the preview conversion snapshots are unavailable.
+* Replay all raw signals under the four existing START/END, ASC/DESC orderings.
+* For each ordering, run zero financing as a control, frozen 14-Oct rates as
+  a sensitivity, and adverse annual base-notional rates of 3% and 6%.
+* Start at GBP 100; risk 1% of modeled current NAV, except EUR_JPY_M15_SHORT
+  at .75%; round down to whole units from worst-bound stop risk.
+* Use recorded instrument margin rates and order limits. Apply nonhedging
+  pair and per-strategy gates again from scratch. No six-position cap exists.
+* Revalue positions/GBP conversions on causal M15 observations, at entry,
+  modeled exit and New York rollover. Track mid NAV, executable liquidation
+  equity, sampled drawdown, margin rejections and sampled closeouts separately.
+* Keep cash financing, conversion components and net trade outcomes auditable.
+
+The observed symmetric conversion-factor markup is 1% in the supplied broker
+records. It is inferred from those records rather than copied from a generic
+website example. Historical modeled cash conversion applies that frozen
+markup once around chained historical GBP mid-rates; GBP itself has no
+conversion markup. It is not a recovered historical broker fee schedule.
+The broker's reported conversion-cost diagnostic is not debited again.
+
+Snapshot/3%/6% lanes use the saved instrument-specific weekday multipliers;
+USD/CAD's saved triple day differs from most pairs. Historical holidays are
+not reconstructed by that schedule. The saved actual USD/JPY financing also
+contains an inferred six-day rollover, reported in the reconciliation summary.
+
+## Historical funding coverage
+
+There is NO default claim of historical daily funding rates back to 2005.
+`historical_funding_coverage.csv` identifies potential pair/rollover dates and
+what has been supplied. Do not manually fill thousands of blanks with zero.
+Review this coverage before sourcing the next historical rate dataset.
+
+An optional `funding_rates.csv` activates a fifth lane, HISTORICAL_FILE, under
+each chronology. A missing rate stops that lane and suppresses whole-period
+CAGR; it never inherits today's rate or a zero value. The included
+`funding_rates_TEMPLATE.csv` is intentionally header-only and is NOT loaded.
+Use these columns when an appropriately sourced rate dataset is available:
+
+  ny_date,pair,long_rate,short_rate,charged_days,source,basis,rate_basis
+
+Rates are signed ANNUAL decimal rates on BASE-currency notional, e.g. -0.03
+means a 3% annual debit, not -3. Charged_days is separate (including actual
+holiday multipliers). A rate already multiplied for weekend days must first
+be normalized; do not multiply it twice. Basis must be FINALIZED_DAILY_RATE
+and rate_basis must be ANNUAL_ONE_DAY_BASE_NOTIONAL. Source must identify the
+archived evidence. The importer checks shape/units, not the truth of that source.
+The NY date is the local funding date, not the UTC calendar date. Weekend
+NY dates are treated as non-posting days for these FX scenarios.
+
+## Limits to read before interpreting returns
+
+These are CURRENT-TERMS, HISTORICAL-PRICE scenarios. The 14 October margin
+rates, order limits and conversion assumptions are applied across 2005–2026;
+historical regulatory/account changes are not reconstructed. The rate snapshot
+is likewise a sensitivity and includes financing credits as well as debits.
+
+Model risk/margin NAV uses mid prices; a second curve uses long bid/short ask
+liquidation prices and sign-dependent home conversion. Broker cash and entry
+margin are reconciled, but live preview NAV is not exactly reconstructed.
+Valuation/conversion prices use reached M15 opens or earlier completed M15
+closes, never a future high, low or close. Off-grid exits can therefore use
+a conversion observation up to 15 minutes old. Missing observations can carry
+an earlier quote for at most seven days, explicitly flagged when older than
+15 minutes outside the conventional weekend. No interpolation or fabricated
+price is inserted. No earlier quote within that limit stops the scenario.
+
+Drawdown and margin closeouts are SAMPLED at M15 plus events. Intrabar worst
+equity, exact liquidation timing/fills, simultaneous real broker ordering,
+historical liquidity/latency and price-bound cancellations remain unknown.
+Same-timestamp order is existing exits, rollover, mark, then ordered signals;
+a newly entered immediate-exit trade closes after its own entry.
+
+Unknown entry cases are omitted and contaminate subsequent ACCOUNT-wide
+sizing lineage. Gap-qualified paths keep their observed-exit assumption and
+likewise contaminate account-wide NAV. They are never promoted to resolved.
+START/END and ascending/descending lanes are assumptions, not return bounds.
+Any additional both-barrier ambiguity uses an explicit STOP_FIRST assumption;
+it does not establish a lower bound on later portfolio returns.
+Unpriced observed exits or unavailable essential quotes stop a lane.
+
+Closed-trade win rates include that lane's modeled financing; open positions'
+cash financing is already in balance but is not called a closed trade.
+No extra spread is subtracted: bid/ask is already in the modeled fills.
+Commission is zero in the supplied records, so no additional commission is
+assumed. Taxes, deposits, withdrawals, unused-margin interest and GSLOs are
+outside this model. No strategy search or live-risk change is performed.
+Modeled cash is rounded to four decimals per posting with Python round;
+unobserved broker rounding edge cases are not claimed to be reproduced.
+
+## Optional settings and offline checks
+
+P32_GBP_INITIAL_BALANCE: default 100; a changed balance makes separate checkpoints.
+P32_GBP_OUTPUT_DIR: optional directory override; otherwise the existing
+P32_SIGNAL_OUTPUT_DIR is retained.
+P32_GBP_PACKAGE_SOURCES: default 1; set 0 to omit the optional larger source ZIP.
+P32_SIGNAL_REQUESTS_PER_SECOND: default 4; max 5, as in the previous runner.
+
+    python -m unittest test_gbp
+    python app.py --reconcile-only
+    python app.py --run --offline
+
+The last command requires all needed quotes already saved; it does not turn
+missing history into assumed data. Run all tests without credentials. Production
+historical downloads/account replays are performed on your research service,
+not claimed as already completed in the delivery validation.

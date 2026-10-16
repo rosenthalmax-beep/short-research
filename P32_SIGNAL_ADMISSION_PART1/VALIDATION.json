@@ -1,22 +1,26 @@
 {
-  "version": "P32_WARMUP_GAP_AUDIT_V1_2026_10_16",
-  "offline_tests_passed": 103,
-  "frozen_source_gap_paths_traced": 171,
-  "frozen_gap_windows": {
-    "native": 26,
-    "M1": 346,
-    "S5": 31
+  "version": "P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16",
+  "validated_at_utc": "2026-10-16T12:30:48.401103+00:00",
+  "offline_unittest_count": 93,
+  "offline_unittests_passed": true,
+  "broker_arithmetic_checks": 82,
+  "broker_arithmetic_failures": 0,
+  "warmed_raw_signals_pinned": 3629,
+  "saved_price_paths_pinned": 3506,
+  "unchanged_execution_and_predicate_modules": {
+    "execution.py": true,
+    "reference_payload.py": true,
+    "admissions.py": true,
+    "history.py": true,
+    "locked_rules.py": true
   },
-  "full_new_historical_run_performed": false,
-  "new_broker_requests_in_local_validation": 0,
-  "full_portfolio_validated": false,
-  "prior_result_sha256": "906769c9aafbc3430eea44aeff25f000832cbcdb91476c1b2f01e4d3831e676a",
-  "unchanged_files": [
-    "execution.py",
-    "admissions.py",
-    "locked_rules.py",
-    "m15_adapter.py",
-    "signals.py",
-    "reference_payload.py"
-  ]
+  "source_import": {
+    "blocks": 12661,
+    "imported_manifests": 6,
+    "network_requests": 0
+  },
+  "new_live_or_historical_broker_requests_performed_locally": 0,
+  "full_historical_gbp_account_run_performed_locally": false,
+  "historical_funding_rate_dataset_supplied": false,
+  "validation_scope": "Offline arithmetic/ordering/cash identity/NAV/margin/funding/causality/regressions; actual seed/addition import; synthetic complete service + report manifest + resumed-no-download run. Full historical account run requires new valuation quotes on research host."
 }

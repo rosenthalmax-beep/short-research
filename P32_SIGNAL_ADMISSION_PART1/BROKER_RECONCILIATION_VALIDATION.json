@@ -1,0 +1,69 @@
+{
+  "status": "PASS",
+  "checks": {
+    "INITIAL_MARGIN_MID_CONVERSION_pass": 10,
+    "WHOLE_UNITS_pass": 10,
+    "FINANCING_BASE_TO_GBP_pass": 4,
+    "DAILY_FINANCING_ALLOCATION_pass": 4,
+    "BROKER_BALANCE_CHANGE_pass": 23,
+    "QUOTE_PL_TO_GBP_pass": 10,
+    "UNITS_TIMES_EXIT_MINUS_ENTRY_pass": 10,
+    "CLOSED_TRADE_NET_INCLUDING_DAILY_FINANCING_pass": 10,
+    "ENDING_SAVED_ACCOUNT_BALANCE_pass": 1
+  },
+  "failures": 0,
+  "cash_transactions": 24,
+  "source_collected_at_utc": "2026-10-14T16:15:05.840227Z",
+  "first_transaction_id": "54",
+  "last_transaction_id": "119",
+  "transaction_ids_contiguous": true,
+  "reconstructed_starting_balance_gbp": 97.7024,
+  "ending_balance_gbp": 95.4684,
+  "transaction_slice_net_cash_gbp": -2.2339999999999947,
+  "daily_financing_gbp": -0.2807,
+  "observed_live_financing_day_multipliers": [
+    {
+      "transaction_id": "58",
+      "trade_id": "55",
+      "time": "2026-09-16T21:00:00.000000000Z",
+      "pair": "USD_JPY",
+      "inferred_charged_days": 6.000000000000146,
+      "basis": "Inferred from broker base financing, recorded annual rate and units; not an independently sourced holiday calendar"
+    },
+    {
+      "transaction_id": "59",
+      "trade_id": "55",
+      "time": "2026-09-17T21:00:00.000000000Z",
+      "pair": "USD_JPY",
+      "inferred_charged_days": 0.9999999999998676,
+      "basis": "Inferred from broker base financing, recorded annual rate and units; not an independently sourced holiday calendar"
+    },
+    {
+      "transaction_id": "96",
+      "trade_id": "93",
+      "time": "2026-09-23T21:00:00.000000000Z",
+      "pair": "USD_JPY",
+      "inferred_charged_days": 2.999999999999945,
+      "basis": "Inferred from broker base financing, recorded annual rate and units; not an independently sourced holiday calendar"
+    },
+    {
+      "transaction_id": "111",
+      "trade_id": "108",
+      "time": "2026-10-12T21:00:00.000000000Z",
+      "pair": "USD_JPY",
+      "inferred_charged_days": 1.000000000000013,
+      "basis": "Inferred from broker base financing, recorded annual rate and units; not an independently sourced holiday calendar"
+    }
+  ],
+  "observed_symmetric_conversion_factor_markup": 0.009999999999999645,
+  "conversion_factor_markup_range": [
+    0.009999999998952288,
+    0.010000000000928605
+  ],
+  "conversion_factor_markup_uniform": true,
+  "uses_recorded_broker_factors": true,
+  "recomputes_broker_pricing_quotes": false,
+  "live_nav_sizing_exactly_reproduced": false,
+  "limitation": "Recorded preview NAV is rounded and preview conversion snapshots are unavailable; exact historical unit sizing/NAV cannot be proved from fill factors.",
+  "no_extra_spread_or_conversion_debit": true
+}

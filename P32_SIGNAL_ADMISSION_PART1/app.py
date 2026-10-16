@@ -1,329 +1,474 @@
 #!/usr/bin/env python3
-"""P32 observed-bar signal recovery and chronological admission research.
-
-Only historical broker candle GETs. GET /status starts one resumable run.
-The live executor and probe are not imported or contacted.
-"""
-import argparse,collections,csv,gc,hashlib,io,json,os,sqlite3,tempfile,threading,zipfile
+"""P32 conditional GBP account replay. Separate research service; candle GETs only."""
+import argparse
+import collections
+import csv
+import gzip
+import io
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+import threading
+import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
-from wsgiref.simple_server import make_server,WSGIRequestHandler
+from wsgiref.simple_server import make_server, WSGIRequestHandler
 import execution as e
-from history import HistoryStore,MidReader,START,END,WARMUP_START
-import signals as recovery
 import admissions
-import gap_audit
+import inputs
+from broker_reconcile import reconcile
+from funding import Funding, MODES, rollovers
+from market import Market
+from accounting import Replay
 
-VERSION='P32_WARMUP_GAP_AUDIT_V1_2026_10_16'
-RESULT='P32_WARMUP_GAP_AUDIT_RESULTS.zip'
-SOURCES='P32_WARMUP_GAP_AUDIT_SOURCES.zip'
-LOCK=threading.RLock()
-STATE=dict(status='IDLE',version=VERSION,orders_supported=False,scope='ALL32_PRE2005_WARMUP_AND_171_GAP_SOURCE_INVESTIGATION')
-DIRECTORY=None
+VERSION = 'P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16'
+RESULT = 'P32_GBP_ACCOUNT_REPLAY_RESULTS.zip'
+EQUITY = 'P32_GBP_ACCOUNT_REPLAY_EQUITY.zip'
+SOURCES = 'P32_GBP_ACCOUNT_REPLAY_SOURCES.zip'
+LOCK = threading.RLock()
+STATE = dict(status='IDLE', version=VERSION, orders_supported=False,
+             scope='WARMED_RAW_SIGNALS_CONDITIONAL_GBP_NAV_MARGIN_AND_FUNDING', full_portfolio_validated=False)
+DIRECTORY = None
 
-PROTOCOL={
- 'scope':'Regenerate all 32 locked current Python predicate streams on observed native bars, before position filtering; replay current nonhedging account gates.',
- 'history':'Indicator warm-up from 2002-01-01; signal evaluation remains 2005-01-01 through 2026-09-20T18:29Z. MID native H1/M15/H4/D, unsmoothed; NY17 daily/H4 alignment; no synthetic bars.',
- 'indicators':'Pre-2005 observed-history SMA-seeded EMA/RMA; missing warm-up is explicitly flagged. EURCHF retains research TR1..14 ATR. This canonical historical initialization is not asserted identical to live rolling fetch-window initialization.',
- 'causality':'M15 HTF eligible only when next actual HTF open <= M15 signal OPEN, exactly as supplied probe. H1 daily filters use previous NY session only.',
- 'rules':'Thresholds, sessions, filters, RR and core/complement priority extracted from supplied probe unchanged. No rule search or optimization.',
- 'signals':'Every observed-bar qualification retained before pyramiding/opposition filtering. Native missing observations can hide additional qualifications.',
- 'entry':'Existing 10 tick limit, broker rounding, first native bid/ask opening proxy. Arrival time, stale checks, fill cancellations and liquidity are not recovered.',
- 'account':'Nonhedging observed in supplied 14-Oct account snapshot. Opposite direction same pair blocked; same direction overlaps allowed. One open position per strategy. No invented six-position cap.',
- 'orders':'Four prespecified START/END exit-interval endpoints crossed with ascending/descending simultaneous strategy order. Within-strategy trigger order retained. These are assumption scenarios, not return bounds.',
- 'uncertainty':'Gaps, unresolved barrier order and uncertain admission lineage remain explicit. Original accepted book and 456 archived EURUSD isolated paths are reconciliation controls, not forced targets.',
- 'accounting':'Illustrative price-only research units: initial 100, 1% of closed balance reserved per entry, EURJPY M15 short .75%, P/L from worst-entry-bound budget R. No GBP conversion, units, margin, live NAV sizing, financing or open-equity drawdown.',
- 'ambiguous_prices':'Separate STOP_FIRST and TARGET_FIRST values for unresolved same-S5 both-barrier candles. Earlier gaps use observed-barrier scenario, never asserted actual first exit.',
- 'gap_diagnostics':'Investigate all 171 prior gap paths separately. Requery missing native/fine windows, inspect finer quotes and one control pair when empty. No absence is certified as a closure, and diagnostic quotes never automatically change exits.',
- 'validation':'All32 observed streams can be recovered while source identity/coverage remains qualified. Conditional closed-equity CAGR/DD must not be presented as validated broker returns.',
-}
 
 def progress(**values):
     with LOCK:
-        if values.get('phase') and values['phase']!=STATE.get('phase'):
-            for key in ('bars_evaluated','bars_required','signals_found','granularity','timeframe','through_utc','native_bars','gap_query_pair','gap_query_granularity','gap_query_start','gap_query_end'):
-                STATE.pop(key,None)
-        STATE.update(values,last_progress_utc=e.stamp(datetime.now(e.UTC)))
+        if values.get('phase') and STATE.get('phase') != values['phase']:
+            for k in ('quote_pair', 'quote_from', 'quote_to', 'qualifications_processed', 'through_utc'):
+                STATE.pop(k, None)
+        STATE.update(values, last_progress_utc=e.stamp(datetime.now(e.UTC)))
+
 
 def output_dir():
-    if DIRECTORY:return Path(DIRECTORY).resolve()
-    return Path(os.getenv('P32_SIGNAL_OUTPUT_DIR','/data/p32_signal_admission' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'p32_signal_admission'))).resolve()
+    value = DIRECTORY or os.getenv('P32_GBP_OUTPUT_DIR') or os.getenv('P32_SIGNAL_OUTPUT_DIR')
+    return Path(value or ('/data/p32_signal_admission' if Path('/data').is_dir() else str(Path(tempfile.gettempdir()) / 'p32_signal_admission'))).resolve()
 
-def fingerprint():
-    return e.sha(e.canon({p:e.sha((Path(__file__).parent/p).read_bytes()) for p in ('app.py','history.py','signals.py','admissions.py','locked_rules.py','m15_adapter.py','execution.py','reference_payload.py','gap_audit.py')}))
-
-def normalized_source_hash(path):
-    # Windows upload/editing can change CRLF/BOM without changing Python code.
-    return e.sha(Path(path).read_text(encoding='utf-8-sig').encode('utf-8'))
 
 def csv_bytes(rows):
-    fields=list(dict.fromkeys(k for r in rows for k in r)) or ['empty']
-    buffer=io.StringIO(newline='');writer=csv.DictWriter(buffer,fieldnames=fields);writer.writeheader()
-    for r in rows:writer.writerow({k:json.dumps(v,sort_keys=True) if isinstance(v,(dict,list)) else v for k,v in r.items()})
-    return buffer.getvalue().encode()
+    fields = list(dict.fromkeys(k for r in rows for k in r)) or ['empty']
+    stream = io.StringIO(newline=''); writer = csv.DictWriter(stream, fieldnames=fields); writer.writeheader()
+    for row in rows:
+        writer.writerow({k: json.dumps(v, sort_keys=True) if isinstance(v, (dict, list)) else v for k, v in row.items()})
+    return stream.getvalue().encode()
 
-def jsonl(rows):return b''.join(e.canon(r)+b'\n' for r in rows)
 
-class PathCache:
-    def __init__(self,directory,signature,store,data):
-        self.db=sqlite3.connect(str(directory/'candidate_paths.sqlite3'))
-        self.db.execute('CREATE TABLE IF NOT EXISTS paths (key TEXT PRIMARY KEY,body BLOB,sha256 TEXT)');self.db.commit()
-        self.signature,self.store,self.data=signature,store,data;self.rows={};self.computed=0;self.hits=0
-    def get(self,signal):
-        key=e.sha(e.canon(dict(signature=self.signature,signal=signal)))
-        if signal['signal_key'] in self.rows:return self.rows[signal['signal_key']]
-        stored=self.db.execute('SELECT body,sha256 FROM paths WHERE key=?',(key,)).fetchone()
-        if stored:
-            e.require(e.sha(stored[0])==stored[1],'Candidate checkpoint checksum mismatch');row=json.loads(stored[0]);self.hits+=1
-        else:
-            if e.dt(signal['entry_utc'])+e.timedelta(seconds=e.STEP[signal['timeframe']])>END:
-                row=dict(signal_key=signal['signal_key'],status='UNRESOLVED_ENTRY',entry_status='NATIVE_ENTRY_INTERVAL_EXCEEDS_FIXED_CUTOFF')
-                self.rows[signal['signal_key']]=row
-                return row
-            row=e.replay_one(self.store,admissions.candidate_data(self.data,signal),0,e.VARIANTS[1])
-            row={k:v for k,v in row.items() if not k.startswith('archived_') and k not in ('index','extended_beyond_archived_exit')}
-            row.update(signal_key=signal['signal_key'],signal_start_utc=signal['signal_start_utc'])
-            if row['status']=='ERROR' and self.store.reader and self.store.reader.fatal:raise e.CandleFetchError('Historical execution candles: authentication failed')
-            if row['status'] not in ('ERROR','NEEDS_CANDLE_DATA'):
-                raw=e.canon(row);self.db.execute('INSERT OR REPLACE INTO paths VALUES (?,?,?)',(key,raw,e.sha(raw)));self.db.commit()
-            self.computed+=1
-        self.rows[signal['signal_key']]=row
-        progress(candidate_paths_computed=self.computed,candidate_path_cache_hits=self.hits,new_execution_blocks=self.store.downloads)
-        return row
-    def close(self):self.db.close()
+def atomic(path, content):
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_bytes(content); temporary.replace(path)
 
-def atomic_json(path,data):
-    temporary=path.with_suffix('.tmp');temporary.write_bytes(e.canon(data));temporary.replace(path)
 
-def run(directory=None,offline=False):
-    directory=Path(directory or output_dir());directory.mkdir(parents=True,exist_ok=True)
-    baseline_path=Path(__file__).parent/'prior_signal_admission_results.zip'
-    baseline=gap_audit.load_baseline(baseline_path)
-    data=e.load_reference();registry=recovery.validate_registry(data['registry']);signature=fingerprint()
-    provenance=json.loads((Path(__file__).parent/'rules_provenance.json').read_text())
-    e.require(normalized_source_hash(Path(__file__).parent/'locked_rules.py')==provenance['pure_rules_sha256'],'Locked rules file changed')
-    e.require(normalized_source_hash(Path(__file__).parent/'m15_adapter.py')==provenance['m15_adapter_sha256'],'M15 adapter file changed')
-    env=os.getenv('OANDA_ENV',os.getenv('OANDA_ENVIRONMENT','live')).strip().lower()
-    e.require(env=='live','Use OANDA_ENV=live to match the saved evidence')
-    token=next((os.getenv(k,'').strip() for k in ('OANDA_TOKEN','OANDA_API_KEY','OANDA_API_TOKEN','OANDA_ACCESS_TOKEN') if os.getenv(k,'').strip()),'')
-    e.require(offline or bool(token),'Set OANDA_TOKEN on the separate research service')
-    rate=float(os.getenv('P32_SIGNAL_REQUESTS_PER_SECOND','4'))
-    mid_reader=None if offline else MidReader(token,'https://api-fxtrade.oanda.com',rate)
-    price_reader=None if offline else e.CandleReader(token,'https://api-fxtrade.oanda.com',rate)
-    history=HistoryStore(directory,mid_reader,progress)
-    store=e.CandleStore(directory,'https://api-fxtrade.oanda.com',price_reader)
-    paths=PathCache(directory,signature,store,data)
-    raw=[];coverage=[];ledgers=[];accounting=[];equity=[];report_written=False
-    progress(status='RUNNING',phase='IMPORT_SAVED_EXECUTION_CANDLES',version=VERSION,pairs_required=9,started_at_utc=e.stamp(datetime.now(e.UTC)))
+def source_signature(root, config):
+    names = ('app.py', 'accounting.py', 'market.py', 'funding.py', 'broker_reconcile.py',
+             'inputs.py', 'pinned_inputs.py', 'execution.py', 'admissions.py', 'history.py', 'locked_rules.py', 'reference_payload.py')
+    return e.sha(e.canon(dict(config=config, code={n: e.sha((root / n).read_bytes()) for n in names})))
+
+
+def persistence(directory, create=False):
+    directory = Path(directory)
+    marker = directory / 'gbp_persistence_marker.json'
+    if create and not marker.exists():
+        atomic(marker, e.canon(dict(marker=str(uuid.uuid4()), created_utc=e.stamp(datetime.now(e.UTC)))))
+    info = json.loads(marker.read_bytes()) if marker.exists() else None
+    mount = None
     try:
-        store.import_seeds(Path(__file__).parent)
-        gap_audit.import_baseline_sources(baseline_path,store)
-        gap_summary,gap_paths,gap_windows=gap_audit.run(directory,baseline,store,price_reader,progress)
-        atomic_json(directory/'gap_investigation_checkpoint.json',dict(summary=gap_summary,paths=gap_paths,windows=gap_windows))
-        for number,pair in enumerate(e.PAIRS,1):
-            checkpoint=directory/('signals_'+pair+'_'+signature+'.json')
-            if checkpoint.exists():
-                saved=json.loads(checkpoint.read_text());e.require(e.sha(e.canon(saved['signals']))==saved['signals_sha256'],'Raw signal checkpoint checksum failed')
-                recovered=saved['signals'];pair_coverage=saved['coverage']
-            else:
-                before=len(history.coverage)
-                h1=history.series(pair,'H1')
-                daily=history.series(pair,'D')
-                m15_bars=history.series(pair,'M15') if pair!='EUR_CHF' else None
-                h4=history.series(pair,'H4') if pair in ('USD_CAD','USD_JPY') else None
-                e.require(len(h1)>=200 and len(daily)>=250 and (m15_bars is None or len(m15_bars)>=200),'Insufficient native history to evaluate locked rules')
-                recovered=recovery.recover_pair(pair,h1,daily,m15_bars,h4,progress)
-                pair_coverage=history.coverage[before:]
-                atomic_json(checkpoint,dict(signature=signature,signals=recovered,signals_sha256=e.sha(e.canon(recovered)),coverage=pair_coverage))
-                del h1,daily,m15_bars,h4;gc.collect()
-            for s in recovered:
-                rule=registry[s['strategy_id']]
-                e.require(s['pair']==rule['pair'] and s['side']==rule['side'] and s['timeframe']==rule['timeframe'] and s['rr'] in [float(x) for x in rule['rr'].split(';')],'Recovered signal registry mismatch')
-            raw.extend(recovered);coverage.extend(pair_coverage)
-            progress(pairs_completed=number,raw_signals_recovered=len(raw))
-        raw.sort(key=lambda r:(r['entry_utc'],r['strategy_id'],r['same_strategy_trigger_priority']))
-        e.require(len({x['signal_key'] for x in raw})==len(raw),'Raw signal keys duplicated across pairs')
-        e.require(all(e.dt(s['signal_start_utc'])>=START for s in raw),'Warm-up signal leaked into evaluation period')
-        archive_control,old_raw_control=recovery.reconcile(data,raw)
-        warmup_summary,warmup_changes,missing_followup=gap_audit.compare(baseline,raw,archive_control)
-        for scenario in admissions.SCENARIOS:
-            ledger=admissions.replay(raw,scenario,paths.get,progress,hedging=False);ledgers.extend(ledger)
-            for ambiguity in ('STOP_FIRST','TARGET_FIRST'):
-                summary,events=admissions.model_accounting(ledger,raw,paths.rows,ambiguity)
-                summary['scenario']=scenario;accounting.append(summary)
-                if ambiguity=='STOP_FIRST':equity.extend(dict(r,scenario=scenario,ambiguity_assumption=ambiguity) for r in events)
-        streams=[]
-        for sid,rule in sorted(registry.items()):
-            selected=[s for s in raw if s['strategy_id']==sid]
-            streams.append(dict(strategy_id=sid,pair=rule['pair'],side=rule['side'],timeframe=rule['timeframe'],scan_completed=True,
-                                observed_bar_qualifications=len(selected),first_signal=selected[0]['entry_utc'] if selected else None,last_signal=selected[-1]['entry_utc'] if selected else None,
-                                raw_signal_filtering='NO_POSITION_FILTER',historical_original_stream_identity_confirmed=False,missing_native_bars_could_hide_signals=True))
-        summaries=[]
-        for scenario in admissions.SCENARIOS:
-            subset=[r for r in ledgers if r['scenario']==scenario]
-            admitted=[r for r in subset if r['decision']=='ADMITTED_UNDER_SCENARIO']
-            resolved=[paths.rows[r['signal_key']] for r in admitted if paths.rows[r['signal_key']]['status']=='CLOSED_RESOLVED']
-            values=[r['observed_path_price_r'] for r in resolved]
-            summaries.append(dict(scenario=scenario,qualified_candidates=len(subset),decisions=dict(collections.Counter(r['decision'] for r in subset)),
-                                  admitted_path_statuses=dict(collections.Counter(r['path_status'] for r in admitted)),
-                                  resolved_admitted=len(resolved),resolved_only_win_rate_pct=100*sum(x>0 for x in values)/len(values) if values else None,
-                                  resolved_only_mean_price_r=sum(values)/len(values) if values else None,
-                                  admitted_with_uncertain_lineage=sum(r['decision_has_uncertain_lineage'] for r in admitted),max_modeled_open_positions=max((r['active_positions'] for r in subset),default=0)))
-        status='COMPLETE_WITH_LIMITATIONS'
-        summary=dict(status=status,version=VERSION,scope=STATE['scope'],prior_admission_result_sha256=gap_audit.BASELINE_SHA,orders_sent=False,live_services_contacted=False,
-                     historical_cutoff=e.stamp(END),evaluation_start=e.stamp(START),warmup_start=e.stamp(WARMUP_START),
-                     warmup_coverage_insufficient=[dict(pair=r['pair'],granularity=r['granularity'],warmup_observed_bars=r.get('warmup_observed_bars',0)) for r in coverage if not r.get('warmup_sufficient',False)],
-                     gap_investigation=gap_summary,warmup_comparison=warmup_summary,strategy_streams_scanned=32,observed_bar_signal_recovery_finished=True,
-                     historical_original_stream_identity_confirmed=False,full_portfolio_validated=False,signature=signature,
-                     raw_signals=len(raw),candidate_paths_priced=len(paths.rows),price_path_status_counts=dict(collections.Counter(r['status'] for r in paths.rows.values())),
-                     archived_control_counts=dict(collections.Counter(r['status'] for r in archive_control)),eurusd_raw_control_counts=dict(collections.Counter(r['status'] for r in old_raw_control)),
-                     mid_downloads=history.downloads,new_execution_blocks=store.downloads,scenarios=summaries,
-                     finished_at_utc=e.stamp(datetime.now(e.UTC)),offline=offline)
-        files={'gap_investigation_summary.json':e.canon(gap_summary),'gap_path_investigation.csv':csv_bytes(gap_paths),
-               'gap_window_evidence.csv':csv_bytes(gap_windows),'warmup_comparison_summary.json':e.canon(warmup_summary),
-               'warmup_signal_changes.csv':csv_bytes(warmup_changes),'prior_missing_32_followup.csv':csv_bytes(missing_followup),
-               'prior_run_summary.json':e.canon(baseline['summary']),'RUN_COMPLETE.json':e.canon(summary),'protocol.json':e.canon(PROTOCOL),'rules_provenance.json':e.canon(provenance),
-               'raw_signal_witnesses.jsonl':jsonl(raw),'raw_signals.csv':csv_bytes([{k:v for k,v in r.items() if k!='diagnostics'} for r in raw]),
-               'strategy_stream_coverage.csv':csv_bytes(streams),'native_history_coverage.csv':csv_bytes(coverage),
-               'archived_3391_signal_reconciliation.csv':csv_bytes(archive_control),'archived_eurusd_raw_reconciliation.csv':csv_bytes(old_raw_control),
-               'admission_ledger.csv':csv_bytes(ledgers),'candidate_price_paths.csv':csv_bytes(list(paths.rows.values())),
-               'admission_scenario_summaries.json':e.canon(summaries),'conditional_price_accounting.json':e.canon(accounting),
-               'conditional_stop_first_equity_events.csv':csv_bytes(equity),
-               'mid_history_source_index.json':e.canon(history.index()),'request_receipts.json':e.canon({'mid':mid_reader.receipts if mid_reader else [],'execution':price_reader.receipts if price_reader else []}),
-               'frozen_original_accepted_book.csv':csv_bytes(data['reference']['book']),
-               'prior_frozen_baseline_controls.json':e.canon(data['baseline_controls'])}
-        text='''# P32 pre-2005 warm-up and gap source investigation
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            left, right = line.split(' - ', 1)
+            target = left.split()[4].replace('\\040', ' ')
+            if str(directory) == target or str(directory).startswith(target.rstrip('/') + '/'):
+                if mount is None or len(target) > len(mount['target']):
+                    mount = dict(target=target, filesystem=right.split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    return dict(output_directory=str(directory), persistence_marker=info,
+                containing_mount=mount, separate_mount_detected=bool(mount and mount['target'] != '/'),
+                persistence_across_redeploy_not_proved=True,
+                instruction='Keep this directory on a mounted persistent volume; compare the marker after a redeploy. No MID history regeneration is used by this update.')
 
-Indicators now use observed history from 2002-01-01; signal evaluation starts
-on 2005-01-01 as before. Native_history_coverage.csv records available warm-up
-and flags insufficient observations. Warmup_signal_changes.csv records added,
-removed and changed signals, without forcing agreement with old trades.
 
-Gap_path_investigation.csv covers all 171 prior uncertain paths.
-Gap_window_evidence.csv distinguishes native, M1 and S5 gaps and reports fresh
-source/finer quote checks. Empty quotes in one or two pairs do not establish
-a historical closure. These diagnostics do not automatically promote exits
-or mix new source revisions into the frozen execution cache.
+class Paths:
+    def __init__(self, directory, saved, store, signals=()):
+        self.rows = saved; self.store = store; self.data = e.load_reference()
+        self.computed = 0; self.saved_hits = 0
+        self.db = sqlite3.connect(str(directory / 'gbp_new_candidate_paths.sqlite3'))
+        self.db.execute('CREATE TABLE IF NOT EXISTS paths(key TEXT PRIMARY KEY, body BLOB, sha256 TEXT)'); self.db.commit()
+        self.signature = e.sha(e.canon(dict(core=e.sha((Path(__file__).parent / 'execution.py').read_bytes()),
+                                         baseline=inputs.PINS['warmed_signal_results.zip'])))
+        for signal in signals:
+            if signal['signal_key'] not in self.rows:
+                identity = e.sha(e.canon(dict(signature=self.signature, signal=signal)))
+                stored = self.db.execute('SELECT body,sha256 FROM paths WHERE key=?', (identity,)).fetchone()
+                if stored:
+                    e.require(e.sha(stored[0]) == stored[1], 'Extra path checkpoint checksum failed')
+                    self.rows[signal['signal_key']] = json.loads(stored[0])
 
-All32 current locked predicate streams are evaluated on continuous native MID
-history before any position filter. Thresholds were not optimized. Compare the
-original archive and EURUSD isolated streams using the reconciliation CSVs.
-Full-history indicator seeds and native price revisions can cause differences
-from old archives or the live rolling fetch windows. Missing observations can
-hide additional signals. Recovery from observed bars is not proof of exact
-original stream identity.
+    def get(self, signal):
+        key = signal['signal_key']
+        if key in self.rows:
+            self.saved_hits += 1
+            return self.rows[key]
+        identity = e.sha(e.canon(dict(signature=self.signature, signal=signal)))
+        stored = self.db.execute('SELECT body,sha256 FROM paths WHERE key=?', (identity,)).fetchone()
+        if stored:
+            e.require(e.sha(stored[0]) == stored[1], 'Extra path checkpoint checksum failed')
+            row = json.loads(stored[0])
+        else:
+            row = e.replay_one(self.store, admissions.candidate_data(self.data, signal), 0, e.VARIANTS[1])
+            row = {k: v for k, v in row.items() if not k.startswith('archived_') and k not in ('index', 'extended_beyond_archived_exit')}
+            row['signal_key'] = key
+            if row['status'] == 'NEEDS_CANDLE_DATA':
+                raise e.NeedData(row['pending_request'])
+            if row['status'] == 'ERROR':
+                raise e.CandleFetchError('Additional candidate path could not be computed: ' + row.get('error', 'unknown'))
+            raw = e.canon(row)
+            self.db.execute('INSERT OR REPLACE INTO paths VALUES (?,?,?)', (identity, raw, e.sha(raw))); self.db.commit()
+            self.computed += 1
+        self.rows[key] = row
+        progress(additional_candidate_paths=self.computed, candidate_paths_available=len(self.rows))
+        return row
 
-The four predeclared admission chronologies vary exit-interval endpoints and
-simultaneous strategy order. Current nonhedging pair gates and strategy p0 are
-applied before entry previews. Original rejected/blocked signals are retained.
-The first native opening quote is still an entry estimate. Latency, stale checks
-and actual price-bound cancellations are not recovered.
+    def close(self):
+        self.db.close()
 
-Earlier gaps and uncertain exits remain flagged. Their observed barrier is a
-conditional modeling assumption; subsequent pair admissions carry uncertainty
-lineage. A gap-qualified observed STOP/TARGET is not a verified first exit.
 
-conditional_price_accounting.json contains ILLUSTRATIVE research units, using
-1% closed-balance risk budgets (.75% EURJPY M15 short) and worst-bound price R.
-It assumes static quote/home conversion and fractional size, with no margin,
-live NAV sizing, financing or unrealized equity. STOP_FIRST/TARGET_FIRST values
-refer only to ambiguous same-S5 barriers. These scenarios are not return bounds.
-Unpriced exits suppress whole-cohort accounting. Open positions are not forced
-closed. Its CAGR/DD fields are conditional CLOSED-equity estimates, not actual
-broker returns or validated portfolio metrics. No best scenario is selected.
+def potential_funding_coverage(signals, paths, funding, end):
+    needed = set()
+    for s in signals:
+        p = paths.get(s['signal_key'])
+        if not p or p['status'] in ('ENTRY_PROXY_REJECTED', 'UNRESOLVED_ENTRY'):
+            continue
+        start = e.dt(s['entry_utc'])
+        finish = e.dt(p['interval_end_utc']) if p.get('interval_end_utc') else end
+        for when in rollovers(start, finish):
+            if start < when < finish and when.astimezone(e.NY).weekday() < 5:
+                needed.add((when.astimezone(e.NY).date().isoformat(), s['pair']))
+    rows = []
+    for date, pair in sorted(needed | funding.coverage):
+        item = funding.historical.get((date, pair))
+        rows.append(dict(ny_date=date, pair=pair, supplied=bool(item),
+                         long_rate=item['long_rate'] if item else None,
+                         short_rate=item['short_rate'] if item else None,
+                         charged_days=item['days'] if item else None,
+                         source=item['source'] if item else None,
+                         basis='FINALIZED_DAILY_RATE' if item else '',
+                         rate_basis='ANNUAL_ONE_DAY_BASE_NOTIONAL' if item else '',
+                         independent_verification=False,
+                         scope='POTENTIAL_OBSERVED_CANDIDATE_ROLLOVER_NOT_ALL_ACTUALLY_ADMITTED'))
+    return rows
 
-The full native source archive is at /sources.zip. Keep it or the persistent
-volume for reproduction. This report includes source hashes and every raw
-qualification witness. Upload the results ZIP for review; source archive can be
-requested separately if a source discrepancy requires it.
 
-No trading service was modified or contacted, and no orders can be submitted.
-'''
-        files['READ_FIRST.md']=text.encode()
-        files['report_manifest.json']=e.canon({n:dict(bytes=len(b),sha256=e.sha(b)) for n,b in files.items()})
+def grouped_trade_stats(rows):
+    groups = collections.defaultdict(list)
+    for row in rows:
+        for kind, key in (('strategy', row['strategy_id']), ('pair_side', row['pair'] + '_' + row['side']),
+                          ('entry_year', row['entry_utc'][:4])):
+            groups[(row['scenario'], row['financing_mode'], kind, key)].append(row)
+    result = []
+    for (scenario, mode, kind, key), group in sorted(groups.items()):
+        result.append(dict(scenario=scenario, financing_mode=mode, grouping=kind, group=key,
+                           closed_trades=len(group), net_wins=sum(r['net_pl_gbp'] > 0 for r in group),
+                           net_win_rate_pct=100 * sum(r['net_pl_gbp'] > 0 for r in group) / len(group),
+                           price_pl_gbp=sum(r['price_pl_gbp'] for r in group),
+                           financing_gbp=sum(r['financing_gbp'] for r in group),
+                           net_pl_gbp=sum(r['net_pl_gbp'] for r in group),
+                           mean_net_r_actual_entry_risk=sum(r['net_r_actual_entry_risk'] for r in group) / len(group),
+                           scope='Closed trades only; no allocation of finance on positions still open'))
+    return result
+
+
+def write_zip(path, files):
+    temp = path.with_suffix(path.suffix + '.tmp')
+    with zipfile.ZipFile(temp, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for name, raw in sorted(files.items()):
+            z.writestr(name, raw)
+    temp.replace(path)
+
+
+def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
+    root = Path(__file__).parent
+    directory = Path(directory or output_dir()); directory.mkdir(parents=True, exist_ok=True)
+    progress(status='RUNNING', phase='VERIFY_PINNED_INPUTS', version=VERSION,
+             started_at_utc=e.stamp(datetime.now(e.UTC)))
+    signals, saved_paths, baseline = inputs.baseline(root)
+    evidence = inputs.broker(root)
+    reconciliation, broker_checks = reconcile(evidence)
+    e.require(reconciliation['status'] == 'PASS', 'Saved broker cash/margin reconciliation failed')
+    e.require(reconciliation['conversion_factor_markup_uniform'], 'Saved conversion markups differ; do not apply a single inferred markup')
+    e.require(evidence['account']['currency'] == 'GBP' and not evidence['account']['hedgingEnabled'], 'Expected saved GBP nonhedging account')
+    e.require({i['name'] for i in evidence['instruments']} == set(e.PAIRS) and all(int(i['tradeUnitsPrecision']) == 0 for i in evidence['instruments']), 'Expected whole-unit instrument terms for all nine portfolio pairs')
+    e.require(os.getenv('OANDA_ENV', os.getenv('OANDA_ENVIRONMENT', 'live')).lower().strip() == 'live', 'Use OANDA_ENV=live to match source evidence')
+    initial = float(os.getenv('P32_GBP_INITIAL_BALANCE', '100'))
+    e.require(0 < initial <= 1e8, 'Invalid initial GBP balance')
+    # Round only the inferred symmetric markup, not any broker P/L factor.
+    markup = round(reconciliation['observed_symmetric_conversion_factor_markup'], 8)
+    funding_file = root / 'funding_rates.csv'
+    funding = Funding(evidence['funding_schedules'], funding_file)
+    config = dict(initial_balance_gbp=initial, markup=markup,
+                  funding_file_sha256=e.sha(funding_file.read_bytes()) if funding_file.is_file() else None,
+                  scenario_filter=scenario_filter, mode_filter=mode_filter,
+                  valuation_max_quote_age_seconds=7 * 86400)
+    signature = source_signature(root, config)
+    scenarios = [scenario_filter] if scenario_filter else list(admissions.SCENARIOS)
+    modes = [mode_filter] if mode_filter else list(MODES) + (['HISTORICAL_FILE'] if funding.historical else [])
+    e.require(all(s in admissions.SCENARIOS for s in scenarios) and all(m in MODES + ('HISTORICAL_FILE',) for m in modes), 'Unsupported scenario/mode filter')
+    token = next((os.getenv(k, '').strip() for k in ('OANDA_TOKEN', 'OANDA_API_KEY', 'OANDA_API_TOKEN', 'OANDA_ACCESS_TOKEN') if os.getenv(k, '').strip()), '')
+    e.require(offline or token, 'Set OANDA_TOKEN on the separate research service')
+    reader = None if offline else e.CandleReader(token, 'https://api-fxtrade.oanda.com', float(os.getenv('P32_SIGNAL_REQUESTS_PER_SECOND', '4')))
+    store = e.CandleStore(directory, 'https://api-fxtrade.oanda.com', reader)
+    paths = Paths(directory, saved_paths, store, signals)
+    market = Market(store, progress)
+    results = []; report_ready = False
+    persistence_info = persistence(directory, create=True)
+    progress(phase='IMPORT_SAVED_EXECUTION_CANDLES', persistence=persistence_info,
+             broker_reconciliation=reconciliation['status'])
+    try:
+        store.import_seeds(root)
+        inputs.import_additions(root, store)
+        total = len(scenarios) * len(modes)
+        equity_files = {}
+        for scenario in scenarios:
+            for mode in modes:
+                name = scenario + '__' + mode
+                checkpoint = directory / ('gbp_' + name + '_' + signature + '.json.gz')
+                progress(phase='REPLAY_GBP_ACCOUNTS', scenario=scenario, funding_mode=mode,
+                         scenarios_completed=len(results), scenarios_required=total,
+                         qualifications_processed=0, qualifications_required=len(signals))
+                if checkpoint.exists():
+                    obj = json.loads(gzip.decompress(checkpoint.read_bytes()))
+                    e.require(obj['signature'] == signature and e.sha(e.canon(obj['result'])) == obj['result_sha256'], 'Scenario checkpoint checksum failed')
+                    result = obj['result']
+                    result['scenario_checkpoint_reused'] = True
+                    # A data-incomplete checkpoint is never treated as a finished
+                    # scenario; adding historical rows changes the signature.
+                    if result['summary']['status'] != 'COMPLETE_CONDITIONAL':
+                        result = None
+                else:
+                    result = None
+                if result is None:
+                    keep_nav = scenario == 'END_ASC' and mode in MODES[:2]
+                    nav_file = directory / ('gbp_nav_' + name + '_' + signature + '.csv.gz')
+                    nav_stream = gzip.open(str(nav_file) + '.tmp', 'wt', encoding='utf-8', newline='') if keep_nav else None
+                    nav_writer = None
+                    def nav_sink(row):
+                        nonlocal nav_writer
+                        if nav_writer is None:
+                            nav_writer = csv.DictWriter(nav_stream, fieldnames=list(row)); nav_writer.writeheader()
+                        nav_writer.writerow(row)
+                    try:
+                        result = Replay(signals, paths.get, market, funding, evidence['instruments'], scenario, mode,
+                                        markup, initial=initial, progress=progress,
+                                        start=baseline['evaluation_start'], end=baseline['historical_cutoff'],
+                                        keep_nav=keep_nav, nav_sink=nav_sink if keep_nav else None).run()
+                    finally:
+                        if nav_stream:
+                            nav_stream.close()
+                    if keep_nav:
+                        Path(str(nav_file) + '.tmp').replace(nav_file)
+                        result['nav_samples_saved_file'] = nav_file.name
+                        result['nav_samples_saved_sha256'] = e.sha(nav_file.read_bytes())
+                    result['valuation_source_summary'] = market.summary()
+                    result['scenario_checkpoint_reused'] = False
+                    raw = e.canon(dict(signature=signature, result=result, result_sha256=e.sha(e.canon(result))))
+                    atomic(checkpoint, gzip.compress(raw, compresslevel=6))
+                results.append(result)
+                if result.get('nav_samples_saved_file'):
+                    nav_file = directory / result['nav_samples_saved_file']
+                    e.require(nav_file.is_file() and e.sha(nav_file.read_bytes()) == result['nav_samples_saved_sha256'], 'NAV samples checkpoint missing or changed')
+                    equity_files[name + '_nav_samples.csv'] = nav_file
+                progress(scenarios_completed=len(results), last_scenario_status=result['summary']['status'])
+        summaries = [r['summary'] for r in results]
+        all_rows = {k: [] for k in ('ledger', 'trades', 'financing', 'cash_events', 'monthly_observations', 'open_positions')}
+        for result in results:
+            s = result['summary']
+            for kind in all_rows:
+                all_rows[kind].extend(dict(row, scenario=s['scenario'], financing_mode=s['financing_mode']) for row in result[kind])
+        coverage = potential_funding_coverage(signals, paths.rows, funding, e.dt(baseline['historical_cutoff']))
+        summary = dict(status='COMPLETE_WITH_LIMITATIONS', version=VERSION,
+                       started_at_utc=STATE['started_at_utc'], finished_at_utc=e.stamp(datetime.now(e.UTC)),
+                       raw_signals=len(signals), strategy_count=32,
+                       baseline_price_paths=3506, available_price_paths=len(paths.rows),
+                       new_candidate_paths=paths.computed,
+                       original_unresolved_path_count=170, original_unknown_entry_count=11,
+                       evaluation_start=baseline['evaluation_start'], historical_cutoff=baseline['historical_cutoff'],
+                       scenario_status_counts=dict(collections.Counter(s['status'] for s in summaries)),
+                       historical_financing_file_supplied=bool(funding.historical),
+                       potential_historical_pair_rollover_dates=len(coverage),
+                       supplied_potential_historical_pair_rollover_dates=sum(r['supplied'] for r in coverage),
+                       historical_financing_lane='RUN_WITH_EXPLICIT_MISSING_RATE_STOPS' if funding.historical else 'NOT_RUN_NO_HISTORICAL_RATE_FILE',
+                       saved_account_terms_at=evidence['collected_at_utc'],
+                       saved_account_currency='GBP', initial_balance_gbp=initial,
+                       frozen_conversion_factor_markup=markup,
+                       broker_reconciliation=reconciliation,
+                       full_portfolio_validated=False, actual_broker_returns=False,
+                       scenario_results_are_assumptions_not_bounds=True,
+                       margin_and_conversion_terms_applied_across_history_are_frozen=True,
+                       orders_supported=False, orders_sent=False, live_services_contacted=False,
+                       no_account_id_required=True, only_new_network_requests='APPROVED_OANDA_HISTORICAL_CANDLE_GETS',
+                       no_strategy_regeneration_or_mid_history_download=True,
+                       signature=signature, pins=inputs.PINS, persistence=persistence_info,
+                       valuation=market.summary(),
+                       scenario_source_summaries=[r.get('valuation_source_summary') for r in results],
+                       reused_scenario_checkpoints=sum(r.get('scenario_checkpoint_reused', False) for r in results),
+                       equity_sampling='Full M15/event samples for prespecified END_ASC zero/snapshot controls in /equity.zip; summaries for all lanes.',
+                       offline=offline)
+        comparison = []
+        for scenario in scenarios:
+            zero = next((s for s in summaries if s['scenario'] == scenario and s['financing_mode'] == MODES[0]), None)
+            for s in [v for v in summaries if v['scenario'] == scenario]:
+                comparison.append(dict(scenario=scenario, financing_mode=s['financing_mode'],
+                                       status=s['status'], admitted=s['decisions'].get('ADMITTED', 0),
+                                       margin_rejections=s['decisions'].get('REJECTED_INSUFFICIENT_MARGIN', 0),
+                                       financing_gbp=s['financing_gbp'], conditional_ending_nav_gbp=s['conditional_ending_nav_gbp'],
+                                       ending_nav_change_vs_zero_gbp=s['conditional_ending_nav_gbp'] - zero['conditional_ending_nav_gbp'] if zero and s['conditional_ending_nav_gbp'] is not None and zero['conditional_ending_nav_gbp'] is not None else None,
+                                       interpretation='Includes financing-driven changes in units, gates and margin, not a fixed-trade fee subtraction'))
+        files = {
+            'RUN_COMPLETE.json': e.canon(summary), 'READ_FIRST.md': (root / 'REPORT_GUIDE.md').read_bytes(),
+            'broker_reconciliation_summary.json': e.canon(reconciliation),
+            'broker_reconciliation_checks.csv': csv_bytes(broker_checks),
+            'gbp_scenario_summaries.json': e.canon(summaries), 'gbp_scenario_comparison.csv': csv_bytes(comparison),
+            'gbp_admission_ledger.csv': csv_bytes(all_rows['ledger']), 'gbp_closed_trades.csv': csv_bytes(all_rows['trades']),
+            'gbp_financing_events.csv': csv_bytes(all_rows['financing']), 'gbp_cash_events.csv': csv_bytes(all_rows['cash_events']),
+            'gbp_monthly_observations.csv': csv_bytes(all_rows['monthly_observations']),
+            'gbp_open_positions_at_cutoff.csv': csv_bytes(all_rows['open_positions']),
+            'gbp_trade_group_summaries.csv': csv_bytes(grouped_trade_stats(all_rows['trades'])),
+            'historical_funding_coverage.csv': csv_bytes(coverage),
+            'account_and_instrument_terms.json': e.canon(dict(collected_at=evidence['collected_at_utc'], account=evidence['account'], instruments=evidence['instruments'], funding_schedules=evidence['funding_schedules'])),
+            'baseline_run_summary.json': e.canon(baseline),
+            'raw_signal_witnesses.jsonl': b''.join(e.canon(s) + b'\n' for s in signals),
+            'candidate_price_paths.csv': csv_bytes(list(paths.rows.values())),
+            'candle_request_receipts.json': e.canon(reader.receipts if reader else []),
+            'persistence_status.json': e.canon(persistence_info),
+        }
+        # Source references are small; full raw MBA blocks are kept separately.
+        index = []
+        for key, identity, checksum, origin in store.db.execute('SELECT key,identity,sha256,origin FROM blocks ORDER BY key'):
+            index.append(dict(key=key, identity=json.loads(identity), sha256=checksum, origin=origin))
+        files['available_candle_source_index.json'] = e.canon(index)
+        files['report_manifest.json'] = e.canon({n: dict(bytes=len(b), sha256=e.sha(b)) for n, b in files.items()})
         progress(phase='PACKAGE_REPORTS')
-        temp=directory/(RESULT+'.tmp')
-        with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
-            for n,b in sorted(files.items()):z.writestr(n,b)
-            store.export(z);gap_audit.export_evidence(directory,z)
-        temp.replace(directory/RESULT)
-        report_written=True
-        progress(phase='PACKAGE_NATIVE_SOURCE_ARCHIVE',result_ready=True,result='/results.zip')
-        temp=directory/(SOURCES+'.tmp')
-        with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
-            history.export(z);store.export(z);gap_audit.export_evidence(directory,z)
-            z.writestr('source_provenance.json',e.canon(dict(signature=signature,seeds=e.SEED_MANIFEST,original_reference_sha256=e.REFERENCE_SHA256,prior_admission_result_sha256=gap_audit.BASELINE_SHA)))
-        temp.replace(directory/SOURCES)
-        atomic_json(directory/'completion.json',summary)
-        progress(**summary,phase='FINISHED',result='/results.zip',source_archive='/sources.zip',result_ready=True)
+        write_zip(directory / RESULT, files); report_ready = True
+        temporary = directory / (EQUITY + '.tmp')
+        with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+            if not equity_files:
+                z.writestr('README.txt', b'No full NAV samples were requested by this filtered run.')
+            for name, local in equity_files.items():
+                with gzip.open(local, 'rb') as source, z.open(name, 'w', force_zip64=True) as target:
+                    shutil.copyfileobj(source, target, 1024 * 1024)
+        temporary.replace(directory / EQUITY)
+        progress(result_ready=True, equity_ready=True, result='/results.zip', equity='/equity.zip', phase='PACKAGE_SOURCE_ARCHIVE')
+        if os.getenv('P32_GBP_PACKAGE_SOURCES', '1').lower() in ('1', 'true'):
+            temporary = directory / (SOURCES + '.tmp')
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                store.export(z)
+                z.writestr('source_provenance.json', e.canon(dict(signature=signature, pins=inputs.PINS, seeds=e.SEED_MANIFEST)))
+            temporary.replace(directory / SOURCES)
+        atomic(directory / 'gbp_completion.json', e.canon(summary))
+        progress(**summary, phase='FINISHED', result_ready=True, equity_ready=True,
+                 sources_ready=(directory / SOURCES).is_file(), result='/results.zip')
         return summary
     except Exception as exc:
-        message=str(exc) if isinstance(exc,(ValueError,e.CandleFetchError)) else type(exc).__name__
-        error=dict(status='ERROR',version=VERSION,error=message,orders_sent=False,partial_raw_signals=len(raw),offline=offline,research_reports_preserved=report_written)
-        if isinstance(exc,e.NeedData):error['pending_request']=exc.identity
-        if report_written:
-            # A source-archive/disk failure must not replace completed research
-            # reports with an error-only file. Append the diagnostic instead.
-            with zipfile.ZipFile(directory/RESULT,'a',zipfile.ZIP_DEFLATED) as z:z.writestr('ERROR.json',e.canon(error))
+        message = str(exc) if isinstance(exc, (ValueError, e.CandleFetchError)) else type(exc).__name__
+        error = dict(status='ERROR', version=VERSION, error=message,
+                     reports_preserved=report_ready, orders_sent=False, signature=signature)
+        if isinstance(exc, e.NeedData):
+            error['pending_request'] = exc.identity
+        if report_ready:
+            with zipfile.ZipFile(directory / RESULT, 'a', zipfile.ZIP_DEFLATED) as z:
+                z.writestr('ERROR.json', e.canon(error))
         else:
-            temp=directory/(RESULT+'.tmp')
-            with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED) as z:
-                z.writestr('ERROR.json',e.canon(error));z.writestr('partial_raw_signals.jsonl',jsonl(raw));z.writestr('rules_provenance.json',e.canon(provenance))
-            temp.replace(directory/RESULT)
-        progress(**error,phase='FAILED',result_ready=True,result='/results.zip')
+            write_zip(directory / RESULT, {'ERROR.json': e.canon(error),
+                      'broker_reconciliation_summary.json': e.canon(reconciliation),
+                      'completed_scenario_summaries.json': e.canon([r['summary'] for r in results])})
+        progress(**error, phase='FAILED', result_ready=True, result='/results.zip')
         raise
     finally:
-        paths.close();store.close();history.close()
+        paths.close(); store.close()
+
 
 def start():
     with LOCK:
-        if STATE['status']!='IDLE':return
-        STATE.update(status='RUNNING',phase='STARTING')
+        if STATE['status'] != 'IDLE':
+            return
+        STATE.update(status='RUNNING', phase='STARTING')
     def worker():
-        try:run(offline=os.getenv('P32_SIGNAL_OFFLINE','').lower() in ('1','true'))
+        try:
+            run(offline=os.getenv('P32_SIGNAL_OFFLINE', '').lower() in ('true', '1'))
         except Exception as exc:
-            if STATE.get('status')!='ERROR':progress(status='ERROR',phase='FAILED',error=str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
-    threading.Thread(target=worker,daemon=True,name='p32-raw-signal-recovery').start()
+            if STATE.get('status') != 'ERROR':
+                progress(status='ERROR', phase='FAILED', error=str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+    threading.Thread(target=worker, daemon=True, name='p32-gbp-account-replay').start()
 
-def application(environ,start_response):
-    method,path=environ.get('REQUEST_METHOD','GET'),environ.get('PATH_INFO','/');kind='application/json';download=None
-    if method not in ('GET','HEAD'):code,body='405 Method Not Allowed',e.canon({'error':'GET/HEAD only'})
-    elif path in ('/','/health'):code,body='200 OK',e.canon(dict(service=VERSION,orders_supported=False,scope=STATE['scope'],start_once='/status',result='/results.zip',native_sources='/sources.zip'))
-    elif path=='/status':
-        if method=='GET':start()
+
+def application(environ, start_response):
+    method, path = environ.get('REQUEST_METHOD', 'GET'), environ.get('PATH_INFO', '/')
+    kind = 'application/json'; download = None
+    if method not in ('GET', 'HEAD'):
+        code, body = '405 Method Not Allowed', e.canon(dict(error='GET/HEAD only'))
+    elif path in ('/', '/health'):
+        code, body = '200 OK', e.canon(dict(service=VERSION, orders_supported=False,
+                                          start_once='/status', result='/results.zip', equity='/equity.zip',
+                                          persistence=persistence(output_dir())))
+    elif path == '/status':
+        if method == 'GET':
+            start()
         with LOCK:
-            snapshot=dict(STATE)
-        if snapshot.get('last_progress_utc'):snapshot['seconds_since_last_progress']=round((datetime.now(e.UTC)-e.dt(snapshot['last_progress_utc'])).total_seconds(),1)
-        body=e.canon(snapshot)
-        code='200 OK'
-    elif path in ('/results.zip','/results','/download','/sources.zip'):
-        name=SOURCES if path=='/sources.zip' else RESULT;file=output_dir()/name
-        if file.is_file() and ((path=='/sources.zip' and STATE.get('phase')=='FINISHED') or (path!='/sources.zip' and STATE.get('result_ready'))):code,body,kind,download='200 OK',b'','application/zip',file
-        else:code,body='409 Conflict',e.canon({'message':'Not ready; check /status'})
-    else:code,body='404 Not Found',e.canon({'error':'Unknown route'})
-    headers=[('Content-Type',kind),('Content-Length',str(download.stat().st_size if download else len(body))),('Cache-Control','no-store')]
-    if kind=='application/zip':headers.append(('Content-Disposition','attachment; filename='+(SOURCES if path=='/sources.zip' else RESULT)))
-    if code.startswith('405'):headers.append(('Allow','GET, HEAD'))
-    start_response(code,headers)
-    if download and method=='GET':
+            snapshot = dict(STATE)
+        if snapshot.get('last_progress_utc'):
+            snapshot['seconds_since_last_progress'] = round((datetime.now(e.UTC) - e.dt(snapshot['last_progress_utc'])).total_seconds(), 1)
+        code, body = '200 OK', e.canon(snapshot)
+    elif path in ('/results.zip', '/equity.zip', '/sources.zip'):
+        name = {'/results.zip': RESULT, '/equity.zip': EQUITY, '/sources.zip': SOURCES}[path]
+        ready = STATE.get({'/results.zip': 'result_ready', '/equity.zip': 'equity_ready', '/sources.zip': 'sources_ready'}[path])
+        candidate = output_dir() / name
+        if ready and candidate.is_file():
+            code, body, kind, download = '200 OK', b'', 'application/zip', candidate
+        else:
+            code, body = '409 Conflict', e.canon(dict(message='Not ready; check /status'))
+    else:
+        code, body = '404 Not Found', e.canon(dict(error='Unknown route'))
+    headers = [('Content-Type', kind), ('Content-Length', str(download.stat().st_size if download else len(body))), ('Cache-Control', 'no-store')]
+    if download:
+        headers.append(('Content-Disposition', 'attachment; filename=' + download.name))
+    if code.startswith('405'):
+        headers.append(('Allow', 'GET, HEAD'))
+    start_response(code, headers)
+    if download and method == 'GET':
         def chunks():
-            with download.open('rb') as file:
+            with download.open('rb') as f:
                 while True:
-                    block=file.read(65536)
-                    if not block:break
+                    block = f.read(65536)
+                    if not block:
+                        break
                     yield block
         return chunks()
-    return [b'' if method=='HEAD' else body]
+    return [b'' if method == 'HEAD' else body]
+
 
 class QuietHandler(WSGIRequestHandler):
-    def log_message(self,*args):pass
+    def log_message(self, *args):
+        pass
+
 
 def main():
     global DIRECTORY
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--run',action='store_true');p.add_argument('--offline',action='store_true');p.add_argument('--output');args=p.parse_args();DIRECTORY=args.output
-    if args.run:print(json.dumps(run(offline=args.offline),indent=2));return
-    if args.offline:os.environ['P32_SIGNAL_OFFLINE']='true'
-    with make_server('0.0.0.0',int(os.getenv('PORT','8080')),application,handler_class=QuietHandler) as server:
-        print(VERSION+' ready',flush=True);server.serve_forever()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run', action='store_true'); parser.add_argument('--offline', action='store_true')
+    parser.add_argument('--reconcile-only', action='store_true'); parser.add_argument('--output')
+    parser.add_argument('--scenario', choices=admissions.SCENARIOS)
+    parser.add_argument('--funding-mode', choices=MODES + ('HISTORICAL_FILE',))
+    args = parser.parse_args(); DIRECTORY = args.output
+    if args.reconcile_only:
+        summary, _ = reconcile(inputs.broker(Path(__file__).parent))
+        print(json.dumps(summary, indent=2)); return
+    if args.run:
+        print(json.dumps(run(offline=args.offline, scenario_filter=args.scenario, mode_filter=args.funding_mode), indent=2)); return
+    if args.offline:
+        os.environ['P32_SIGNAL_OFFLINE'] = 'true'
+    with make_server('0.0.0.0', int(os.getenv('PORT', '8080')), application, handler_class=QuietHandler) as server:
+        print(VERSION + ' ready', flush=True); server.serve_forever()
 
-if __name__=='__main__':main()
+
+if __name__ == '__main__':
+    main()
