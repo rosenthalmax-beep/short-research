@@ -105,6 +105,35 @@ class IndicatorTests(unittest.TestCase):
 
 class NativeTests(unittest.TestCase):
     def ident(self,gran,start,end):return dict(pair='EUR_USD',granularity=gran,start=e.stamp(start),end=e.stamp(end))
+    def test_h4_advance_crosses_autumn_clock_change(self):
+        start=e.dt('2005-10-30T05:00:00Z')
+        self.assertEqual(h.advance(start,'H4',1),e.dt('2005-10-30T10:00:00Z'))
+        self.assertEqual(h.bar_end(start,'H4'),e.dt('2005-10-30T10:00:00Z'))
+    def test_h4_advance_crosses_spring_clock_change(self):
+        start=e.dt('2020-03-08T06:00:00Z')
+        self.assertEqual(h.advance(start,'H4',1),e.dt('2020-03-08T09:00:00Z'))
+        end=e.dt('2020-03-08T09:00:00Z')
+        rows=h.HistoryStore.validate(dict(instrument='EUR_USD',granularity='H4',candles=[native(start,'H4')]),self.ident('H4',start,end))
+        self.assertEqual(len(rows),1)
+    def test_h4_entire_research_horizon_always_advances(self):
+        t=h.align(h.START,'H4');end=h.align(h.END,'H4');count=0
+        while t<end and count<50000:
+            nxt=h.advance(t,'H4',1)
+            self.assertGreater(nxt,t)
+            self.assertEqual(h.align(nxt,'H4'),nxt)
+            self.assertEqual(nxt.astimezone(e.NY).hour%4,1)
+            t=nxt;count+=1
+        self.assertEqual(t,end)
+        self.assertGreater(count,47000)
+    def test_history_coverage_guard_fails_instead_of_hanging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader=h.MidReader('FAKE','https://api-fxtrade.oanda.com',transport=lambda req:dict(instrument='EUR_USD',granularity='H4',candles=[]))
+            store=h.HistoryStore(directory,reader)
+            original=h.advance
+            try:
+                with patch.object(h,'advance',side_effect=lambda t,gran,n:t if n==1 else original(t,gran,n)):
+                    with self.assertRaisesRegex(ValueError,'coverage cursor did not advance'):store.series('EUR_USD','H4')
+            finally:store.close()
     def test_daily_alignment_changes_utc_offset_across_dst(self):
         self.assertEqual(h.align(e.dt('2020-07-01T22:00:00Z'),'D'),e.dt('2020-07-01T21:00:00Z'))
         self.assertEqual(h.align(e.dt('2020-01-01T23:00:00Z'),'D'),e.dt('2020-01-01T22:00:00Z'))

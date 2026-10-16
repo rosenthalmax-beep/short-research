@@ -24,9 +24,13 @@ def align(t,gran):
 
 def advance(t,gran,n):
     if gran=='D':return (t.astimezone(e.NY)+timedelta(days=n)).astimezone(e.UTC)
+    # H4 is day-aligned to NY17. Advance in New York wall time:
+    # adding UTC hours and flooring can return the same bar at autumn DST.
+    if gran=='H4':return align((t.astimezone(e.NY)+timedelta(hours=4*n)).astimezone(e.UTC),gran)
     return align(t+timedelta(seconds=n*GRANS[gran]),gran)
 
 def bar_end(t,gran):
+    if gran=='H4':return advance(t,gran,1)
     return (t.astimezone(e.NY)+timedelta(days=1)).astimezone(e.UTC) if gran=='D' else t+timedelta(seconds=GRANS[gran])
 
 class MidReader(e.CandleReader):
@@ -162,6 +166,10 @@ class HistoryStore:
         while cursor<end:
             finish=min(end,advance(cursor,gran,4800))
             e.require(finish>cursor,'Native history cursor did not advance')
+            self.progress(phase='DOWNLOAD_CONTINUOUS_HISTORY',pair=pair,granularity=gran,timeframe=gran,
+                          bars_evaluated=None,bars_required=None,signals_found=None,
+                          through_utc=e.stamp(cursor),native_bars=len(result),mid_downloads=self.downloads,mid_cache_hits=self.hits,
+                          history_timing_fix='NY17_H4_DST_V1_2026_10_16',last_history_update_utc=e.stamp(datetime.now(e.UTC)))
             ident=dict(schema='MID_HISTORY_NY17_V1',broker='https://api-fxtrade.oanda.com',pair=pair,granularity=gran,start=e.stamp(cursor),end=e.stamp(finish),price='M',smooth=False,dailyAlignment=17,alignmentTimezone='America/New_York')
             key=e.sha(e.canon(ident));cached=self.db.execute('SELECT body,sha256 FROM history WHERE key=?',(key,)).fetchone()
             if cached:
@@ -176,10 +184,12 @@ class HistoryStore:
                 if t not in available:
                     if e.conventional_weekend(t):weekends+=1
                     else:missing+=1
-                t=advance(t,gran,1)
+                next_slot=advance(t,gran,1)
+                e.require(next_slot>t,'Native history coverage cursor did not advance: '+pair+' '+gran+' '+e.stamp(t))
+                t=next_slot
             for c in rows:result.append(c)
             cursor=finish
-            self.progress(phase='DOWNLOAD_CONTINUOUS_HISTORY',pair=pair,granularity=gran,through_utc=e.stamp(cursor),native_bars=len(result),mid_downloads=self.downloads,mid_cache_hits=self.hits)
+            self.progress(phase='DOWNLOAD_CONTINUOUS_HISTORY',pair=pair,granularity=gran,through_utc=e.stamp(cursor),native_bars=len(result),mid_downloads=self.downloads,mid_cache_hits=self.hits,last_history_update_utc=e.stamp(datetime.now(e.UTC)))
         self.coverage.append(dict(pair=pair,granularity=gran,observed_bars=len(result),expected_calendar_slots=expected,
                                   missing_nonweekend_slots=missing,assumed_weekend_slots=weekends,
                                   first_observed=e.stamp(result[0]['time']) if len(result) else None,last_observed=e.stamp(result[-1]['time']) if len(result) else None,
