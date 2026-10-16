@@ -28,7 +28,7 @@ portfolio instruments. The live executor and strategy probe are not contacted.
    reports its containing mount and a marker after the run starts; neither is
    a guarantee that a hosting provider will preserve it across redeployment.
 2. Deploy the extracted files with the existing five seed ZIPs still present.
-3. Open `/health`; service must be `P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16`.
+3. Open `/health`; service must be `P32_GBP_ACCOUNT_REPLAY_V2_2026_10_16_SOURCE_WINDOWS`.
 4. Open `/status` once to start. Refresh this address to follow the run.
    Progress includes the scenario, financing mode, qualifications processed,
    valuation quote windows and the last real progress timestamp.
@@ -152,7 +152,7 @@ P32_SIGNAL_OUTPUT_DIR is retained.
 P32_GBP_PACKAGE_SOURCES: default 1; set 0 to omit the optional larger source ZIP.
 P32_SIGNAL_REQUESTS_PER_SECOND: default 4; max 5, as in the previous runner.
 
-    python -m unittest test_gbp
+    python -m unittest test_source_windows test_gbp test_execution
     python app.py --reconcile-only
     python app.py --run --offline
 
@@ -160,3 +160,32 @@ The last command requires all needed quotes already saved; it does not turn
 missing history into assumed data. Run all tests without credentials. Production
 historical downloads/account replays are performed on your research service,
 not claimed as already completed in the delivery validation.
+
+## V2 source-window fix
+
+The V1 valuation reader merged broad new responses with overlapping saved
+seed intervals. Differences between those batches could stop the entire run
+with "Overlapping source candles disagree". V2 uses one exact canonical
+14-day response for each valuation window in gbp_valuation_windows_v2, with
+an independent execution-source cache in gbp_execution_paths_v2. It preserves
+all 3,506 pinned trade paths and the original seed data. It does not choose the
+first/last overlapping candle or relax frozen execution consistency checks.
+
+Numeric OHLC differences and frozen candles absent from the valuation response
+are recorded in valuation_vs_frozen_source_differences.csv. Representation-only
+differences are compared numerically. Causes such as broker revisions are not
+asserted without evidence. The resulting curves remain conditional on the
+separate valuation dataset. Cached exact whole-window responses from a V1 run
+can be copied with checksum/identity validation; mixed partial seed batches
+cannot be used to fill a canonical valuation response. Data/checkpoints are
+retained; V2 accounting checkpoints have a new source signature.
+
+The status showing /tmp/p32_signal_admission on the root overlay filesystem
+means that run was not using a separate persistent mount. In Railway, attach
+a volume to THIS research service and set its mount path to /data. Then set
+both P32_GBP_OUTPUT_DIR and P32_SIGNAL_OUTPUT_DIR to /data/p32_signal_admission.
+Creating a directory or setting the variable alone does not attach a volume.
+Deploy the changes and check /health: output_directory should be the configured
+/data path and separate_mount_detected should be true. New storage does not
+restore an old /tmp cache, but the five seed ZIPs reconstruct the saved sources.
+Keep all existing seed/input ZIPs and do not delete any data to apply this fix.

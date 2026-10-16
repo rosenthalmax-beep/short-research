@@ -23,8 +23,9 @@ from broker_reconcile import reconcile
 from funding import Funding, MODES, rollovers
 from market import Market
 from accounting import Replay
+from valuation_sources import ValuationWindows
 
-VERSION = 'P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16'
+VERSION = 'P32_GBP_ACCOUNT_REPLAY_V2_2026_10_16_SOURCE_WINDOWS'
 RESULT = 'P32_GBP_ACCOUNT_REPLAY_RESULTS.zip'
 EQUITY = 'P32_GBP_ACCOUNT_REPLAY_EQUITY.zip'
 SOURCES = 'P32_GBP_ACCOUNT_REPLAY_SOURCES.zip'
@@ -62,7 +63,7 @@ def atomic(path, content):
 
 def source_signature(root, config):
     names = ('app.py', 'accounting.py', 'market.py', 'funding.py', 'broker_reconcile.py',
-             'inputs.py', 'pinned_inputs.py', 'execution.py', 'admissions.py', 'history.py', 'locked_rules.py', 'reference_payload.py')
+             'inputs.py', 'pinned_inputs.py', 'execution.py', 'admissions.py', 'history.py', 'locked_rules.py', 'reference_payload.py', 'valuation_sources.py')
     return e.sha(e.canon(dict(config=config, code={n: e.sha((root / n).read_bytes()) for n in names})))
 
 
@@ -95,7 +96,8 @@ class Paths:
         self.db = sqlite3.connect(str(directory / 'gbp_new_candidate_paths.sqlite3'))
         self.db.execute('CREATE TABLE IF NOT EXISTS paths(key TEXT PRIMARY KEY, body BLOB, sha256 TEXT)'); self.db.commit()
         self.signature = e.sha(e.canon(dict(core=e.sha((Path(__file__).parent / 'execution.py').read_bytes()),
-                                         baseline=inputs.PINS['warmed_signal_results.zip'])))
+                                         baseline=inputs.PINS['warmed_signal_results.zip'],
+                                         execution_source_scope='ISOLATED_V2_FROZEN_SEEDS_AND_ADMISSION_89')))
         for signal in signals:
             if signal['signal_key'] not in self.rows:
                 identity = e.sha(e.canon(dict(signature=self.signature, signal=signal)))
@@ -216,9 +218,14 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
     token = next((os.getenv(k, '').strip() for k in ('OANDA_TOKEN', 'OANDA_API_KEY', 'OANDA_API_TOKEN', 'OANDA_ACCESS_TOKEN') if os.getenv(k, '').strip()), '')
     e.require(offline or token, 'Set OANDA_TOKEN on the separate research service')
     reader = None if offline else e.CandleReader(token, 'https://api-fxtrade.oanda.com', float(os.getenv('P32_SIGNAL_REQUESTS_PER_SECOND', '4')))
-    store = e.CandleStore(directory, 'https://api-fxtrade.oanda.com', reader)
+    # Keep the V1 database intact. It may contain canonical valuation windows
+    # that overlap its seed candles. Reuse only exact whole-window responses.
+    legacy = e.CandleStore(directory, 'https://api-fxtrade.oanda.com') if (directory / 'replay_candles.sqlite3').is_file() else None
+    store = e.CandleStore(directory / 'gbp_execution_paths_v2', 'https://api-fxtrade.oanda.com', reader)
+    valuation_store = e.CandleStore(directory / 'gbp_valuation_windows_v2', 'https://api-fxtrade.oanda.com', reader)
+    valuation_windows = ValuationWindows(valuation_store, store, legacy, progress)
     paths = Paths(directory, saved_paths, store, signals)
-    market = Market(store, progress)
+    market = Market(valuation_windows, progress)
     results = []; report_ready = False
     persistence_info = persistence(directory, create=True)
     progress(phase='IMPORT_SAVED_EXECUTION_CANDLES', persistence=persistence_info,
@@ -309,6 +316,7 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
                        no_strategy_regeneration_or_mid_history_download=True,
                        signature=signature, pins=inputs.PINS, persistence=persistence_info,
                        valuation=market.summary(),
+                       valuation_source_policy=valuation_windows.summary(),
                        scenario_source_summaries=[r.get('valuation_source_summary') for r in results],
                        reused_scenario_checkpoints=sum(r.get('scenario_checkpoint_reused', False) for r in results),
                        equity_sampling='Full M15/event samples for prespecified END_ASC zero/snapshot controls in /equity.zip; summaries for all lanes.',
@@ -340,12 +348,18 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
             'candidate_price_paths.csv': csv_bytes(list(paths.rows.values())),
             'candle_request_receipts.json': e.canon(reader.receipts if reader else []),
             'persistence_status.json': e.canon(persistence_info),
+            'valuation_vs_frozen_source_differences.csv': csv_bytes(valuation_windows.differences()),
+            'valuation_source_policy.json': e.canon(valuation_windows.summary()),
+            'valuation_window_origins.json': e.canon(valuation_windows.origins()),
         }
         # Source references are small; full raw MBA blocks are kept separately.
         index = []
         for key, identity, checksum, origin in store.db.execute('SELECT key,identity,sha256,origin FROM blocks ORDER BY key'):
             index.append(dict(key=key, identity=json.loads(identity), sha256=checksum, origin=origin))
         files['available_candle_source_index.json'] = e.canon(index)
+        files['valuation_candle_source_index.json'] = e.canon([
+            dict(key=key, identity=json.loads(identity), sha256=checksum, origin=origin)
+            for key, identity, checksum, origin in valuation_store.db.execute('SELECT key,identity,sha256,origin FROM blocks ORDER BY key')])
         files['report_manifest.json'] = e.canon({n: dict(bytes=len(b), sha256=e.sha(b)) for n, b in files.items()})
         progress(phase='PACKAGE_REPORTS')
         write_zip(directory / RESULT, files); report_ready = True
@@ -362,6 +376,10 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
             temporary = directory / (SOURCES + '.tmp')
             with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
                 store.export(z)
+                class Prefixed:
+                    def writestr(self, name, raw):
+                        z.writestr('valuation/' + name, raw)
+                valuation_store.export(Prefixed())
                 z.writestr('source_provenance.json', e.canon(dict(signature=signature, pins=inputs.PINS, seeds=e.SEED_MANIFEST)))
             temporary.replace(directory / SOURCES)
         atomic(directory / 'gbp_completion.json', e.canon(summary))
@@ -371,7 +389,9 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
     except Exception as exc:
         message = str(exc) if isinstance(exc, (ValueError, e.CandleFetchError)) else type(exc).__name__
         error = dict(status='ERROR', version=VERSION, error=message,
-                     reports_preserved=report_ready, orders_sent=False, signature=signature)
+                     reports_preserved=report_ready, orders_sent=False, signature=signature,
+                     failed_source_context={k: STATE.get(k) for k in ('quote_pair', 'quote_from', 'quote_to', 'scenario', 'funding_mode', 'through_utc')},
+                     valuation_source_policy=valuation_windows.summary())
         if isinstance(exc, e.NeedData):
             error['pending_request'] = exc.identity
         if report_ready:
@@ -380,11 +400,14 @@ def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
         else:
             write_zip(directory / RESULT, {'ERROR.json': e.canon(error),
                       'broker_reconciliation_summary.json': e.canon(reconciliation),
+                      'valuation_vs_frozen_source_differences.csv': csv_bytes(valuation_windows.differences()),
                       'completed_scenario_summaries.json': e.canon([r['summary'] for r in results])})
         progress(**error, phase='FAILED', result_ready=True, result='/results.zip')
         raise
     finally:
-        paths.close(); store.close()
+        paths.close(); store.close(); valuation_store.close()
+        if legacy is not None:
+            legacy.close()
 
 
 def start():

@@ -8,28 +8,28 @@
     "sha256": "7153a696348182d56054897f6d24d2f7fb9cccbd1ebe15e5d43a33733a8cdad7"
   },
   "README.md": {
-    "bytes": 9581,
-    "sha256": "0565278ba5005b87a215d804d423378b1bd9060781340592796ce8b48b27c52a"
+    "bytes": 11501,
+    "sha256": "7a1ed7c4f5d92249e2dc33bc850893bcc55b51296347b52af0c8df3b8c78695a"
   },
   "REPORT_GUIDE.md": {
-    "bytes": 4543,
-    "sha256": "d2a50a5716e3433796beb74aa26864bce79bfb7b0a180fd95dcf3e60ff085cc0"
+    "bytes": 4989,
+    "sha256": "609d0227c268885dec968d2e6d7caf12990db2cf993442531bc22bb10eee098d"
   },
   "SOURCE_NOTES.json": {
     "bytes": 668,
     "sha256": "51327c25419bba4e4e531264ad323bd0f036e80effb5caf6e21003e5c39ec3ad"
   },
   "TEST_RESULTS.txt": {
-    "bytes": 10828,
-    "sha256": "544b44e86bd6a234108a12ea6ce30ee9cb69572000f51ee241b96420670234d2"
+    "bytes": 11934,
+    "sha256": "1101273b6b95c810e83369b15aa0c8ac32984715b200cd5c1cf16847f1d73ec9"
   },
   "VALIDATION.json": {
-    "bytes": 1085,
-    "sha256": "bcf872630b7a553cef5fd000f4cf1149a4d966a68b849e75955c8c4bf74ed872"
+    "bytes": 1656,
+    "sha256": "7d0c043006de3234b1212f60c6ebbb2b26ed15502566d69187345c5dead66adc"
   },
   "accounting.py": {
-    "bytes": 26144,
-    "sha256": "31d451cc6266fcd581b2dcf62a83507ada15e28712714a6fdd3c0cba29d87f8b"
+    "bytes": 26296,
+    "sha256": "6e0e43fb1547fa7ba6b64db29571d555063fba40fe5ff481ccd34801a311178d"
   },
   "admission_source_additions.zip": {
     "bytes": 277153,
@@ -40,8 +40,8 @@
     "sha256": "186b70890d9ce8c6e16a73af36c090d8e3949707f2eae524d258a452a04103b2"
   },
   "app.py": {
-    "bytes": 28853,
-    "sha256": "a65274f551e0951aab7d3e51c231012dbaf795841274ed2ea30b3c495fe36687"
+    "bytes": 30833,
+    "sha256": "4d1347d609b867f1e1c74be4b9eac061d38c5af568d14f1d4f1d2d1ca2624582"
   },
   "broker_reconcile.py": {
     "bytes": 8289,
@@ -84,8 +84,8 @@
     "sha256": "7627c48bf8c4c2fa443b25d7d582475c962a201cbe4a0c983afd06e22f50dca9"
   },
   "market.py": {
-    "bytes": 5685,
-    "sha256": "e3715fef5b148cab5bde6e6c596399f901505c0a745c764cee65986a0a091a3f"
+    "bytes": 6122,
+    "sha256": "1e6040d609bf959b91cf2832781384dcf401662d8e7faae594126af7f5c41bbb"
   },
   "pinned_inputs.py": {
     "bytes": 365,
@@ -110,6 +110,14 @@
   "test_gbp.py": {
     "bytes": 23247,
     "sha256": "66a618c23216ba387e36b3b0bbc1ead569f6f57ffb7dad5694245168394b223f"
+  },
+  "test_source_windows.py": {
+    "bytes": 6359,
+    "sha256": "f4a5e1720a834fcd5331e5f6b9524a51fbcf596de3c771f37f54ea18d6b02acd"
+  },
+  "valuation_sources.py": {
+    "bytes": 7152,
+    "sha256": "ace38aeb4a54b6120955d2476d0dd0bed2f11e71673cd993df8caf9d0c95cf7c"
   },
   "warmed_signal_results.zip": {
     "bytes": 4266192,

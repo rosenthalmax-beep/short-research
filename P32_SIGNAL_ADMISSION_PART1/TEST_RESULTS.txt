@@ -1,3 +1,10 @@
+test_corrupt_legacy_response_rejected (test_source_windows.WindowTests.test_corrupt_legacy_response_rejected) ... ok
+test_dedicated_cache_never_merges_an_overlapping_request (test_source_windows.WindowTests.test_dedicated_cache_never_merges_an_overlapping_request) ... ok
+test_fresh_request_does_not_copy_partial_seed_into_new_window (test_source_windows.WindowTests.test_fresh_request_does_not_copy_partial_seed_into_new_window) ... ok
+test_missing_frozen_candle_is_reported_without_promoting_exit (test_source_windows.WindowTests.test_missing_frozen_candle_is_reported_without_promoting_exit) ... ok
+test_repeated_window_uses_saved_exact_response_and_diagnostics (test_source_windows.WindowTests.test_repeated_window_uses_saved_exact_response_and_diagnostics) ... ok
+test_representation_only_differences_are_not_numeric_revisions (test_source_windows.WindowTests.test_representation_only_differences_are_not_numeric_revisions) ... ok
+test_reproduce_original_merge_failure_and_fix_without_overwrite (test_source_windows.WindowTests.test_reproduce_original_merge_failure_and_fix_without_overwrite) ... ok
 test_close_at_rollover_is_before_financing_in_declared_order (test_gbp.AccountTests.test_close_at_rollover_is_before_financing_in_declared_order) ... ok
 test_end_start_interval_scenarios_remain_different (test_gbp.AccountTests.test_end_start_interval_scenarios_remain_different) ... ok
 test_eurjpy_override (test_gbp.AccountTests.test_eurjpy_override) ... ok
@@ -93,6 +100,6 @@ test_resumed_export_keeps_source_evidence_without_read_again (test_execution.Sou
 test_unordered_source_rejected (test_execution.SourceAndSafetyTests.test_unordered_source_rejected) ... ok
 
 ----------------------------------------------------------------------
-Ran 93 tests in 2.129s
+Ran 100 tests in 2.060s
 
 OK

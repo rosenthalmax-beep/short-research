@@ -1,26 +1,32 @@
 {
-  "version": "P32_GBP_ACCOUNT_REPLAY_V1_2026_10_16",
-  "validated_at_utc": "2026-10-16T12:30:48.401103+00:00",
-  "offline_unittest_count": 93,
-  "offline_unittests_passed": true,
+  "version": "P32_GBP_ACCOUNT_REPLAY_V2_2026_10_16_SOURCE_WINDOWS",
+  "validated_at_utc": "2026-10-16T13:24:31.933471+00:00",
+  "offline_tests_passed": 100,
   "broker_arithmetic_checks": 82,
-  "broker_arithmetic_failures": 0,
-  "warmed_raw_signals_pinned": 3629,
-  "saved_price_paths_pinned": 3506,
-  "unchanged_execution_and_predicate_modules": {
+  "full_historical_gbp_run_performed_locally": false,
+  "fresh_broker_requests_performed_locally": 0,
+  "fix": "Exact canonical valuation responses in a separate cache; immutable frozen execution sources; numeric differences logged; exact legacy-window reuse and corruption rejection. No global relaxation of overlap checks.",
+  "reported_failure_reproduced": "Synthetic overlapping saved responses raise the same V1 ValueError; V2 reads one canonical response and preserves original source bytes. The actual remote failed response was not provided.",
+  "immutable_inputs": {
+    "raw_qualifications": 3629,
+    "saved_price_paths": 3506,
+    "pins": {
+      "warmed_signal_results.zip": "6d06c8bf4d8b7f4641edee4edbac6e919c01805480388f2c14b1935e5c5188f0",
+      "saved_broker_evidence.json": "e806e5acd9ae01978b46fcdfd3d9770bb31841c27e7dd679ad6b7b0e3d0651b7",
+      "admission_source_additions.zip": "fcbe0bf49e5a5e639ae0d4389144e449d7e7d9d2e64eebcbeb5b71ad90dde893"
+    }
+  },
+  "unchanged_core_modules": {
     "execution.py": true,
-    "reference_payload.py": true,
     "admissions.py": true,
+    "reference_payload.py": true,
     "history.py": true,
     "locked_rules.py": true
   },
-  "source_import": {
+  "source_import_validation": {
     "blocks": 12661,
     "imported_manifests": 6,
     "network_requests": 0
   },
-  "new_live_or_historical_broker_requests_performed_locally": 0,
-  "full_historical_gbp_account_run_performed_locally": false,
-  "historical_funding_rate_dataset_supplied": false,
-  "validation_scope": "Offline arithmetic/ordering/cash identity/NAV/margin/funding/causality/regressions; actual seed/addition import; synthetic complete service + report manifest + resumed-no-download run. Full historical account run requires new valuation quotes on research host."
+  "hosting_observation": "User status reports /tmp/p32_signal_admission on overlay root, no separate mount. Must attach a volume and set output path; persistence not recovered by software alone."
 }

@@ -68,3 +68,10 @@ Broker evidence is frozen at 14 October 2026 16:15:05 UTC. The signal window
 remains 1 January 2005 to 20 September 2026 18:29 UTC. These data include the
 previously developed strategy history; they are not a new out-of-sample test.
 The live probe/executor is not contacted or modified; no order route exists.
+
+V2 source policy: valuation windows use one immutable canonical response,
+separately cached from execution seeds and pinned paths. Read
+valuation_vs_frozen_source_differences.csv and valuation_source_policy.json.
+These report numeric OHLC disagreements/absent frozen candles without silently
+merging batches, certifying a revision cause or changing saved exits. Full raw
+valuation responses are in valuation/ inside the optional source archive.

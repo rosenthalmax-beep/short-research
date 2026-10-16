@@ -33,6 +33,7 @@ class Market:
         self.current_stale = False
         self.quote_gap_seen = False
         self.curve_gap_seen = False
+        self.source_disagreement_seen = False
 
     def begin_event(self):
         self.current_max_age = 0
@@ -47,7 +48,10 @@ class Market:
         end = start + timedelta(days=14)
         self.progress(quote_pair=pair, quote_from=e.stamp(start), quote_to=e.stamp(end),
                       valuation_windows_loaded=self.window_loads, new_candle_blocks=self.store.downloads)
-        if hasattr(self.store, 'intervals'):
+        if hasattr(self.store, 'window'):
+            candles = self.store.window(pair, start, end)
+            self.source_disagreement_seen = self.source_disagreement_seen or self.store.difference_count() > 0
+        elif hasattr(self.store, 'intervals'):
             # Sparse seed windows must not create dozens of tiny HTTP requests
             # for every intervening hole. One canonical 14-day MBA request fills
             # the window; range() still checks overlap against frozen sources.
@@ -61,7 +65,9 @@ class Market:
                     break
             if cursor < end:
                 self.store._fetch(pair, 'M15', start, end)
-        candles = self.store.range(pair, 'M15', start, end)
+            candles = self.store.range(pair, 'M15', start, end)
+        else:
+            candles = self.store.range(pair, 'M15', start, end)
         points = []
         for c in candles:
             t = e.dt(c['time']).timestamp()
@@ -122,6 +128,7 @@ class Market:
                     stale_over_15min_calls=self.stale_calls, max_source_age_seconds=self.max_age,
                     max_permitted_source_age_seconds=self.max_stale,
                     nonweekend_stale_quote_seen=self.quote_gap_seen,
+                    valuation_vs_frozen_source_disagreement_seen=self.source_disagreement_seen,
                     no_future_bar_high_low_close_used=True,
                     conversion_routes={k: list(v) for k, v in ROUTES.items()},
                     cross_rate_basis='Chained historical mid-rates, then frozen gain/loss markup once; not recovered broker conversion quotes')

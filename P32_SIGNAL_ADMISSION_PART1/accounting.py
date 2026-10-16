@@ -89,6 +89,8 @@ class Replay:
 
     def observe(self, when, reason, liquidate=True):
         values = self.valuation(when)
+        if getattr(self.market, 'source_disagreement_seen', False):
+            self.flag('VALUATION_QUOTES_DIFFER_FROM_FROZEN_EXECUTION_SOURCE', when)
         if getattr(self.market, 'current_stale', False) and not e.conventional_weekend(when):
             self.critical_stale_count += 1
             self.flag('STALE_CAUSAL_M15_QUOTES_OVER_15_MINUTES', when)
