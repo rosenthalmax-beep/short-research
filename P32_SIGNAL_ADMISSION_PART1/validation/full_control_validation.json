@@ -1,0 +1,1069 @@
+{
+  "status": "PASS",
+  "method": "Actual Replay and PolicyPaths over previously independently verified canonical valuation samples",
+  "network_requests": 0,
+  "elapsed_seconds": 438.12932669399993,
+  "source_checks": {
+    "native_candles": 2433648,
+    "source_blocks": 2527,
+    "frozen_overlap_candle_comparisons": 129146
+  },
+  "lanes": [
+    {
+      "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "26ba8343cfef91c73d3b2ed4347b35bf69a68783af4e1b71c68764a5d5fb0994",
+          "expected_sha256": "26ba8343cfef91c73d3b2ed4347b35bf69a68783af4e1b71c68764a5d5fb0994",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "dfa425ce9b2a08e855a4fdba8e3f67cce8bbae8fa3437839d3530be025788aac",
+          "expected_sha256": "dfa425ce9b2a08e855a4fdba8e3f67cce8bbae8fa3437839d3530be025788aac",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "1a4e9dbe5dd4b5f34e5a59783c1e7ffb69c4ac513e6ae25475ed8269d6e4e601",
+          "expected_sha256": "1a4e9dbe5dd4b5f34e5a59783c1e7ffb69c4ac513e6ae25475ed8269d6e4e601",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "75e5f1b9e7296e2b5a618b5e802eea4b9a17705aba0347dad4254768e450ed23",
+          "expected_sha256": "75e5f1b9e7296e2b5a618b5e802eea4b9a17705aba0347dad4254768e450ed23",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "57731298b7e024b16a57fdcc78eade8b563b9faa5d526a1ebd9b2bf47a6ff107",
+          "expected_sha256": "57731298b7e024b16a57fdcc78eade8b563b9faa5d526a1ebd9b2bf47a6ff107",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ZERO_FINANCING_CONTROL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "6d434ae779d57c862138f41bf4e650f2f762822f7f14719960e625060caff06d",
+          "expected_sha256": "6d434ae779d57c862138f41bf4e650f2f762822f7f14719960e625060caff06d",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "9c9d1c164b7bf4149eddc1f8e20bdb842be85b9329a016af47541266119eb005",
+          "expected_sha256": "9c9d1c164b7bf4149eddc1f8e20bdb842be85b9329a016af47541266119eb005",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "dd769e4b6b3d653ad06f889b6c39b71f82de3d18339950df24d312c7ce34dcd4",
+          "expected_sha256": "dd769e4b6b3d653ad06f889b6c39b71f82de3d18339950df24d312c7ce34dcd4",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "d59cc7478c6060cb6036b14612528d19f64d4fe17fb11b4739d7993e540af94c",
+          "expected_sha256": "d59cc7478c6060cb6036b14612528d19f64d4fe17fb11b4739d7993e540af94c",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "ce9fd093173f44a8ec10edef1edbabd06ca8246611b80183e77a9bcab0cc044b",
+          "expected_sha256": "ce9fd093173f44a8ec10edef1edbabd06ca8246611b80183e77a9bcab0cc044b",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__FROZEN_14OCT2026_RATES",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "21b4667422eb3df589dfc087b48a4fb03f42c753f16065d5610ec42f77e643ab",
+          "expected_sha256": "21b4667422eb3df589dfc087b48a4fb03f42c753f16065d5610ec42f77e643ab",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "fcff71de5de00e0e6c1a7c76fd04c1fe0753b1ce0d129bff36f6547f930412b8",
+          "expected_sha256": "fcff71de5de00e0e6c1a7c76fd04c1fe0753b1ce0d129bff36f6547f930412b8",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "d05555cd43e49f3702cf77a8335ae8ae583a31b28143be00cfe56d9998252412",
+          "expected_sha256": "d05555cd43e49f3702cf77a8335ae8ae583a31b28143be00cfe56d9998252412",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "cd547ceb5711f4f30fc3f5bc9d9488f9b26cbc6521be562092d797e2220fb307",
+          "expected_sha256": "cd547ceb5711f4f30fc3f5bc9d9488f9b26cbc6521be562092d797e2220fb307",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "b93c0ee04ee3093d1b11fd588b8fb49d07c2a09cebfb223294a61a97a6252d61",
+          "expected_sha256": "b93c0ee04ee3093d1b11fd588b8fb49d07c2a09cebfb223294a61a97a6252d61",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "6db221b0e010a1833db0bd406516ec33e9e7c96b661ff05951734c5e88ee7d6f",
+          "expected_sha256": "6db221b0e010a1833db0bd406516ec33e9e7c96b661ff05951734c5e88ee7d6f",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "926fb324224ad76354fbd2ef009e3409bb20e72aa4caef04725080fca62d962d",
+          "expected_sha256": "926fb324224ad76354fbd2ef009e3409bb20e72aa4caef04725080fca62d962d",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "3148fb244b0a4443a51de98d39a08182b1f18406de3d18a63aaa9291d2e6caee",
+          "expected_sha256": "3148fb244b0a4443a51de98d39a08182b1f18406de3d18a63aaa9291d2e6caee",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "16294aab96bb9ef58f91880c03f713dd0f4ec404cf9ee42ac1349cddd2b0dafa",
+          "expected_sha256": "16294aab96bb9ef58f91880c03f713dd0f4ec404cf9ee42ac1349cddd2b0dafa",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "0a600250dc5a49bd97cc457278276df0ddb4eb13fdf4fe6b33f2a498228266f1",
+          "expected_sha256": "0a600250dc5a49bd97cc457278276df0ddb4eb13fdf4fe6b33f2a498228266f1",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "4661a29ca519d1785311fa12850e68e7f0b67ff66e448c1e7170099772bd3f01",
+          "expected_sha256": "4661a29ca519d1785311fa12850e68e7f0b67ff66e448c1e7170099772bd3f01",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "6872dfcb3e1f338a91de891d9095c62c270f87e93c445424ee6eafd39ea9202b",
+          "expected_sha256": "6872dfcb3e1f338a91de891d9095c62c270f87e93c445424ee6eafd39ea9202b",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "2833656e0f0c48fcfa9a9b2ecc365e62a30d24c8edaa7c160c39979a601613be",
+          "expected_sha256": "2833656e0f0c48fcfa9a9b2ecc365e62a30d24c8edaa7c160c39979a601613be",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "4ee74c1e3b9cfafa2a3ee45a6a8a99ef889ec485e0761c178161c8ef15a645c4",
+          "expected_sha256": "4ee74c1e3b9cfafa2a3ee45a6a8a99ef889ec485e0761c178161c8ef15a645c4",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "bc87602141aa73c81009b2616d2904cde335ecae56da37fd75fe63186f3e77c6",
+          "expected_sha256": "bc87602141aa73c81009b2616d2904cde335ecae56da37fd75fe63186f3e77c6",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ZERO_FINANCING_CONTROL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "8f74e5b7490e973413c6a07e63a8c352d1bed69fd06f56703cb649203ae7d10c",
+          "expected_sha256": "8f74e5b7490e973413c6a07e63a8c352d1bed69fd06f56703cb649203ae7d10c",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "1caea1c8877ddc6816ca32472d6f7c81b96e34598d778fa379408312038d8c0a",
+          "expected_sha256": "1caea1c8877ddc6816ca32472d6f7c81b96e34598d778fa379408312038d8c0a",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "e8ce62bde3d706221a36c632d4bc52b2553f558d0d6856606477658419398d9a",
+          "expected_sha256": "e8ce62bde3d706221a36c632d4bc52b2553f558d0d6856606477658419398d9a",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "20bb4f032951fe2d8dea97216db455a48cf4d891cc74deef975dcb698cfa3b7b",
+          "expected_sha256": "20bb4f032951fe2d8dea97216db455a48cf4d891cc74deef975dcb698cfa3b7b",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "147f689689638f0e0c81927593a7e9638f234abfbfc6555ed7c50fe5d7ecd724",
+          "expected_sha256": "147f689689638f0e0c81927593a7e9638f234abfbfc6555ed7c50fe5d7ecd724",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__FROZEN_14OCT2026_RATES",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "4a621b2b6e8995fafda817555e09c3c63a2cfd8fbbfcc7cf84a8df5a5fd96b4a",
+          "expected_sha256": "4a621b2b6e8995fafda817555e09c3c63a2cfd8fbbfcc7cf84a8df5a5fd96b4a",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "b6422e13f37ea91f4279239fd5cce735a3571b6d2b96c2db2296346549d2c4c4",
+          "expected_sha256": "b6422e13f37ea91f4279239fd5cce735a3571b6d2b96c2db2296346549d2c4c4",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "0ea8d82c0534ec58b477cfe88a600657135c730e2fd93e6dce09cfad1a132d5c",
+          "expected_sha256": "0ea8d82c0534ec58b477cfe88a600657135c730e2fd93e6dce09cfad1a132d5c",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "201bf3ba66b352a99dc189bf231d2eedb42f0864ead9beb52483eb2217498ef5",
+          "expected_sha256": "201bf3ba66b352a99dc189bf231d2eedb42f0864ead9beb52483eb2217498ef5",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "eb64b69479d85acb0b6f0d0d9d5d930af4df4a5da6426f080522452cf0a04b98",
+          "expected_sha256": "eb64b69479d85acb0b6f0d0d9d5d930af4df4a5da6426f080522452cf0a04b98",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "ba59f12490264555c097bb78edd0dd926169a3b5ce3d42cf6c2e11a787313e76",
+          "expected_sha256": "ba59f12490264555c097bb78edd0dd926169a3b5ce3d42cf6c2e11a787313e76",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2118,
+          "expected_rows": 2118,
+          "actual_sha256": "65ddae99d0eb1e1b2beefe80f3b15eeafb238e9f1b10a287c93fad139f9e2eb7",
+          "expected_sha256": "65ddae99d0eb1e1b2beefe80f3b15eeafb238e9f1b10a287c93fad139f9e2eb7",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2611,
+          "expected_rows": 2611,
+          "actual_sha256": "a22ffde18abb2858926c8e58bfcadb70fdc34ce60c391660d1676024449b47c6",
+          "expected_sha256": "a22ffde18abb2858926c8e58bfcadb70fdc34ce60c391660d1676024449b47c6",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6847,
+          "expected_rows": 6847,
+          "actual_sha256": "a41460d3b89d89f8ec9a347112fb586178bf8bf191844823319558cf4afa1348",
+          "expected_sha256": "a41460d3b89d89f8ec9a347112fb586178bf8bf191844823319558cf4afa1348",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "c2dc612f1a9cf3e17f0d788cadd34e8c46ed843a912877f8d119de15de2f1775",
+          "expected_sha256": "c2dc612f1a9cf3e17f0d788cadd34e8c46ed843a912877f8d119de15de2f1775",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "END_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "5362c7a6a179d7c4b8bdf53ce9dad55270d303a3eede9a3831471ad6bf3f4fc3",
+          "expected_sha256": "5362c7a6a179d7c4b8bdf53ce9dad55270d303a3eede9a3831471ad6bf3f4fc3",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "5180546ec4b559c175ecc1d3e3370ed1cfa64ece72a3458e17cac5bcca3d9f0f",
+          "expected_sha256": "5180546ec4b559c175ecc1d3e3370ed1cfa64ece72a3458e17cac5bcca3d9f0f",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "1ed31717c00fbacce276f5ff4b8b178e7245fcd55b8a5ca304f0bdd706c4d393",
+          "expected_sha256": "1ed31717c00fbacce276f5ff4b8b178e7245fcd55b8a5ca304f0bdd706c4d393",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "f81797424924c54811834b0f64747af5b640f5de97c7d6db0dfcb4f8e37480c6",
+          "expected_sha256": "f81797424924c54811834b0f64747af5b640f5de97c7d6db0dfcb4f8e37480c6",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "63b938a9f3d1b56c274c1d00e1ceb5401fdc5a0739f483d8d1b7f0ef4ff0c89e",
+          "expected_sha256": "63b938a9f3d1b56c274c1d00e1ceb5401fdc5a0739f483d8d1b7f0ef4ff0c89e",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ZERO_FINANCING_CONTROL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "5480bc759aacefa8587ec75bb4cf96a078d72623b537c3ff38aceaf673531709",
+          "expected_sha256": "5480bc759aacefa8587ec75bb4cf96a078d72623b537c3ff38aceaf673531709",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "6e670ece7374865ee788832bad1cdbf6b8a15b2abb801bf20933fd19962fdf64",
+          "expected_sha256": "6e670ece7374865ee788832bad1cdbf6b8a15b2abb801bf20933fd19962fdf64",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "cd9e4b368ed7b95f5d96b766bfc25c77bc417eccd8e4923998f6e3a1a5503d4e",
+          "expected_sha256": "cd9e4b368ed7b95f5d96b766bfc25c77bc417eccd8e4923998f6e3a1a5503d4e",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "6ce5a23e545e669b8f71ad165d7038effd604e11e5f7d335a94dc80001ab9269",
+          "expected_sha256": "6ce5a23e545e669b8f71ad165d7038effd604e11e5f7d335a94dc80001ab9269",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "a8e000cdf6eb1c0a013fab8477666a65c90bfdf5a7e29be86f8a1901e870c2af",
+          "expected_sha256": "a8e000cdf6eb1c0a013fab8477666a65c90bfdf5a7e29be86f8a1901e870c2af",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__FROZEN_14OCT2026_RATES",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "3895264cbd128708df23e511b695141cff1000d0606855be547385a5214f37fb",
+          "expected_sha256": "3895264cbd128708df23e511b695141cff1000d0606855be547385a5214f37fb",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "8b32db1001e3fa584cd2ce4e469d04af4c5837ae1d41996c7ed75c1b099a2c88",
+          "expected_sha256": "8b32db1001e3fa584cd2ce4e469d04af4c5837ae1d41996c7ed75c1b099a2c88",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "3e045e2d60ac08ef5d883c832e69a4a71f7c4f1f478435582004d25fe389d4ab",
+          "expected_sha256": "3e045e2d60ac08ef5d883c832e69a4a71f7c4f1f478435582004d25fe389d4ab",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "ffc54cf46c7a7b1cce5f137cfd4d1061a3a2b0df080a65a9ed1be3af22b331d2",
+          "expected_sha256": "ffc54cf46c7a7b1cce5f137cfd4d1061a3a2b0df080a65a9ed1be3af22b331d2",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "34752874f41cf5501efa814f01776be7fbf0c8baca46ea01b1fd5eeb784289c7",
+          "expected_sha256": "34752874f41cf5501efa814f01776be7fbf0c8baca46ea01b1fd5eeb784289c7",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_3PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "a4904459fdd8afae72a23b17b169775c1ee54bf33c311eb534ebc07433458df0",
+          "expected_sha256": "a4904459fdd8afae72a23b17b169775c1ee54bf33c311eb534ebc07433458df0",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "63fb232a486b3358448a73605b35e616bc1435e768b5a0440c9683cd76f5b2ab",
+          "expected_sha256": "63fb232a486b3358448a73605b35e616bc1435e768b5a0440c9683cd76f5b2ab",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "5143c8b41b2691d4e0e5764e33ec93bc887315a32c27e02d0cff1f7495c3d0d3",
+          "expected_sha256": "5143c8b41b2691d4e0e5764e33ec93bc887315a32c27e02d0cff1f7495c3d0d3",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "65f2aea39e3e73a211b436c26cb4583da81a46dd42852e578b3c09fcefb22574",
+          "expected_sha256": "65f2aea39e3e73a211b436c26cb4583da81a46dd42852e578b3c09fcefb22574",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "12e5e06cc07c7ba86b4773a68b28e7253547fcdd898b67640ee3b516f2b2d65c",
+          "expected_sha256": "12e5e06cc07c7ba86b4773a68b28e7253547fcdd898b67640ee3b516f2b2d65c",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_ASC__ADVERSE_6PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "38c59dc6b3405a38a358e53a24c63ba3d5560e5d25d8f809dc5db9450cf82922",
+          "expected_sha256": "38c59dc6b3405a38a358e53a24c63ba3d5560e5d25d8f809dc5db9450cf82922",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "7a851c42684c33836ec30cf33964946b7b4704add411e51e26f95fec50109640",
+          "expected_sha256": "7a851c42684c33836ec30cf33964946b7b4704add411e51e26f95fec50109640",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "1fa29e1013b31169c19cea71aabda3d5c99ae556bdf91ada200b57cf7839765d",
+          "expected_sha256": "1fa29e1013b31169c19cea71aabda3d5c99ae556bdf91ada200b57cf7839765d",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "a57ef5a88baf4cdc430cfa6db38e00b8e5d6f4ea30b330c4d7444f49ae01e093",
+          "expected_sha256": "a57ef5a88baf4cdc430cfa6db38e00b8e5d6f4ea30b330c4d7444f49ae01e093",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "0f25e3d522fddf7dc9931c43da1dab394f9667444f674ce0850549d13ccfab23",
+          "expected_sha256": "0f25e3d522fddf7dc9931c43da1dab394f9667444f674ce0850549d13ccfab23",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ZERO_FINANCING_CONTROL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "4a82a4543cacfc1906f6296ccd7a645c82946cf3140e3a2aacfe757e291eb9c3",
+          "expected_sha256": "4a82a4543cacfc1906f6296ccd7a645c82946cf3140e3a2aacfe757e291eb9c3",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "ff595bb5fef7d00dd2acb04b2a18a8979ebac6276e1cfe432c3ce20541db3242",
+          "expected_sha256": "ff595bb5fef7d00dd2acb04b2a18a8979ebac6276e1cfe432c3ce20541db3242",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "26a7645e3418424349eb62cd06c502cda0870f93433213c2b96b1725a9903c9e",
+          "expected_sha256": "26a7645e3418424349eb62cd06c502cda0870f93433213c2b96b1725a9903c9e",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "76a9745a3309d69046613c5a0496f676d300983d35618255343f33f3a7ae5d8d",
+          "expected_sha256": "76a9745a3309d69046613c5a0496f676d300983d35618255343f33f3a7ae5d8d",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "5747760886c9b11bd2e86e4b691844b1eb66e833cb2701404e7bbbc2a1880eea",
+          "expected_sha256": "5747760886c9b11bd2e86e4b691844b1eb66e833cb2701404e7bbbc2a1880eea",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__FROZEN_14OCT2026_RATES",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "9bc86f5506fa84012a0e62b3e04841dcdf0164ad925cfe80ba8a6cf56099d088",
+          "expected_sha256": "9bc86f5506fa84012a0e62b3e04841dcdf0164ad925cfe80ba8a6cf56099d088",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "249f07fecb226c20ec39814eebd69342bc6973b1a698eff6e42f777abaf02701",
+          "expected_sha256": "249f07fecb226c20ec39814eebd69342bc6973b1a698eff6e42f777abaf02701",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "802cc4882cc2b453eb556ed0bceef07984dcb3e0a7e45b8a7b42d5d58f763022",
+          "expected_sha256": "802cc4882cc2b453eb556ed0bceef07984dcb3e0a7e45b8a7b42d5d58f763022",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "bf10fdcf2ac8794cff0811ca79c32adbbf985ab3efba77d60ef3f6d4e971c263",
+          "expected_sha256": "bf10fdcf2ac8794cff0811ca79c32adbbf985ab3efba77d60ef3f6d4e971c263",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "1e788f792fd264971b207c6ceac012d5c577af8d63e3f735fd7dc93df261e959",
+          "expected_sha256": "1e788f792fd264971b207c6ceac012d5c577af8d63e3f735fd7dc93df261e959",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_3PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+      "status": "PASS",
+      "failed_components": [],
+      "checks": [
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "ledger",
+          "rows": 3629,
+          "expected_rows": 3629,
+          "actual_sha256": "25ebda8d9ad044ae3446ccf7c375464077cd3bc28c64f854f8e6890f248be858",
+          "expected_sha256": "25ebda8d9ad044ae3446ccf7c375464077cd3bc28c64f854f8e6890f248be858",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "trades",
+          "rows": 2119,
+          "expected_rows": 2119,
+          "actual_sha256": "d4dab663abfd73fc14b745d8dba397d19069ec06bd954e7c11ebaa532fff8bff",
+          "expected_sha256": "d4dab663abfd73fc14b745d8dba397d19069ec06bd954e7c11ebaa532fff8bff",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "financing",
+          "rows": 2614,
+          "expected_rows": 2614,
+          "actual_sha256": "9ba220eb960f2014780b021bc39f840bc932671fa63b470bc3877d9ff3392543",
+          "expected_sha256": "9ba220eb960f2014780b021bc39f840bc932671fa63b470bc3877d9ff3392543",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "cash_events",
+          "rows": 6852,
+          "expected_rows": 6852,
+          "actual_sha256": "af13c7dd79f3e7cf3c09c5be13fdab737a4f6b35c2af718d40a3df1f1daf05f1",
+          "expected_sha256": "af13c7dd79f3e7cf3c09c5be13fdab737a4f6b35c2af718d40a3df1f1daf05f1",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "monthly_observations",
+          "rows": 261,
+          "expected_rows": 261,
+          "actual_sha256": "5ea0d4e2c07f06b2ba3056c35390ec183deff1924eb97f6582293555af013270",
+          "expected_sha256": "5ea0d4e2c07f06b2ba3056c35390ec183deff1924eb97f6582293555af013270",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "open_positions",
+          "rows": 0,
+          "expected_rows": 0,
+          "actual_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "passed": true
+        },
+        {
+          "lane": "START_DESC__ADVERSE_6PCT_ANNUAL",
+          "component": "summary",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

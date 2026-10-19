@@ -1,0 +1,37 @@
+{
+  "version": "P32_ENTRY_LIMIT_RESEARCH_V1_2026_10_19",
+  "validated_at_utc": "2026-10-19T14:32:06.201428+00:00",
+  "regression_tests": {
+    "count": 117,
+    "status": "PASS",
+    "command": "python -m unittest test_caps test_source_windows test_gbp test_execution"
+  },
+  "original_10_tick_full_account_replays": {
+    "count": 16,
+    "status": "PASS",
+    "network_requests": 0,
+    "compared": [
+      "summary",
+      "ordered admission ledger",
+      "trades",
+      "financing",
+      "cash events",
+      "monthly observations",
+      "open positions"
+    ],
+    "method": "Actual Replay and PolicyPaths over previously independently verified canonical valuation samples"
+  },
+  "newly_eligible_price_path_examples": {
+    "count": 4,
+    "status": "PASS",
+    "network_requests": 0,
+    "purpose": "Code verification examples, not a performance sample",
+    "coverage": "Both sides; JPY/non-JPY; identical execution at 15/30 with different sizing bounds"
+  },
+  "original_gbp_accounting_market_funding_code_unchanged": true,
+  "full_80_lane_policy_comparison_run_locally": false,
+  "deployment_run": "Run all 80 research lanes before any policy conclusion",
+  "orders_sent": false,
+  "live_configuration_changed": false,
+  "limitations": "Existing source/path uncertainty, native candle-open entries, frozen terms/funding and sampled equity remain conditional. No automatic live selection."
+}

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 import execution as e
 import inputs
-import app
+import gbp_support as app
 from accounting import Replay, converted
 from broker_reconcile import reconcile
 from funding import Funding, MODES, MissingHistoricalRate, rollovers

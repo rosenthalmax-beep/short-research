@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""P32 conditional GBP account replay. Separate research service; candle GETs only."""
+"""Read-only P32 entry-limit research service. Historical candle GETs only."""
 import argparse
 import collections
 import csv
 import gzip
-import io
 import json
 import os
 import shutil
-import sqlite3
 import tempfile
 import threading
-import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -19,479 +16,260 @@ from wsgiref.simple_server import make_server, WSGIRequestHandler
 import execution as e
 import admissions
 import inputs
-from broker_reconcile import reconcile
-from funding import Funding, MODES, rollovers
-from market import Market
+import gbp_support as support
+import control_checks
+import reports
 from accounting import Replay
+from broker_reconcile import reconcile
+from execution_sources import ExecutionWindows
+from funding import Funding, MODES
+from market import Market
+from policies import POLICIES, PROTOCOL, PRIMARY_SCENARIO, PRIMARY_FUNDING
+from policy_paths import PolicyPaths
 from valuation_sources import ValuationWindows
 
-VERSION = 'P32_GBP_ACCOUNT_REPLAY_V2_2026_10_16_SOURCE_WINDOWS'
-RESULT = 'P32_GBP_ACCOUNT_REPLAY_RESULTS.zip'
-EQUITY = 'P32_GBP_ACCOUNT_REPLAY_EQUITY.zip'
-SOURCES = 'P32_GBP_ACCOUNT_REPLAY_SOURCES.zip'
-LOCK = threading.RLock()
-STATE = dict(status='IDLE', version=VERSION, orders_supported=False,
-             scope='WARMED_RAW_SIGNALS_CONDITIONAL_GBP_NAV_MARGIN_AND_FUNDING', full_portfolio_validated=False)
-DIRECTORY = None
-
-
-def progress(**values):
-    with LOCK:
-        if values.get('phase') and STATE.get('phase') != values['phase']:
-            for k in ('quote_pair', 'quote_from', 'quote_to', 'qualifications_processed', 'through_utc'):
-                STATE.pop(k, None)
-        STATE.update(values, last_progress_utc=e.stamp(datetime.now(e.UTC)))
+VERSION='P32_ENTRY_LIMIT_RESEARCH_V1_2026_10_19'
+RESULT='P32_ENTRY_LIMIT_RESEARCH_RESULTS.zip'
+LOCK=threading.RLock()
+STATE=dict(status='IDLE',version=VERSION,orders_supported=False,orders_sent=False,full_portfolio_validated=False)
+DIRECTORY=None
+atomic=support.atomic
 
 
 def output_dir():
-    value = DIRECTORY or os.getenv('P32_GBP_OUTPUT_DIR') or os.getenv('P32_SIGNAL_OUTPUT_DIR')
-    return Path(value or ('/data/p32_signal_admission' if Path('/data').is_dir() else str(Path(tempfile.gettempdir()) / 'p32_signal_admission'))).resolve()
+    value=DIRECTORY or os.getenv('P32_GBP_OUTPUT_DIR') or os.getenv('P32_SIGNAL_OUTPUT_DIR')
+    return Path(value or ('/data/p32_signal_admission' if Path('/data').is_dir() else str(Path(tempfile.gettempdir())/'p32_signal_admission'))).resolve()
 
 
-def csv_bytes(rows):
-    fields = list(dict.fromkeys(k for r in rows for k in r)) or ['empty']
-    stream = io.StringIO(newline=''); writer = csv.DictWriter(stream, fieldnames=fields); writer.writeheader()
-    for row in rows:
-        writer.writerow({k: json.dumps(v, sort_keys=True) if isinstance(v, (dict, list)) else v for k, v in row.items()})
-    return stream.getvalue().encode()
+def work_dir():return output_dir()/'entry_limit_v1'
 
 
-def atomic(path, content):
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_bytes(content); temporary.replace(path)
+def progress(**values):
+    with LOCK:STATE.update(values,last_progress_utc=e.stamp(datetime.now(e.UTC)))
 
 
-def source_signature(root, config):
-    names = ('app.py', 'accounting.py', 'market.py', 'funding.py', 'broker_reconcile.py',
-             'inputs.py', 'pinned_inputs.py', 'execution.py', 'admissions.py', 'history.py', 'locked_rules.py', 'reference_payload.py', 'valuation_sources.py')
-    return e.sha(e.canon(dict(config=config, code={n: e.sha((root / n).read_bytes()) for n in names})))
+def write_zip(path,files):
+    temporary=path.with_suffix(path.suffix+'.tmp')
+    with zipfile.ZipFile(temporary,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        for name,payload in sorted(files.items()):
+            if isinstance(payload,Path):z.write(payload,name)
+            else:z.writestr(name,payload)
+    temporary.replace(path)
 
 
-def persistence(directory, create=False):
-    directory = Path(directory)
-    marker = directory / 'gbp_persistence_marker.json'
-    if create and not marker.exists():
-        atomic(marker, e.canon(dict(marker=str(uuid.uuid4()), created_utc=e.stamp(datetime.now(e.UTC)))))
-    info = json.loads(marker.read_bytes()) if marker.exists() else None
-    mount = None
+def source_signature(root,config):
+    return e.sha(e.canon(dict(config=config,code={p.name:e.sha(p.read_bytes()) for p in sorted(root.glob('*.py'))})))
+
+
+def checkpoint_load(path,signature):
+    if not path.exists():return None
+    item=json.loads(gzip.decompress(path.read_bytes()))
+    e.require(item['signature']==signature and item['sha256']==e.sha(e.canon(item['result'])), 'Account checkpoint checksum failed')
+    return item['result'] if item['result']['summary']['status']=='COMPLETE_CONDITIONAL' else None
+
+
+def run(directory=None,offline=False,policy_filter=None,scenario_filter=None,mode_filter=None):
+    root=Path(__file__).parent;directory=Path(directory or output_dir());work=directory/'entry_limit_v1'
+    resources=[];checks=[];started=e.stamp(datetime.now(e.UTC))
     try:
-        for line in Path('/proc/self/mountinfo').read_text().splitlines():
-            left, right = line.split(' - ', 1)
-            target = left.split()[4].replace('\\040', ' ')
-            if str(directory) == target or str(directory).startswith(target.rstrip('/') + '/'):
-                if mount is None or len(target) > len(mount['target']):
-                    mount = dict(target=target, filesystem=right.split()[0])
-    except (OSError, ValueError, IndexError):
-        pass
-    return dict(output_directory=str(directory), persistence_marker=info,
-                containing_mount=mount, separate_mount_detected=bool(mount and mount['target'] != '/'),
-                persistence_across_redeploy_not_proved=True,
-                instruction='Keep this directory on a mounted persistent volume; compare the marker after a redeploy. No MID history regeneration is used by this update.')
-
-
-class Paths:
-    def __init__(self, directory, saved, store, signals=()):
-        self.rows = saved; self.store = store; self.data = e.load_reference()
-        self.computed = 0; self.saved_hits = 0
-        self.db = sqlite3.connect(str(directory / 'gbp_new_candidate_paths.sqlite3'))
-        self.db.execute('CREATE TABLE IF NOT EXISTS paths(key TEXT PRIMARY KEY, body BLOB, sha256 TEXT)'); self.db.commit()
-        self.signature = e.sha(e.canon(dict(core=e.sha((Path(__file__).parent / 'execution.py').read_bytes()),
-                                         baseline=inputs.PINS['warmed_signal_results.zip'],
-                                         execution_source_scope='ISOLATED_V2_FROZEN_SEEDS_AND_ADMISSION_89')))
-        for signal in signals:
-            if signal['signal_key'] not in self.rows:
-                identity = e.sha(e.canon(dict(signature=self.signature, signal=signal)))
-                stored = self.db.execute('SELECT body,sha256 FROM paths WHERE key=?', (identity,)).fetchone()
-                if stored:
-                    e.require(e.sha(stored[0]) == stored[1], 'Extra path checkpoint checksum failed')
-                    self.rows[signal['signal_key']] = json.loads(stored[0])
-
-    def get(self, signal):
-        key = signal['signal_key']
-        if key in self.rows:
-            self.saved_hits += 1
-            return self.rows[key]
-        identity = e.sha(e.canon(dict(signature=self.signature, signal=signal)))
-        stored = self.db.execute('SELECT body,sha256 FROM paths WHERE key=?', (identity,)).fetchone()
-        if stored:
-            e.require(e.sha(stored[0]) == stored[1], 'Extra path checkpoint checksum failed')
-            row = json.loads(stored[0])
-        else:
-            row = e.replay_one(self.store, admissions.candidate_data(self.data, signal), 0, e.VARIANTS[1])
-            row = {k: v for k, v in row.items() if not k.startswith('archived_') and k not in ('index', 'extended_beyond_archived_exit')}
-            row['signal_key'] = key
-            if row['status'] == 'NEEDS_CANDLE_DATA':
-                raise e.NeedData(row['pending_request'])
-            if row['status'] == 'ERROR':
-                raise e.CandleFetchError('Additional candidate path could not be computed: ' + row.get('error', 'unknown'))
-            raw = e.canon(row)
-            self.db.execute('INSERT OR REPLACE INTO paths VALUES (?,?,?)', (identity, raw, e.sha(raw))); self.db.commit()
-            self.computed += 1
-        self.rows[key] = row
-        progress(additional_candidate_paths=self.computed, candidate_paths_available=len(self.rows))
-        return row
-
-    def close(self):
-        self.db.close()
-
-
-def potential_funding_coverage(signals, paths, funding, end):
-    needed = set()
-    for s in signals:
-        p = paths.get(s['signal_key'])
-        if not p or p['status'] in ('ENTRY_PROXY_REJECTED', 'UNRESOLVED_ENTRY'):
-            continue
-        start = e.dt(s['entry_utc'])
-        finish = e.dt(p['interval_end_utc']) if p.get('interval_end_utc') else end
-        for when in rollovers(start, finish):
-            if start < when < finish and when.astimezone(e.NY).weekday() < 5:
-                needed.add((when.astimezone(e.NY).date().isoformat(), s['pair']))
-    rows = []
-    for date, pair in sorted(needed | funding.coverage):
-        item = funding.historical.get((date, pair))
-        rows.append(dict(ny_date=date, pair=pair, supplied=bool(item),
-                         long_rate=item['long_rate'] if item else None,
-                         short_rate=item['short_rate'] if item else None,
-                         charged_days=item['days'] if item else None,
-                         source=item['source'] if item else None,
-                         basis='FINALIZED_DAILY_RATE' if item else '',
-                         rate_basis='ANNUAL_ONE_DAY_BASE_NOTIONAL' if item else '',
-                         independent_verification=False,
-                         scope='POTENTIAL_OBSERVED_CANDIDATE_ROLLOVER_NOT_ALL_ACTUALLY_ADMITTED'))
-    return rows
-
-
-def grouped_trade_stats(rows):
-    groups = collections.defaultdict(list)
-    for row in rows:
-        for kind, key in (('strategy', row['strategy_id']), ('pair_side', row['pair'] + '_' + row['side']),
-                          ('entry_year', row['entry_utc'][:4])):
-            groups[(row['scenario'], row['financing_mode'], kind, key)].append(row)
-    result = []
-    for (scenario, mode, kind, key), group in sorted(groups.items()):
-        result.append(dict(scenario=scenario, financing_mode=mode, grouping=kind, group=key,
-                           closed_trades=len(group), net_wins=sum(r['net_pl_gbp'] > 0 for r in group),
-                           net_win_rate_pct=100 * sum(r['net_pl_gbp'] > 0 for r in group) / len(group),
-                           price_pl_gbp=sum(r['price_pl_gbp'] for r in group),
-                           financing_gbp=sum(r['financing_gbp'] for r in group),
-                           net_pl_gbp=sum(r['net_pl_gbp'] for r in group),
-                           mean_net_r_actual_entry_risk=sum(r['net_r_actual_entry_risk'] for r in group) / len(group),
-                           scope='Closed trades only; no allocation of finance on positions still open'))
-    return result
-
-
-def write_zip(path, files):
-    temp = path.with_suffix(path.suffix + '.tmp')
-    with zipfile.ZipFile(temp, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for name, raw in sorted(files.items()):
-            z.writestr(name, raw)
-    temp.replace(path)
-
-
-def run(directory=None, offline=False, scenario_filter=None, mode_filter=None):
-    root = Path(__file__).parent
-    directory = Path(directory or output_dir()); directory.mkdir(parents=True, exist_ok=True)
-    progress(status='RUNNING', phase='VERIFY_PINNED_INPUTS', version=VERSION,
-             started_at_utc=e.stamp(datetime.now(e.UTC)))
-    signals, saved_paths, baseline = inputs.baseline(root)
-    evidence = inputs.broker(root)
-    reconciliation, broker_checks = reconcile(evidence)
-    e.require(reconciliation['status'] == 'PASS', 'Saved broker cash/margin reconciliation failed')
-    e.require(reconciliation['conversion_factor_markup_uniform'], 'Saved conversion markups differ; do not apply a single inferred markup')
-    e.require(evidence['account']['currency'] == 'GBP' and not evidence['account']['hedgingEnabled'], 'Expected saved GBP nonhedging account')
-    e.require({i['name'] for i in evidence['instruments']} == set(e.PAIRS) and all(int(i['tradeUnitsPrecision']) == 0 for i in evidence['instruments']), 'Expected whole-unit instrument terms for all nine portfolio pairs')
-    e.require(os.getenv('OANDA_ENV', os.getenv('OANDA_ENVIRONMENT', 'live')).lower().strip() == 'live', 'Use OANDA_ENV=live to match source evidence')
-    initial = float(os.getenv('P32_GBP_INITIAL_BALANCE', '100'))
-    e.require(0 < initial <= 1e8, 'Invalid initial GBP balance')
-    # Round only the inferred symmetric markup, not any broker P/L factor.
-    markup = round(reconciliation['observed_symmetric_conversion_factor_markup'], 8)
-    funding_file = root / 'funding_rates.csv'
-    funding = Funding(evidence['funding_schedules'], funding_file)
-    config = dict(initial_balance_gbp=initial, markup=markup,
-                  funding_file_sha256=e.sha(funding_file.read_bytes()) if funding_file.is_file() else None,
-                  scenario_filter=scenario_filter, mode_filter=mode_filter,
-                  valuation_max_quote_age_seconds=7 * 86400)
-    signature = source_signature(root, config)
-    scenarios = [scenario_filter] if scenario_filter else list(admissions.SCENARIOS)
-    modes = [mode_filter] if mode_filter else list(MODES) + (['HISTORICAL_FILE'] if funding.historical else [])
-    e.require(all(s in admissions.SCENARIOS for s in scenarios) and all(m in MODES + ('HISTORICAL_FILE',) for m in modes), 'Unsupported scenario/mode filter')
-    token = next((os.getenv(k, '').strip() for k in ('OANDA_TOKEN', 'OANDA_API_KEY', 'OANDA_API_TOKEN', 'OANDA_ACCESS_TOKEN') if os.getenv(k, '').strip()), '')
-    e.require(offline or token, 'Set OANDA_TOKEN on the separate research service')
-    reader = None if offline else e.CandleReader(token, 'https://api-fxtrade.oanda.com', float(os.getenv('P32_SIGNAL_REQUESTS_PER_SECOND', '4')))
-    # Keep the V1 database intact. It may contain canonical valuation windows
-    # that overlap its seed candles. Reuse only exact whole-window responses.
-    legacy = e.CandleStore(directory, 'https://api-fxtrade.oanda.com') if (directory / 'replay_candles.sqlite3').is_file() else None
-    store = e.CandleStore(directory / 'gbp_execution_paths_v2', 'https://api-fxtrade.oanda.com', reader)
-    valuation_store = e.CandleStore(directory / 'gbp_valuation_windows_v2', 'https://api-fxtrade.oanda.com', reader)
-    valuation_windows = ValuationWindows(valuation_store, store, legacy, progress)
-    paths = Paths(directory, saved_paths, store, signals)
-    market = Market(valuation_windows, progress)
-    results = []; report_ready = False
-    persistence_info = persistence(directory, create=True)
-    progress(phase='IMPORT_SAVED_EXECUTION_CANDLES', persistence=persistence_info,
-             broker_reconciliation=reconciliation['status'])
-    try:
-        store.import_seeds(root)
-        inputs.import_additions(root, store)
-        total = len(scenarios) * len(modes)
-        equity_files = {}
-        for scenario in scenarios:
-            for mode in modes:
-                name = scenario + '__' + mode
-                checkpoint = directory / ('gbp_' + name + '_' + signature + '.json.gz')
-                progress(phase='REPLAY_GBP_ACCOUNTS', scenario=scenario, funding_mode=mode,
-                         scenarios_completed=len(results), scenarios_required=total,
-                         qualifications_processed=0, qualifications_required=len(signals))
-                if checkpoint.exists():
-                    obj = json.loads(gzip.decompress(checkpoint.read_bytes()))
-                    e.require(obj['signature'] == signature and e.sha(e.canon(obj['result'])) == obj['result_sha256'], 'Scenario checkpoint checksum failed')
-                    result = obj['result']
-                    result['scenario_checkpoint_reused'] = True
-                    # A data-incomplete checkpoint is never treated as a finished
-                    # scenario; adding historical rows changes the signature.
-                    if result['summary']['status'] != 'COMPLETE_CONDITIONAL':
-                        result = None
-                else:
-                    result = None
-                if result is None:
-                    keep_nav = scenario == 'END_ASC' and mode in MODES[:2]
-                    nav_file = directory / ('gbp_nav_' + name + '_' + signature + '.csv.gz')
-                    nav_stream = gzip.open(str(nav_file) + '.tmp', 'wt', encoding='utf-8', newline='') if keep_nav else None
-                    nav_writer = None
-                    def nav_sink(row):
-                        nonlocal nav_writer
-                        if nav_writer is None:
-                            nav_writer = csv.DictWriter(nav_stream, fieldnames=list(row)); nav_writer.writeheader()
-                        nav_writer.writerow(row)
-                    try:
-                        result = Replay(signals, paths.get, market, funding, evidence['instruments'], scenario, mode,
-                                        markup, initial=initial, progress=progress,
-                                        start=baseline['evaluation_start'], end=baseline['historical_cutoff'],
-                                        keep_nav=keep_nav, nav_sink=nav_sink if keep_nav else None).run()
-                    finally:
-                        if nav_stream:
-                            nav_stream.close()
+        work.mkdir(parents=True,exist_ok=True)
+        progress(status='RUNNING',phase='VERIFY_PINNED_INPUTS',started_at_utc=started,version=VERSION,result_ready=False)
+        signals,saved,baseline=inputs.baseline(root);expected=control_checks.load(root);evidence=inputs.broker(root)
+        reconciliation,broker_checks=reconcile(evidence)
+        e.require(reconciliation['status']=='PASS' and reconciliation['conversion_factor_markup_uniform'], 'Saved broker arithmetic reconciliation failed')
+        e.require(evidence['account']['currency']=='GBP' and not evidence['account']['hedgingEnabled'], 'Expected saved GBP nonhedging account')
+        e.require({i['name'] for i in evidence['instruments']}==set(e.PAIRS) and all(int(i['tradeUnitsPrecision'])==0 for i in evidence['instruments']), 'Expected whole-unit terms for all nine pairs')
+        e.require(os.getenv('OANDA_ENV',os.getenv('OANDA_ENVIRONMENT','live')).lower().strip()=='live', 'Use OANDA_ENV=live for source parity')
+        e.require(float(os.getenv('P32_GBP_INITIAL_BALANCE','100'))==100., 'Control comparison requires pinned GBP100 initial balance')
+        policies=[p for p in POLICIES if p in ('FIXED_10',policy_filter)] if policy_filter else list(POLICIES)
+        scenarios=[scenario_filter] if scenario_filter else list(admissions.SCENARIOS)
+        modes=[mode_filter] if mode_filter else list(MODES)
+        e.require(policy_filter is None or policy_filter in POLICIES, 'Unknown policy')
+        e.require(all(s in admissions.SCENARIOS for s in scenarios) and all(m in MODES for m in modes), 'Unknown scenario/funding mode')
+        config=dict(protocol=PROTOCOL,policies=policies,scenarios=scenarios,modes=modes,pins=inputs.PINS,
+                    expected_control_sha256=e.sha((root/'control_expectations.json').read_bytes()),initial_balance_gbp=100.)
+        signature=source_signature(root,config);atomic(work/'protocol.json',e.canon(dict(signature=signature,**config)))
+        token=next((os.getenv(k,'').strip() for k in ('OANDA_TOKEN','OANDA_API_KEY','OANDA_API_TOKEN','OANDA_ACCESS_TOKEN') if os.getenv(k,'').strip()),'')
+        e.require(offline or token, 'Set OANDA_TOKEN on the separate research service')
+        reader=None if offline else e.CandleReader(token,'https://api-fxtrade.oanda.com',float(os.getenv('P32_SIGNAL_REQUESTS_PER_SECOND','4')))
+        frozen=e.CandleStore(directory/'gbp_execution_paths_v2','https://api-fxtrade.oanda.com');resources.append(frozen)
+        fresh=e.CandleStore(work/'new_execution_windows','https://api-fxtrade.oanda.com',reader);resources.append(fresh)
+        value_store=e.CandleStore(directory/'gbp_valuation_windows_v2','https://api-fxtrade.oanda.com',reader);resources.append(value_store)
+        legacy=e.CandleStore(directory,'https://api-fxtrade.oanda.com') if (directory/'replay_candles.sqlite3').is_file() else None
+        if legacy:resources.append(legacy)
+        progress(phase='IMPORT_FROZEN_EXECUTION_CANDLES',signature=signature,persistence=support.persistence(directory,create=True),
+                 broker_reconciliation='PASS',lanes_completed=0,lanes_required=len(policies)*len(scenarios)*len(modes))
+        imported={row[0] for row in frozen.db.execute('SELECT sha256 FROM imports')}
+        if not all(part['sha256'] in imported for part in e.SEED_MANIFEST):frozen.import_seeds(root)
+        inputs.import_additions(root,frozen)
+        execution_windows=ExecutionWindows(frozen,fresh,progress);value_windows=ValuationWindows(value_store,frozen,legacy,progress)
+        market=Market(value_windows,progress);paths=PolicyPaths(work,saved,execution_windows,progress);resources.append(paths)
+        funding=Funding(evidence['funding_schedules']);markup=round(reconciliation['observed_symmetric_conversion_factor_markup'],8)
+        results={};comparisons=[];groups=[];period_rows=collections.defaultdict(list);primary={};changes=[]
+        equity_files={};detail_files={};completed=0
+        for policy in policies:
+            paths.policy=policy
+            for scenario in scenarios:
+                for mode in modes:
+                    lane=policy+'__'+scenario+'__'+mode
+                    progress(phase='REPLAY_ACCOUNTS',policy=policy,scenario=scenario,funding_mode=mode,
+                             lanes_completed=completed,qualifications_processed=0,qualifications_required=len(signals))
+                    checkpoint=work/(lane+'__'+signature+'.json.gz');result=checkpoint_load(checkpoint,signature)
+                    keep_nav=scenario==PRIMARY_SCENARIO and mode==PRIMARY_FUNDING
+                    nav_file=work/(lane+'__'+signature+'_nav.csv.gz')
+                    if result is None:
+                        stream=gzip.open(str(nav_file)+'.tmp','wt',encoding='utf-8',newline='') if keep_nav else None
+                        writer=None
+                        def sink(row):
+                            nonlocal writer
+                            if writer is None:writer=csv.DictWriter(stream,fieldnames=list(row));writer.writeheader()
+                            writer.writerow(row)
+                        try:
+                            result=Replay(signals,paths.get,market,funding,evidence['instruments'],scenario,mode,markup,
+                                start=baseline['evaluation_start'],end=baseline['historical_cutoff'],progress=progress,
+                                keep_nav=keep_nav,nav_sink=sink if keep_nav else None).run()
+                        finally:
+                            if stream:stream.close()
+                        e.require(result['summary']['status']=='COMPLETE_CONDITIONAL', 'Account did not complete: '+str(result['summary'].get('stopped_reason')))
+                        if keep_nav:
+                            Path(str(nav_file)+'.tmp').replace(nav_file)
+                            result['nav_file']=nav_file.name;result['nav_sha256']=e.sha(nav_file.read_bytes())
+                        result['evaluated_paths']={k:r for (p,k),r in paths.evaluated.items() if p==policy}
+                        atomic(checkpoint,gzip.compress(e.canon(dict(signature=signature,result=result,sha256=e.sha(e.canon(result)))),compresslevel=6))
+                    if policy=='FIXED_10':
+                        checked=control_checks.check(result,expected);checks.append(checked);atomic(work/'control_checks.json',e.canon(checks))
+                        e.require(checked['status']=='PASS', '10-tick control mismatch: '+checked['lane']+' '+','.join(checked['failed_components']))
+                    reference=result if policy=='FIXED_10' else results['FIXED_10',scenario,mode]
+                    changes_here,attribution=reports.admission_changes(reference,result)
+                    periods=reports.period_tables(result,baseline['evaluation_start'],baseline['historical_cutoff'])
+                    label=dict(policy=policy,scenario=scenario,financing_mode=mode)
+                    comparisons.append(dict(result['summary'],policy=policy,**attribution,
+                        **reports.extra_summary(result,periods,baseline['evaluation_start'],baseline['historical_cutoff'])))
+                    for kind,rows in periods.items():period_rows[kind].extend(dict(row,**label) for row in rows)
+                    groups.extend(dict(row,**label) for row in reports.grouped(result,result.get('evaluated_paths',{})))
                     if keep_nav:
-                        Path(str(nav_file) + '.tmp').replace(nav_file)
-                        result['nav_samples_saved_file'] = nav_file.name
-                        result['nav_samples_saved_sha256'] = e.sha(nav_file.read_bytes())
-                    result['valuation_source_summary'] = market.summary()
-                    result['scenario_checkpoint_reused'] = False
-                    raw = e.canon(dict(signature=signature, result=result, result_sha256=e.sha(e.canon(result))))
-                    atomic(checkpoint, gzip.compress(raw, compresslevel=6))
-                results.append(result)
-                if result.get('nav_samples_saved_file'):
-                    nav_file = directory / result['nav_samples_saved_file']
-                    e.require(nav_file.is_file() and e.sha(nav_file.read_bytes()) == result['nav_samples_saved_sha256'], 'NAV samples checkpoint missing or changed')
-                    equity_files[name + '_nav_samples.csv'] = nav_file
-                progress(scenarios_completed=len(results), last_scenario_status=result['summary']['status'])
-        summaries = [r['summary'] for r in results]
-        all_rows = {k: [] for k in ('ledger', 'trades', 'financing', 'cash_events', 'monthly_observations', 'open_positions')}
-        for result in results:
-            s = result['summary']
-            for kind in all_rows:
-                all_rows[kind].extend(dict(row, scenario=s['scenario'], financing_mode=s['financing_mode']) for row in result[kind])
-        coverage = potential_funding_coverage(signals, paths.rows, funding, e.dt(baseline['historical_cutoff']))
-        summary = dict(status='COMPLETE_WITH_LIMITATIONS', version=VERSION,
-                       started_at_utc=STATE['started_at_utc'], finished_at_utc=e.stamp(datetime.now(e.UTC)),
-                       raw_signals=len(signals), strategy_count=32,
-                       baseline_price_paths=3506, available_price_paths=len(paths.rows),
-                       new_candidate_paths=paths.computed,
-                       original_unresolved_path_count=170, original_unknown_entry_count=11,
-                       evaluation_start=baseline['evaluation_start'], historical_cutoff=baseline['historical_cutoff'],
-                       scenario_status_counts=dict(collections.Counter(s['status'] for s in summaries)),
-                       historical_financing_file_supplied=bool(funding.historical),
-                       potential_historical_pair_rollover_dates=len(coverage),
-                       supplied_potential_historical_pair_rollover_dates=sum(r['supplied'] for r in coverage),
-                       historical_financing_lane='RUN_WITH_EXPLICIT_MISSING_RATE_STOPS' if funding.historical else 'NOT_RUN_NO_HISTORICAL_RATE_FILE',
-                       saved_account_terms_at=evidence['collected_at_utc'],
-                       saved_account_currency='GBP', initial_balance_gbp=initial,
-                       frozen_conversion_factor_markup=markup,
-                       broker_reconciliation=reconciliation,
-                       full_portfolio_validated=False, actual_broker_returns=False,
-                       scenario_results_are_assumptions_not_bounds=True,
-                       margin_and_conversion_terms_applied_across_history_are_frozen=True,
-                       orders_supported=False, orders_sent=False, live_services_contacted=False,
-                       no_account_id_required=True, only_new_network_requests='APPROVED_OANDA_HISTORICAL_CANDLE_GETS',
-                       no_strategy_regeneration_or_mid_history_download=True,
-                       signature=signature, pins=inputs.PINS, persistence=persistence_info,
-                       valuation=market.summary(),
-                       valuation_source_policy=valuation_windows.summary(),
-                       scenario_source_summaries=[r.get('valuation_source_summary') for r in results],
-                       reused_scenario_checkpoints=sum(r.get('scenario_checkpoint_reused', False) for r in results),
-                       equity_sampling='Full M15/event samples for prespecified END_ASC zero/snapshot controls in /equity.zip; summaries for all lanes.',
-                       offline=offline)
-        comparison = []
-        for scenario in scenarios:
-            zero = next((s for s in summaries if s['scenario'] == scenario and s['financing_mode'] == MODES[0]), None)
-            for s in [v for v in summaries if v['scenario'] == scenario]:
-                comparison.append(dict(scenario=scenario, financing_mode=s['financing_mode'],
-                                       status=s['status'], admitted=s['decisions'].get('ADMITTED', 0),
-                                       margin_rejections=s['decisions'].get('REJECTED_INSUFFICIENT_MARGIN', 0),
-                                       financing_gbp=s['financing_gbp'], conditional_ending_nav_gbp=s['conditional_ending_nav_gbp'],
-                                       ending_nav_change_vs_zero_gbp=s['conditional_ending_nav_gbp'] - zero['conditional_ending_nav_gbp'] if zero and s['conditional_ending_nav_gbp'] is not None and zero['conditional_ending_nav_gbp'] is not None else None,
-                                       interpretation='Includes financing-driven changes in units, gates and margin, not a fixed-trade fee subtraction'))
-        files = {
-            'RUN_COMPLETE.json': e.canon(summary), 'READ_FIRST.md': (root / 'REPORT_GUIDE.md').read_bytes(),
-            'broker_reconciliation_summary.json': e.canon(reconciliation),
-            'broker_reconciliation_checks.csv': csv_bytes(broker_checks),
-            'gbp_scenario_summaries.json': e.canon(summaries), 'gbp_scenario_comparison.csv': csv_bytes(comparison),
-            'gbp_admission_ledger.csv': csv_bytes(all_rows['ledger']), 'gbp_closed_trades.csv': csv_bytes(all_rows['trades']),
-            'gbp_financing_events.csv': csv_bytes(all_rows['financing']), 'gbp_cash_events.csv': csv_bytes(all_rows['cash_events']),
-            'gbp_monthly_observations.csv': csv_bytes(all_rows['monthly_observations']),
-            'gbp_open_positions_at_cutoff.csv': csv_bytes(all_rows['open_positions']),
-            'gbp_trade_group_summaries.csv': csv_bytes(grouped_trade_stats(all_rows['trades'])),
-            'historical_funding_coverage.csv': csv_bytes(coverage),
-            'account_and_instrument_terms.json': e.canon(dict(collected_at=evidence['collected_at_utc'], account=evidence['account'], instruments=evidence['instruments'], funding_schedules=evidence['funding_schedules'])),
-            'baseline_run_summary.json': e.canon(baseline),
-            'raw_signal_witnesses.jsonl': b''.join(e.canon(s) + b'\n' for s in signals),
-            'candidate_price_paths.csv': csv_bytes(list(paths.rows.values())),
-            'candle_request_receipts.json': e.canon(reader.receipts if reader else []),
-            'persistence_status.json': e.canon(persistence_info),
-            'valuation_vs_frozen_source_differences.csv': csv_bytes(valuation_windows.differences()),
-            'valuation_source_policy.json': e.canon(valuation_windows.summary()),
-            'valuation_window_origins.json': e.canon(valuation_windows.origins()),
-        }
-        # Source references are small; full raw MBA blocks are kept separately.
-        index = []
-        for key, identity, checksum, origin in store.db.execute('SELECT key,identity,sha256,origin FROM blocks ORDER BY key'):
-            index.append(dict(key=key, identity=json.loads(identity), sha256=checksum, origin=origin))
-        files['available_candle_source_index.json'] = e.canon(index)
-        files['valuation_candle_source_index.json'] = e.canon([
-            dict(key=key, identity=json.loads(identity), sha256=checksum, origin=origin)
-            for key, identity, checksum, origin in valuation_store.db.execute('SELECT key,identity,sha256,origin FROM blocks ORDER BY key')])
-        files['report_manifest.json'] = e.canon({n: dict(bytes=len(b), sha256=e.sha(b)) for n, b in files.items()})
-        progress(phase='PACKAGE_REPORTS')
-        write_zip(directory / RESULT, files); report_ready = True
-        temporary = directory / (EQUITY + '.tmp')
-        with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-            if not equity_files:
-                z.writestr('README.txt', b'No full NAV samples were requested by this filtered run.')
-            for name, local in equity_files.items():
-                with gzip.open(local, 'rb') as source, z.open(name, 'w', force_zip64=True) as target:
-                    shutil.copyfileobj(source, target, 1024 * 1024)
-        temporary.replace(directory / EQUITY)
-        progress(result_ready=True, equity_ready=True, result='/results.zip', equity='/equity.zip', phase='PACKAGE_SOURCE_ARCHIVE')
-        if os.getenv('P32_GBP_PACKAGE_SOURCES', '1').lower() in ('1', 'true'):
-            temporary = directory / (SOURCES + '.tmp')
-            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                store.export(z)
-                class Prefixed:
-                    def writestr(self, name, raw):
-                        z.writestr('valuation/' + name, raw)
-                valuation_store.export(Prefixed())
-                z.writestr('source_provenance.json', e.canon(dict(signature=signature, pins=inputs.PINS, seeds=e.SEED_MANIFEST)))
-            temporary.replace(directory / SOURCES)
-        atomic(directory / 'gbp_completion.json', e.canon(summary))
-        progress(**summary, phase='FINISHED', result_ready=True, equity_ready=True,
-                 sources_ready=(directory / SOURCES).is_file(), result='/results.zip')
-        return summary
+                        e.require(nav_file.is_file() and e.sha(nav_file.read_bytes())==result['nav_sha256'], 'Saved equity checkpoint missing or changed')
+                        equity_files[policy]=nav_file;primary[policy]=result;changes.extend(dict(row,**label) for row in changes_here)
+                    if policy=='FIXED_10':
+                        results[policy,scenario,mode]={k:result[k] for k in ('summary','ledger','cash_events')}
+                    detail_files[lane]=checkpoint.name;completed+=1
+                    progress(phase='REPLAY_ACCOUNTS',lanes_completed=completed,controls_passed=len(checks))
+        summary=dict(status='COMPLETE_WITH_LIMITATIONS',version=VERSION,signature=signature,started_at_utc=started,
+                     finished_at_utc=e.stamp(datetime.now(e.UTC)),raw_signals=len(signals),strategy_count=32,
+                     evaluation_start=baseline['evaluation_start'],historical_cutoff=baseline['historical_cutoff'],
+                     lanes_completed=completed,controls_passed=len(checks),policies=policies,
+                     original_unknown_entry_count=11,original_unresolved_path_count=170,full_80_lane_experiment=completed==80,
+                     full_portfolio_validated=False,orders_supported=False,orders_sent=False,live_services_contacted=False,
+                     actual_broker_returns=False,historical_financing_known=False,primary_scenario=PRIMARY_SCENARIO,
+                     primary_financing=PRIMARY_FUNDING,valuation_policy=value_windows.summary(),
+                     new_execution_source_differences=len(execution_windows.differences()),
+                     uncertainty='Source/path/account assumptions remain conditional. No live policy selection is made.')
+        files={'RUN_COMPLETE.json':e.canon(summary),'protocol.json':(work/'protocol.json').read_bytes(),
+               'control_checks.json':e.canon(checks),'control_expectations.json':(root/'control_expectations.json').read_bytes(),
+               'policy_comparison.csv':support.csv_bytes(comparisons),'grouped_trade_stats.csv':support.csv_bytes(groups),
+               'admission_changes_primary.csv':support.csv_bytes(changes),'broker_reconciliation.json':e.canon(reconciliation),
+               'new_execution_source_differences.csv':support.csv_bytes(execution_windows.differences()),
+               'valuation_source_differences.csv':support.csv_bytes(value_windows.differences()),
+               'source_request_receipts.json':e.canon(reader.receipts if reader else []),
+               'persistence.json':e.canon(support.persistence(directory)),
+               'detail_downloads.json':e.canon({n:'/details/'+n+'.json.gz' for n in detail_files}),
+               'REPORT_GUIDE.md':(root/'REPORT_GUIDE.md').read_bytes()}
+        for kind,rows in period_rows.items():files[kind+'.csv']=support.csv_bytes(rows)
+        evaluated={}
+        for policy,result in primary.items():
+            for key,row in result.get('evaluated_paths',{}).items():evaluated[policy,key]=dict(row,policy=policy)
+            for kind in ('ledger','trades','cash_events','financing','open_positions'):
+                files['primary/'+policy+'/'+kind+'.csv']=support.csv_bytes(result[kind])
+            target=work/('EQUITY_'+policy+'.zip');temp=target.with_suffix('.zip.tmp')
+            with gzip.open(equity_files[policy],'rb') as source:
+                with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+                    with z.open(policy+'_nav_samples.csv','w') as out:shutil.copyfileobj(source,out,1024*1024)
+            temp.replace(target)
+        files['evaluated_paths_primary.csv']=support.csv_bytes(list(evaluated.values()))
+        files['report_manifest.json']=e.canon({n:dict(bytes=len(v),sha256=e.sha(v)) for n,v in files.items() if isinstance(v,bytes)})
+        atomic(work/'detail_files.json',e.canon(detail_files))
+        if os.getenv('P32_CAP_PACKAGE_SOURCES','0')=='1':
+            with zipfile.ZipFile(work/'NEW_EXECUTION_SOURCES.zip','w',zipfile.ZIP_DEFLATED) as z:fresh.export(z)
+        progress(phase='PACKAGE_RESULTS');write_zip(work/RESULT,files)
+        progress(**summary,phase='FINISHED',result_ready=True,result='/results.zip');return summary
     except Exception as exc:
-        message = str(exc) if isinstance(exc, (ValueError, e.CandleFetchError)) else type(exc).__name__
-        error = dict(status='ERROR', version=VERSION, error=message,
-                     reports_preserved=report_ready, orders_sent=False, signature=signature,
-                     failed_source_context={k: STATE.get(k) for k in ('quote_pair', 'quote_from', 'quote_to', 'scenario', 'funding_mode', 'through_utc')},
-                     valuation_source_policy=valuation_windows.summary())
-        if isinstance(exc, e.NeedData):
-            error['pending_request'] = exc.identity
-        if report_ready:
-            with zipfile.ZipFile(directory / RESULT, 'a', zipfile.ZIP_DEFLATED) as z:
-                z.writestr('ERROR.json', e.canon(error))
-        else:
-            write_zip(directory / RESULT, {'ERROR.json': e.canon(error),
-                      'broker_reconciliation_summary.json': e.canon(reconciliation),
-                      'valuation_vs_frozen_source_differences.csv': csv_bytes(valuation_windows.differences()),
-                      'completed_scenario_summaries.json': e.canon([r['summary'] for r in results])})
-        progress(**error, phase='FAILED', result_ready=True, result='/results.zip')
-        raise
-    finally:
-        paths.close(); store.close(); valuation_store.close()
-        if legacy is not None:
-            legacy.close()
-
-
-def start():
-    with LOCK:
-        if STATE['status'] != 'IDLE':
-            return
-        STATE.update(status='RUNNING', phase='STARTING')
-    def worker():
+        message=str(exc) if isinstance(exc,(ValueError,e.CandleFetchError)) else type(exc).__name__
+        failure=dict(status='ERROR',version=VERSION,error=message,orders_sent=False,full_portfolio_validated=False,
+                     control_checks=checks,started_at_utc=started)
+        if isinstance(exc,e.NeedData):failure['missing_candle_request']=exc.identity
         try:
-            run(offline=os.getenv('P32_SIGNAL_OFFLINE', '').lower() in ('true', '1'))
-        except Exception as exc:
-            if STATE.get('status') != 'ERROR':
-                progress(status='ERROR', phase='FAILED', error=str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
-    threading.Thread(target=worker, daemon=True, name='p32-gbp-account-replay').start()
+            work.mkdir(parents=True,exist_ok=True);write_zip(work/RESULT,{'ERROR.json':e.canon(failure),'control_checks.json':e.canon(checks)})
+        except OSError:pass
+        progress(**failure,phase='FAILED',result_ready=(work/RESULT).is_file(),result='/results.zip');return failure
+    finally:
+        for resource in reversed(resources):resource.close()
 
 
-def application(environ, start_response):
-    method, path = environ.get('REQUEST_METHOD', 'GET'), environ.get('PATH_INFO', '/')
-    kind = 'application/json'; download = None
-    if method not in ('GET', 'HEAD'):
-        code, body = '405 Method Not Allowed', e.canon(dict(error='GET/HEAD only'))
-    elif path in ('/', '/health'):
-        code, body = '200 OK', e.canon(dict(service=VERSION, orders_supported=False,
-                                          start_once='/status', result='/results.zip', equity='/equity.zip',
-                                          persistence=persistence(output_dir())))
-    elif path == '/status':
-        if method == 'GET':
-            start()
-        with LOCK:
-            snapshot = dict(STATE)
-        if snapshot.get('last_progress_utc'):
-            snapshot['seconds_since_last_progress'] = round((datetime.now(e.UTC) - e.dt(snapshot['last_progress_utc'])).total_seconds(), 1)
-        code, body = '200 OK', e.canon(snapshot)
-    elif path in ('/results.zip', '/equity.zip', '/sources.zip'):
-        name = {'/results.zip': RESULT, '/equity.zip': EQUITY, '/sources.zip': SOURCES}[path]
-        ready = STATE.get({'/results.zip': 'result_ready', '/equity.zip': 'equity_ready', '/sources.zip': 'sources_ready'}[path])
-        candidate = output_dir() / name
-        if ready and candidate.is_file():
-            code, body, kind, download = '200 OK', b'', 'application/zip', candidate
-        else:
-            code, body = '409 Conflict', e.canon(dict(message='Not ready; check /status'))
-    else:
-        code, body = '404 Not Found', e.canon(dict(error='Unknown route'))
-    headers = [('Content-Type', kind), ('Content-Length', str(download.stat().st_size if download else len(body))), ('Cache-Control', 'no-store')]
+def start_once():
+    with LOCK:
+        if STATE['status']!='IDLE':return
+        STATE.update(status='RUNNING',phase='STARTING')
+    threading.Thread(target=lambda:run(offline=os.getenv('P32_SIGNAL_OFFLINE','').lower() in ('1','true')),daemon=True,name='p32-entry-limit').start()
+
+
+def application(environ,start_response):
+    method,path=environ.get('REQUEST_METHOD','GET'),environ.get('PATH_INFO','/')
+    code,body,content='200 OK',b'','application/json';file=None
+    if method not in ('GET','HEAD'):code,body='405 Method Not Allowed',e.canon(dict(error='GET/HEAD only; no order routes'))
+    elif path in ('/','/health'):
+        body=e.canon(dict(service=VERSION,orders_supported=False,orders_sent=False,start_once='/status',result='/results.zip',
+                          persistence=support.persistence(output_dir()),policies=list(POLICIES),lanes=80))
+    elif path=='/status':
+        if method=='GET':start_once()
+        with LOCK:body=e.canon(dict(STATE))
+    elif path in ('/results.zip','/results','/download'):
+        if STATE.get('result_ready'):file=work_dir()/RESULT
+    elif path=='/details':
+        mapping=work_dir()/'detail_files.json'
+        body=e.canon({n:'/details/'+n+'.json.gz' for n in json.loads(mapping.read_bytes())}) if mapping.is_file() else e.canon(dict(message='Details available after completion'))
+    elif path.startswith('/details/'):
+        mapping=work_dir()/'detail_files.json';name=path.removeprefix('/details/').removesuffix('.json.gz')
+        if mapping.is_file():
+            selected=json.loads(mapping.read_bytes()).get(name)
+            if selected:file=work_dir()/selected
+    elif path.startswith('/equity/') and path.endswith('.zip'):
+        policy=path.removeprefix('/equity/').removesuffix('.zip')
+        if policy in POLICIES:file=work_dir()/('EQUITY_'+policy+'.zip')
+    elif path=='/sources.zip':file=work_dir()/'NEW_EXECUTION_SOURCES.zip'
+    else:code,body='404 Not Found',e.canon(dict(error='Unknown route'))
+    download=method in ('GET','HEAD') and (path in ('/results.zip','/results','/download','/sources.zip') or path.startswith(('/equity/','/details/')))
     if download:
-        headers.append(('Content-Disposition', 'attachment; filename=' + download.name))
-    if code.startswith('405'):
-        headers.append(('Allow', 'GET, HEAD'))
-    start_response(code, headers)
-    if download and method == 'GET':
-        def chunks():
-            with download.open('rb') as f:
-                while True:
-                    block = f.read(65536)
-                    if not block:
-                        break
-                    yield block
-        return chunks()
-    return [b'' if method == 'HEAD' else body]
+        if file is None or not file.is_file():code,body='409 Conflict',e.canon(dict(message='Download not ready; check /status'));file=None
+        else:content='application/gzip' if file.suffix=='.gz' else 'application/zip'
+    headers=[('Content-Type',content),('Cache-Control','no-store'),('Content-Length',str(file.stat().st_size if file else len(body)))]
+    if file:headers.append(('Content-Disposition','attachment; filename='+file.name))
+    if code.startswith('405'):headers.append(('Allow','GET, HEAD'))
+    start_response(code,headers)
+    if method=='HEAD':return [b'']
+    if not file:return [body]
+    def chunks():
+        with file.open('rb') as stream:
+            while block:=stream.read(1024*1024):yield block
+    return chunks()
 
 
 class QuietHandler(WSGIRequestHandler):
-    def log_message(self, *args):
-        pass
+    def log_message(self,*args):pass
 
 
 def main():
     global DIRECTORY
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run', action='store_true'); parser.add_argument('--offline', action='store_true')
-    parser.add_argument('--reconcile-only', action='store_true'); parser.add_argument('--output')
-    parser.add_argument('--scenario', choices=admissions.SCENARIOS)
-    parser.add_argument('--funding-mode', choices=MODES + ('HISTORICAL_FILE',))
-    args = parser.parse_args(); DIRECTORY = args.output
-    if args.reconcile_only:
-        summary, _ = reconcile(inputs.broker(Path(__file__).parent))
-        print(json.dumps(summary, indent=2)); return
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run',action='store_true');parser.add_argument('--offline',action='store_true')
+    parser.add_argument('--output');parser.add_argument('--policy',choices=POLICIES)
+    parser.add_argument('--scenario',choices=admissions.SCENARIOS);parser.add_argument('--funding-mode',choices=MODES)
+    args=parser.parse_args();DIRECTORY=args.output
     if args.run:
-        print(json.dumps(run(offline=args.offline, scenario_filter=args.scenario, mode_filter=args.funding_mode), indent=2)); return
-    if args.offline:
-        os.environ['P32_SIGNAL_OFFLINE'] = 'true'
-    with make_server('0.0.0.0', int(os.getenv('PORT', '8080')), application, handler_class=QuietHandler) as server:
-        print(VERSION + ' ready', flush=True); server.serve_forever()
+        result=run(args.output,args.offline,args.policy,args.scenario,args.funding_mode);print(json.dumps(result,indent=2))
+        raise SystemExit(1 if result['status']=='ERROR' else 0)
+    e.require(not(args.policy or args.scenario or args.funding_mode or args.offline), 'Run filters require --run; hosted status runs all 80 lanes')
+    with make_server('0.0.0.0',int(os.getenv('PORT','8080')),application,handler_class=QuietHandler) as server:
+        print(VERSION+' ready',flush=True);server.serve_forever()
 
 
-if __name__ == '__main__':
-    main()
+if __name__=='__main__':main()

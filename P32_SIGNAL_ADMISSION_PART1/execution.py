@@ -115,27 +115,28 @@ def broker_price(pair, value):
     return dec(format(round(float(value), digits(pair)), '.%df' % digits(pair)))
 
 
-def levels(pair, side, reference, stop, rr):
+def levels(pair, side, reference, stop, rr, adverse_limit_ticks=10):
+    require(isinstance(adverse_limit_ticks, int) and 10 <= adverse_limit_ticks <= 30, "Entry limit must be whole ticks from 10 to 30")
     require(side in ('BUY', 'SELL') and math.isfinite(float(rr)) and float(rr) > 0, 'Invalid direction/RR')
     sign = 1 if side == 'BUY' else -1
     ref, sl = broker_price(pair, reference), broker_price(pair, stop)
     risk = sign * (float(ref) - float(sl))
     require(risk > 0, 'Reference stop must be on the loss side')
     target = broker_price(pair, float(ref) + sign * risk * float(rr))
-    bound = broker_price(pair, float(ref) + sign * 10 * float(tick(pair)))
+    bound = broker_price(pair, float(ref) + sign * adverse_limit_ticks * float(tick(pair)))
     return dict(reference_entry=ref, stop=sl, target=target, price_bound=bound)
 
 
-def entry_preview(pair, side, reference, stop, rr, bid, ask):
-    result = levels(pair, side, reference, stop, rr)
+def entry_preview(pair, side, reference, stop, rr, bid, ask, adverse_limit_ticks=10):
+    result = levels(pair, side, reference, stop, rr, adverse_limit_ticks)
     bid, ask = broker_price(pair, bid), broker_price(pair, ask)
     require(ask >= bid > 0, 'Invalid quote')
     sign = 1 if side == 'BUY' else -1
     fill = ask if sign == 1 else bid
     deviation = max(dec(0), sign * (fill - result['reference_entry']) / tick(pair))
     status = 'ADMITTED_ENTRY_PROXY'
-    if deviation > 10:
-        status = 'REJECTED_10T_ENTRY_PROXY'
+    if deviation > adverse_limit_ticks:
+        status = 'REJECTED_' + str(adverse_limit_ticks) + 'T_ENTRY_PROXY'
     elif sign * (fill - result['stop']) <= 0:
         status = 'REJECTED_STOP_GEOMETRY_PROXY'
     elif pair == 'EUR_CHF' and bid <= result['target']:
