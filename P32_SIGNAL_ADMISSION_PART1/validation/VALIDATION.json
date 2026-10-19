@@ -1,37 +1,38 @@
 {
-  "version": "P32_ENTRY_LIMIT_RESEARCH_V1_2026_10_19",
-  "validated_at_utc": "2026-10-19T14:32:06.201428+00:00",
+  "version": "P32_SMALL_ACCOUNT_ENTRY_LIMIT_V1_2026_10_19",
+  "validated_at_utc": "2026-10-19T18:30:55.947938+00:00",
   "regression_tests": {
-    "count": 117,
+    "count": 136,
     "status": "PASS",
-    "command": "python -m unittest test_caps test_source_windows test_gbp test_execution"
+    "command": "python -m unittest test_windows test_caps test_source_windows test_gbp test_execution"
   },
-  "original_10_tick_full_account_replays": {
-    "count": 16,
+  "saved_historical_path_window_checks": {
+    "count": 57620,
     "status": "PASS",
-    "network_requests": 0,
-    "compared": [
-      "summary",
-      "ordered admission ledger",
-      "trades",
-      "financing",
-      "cash events",
-      "monthly observations",
-      "open positions"
-    ],
-    "method": "Actual Replay and PolicyPaths over previously independently verified canonical valuation samples"
+    "censored_cases": 40
   },
-  "newly_eligible_price_path_examples": {
-    "count": 4,
+  "end_to_end_offline_fixture": {
+    "original_control_lanes": 16,
+    "fresh_account_lanes": 96,
     "status": "PASS",
-    "network_requests": 0,
-    "purpose": "Code verification examples, not a performance sample",
-    "coverage": "Both sides; JPY/non-JPY; identical execution at 15/30 with different sizing bounds"
+    "checks": [
+      "All original summaries and ordered tables",
+      "Half-open entry cohorts",
+      "Causal end valuations with open positions",
+      "No future stop/target booked",
+      "Funding on open positions counted once",
+      "Cash and admitted population identities",
+      "Per-lane resume without rerunning account",
+      "Bad original control stops before window replay",
+      "ZIP CRC and every manifest hash"
+    ]
   },
-  "original_gbp_accounting_market_funding_code_unchanged": true,
-  "full_80_lane_policy_comparison_run_locally": false,
-  "deployment_run": "Run all 80 research lanes before any policy conclusion",
+  "original_accounting_execution_funding_path_inputs_unchanged": true,
+  "unchanged_files_verified": 17,
+  "full_historical_880_account_experiment_run_locally": false,
+  "deployment_gate": "All sixteen original full-history controls must pass on the research service before 864 fresh-window lanes",
+  "no_strategy_regeneration": true,
+  "no_live_configuration_change": true,
   "orders_sent": false,
-  "live_configuration_changed": false,
-  "limitations": "Existing source/path uncertainty, native candle-open entries, frozen terms/funding and sampled equity remain conditional. No automatic live selection."
+  "limitations": "Fixture tests and saved-path boundary checks validate implementation, not new performance. Complete historical fresh-account results require the existing persistent candle caches and hosted replay."
 }

@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 from datetime import timedelta
 from unittest.mock import patch
-import app
+import entry_limit_service as app
 import execution as e
 import inputs
 import control_checks as controls
@@ -205,18 +205,18 @@ class CapsTests(unittest.TestCase):
         expected=expectations(original)
         baseline=dict(evaluation_start=e.stamp(T),historical_cutoff=e.stamp(T+timedelta(hours=2)))
         with tempfile.TemporaryDirectory() as d:
-            with patch('app.inputs.baseline',return_value=([s],{'a':p},baseline)),patch('app.control_checks.load',return_value=expected),\
-                 patch('app.e.CandleStore.import_seeds'),patch('app.inputs.import_additions'),patch('app.Market',side_effect=lambda *args:FixedMarket()):
+            with patch('entry_limit_service.inputs.baseline',return_value=([s],{'a':p},baseline)),patch('entry_limit_service.control_checks.load',return_value=expected),\
+                 patch('entry_limit_service.e.CandleStore.import_seeds'),patch('entry_limit_service.inputs.import_additions'),patch('entry_limit_service.Market',side_effect=lambda *args:FixedMarket()):
                 result=app.run(d,True,'FIXED_15','END_ASC',MODES[1]);self.assertEqual(result['status'],'COMPLETE_WITH_LIMITATIONS',result)
                 z=zipfile.ZipFile(Path(d)/'entry_limit_v1'/app.RESULT);self.assertIsNone(z.testzip())
                 self.assertIn('policy_comparison.csv',z.namelist());z.close()
                 self.assertTrue((Path(d)/'entry_limit_v1/EQUITY_FIXED_15.zip').is_file())
-                with patch('app.Replay',side_effect=AssertionError('must resume')):
+                with patch('entry_limit_service.Replay',side_effect=AssertionError('must resume')):
                     self.assertEqual(app.run(d,True,'FIXED_15','END_ASC',MODES[1])['status'],'COMPLETE_WITH_LIMITATIONS')
             bad=copy.deepcopy(expected);next(iter(bad['lanes'].values()))['summary_sha256']='bad'
             with tempfile.TemporaryDirectory() as other:
-                with patch('app.inputs.baseline',return_value=([s],{'a':p},baseline)),patch('app.control_checks.load',return_value=bad),\
-                     patch('app.e.CandleStore.import_seeds'),patch('app.inputs.import_additions'),patch('app.Market',side_effect=lambda *args:FixedMarket()):
+                with patch('entry_limit_service.inputs.baseline',return_value=([s],{'a':p},baseline)),patch('entry_limit_service.control_checks.load',return_value=bad),\
+                     patch('entry_limit_service.e.CandleStore.import_seeds'),patch('entry_limit_service.inputs.import_additions'),patch('entry_limit_service.Market',side_effect=lambda *args:FixedMarket()):
                     failed=app.run(other,True,'FIXED_15','END_ASC',MODES[1]);self.assertEqual(failed['status'],'ERROR')
                     self.assertEqual(len(failed['control_checks']),1)
                     self.assertFalse(list((Path(other)/'entry_limit_v1').glob('FIXED_15__*.json.gz')))

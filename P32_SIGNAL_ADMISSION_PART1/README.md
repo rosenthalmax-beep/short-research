@@ -1,111 +1,121 @@
-# P32 entry-limit research update — 19 October 2026
+# P32 fresh GBP100 entry-limit comparison — 19 October 2026
 
-Upload this to the **same separate research/audit service** that ran the GBP
-account replay. Extract the outer ZIP and upload all contents to the application
-root, replacing matching files. **Do not delete the existing files first. Keep
-seed_01.zip through seed_05.zip, and keep the persistent /data volume.** Keep the
-two inner input ZIPs zipped. Do not upload this to the live executor or probe.
+Extract the outer update ZIP and upload **its contents** into the application
+root of the **same separate research/audit service**, replacing matching files.
+**Do not delete the existing files first.** Retain `seed_01.zip` through
+`seed_05.zip`, the two supplied inner input ZIPs, and the mounted `/data` volume.
+Keep inner ZIPs zipped. This package is under 25 MB. It contains no credentials.
 
-Start command: `python app.py`. Python 3.10+; standard library only.
+Start command remains **`python app.py`**. Standard library only; Python 3.10+
+with timezone data on Linux. Procfile remains supplied.
 
 | Variable | Value |
 | --- | --- |
-| OANDA_TOKEN | Keep the existing token in service variables |
+| OANDA_TOKEN | Keep your existing token in service variables |
 | OANDA_ENV | live |
 | P32_GBP_OUTPUT_DIR | /data/p32_signal_admission |
 | P32_SIGNAL_OUTPUT_DIR | /data/p32_signal_admission |
-| P32_SIGNAL_OFFLINE | Unset |
+| P32_SIGNAL_OFFLINE | Leave unset for the hosted run |
 
-The /data directory must be the mounted persistent volume already attached to
-this service. Shared execution/valuation caches are reused. New reports and
-checkpoints go into `/data/p32_signal_admission/entry_limit_v1`. Earlier GBP
-reports are preserved. No continuous MID-history regeneration is performed.
+This service only supports historical candle GET requests. It has no order,
+executor or strategy-probe submission route. Upload to the research service.
 
-1. Deploy the extracted files with existing seed ZIPs retained.
-2. Open `/health`. Check service `P32_ENTRY_LIMIT_RESEARCH_V1_2026_10_19` and
-   `separate_mount_detected: true` in persistence.
-3. Open `/status` to start. Refresh that URL for progress.
-4. All sixteen 10-tick control lanes run first. Their summaries and complete
-   ordered account tables must reproduce the pinned GBP results before any
-   alternative runs. A mismatch stops the experiment.
-5. At `COMPLETE_WITH_LIMITATIONS`, download `/results.zip` and send back
-   `P32_ENTRY_LIMIT_RESEARCH_RESULTS.zip`.
+## Run and download
 
-At ERROR, download the available results ZIP for diagnosis. After restarting,
-reopen /status: completed lanes and computed paths resume from checksummed
-files. A partly finished account lane restarts its account loop while reusing
-saved price work. Refreshing /status does not duplicate a running job.
+1. Upload the extracted contents and redeploy using `python app.py`.
+2. Open your research URL followed by `/health`. Check service
+   `P32_SMALL_ACCOUNT_ENTRY_LIMIT_V1_2026_10_19` and
+   `persistence.separate_mount_detected: true`. The output directory should be
+   `/data/p32_signal_admission`. The existing persistence marker is retained.
+3. Open `/status` to start; refresh it for progress. Health checks and HEAD
+   requests do not start work. Repeated GETs do not start duplicate jobs.
+4. First, all **16 original full-history 10-tick account controls** must pass.
+   A failure stops the experiment before any fresh-account comparison.
+5. Then **864 fresh-account lanes** run. This is 18 windows × 3 policies ×
+   4 chronology assumptions × 4 funding assumptions. Watch `lanes_completed`
+   against `lanes_required`, `window_id`, `policy` and `through_utc`.
+6. At `status: COMPLETE_WITH_LIMITATIONS`, download `/results.zip` and return
+   **P32_SMALL_ACCOUNT_ENTRY_LIMIT_RESULTS.zip** for review.
 
-## Frozen comparison
+If it reports ERROR, download the diagnostic ZIP from the same `/results.zip`
+route. Reopen `/status` after a restart to resume completed checksummed lanes.
+A partly completed account lane restarts from its own fresh account start;
+previous candle and path calculations remain cached. An exclusive process lock
+prevents two workers from writing this experiment simultaneously.
 
-Five policies × four chronology assumptions × four funding assumptions =
-**80 account lanes**. The frozen protocol is written before computation.
+The three caps do not change live. No winner is chosen automatically.
 
-| Policy | Maximum adverse entry deviation |
-| --- | --- |
-| FIXED_10 | 10 ticks / 1 pip, current control |
-| FIXED_15 | 15 ticks / 1.5 pips |
-| FIXED_20 | 20 ticks / 2 pips |
-| FIXED_30 | 30 ticks / 3 pips |
-| STOP10_MAX30 | 10% of rounded original stop distance, rounded down to ticks, with a 10-tick floor and 30-tick ceiling |
+## Frozen experiment
 
-The relative comparator is a single rule for the portfolio. No optimum per pair
-is fitted. All 3,629 warmed qualifications and 32 existing strategy rules stay
-fixed. Entry quotes, rounded stops and targets are shared across policies.
-Targets are not moved to restore RR after a worse entry. Existing EURCHF
-target-passed and stop geometry checks remain. Position sizes use each policy's
-worst permitted entry, whole units and the same 1% NAV risk budget (0.75% for
-EUR_JPY_M15_SHORT). Wider allowances can shrink already-eligible positions.
+- Policies: FIXED_10 (current control), FIXED_15, STOP10_MAX30.
+- Relative rule: `max(10,min(30,floor(0.10*original_stop_distance_ticks)))`.
+- Seventeen overlapping five-year windows, starting each 1 January from 2005
+  through 2021. Examples: 2005-01-01 to 2010-01-01; 2021-01-01 to 2026-01-01.
+- One separate recent diagnostic: 2021-01-01 to 2026-09-20 18:29 UTC, the existing
+  pinned data cutoff. This does not extend history through today's live market.
+- Every account starts with **GBP100 and no existing positions**. It compounds
+  within its window; no withdrawals, scaling resets or clipping of order sizes
+  occur inside a window. Strategies retain their original warmed indicators.
+- Signals enter at or after the window start and strictly before its end.
+  Earlier positions do not carry into a fresh account. This is a deliberate
+  fresh-start comparison, not a reconstruction of a continuously funded account.
+- Existing per-strategy pyramiding, opposite-pair gates, 1% NAV sizing (0.75% for
+  EUR_JPY_M15_SHORT), whole units, margin, conversion markup and broker limits
+  stay in force. Capacity rejections are counted and flagged, never suppressed.
+- Entry bid/ask evidence, rounded stop and target remain shared. Each cap uses
+  its own worst-permitted-entry sizing bound; targets are not moved to restore RR.
+- Chronologies: END_ASC, END_DESC, START_ASC, START_DESC, as before.
+- Funding assumptions: zero financing, frozen 14-Oct-2026 rates, adverse 3% annual,
+  adverse 6% annual, as before. They are not recovered historical rate schedules.
+- Primary comparison: END_ASC with frozen 14-Oct-2026 funding. Assess the other
+  lanes for sensitivity. Overlapping windows are not independent experiments.
 
-Each lane rebuilds strategy and pair blocking, margin, GBP NAV sizing,
-conversion, financing and sampled liquidation equity. Chronologies remain
-END_ASC, END_DESC, START_ASC, START_DESC. Funding is zero, frozen 14 October
-2026 rates, adverse annual 3%, and adverse annual 6%. These are assumptions,
-not reconstructed historical financing rates. The primary comparison is
-END_ASC with frozen rates; inspect all lanes for sensitivity.
+## Correct treatment of the window end
 
-Rejected candidates are not assigned old midpoint wins or losses. Full bid/ask
-exits are computed when newly eligible. Previously blocked signals may become
-eligible and need entirely new price paths. New candle downloads can be
-substantial, particularly M1/S5. Only official OANDA historical candle GETs are
-supported; no account ID, executor URL, webhook secret or order API is needed.
+An exit scheduled after a window ends is censored for that account: the
+position remains open, accrues financing only through the cutoff, and is valued
+using causal M15 midpoint NAV and separate executable-side liquidation equity.
+Its later target/stop is never booked in cash or counted as a closed win/loss.
+There is no forced end-of-window closing transaction. Existing source/path gaps
+remain uncertain. A barrier interval straddling the cutoff under END chronology
+is additionally qualified rather than labelled definitely open.
 
-## Source policy and limitations
+## Storage and re-use
 
-Consistent frozen execution coverage is used first. Missing or conflicting
-coverage is read from independent immutable canonical windows: H1/M15 14-day,
-M1 day, S5 hour. Fresh evidence never overwrites frozen bars. Numeric differences
-with frozen sources are recorded and qualify the new path. The existing GBP V2
-canonical valuation-window policy is retained.
+New reports/checkpoints:
+`/data/p32_signal_admission/small_account_entry_limit_v1`.
 
-The 170 previously qualified paths and 11 unknown entries remain explicit.
-Historical prices are candle proxies, not recovered live quotes or fills.
-Latency, broker price-bound cancellation frequency and intrabar worst equity
-are not reconstructed. Margin and conversion terms are frozen. Recent-era
-data have already been examined and are not an untouched holdout. No policy is
-selected automatically or written to the live services.
+The prior `entry_limit_v1/policy_paths.sqlite3` and its `new_execution_windows`
+are reused; the shared `gbp_execution_paths_v2` and `gbp_valuation_windows_v2`
+are reused. Do not clear, replace or move these directories. Previous reports
+and checkpoints are retained. This update performs no continuous MID-history
+or strategy-signal regeneration. Fresh account gates can expose a previously
+blocked path; a missing path or valuation window can still need candle GETs.
 
-## Downloads
+The previous experiment source is retained as `entry_limit_service.py` for
+regression checks; the hosted start command uses the new `app.py`.
 
-Start with `/results.zip`: comparisons, periods, groups, control checks,
-primary-lane admissions/trades/cash and evaluated paths. Full large account
-records remain on the volume; `/details` lists per-lane JSON.GZ downloads.
+## Reports
 
-Primary equity CSVs are separate ZIPs:
-`/equity/FIXED_10.zip`, `/equity/FIXED_15.zip`, `/equity/FIXED_20.zip`,
-`/equity/FIXED_30.zip`, `/equity/STOP10_MAX30.zip`.
+Start with `recent_comparison.csv`, `rolling_window_summary.csv` and
+`window_comparison.csv`. REPORT_GUIDE.md explains comparisons, uncertainty,
+open end positions and the separate full-detail/equity downloads.
 
-Optional `P32_CAP_PACKAGE_SOURCES=1` creates `/sources.zip` with newly downloaded
-execution windows. Default off. Keep earlier source archives and all valuation
-caches too: this new archive alone does not replace the prior source evidence.
+Local validation:
 
-Local regression checks:
+    python -m unittest test_windows test_caps test_source_windows test_gbp test_execution
 
-    python -m unittest test_caps test_source_windows test_gbp test_execution
+Restricted CLI runs still perform all sixteen original controls first:
 
-Restricted CLI run, always including the matching 10-tick control:
+    python app.py --run --window RECENT_2021_TO_CUTOFF --policy FIXED_15 --scenario END_ASC --funding-mode FROZEN_14OCT2026_RATES
 
-    python app.py --run --policy FIXED_15 --scenario END_ASC --funding-mode FROZEN_14OCT2026_RATES
+The CLI adds the matching 10-tick window control automatically. Hosted `/status`
+always uses the complete frozen experiment. `--offline` requires every needed
+candle to be cached already.
 
-`--offline` requires all needed historical candles already cached. Hosted
-`/status` runs all 80 lanes. Read REPORT_GUIDE.md and GBP_ACCOUNT_ASSUMPTIONS.md.
+These are conditional historical comparisons using selected strategies and
+previously examined history. Recent windows are not an untouched holdout;
+historical returns are not a forward forecast. Current broker and funding
+terms, candle-entry proxies, 11 original unknown entries, 170 qualified original
+paths and sampled drawdowns retain their stated limitations. See
+GBP_ACCOUNT_ASSUMPTIONS.md and the protocol in the results ZIP.
