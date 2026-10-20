@@ -1,0 +1,39 @@
+P32 PULLBACK: FREE STORAGE RECOVERY ADD-ON
+
+1. Keep your downloaded P32_PULLBACK_PASS1_RESULTS.zip as a recovery copy.
+2. Extract this small ZIP. Upload its CONTENTS to the SAME separate pullback
+   research service alongside pullback_app.py and pullback_lab/.
+   Replace matching files if asked. Do not delete current files or /data.
+3. Set the service start command to:
+       python pullback_storage_guard.py
+   The supplied Procfile sets the same command if your host uses Procfiles.
+4. Keep the existing mounted volume, token and variables:
+       PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
+       PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
+       OANDA_ENV=live
+       OANDA_TOKEN=<your existing value; do not paste it into a chat>
+   Keep all existing study dates/pair settings unchanged.
+   Optional variables (defaults already applied; no need to add):
+       PULLBACK_RAW_CACHE_MB=128
+       PULLBACK_STORAGE_RESERVE_MB=96
+5. Redeploy. Open /health first. Then open /status to start recovery/resume.
+   Look for storage_overlay and raw_cache_limit_bytes in /status.
+   It should show RECOVERING_STORAGE, verify the completed pairs, reclaim
+   duplicates, compact the raw cache, and resume the unchanged V2 study.
+   Completed counts may briefly reset while the existing pairs are verified.
+6. Downloads:
+       /results-summary.zip  = small summary, ideal for the next review
+       /results.zip          = full saved reports, streamed without a disk copy
+   These are paths appended to your existing research-service URL.
+7. Send the next /status JSON after recovery. If it stops at
+   STORAGE_RECOVERY_STOPPED or reports a checksum mismatch/reserve error,
+   send that JSON. Do not delete databases or change study parameters.
+
+This service cannot place orders. No live executor/probe changes are needed.
+The existing V2 calculation files must remain unchanged. This add-on checks
+all their hashes and keeps the same study signature for checkpoint reuse.
+
+Trade-off: old raw candle bodies can be evicted and fetched again, which may
+increase runtime. Their source identities/checksums remain. Any changed window
+stops the run instead of silently mixing revised prices. Saved pair reports,
+trades and account ledgers remain on disk. The old P32 legacy cache is read-only.

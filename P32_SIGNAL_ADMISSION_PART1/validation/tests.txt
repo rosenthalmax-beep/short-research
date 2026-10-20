@@ -1,0 +1,16 @@
+test_full_disk_bootstrap_reclaims_duplicate_before_free_space_check (test_replay_parity.ParityTests.test_full_disk_bootstrap_reclaims_duplicate_before_free_space_check) ... ok
+test_original_ledgers_identical_and_finished_pairs_resume_without_quotes (test_replay_parity.ParityTests.test_original_ledgers_identical_and_finished_pairs_resume_without_quotes) ... ok
+test_cache_compacts_physical_size_keeps_receipts_and_native_priority (test_storage_guard.CacheTests.test_cache_compacts_physical_size_keeps_receipts_and_native_priority) ... ok
+test_evicted_refetch_identical_then_revised_stops (test_storage_guard.CacheTests.test_evicted_refetch_identical_then_revised_stops) ... ok
+test_runtime_cache_bound_and_reserve_stop (test_storage_guard.CacheTests.test_runtime_cache_bound_and_reserve_stop) ... ok
+test_cleanup_preserves_reports_and_pending_bytes (test_storage_guard.RecoveryTests.test_cleanup_preserves_reports_and_pending_bytes) ... ok
+test_corrupt_witness_blocks_cleanup (test_storage_guard.RecoveryTests.test_corrupt_witness_blocks_cleanup) ... ok
+test_different_export_never_removes_checkpoint (test_storage_guard.RecoveryTests.test_different_export_never_removes_checkpoint) ... ok
+test_head_health_do_not_start_or_cleanup (test_storage_guard.RecoveryTests.test_head_health_do_not_start_or_cleanup) ... ok
+test_source_parity_and_deployed_signature (test_storage_guard.RecoveryTests.test_source_parity_and_deployed_signature) ... ok
+test_stream_valid_manifest_no_disk_archive_and_summary_scope (test_storage_guard.RecoveryTests.test_stream_valid_manifest_no_disk_archive_and_summary_scope) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 1.220s
+
+OK

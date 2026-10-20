@@ -1,0 +1,13 @@
+{
+  "offline_tests_passed": 11,
+  "calculation_source_unchanged": true,
+  "deployed_default_signature": "ede17fd5f452abcf4fa9fc2ec0f73aad0660d2d1f582a96059c841ee64d61dd6",
+  "synthetic_account_payloads_identical": true,
+  "pending_checkpoint_bytes_preserved": true,
+  "revised_refetch_rejected": true,
+  "full_zip_disk_copy_required": false,
+  "external_deployment_tested": false,
+  "live_orders_sent": false,
+  "unchanged_v2_tests_passed": 31,
+  "total_offline_checks_passed": 42
+}
