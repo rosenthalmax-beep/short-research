@@ -1,0 +1,19 @@
+P32 PULLBACK RESEARCH - PASS 1
+
+1. Extract the outer ZIP and upload its CONTENTS to the SAME SEPARATE RESEARCH
+   SERVICE. Preserve the pullback_lab folder. Do not delete existing files/data.
+2. Change the service start command to: python pullback_app.py
+3. Keep OANDA_TOKEN secret and OANDA_ENV=live.
+   Set PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
+   Set PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
+   Keep the persistent volume mounted at /data.
+4. Redeploy, then open /health. Confirm:
+   service=P32_PULLBACK_PASS1_V1_2026_10_20
+   persistence.separate_mount_detected=true
+   orders_supported=false
+5. Open /status to start; refresh for progress.
+6. Once COMPLETE, download /results.zip and send it back.
+
+The study is resumable. Historical downloads can take a long time and require
+several GB of persistent disk. It runs the baseline/discovery stage only.
+README_PULLBACK.md contains the exact rules, scope and report definitions.

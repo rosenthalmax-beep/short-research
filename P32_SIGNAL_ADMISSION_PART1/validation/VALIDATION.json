@@ -1,38 +1,21 @@
 {
-  "version": "P32_SMALL_ACCOUNT_ENTRY_LIMIT_V1_2026_10_19",
-  "validated_at_utc": "2026-10-19T18:30:55.947938+00:00",
-  "regression_tests": {
-    "count": 136,
-    "status": "PASS",
-    "command": "python -m unittest test_windows test_caps test_source_windows test_gbp test_execution"
-  },
-  "saved_historical_path_window_checks": {
-    "count": 57620,
-    "status": "PASS",
-    "censored_cases": 40
-  },
-  "end_to_end_offline_fixture": {
-    "original_control_lanes": 16,
-    "fresh_account_lanes": 96,
-    "status": "PASS",
-    "checks": [
-      "All original summaries and ordered tables",
-      "Half-open entry cohorts",
-      "Causal end valuations with open positions",
-      "No future stop/target booked",
-      "Funding on open positions counted once",
-      "Cash and admitted population identities",
-      "Per-lane resume without rerunning account",
-      "Bad original control stops before window replay",
-      "ZIP CRC and every manifest hash"
-    ]
-  },
-  "original_accounting_execution_funding_path_inputs_unchanged": true,
-  "unchanged_files_verified": 17,
-  "full_historical_880_account_experiment_run_locally": false,
-  "deployment_gate": "All sixteen original full-history controls must pass on the research service before 864 fresh-window lanes",
-  "no_strategy_regeneration": true,
-  "no_live_configuration_change": true,
-  "orders_sent": false,
-  "limitations": "Fixture tests and saved-path boundary checks validate implementation, not new performance. Complete historical fresh-account results require the existing persistent candle caches and hosted replay."
+  "status": "PASS",
+  "offline_tests_passed": 28,
+  "synthetic_integration": true,
+  "real_historical_study_run_locally": false,
+  "saved_broker_cash_checks": 82,
+  "only_network_requests": [
+    {
+      "file": "pullback_lab/core.py",
+      "line": 127,
+      "method": "GET"
+    }
+  ],
+  "live_executor_modified": false,
+  "strategy_probe_modified": false,
+  "orders_supported": false,
+  "scope": "PULLBACK_PASS1_BASELINE_AND_SINGLE_FEATURE_DISCOVERY",
+  "default_pairs": 9,
+  "default_account_runs": 324,
+  "predeclared_filter_rows_including_unfiltered": 32
 }

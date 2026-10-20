@@ -1,5 +1,33 @@
-........................................................................................................................................
+test_full_job_report_manifest_cash_ledgers_and_resume (test_integration.IntegrationTests.test_full_job_report_manifest_cash_ledgers_and_resume) ... ok
+test_exit_before_rollover_avoids_charge_at_same_instant (test_pullback.AccountTests.test_exit_before_rollover_avoids_charge_at_same_instant) ... ok
+test_feature_denominators_do_not_turn_missing_or_rejects_into_losses (test_pullback.AccountTests.test_feature_denominators_do_not_turn_missing_or_rejects_into_losses) ... ok
+test_funding_charges_base_units_and_preserves_three_day_multiplier (test_pullback.AccountTests.test_funding_charges_base_units_and_preserves_three_day_multiplier) ... ok
+test_same_direction_distinct_strategies_can_overlap (test_pullback.AccountTests.test_same_direction_distinct_strategies_can_overlap) ... ok
+test_same_pair_opposite_direction_and_same_strategy_are_blocked (test_pullback.AccountTests.test_same_pair_opposite_direction_and_same_strategy_are_blocked) ... ok
+test_saved_broker_evidence_reconciles (test_pullback.AccountTests.test_saved_broker_evidence_reconciles) ... ok
+test_worst_bound_floor_and_cash_identity (test_pullback.AccountTests.test_worst_bound_floor_and_cash_identity) ... ok
+test_15_tick_boundary_both_directions (test_pullback.GeometryTests.test_15_tick_boundary_both_directions) ... ok
+test_exact_pattern_inclusive_body_edges_and_direction (test_pullback.GeometryTests.test_exact_pattern_inclusive_body_edges_and_direction) ... ok
+test_stop_gap_exceeds_one_r_and_bid_ask_exit_sides (test_pullback.GeometryTests.test_stop_gap_exceeds_one_r_and_bid_ask_exit_sides) ... ok
+test_tree_matches_brute_force_for_random_barriers (test_pullback.GeometryTests.test_tree_matches_brute_force_for_random_barriers) ... ok
+test_cache_tampering_fails (test_pullback.PathTests.test_cache_tampering_fails) ... ok
+test_candle_interval_truncation_withholds_later_exit (test_pullback.PathTests.test_candle_interval_truncation_withholds_later_exit) ... ok
+test_guard_rejection_keeps_counterfactual_separate (test_pullback.PathTests.test_guard_rejection_keeps_counterfactual_separate) ... ok
+test_missing_exact_entry_is_not_replaced_by_later_quote (test_pullback.PathTests.test_missing_exact_entry_is_not_replaced_by_later_quote) ... ok
+test_missing_native_interval_qualifies_otherwise_observed_exit (test_pullback.PathTests.test_missing_native_interval_qualifies_otherwise_observed_exit) ... ok
+test_refinement_preserves_s5_double_touch_as_unresolved (test_pullback.PathTests.test_refinement_preserves_s5_double_touch_as_unresolved) ... ok
+test_expired_pullback_does_not_accept_late_engulf (test_pullback.SignalTests.test_expired_pullback_does_not_accept_late_engulf) ... ok
+test_first_trigger_consumes_pullback_and_stop_contains_earlier_low (test_pullback.SignalTests.test_first_trigger_consumes_pullback_and_stop_contains_earlier_low) ... ok
+test_h1_never_uses_future_hour_and_prefix_has_identical_signals (test_pullback.SignalTests.test_h1_never_uses_future_hour_and_prefix_has_identical_signals) ... ok
+test_missing_m15_break_resets_setup (test_pullback.SignalTests.test_missing_m15_break_resets_setup) ... ok
+test_exact_legacy_reuse_is_read_only_and_checksum_checked (test_pullback.StorageAndServiceTests.test_exact_legacy_reuse_is_read_only_and_checksum_checked) ... ok
+test_head_and_health_never_start_work_and_post_is_rejected (test_pullback.StorageAndServiceTests.test_head_and_health_never_start_work_and_post_is_rejected) ... ok
+test_negative_spread_and_incomplete_candles (test_pullback.StorageAndServiceTests.test_negative_spread_and_incomplete_candles) ... ok
+test_partial_last_hour_is_not_reported_as_missing_completed_hour (test_pullback.StorageAndServiceTests.test_partial_last_hour_is_not_reported_as_missing_completed_hour) ... ok
+test_reader_only_requests_allowlisted_candle_get_and_sanitizes_auth_error (test_pullback.StorageAndServiceTests.test_reader_only_requests_allowlisted_candle_get_and_sanitizes_auth_error) ... ok
+test_repeated_status_starts_one_worker (test_pullback.StorageAndServiceTests.test_repeated_status_starts_one_worker) ... ok
+
 ----------------------------------------------------------------------
-Ran 136 tests in 3.791s
+Ran 28 tests in 0.655s
 
 OK
