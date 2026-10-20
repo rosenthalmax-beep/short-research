@@ -11,6 +11,7 @@ from . import core as e
 
 BROKER = 'https://api-fxtrade.oanda.com'
 WINDOW_SECONDS = {'M15': 14 * 86400, 'H1': 14 * 86400, 'M1': 86400, 'S5': 3600}
+REQUIRED_WARMUP = {'M15': 250, 'H1': 1000}
 
 
 def validate(obj, ident):
@@ -83,6 +84,8 @@ class Store:
             self.memo.move_to_end(key)
             return self.memo[key]
         row = self.db.execute('SELECT identity,body,sha256,origin FROM blocks WHERE key=?', (key,)).fetchone()
+        if row is not None:
+            self.hits += 1
         if row is None:
             for path, con in self.legacy:
                 old = con.execute('SELECT identity,body,sha256 FROM blocks WHERE key=?', (key,)).fetchone()
@@ -122,7 +125,7 @@ class Store:
             self.memo.popitem(last=False)
         self.progress(data_operation='CANDLE_READY', data_pair=pair, data_granularity=gran,
                       data_through=ident['end'], downloaded_windows=self.downloads,
-                      exact_legacy_windows_reused=self.reused)
+                      exact_legacy_windows_reused=self.reused, persistent_cache_windows_read=self.hits)
         return candles
 
     def range(self, pair, gran, start, end):
@@ -197,9 +200,16 @@ def load_bars(store, pair, gran, warmup, start, end, progress=lambda **x: None):
         progress(phase='LOAD_HISTORY', pair=pair, granularity=gran, bars_loaded=len(bars),
                  through_utc=e.stamp(min(cursor, end)))
     warmed = sum(t + e.STEP[gran] <= start.timestamp() for t in bars.times)
-    e.require(warmed >= 1000 if gran == 'H1' else warmed >= 250,
-              pair + ' ' + gran + ': insufficient pre-start indicator warm-up')
+    required = REQUIRED_WARMUP[gran]
+    e.require(len(bars) >= required,
+              pair + ' ' + gran + ': insufficient total observed history: ' + str(len(bars)) + '/' + str(required))
+    ready = e.datetime.fromtimestamp(bars.times[required - 1] + e.STEP[gran], e.UTC)
+    progress(phase='LOAD_HISTORY', pair=pair, granularity=gran, bars_loaded=len(bars),
+             prestart_warmup_bars=warmed, required_warmup_bars=required,
+             stream_indicator_ready_from_utc=e.stamp(ready), prestart_warmup_sufficient=warmed >= required)
     return bars, dict(pair=pair, granularity=gran, observed_bars=len(bars),
                       warmup_bars=warmed, unavailable_warmup_windows=warmup_errors,
+                      required_observed_warmup_bars=required, prestart_warmup_sufficient=warmed >= required,
+                      indicator_ready_from_utc=e.stamp(ready),
                       first_utc=e.stamp(e.datetime.fromtimestamp(bars.times[0], e.UTC)),
                       last_utc=e.stamp(e.datetime.fromtimestamp(bars.times[-1], e.UTC)))

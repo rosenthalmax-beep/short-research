@@ -89,7 +89,7 @@ def gap_rows(bars, seconds, pair, gran, start, end):
     return rows
 
 
-def generate(pair, m15, h1, start, end, progress=lambda **x: None):
+def generate(pair, m15, h1, start, end, progress=lambda **x: None, indicator_ready_from=None):
     m, h = m15.values['mid'], h1.values['mid']
     ma = ema(m['c'], 20); av = atr(m15)
     hm = {n: ema(h['c'], n) for n in (50, 100, 200)}; ha = atr(h1)
@@ -97,11 +97,18 @@ def generate(pair, m15, h1, start, end, progress=lambda **x: None):
     armed = {side: False for side in setups}
     counts = Counter(); result = []
     start_ts, end_ts = int(start.timestamp()), int(end.timestamp())
+    ready_ts = int(indicator_ready_from.timestamp()) if indicator_ready_from is not None else -math.inf
     hi = -1
     for i in range(1, len(m15)):
         t = m15.times[i] + 900
         while hi + 1 < len(h1) and h1.times[hi + 1] + 3600 <= t:
             hi += 1
+        if t < ready_ts:
+            if start_ts <= t < end_ts:
+                counts['evaluation_bars_excluded_for_indicator_warmup'] += 1
+            # No setup is accumulated using indicators before the fixed
+            # history requirement. Future candles cannot repair earlier bars.
+            continue
         if m15.times[i] != m15.times[i - 1] + 900:
             counts['m15_gap_setup_resets'] += 1
             setups = {side: None for side in setups}; armed = {side: False for side in setups}

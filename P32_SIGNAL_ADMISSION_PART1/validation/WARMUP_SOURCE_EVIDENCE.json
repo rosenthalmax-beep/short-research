@@ -1,0 +1,41 @@
+{
+  "source_archive": "P32_WARMUP_GAP_AUDIT_RESULTS.zip / preserved warmed_signal_results.zip",
+  "sha256": "6d06c8bf4d8b7f4641edee4edbac6e919c01805480388f2c14b1935e5c5188f0",
+  "prior_native_history_coverage": [
+    {
+      "pair": "AUD_JPY",
+      "granularity": "H1",
+      "observed_bars": "137851",
+      "expected_calendar_slots": "216690",
+      "missing_nonweekend_slots": "19447",
+      "assumed_weekend_slots": "59392",
+      "first_observed": "2004-05-31T20:00:00Z",
+      "last_observed": "2026-09-18T20:00:00Z",
+      "start": "2002-01-01T00:00:00Z",
+      "evaluation_start": "2005-01-01T00:00:00Z",
+      "warmup_observed_bars": "183",
+      "warmup_unavailable_blocks": "[]",
+      "warmup_sufficient": "False",
+      "end": "2026-09-20T18:00:00Z",
+      "interpretation": "Missing slots can be scheduled closure/holidays/zero quotes or missing observations; no synthetic candles. Failed warm-up requests are unknown, not verified empty history."
+    },
+    {
+      "pair": "AUD_JPY",
+      "granularity": "M15",
+      "observed_bars": "546530",
+      "expected_calendar_slots": "866761",
+      "missing_nonweekend_slots": "78368",
+      "assumed_weekend_slots": "241863",
+      "first_observed": "2004-05-31T20:45:00Z",
+      "last_observed": "2026-09-18T20:45:00Z",
+      "start": "2002-01-01T00:00:00Z",
+      "evaluation_start": "2005-01-01T00:00:00Z",
+      "warmup_observed_bars": "183",
+      "warmup_unavailable_blocks": "[]",
+      "warmup_sufficient": "False",
+      "end": "2026-09-20T18:15:00Z",
+      "interpretation": "Missing slots can be scheduled closure/holidays/zero quotes or missing observations; no synthetic candles. Failed warm-up requests are unknown, not verified empty history."
+    }
+  ],
+  "fix": "Preserve fixed observed-bar warm-up requirements; quarantine early signals; start affected accounts only at eligibility; explicitly report shortened periods. Reuse unchanged canonical candle cache."
+}

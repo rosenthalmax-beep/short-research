@@ -1,4 +1,8 @@
-# P32 pullback research — pass 1
+# P32 pullback research — pass 1, warm-up fix (V2)
+
+This V2 fixes the abort on known sparse pre-2005 AUD/JPY history. Keep the
+existing output directory: all already downloaded canonical candles are reused.
+Research checkpoints receive a new code signature; the candle cache is shared.
 
 This package runs the baseline and broad single-feature study agreed on
 20 October 2026. Use the **separate research/audit service**.
@@ -32,7 +36,7 @@ This package runs the baseline and broad single-feature study agreed on
    unset for the full hosted study. Old unrelated P32 filter variables do not
    restrict this new study.
 5. Redeploy. Open your existing research URL followed by **`/health`**.
-   It should show service `P32_PULLBACK_PASS1_V1_2026_10_20`,
+   It should show service `P32_PULLBACK_PASS1_V2_2026_10_20_WARMUP`,
    `orders_supported: false`, and `persistence.separate_mount_detected: true`.
    The output directory should be `/data/p32_pullback_pass1`.
 6. Open **`/status`** once to start, then refresh it for progress.
@@ -49,7 +53,9 @@ from the official live OANDA candle endpoint. An account ID is not required.
 
 - Nine pairs, BUY and SELL as research directions, even where a direction is
   not currently registered for live trading.
-- Native H1 trend and M15 trigger data, with pre-2005 indicator warm-up.
+- Native H1 trend and M15 trigger data. Use available pre-2005 history, then
+  quarantine each pair until the unchanged observed-bar warm-up requirements
+  are met. Coverage reports identify delayed starts and excluded periods.
 - Evaluation from **2005-01-01 through 2026-09-20 18:15 UTC**, a completed M15
   boundary just before the earlier 18:29 archive cutoff. No automatic extension
   to newer data is made.
@@ -86,7 +92,12 @@ live candidate is automatically selected or activated.
   three observed H1 bars earlier. Reverse for short. An H1 candle completing
   exactly at M15 close is eligible. Reject a stale H1 snapshot.
 - EMA uses an initial SMA seed; ATR14 is Wilder smoothing. Warm-up needs at
-  least 1,000 observed H1 and 250 M15 bars before the evaluation start.
+  least 1,000 observed H1 and 250 M15 bars. If pre-start history is insufficient,
+  the pair becomes eligible only when these fixed counts have actually completed.
+  No synthetic or future candles are used. Each affected account starts flat
+  at its later eligible date; its excluded early period is not counted as a
+  zero-return investment period. Shortened windows and actual CAGR start dates
+  are explicit in coverage/account reports.
 - A valid trend must first show an M15 candle fully clear of EMA20: low above
   its EMA for long, high below for short. A subsequent candle touching the
   **previous** M15 EMA starts the pullback. Include the touch candle in the

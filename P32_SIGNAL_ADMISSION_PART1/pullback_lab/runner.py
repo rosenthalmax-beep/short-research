@@ -43,6 +43,7 @@ def configuration(environ=None):
                 controls=list(CONTROLS), account_modes=list(MODES), account_scenarios=['END_ASC'],
                 account_windows=windows(start,end), initial_balance_gbp=100.,
                 full_default_scope=pairs==e.PAIRS and e.stamp(start)==DEFAULT_START and e.stamp(end)==DEFAULT_END,
+                warmup_policy='FIXED_OBSERVED_BAR_REQUIREMENTS; QUARANTINE_EARLY_SIGNALS; REPORT_EFFECTIVE_PAIR_AND_ACCOUNT_START',
                 historical_financing_known=False, untouched_holdout=False,
                 feature_trial_count_including_unfiltered=len(FEATURE_FILTERS), automatic_strategy_selection=False,
                 live_portfolio_admission_replayed=False, orders_supported=False, orders_sent=False)
@@ -184,10 +185,19 @@ class Research:
                 self.progress(phase='LOAD_HISTORY',pair=pair,pairs_completed=completed)
                 m15,mc=load_bars(store,pair,'M15',warm,start,end,self.progress)
                 h1,hc=load_bars(store,pair,'H1',warm,start,end,self.progress)
+                indicator_ready=max(e.dt(mc['indicator_ready_from_utc']),e.dt(hc['indicator_ready_from_utc']))
+                eligible_start=max(start,indicator_ready)
+                e.require(eligible_start < end,pair+': no evaluation period remains after observed indicator warm-up')
+                eligibility=dict(requested_start_utc=e.stamp(start),indicator_ready_from_utc=e.stamp(indicator_ready),
+                                 effective_evaluation_start_utc=e.stamp(eligible_start),
+                                 evaluation_delayed_for_warmup=eligible_start>start,
+                                 excluded_early_calendar_days=(eligible_start-start).total_seconds()/86400,
+                                 excludes_synthetic_or_future_history=True)
+                self.progress(phase='INDICATOR_READINESS',pair=pair,**eligibility)
                 gaps=gap_rows(m15,900,pair,'M15',start,end)+gap_rows(h1,3600,pair,'H1',start,end)
-                atomic(pair_dir/'coverage.json',e.canon(dict(streams=[mc,hc],gaps=gaps,
+                atomic(pair_dir/'coverage.json',e.canon(dict(streams=[mc,hc],gaps=gaps,eligibility=eligibility,
                            unexplained_slots=sum(g['unexplained_slots'] for g in gaps))))
-                signals,counts=generate(pair,m15,h1,start,end,self.progress)
+                signals,counts=generate(pair,m15,h1,start,end,self.progress,indicator_ready_from=indicator_ready)
                 write_jsonl(pair_dir/'qualifying_signals.jsonl.gz',signals)
                 atomic(pair_dir/'generation_counts.json',e.canon(counts))
                 del h1;gc.collect()
@@ -216,20 +226,25 @@ class Research:
                 database.commit();database.close();resources.remove(database)
                 write_jsonl(pair_dir/'opportunities.jsonl.gz',opportunities)
                 write_jsonl(pair_dir/'price_paths.jsonl.gz',(dict(signal_key=s['signal_key'],**paths.get(s)) for s in signals))
-                feature_rows=feature_study(pair,opportunities,start,end)
+                feature_rows=feature_study(pair,opportunities,start,end,eligible_start)
                 atomic(pair_dir/'feature_study.json.gz',gzip.compress(e.canon(feature_rows)))
-                atomic(pair_dir/'opportunity_summary.csv',csv_bytes(opportunity_summary(pair,opportunities,start,end)))
-                atomic(pair_dir/'monthly_qualifications.csv',csv_bytes(frequency(pair,signals,start,end)))
+                atomic(pair_dir/'opportunity_summary.csv',csv_bytes(opportunity_summary(pair,opportunities,start,end,eligible_start)))
+                atomic(pair_dir/'monthly_qualifications.csv',csv_bytes(frequency(pair,signals,start,end,eligible_start)))
                 del opportunities;gc.collect()
                 summaries=[]
                 for control in CONTROLS:
                     for window in self.protocol['account_windows']:
-                        lo,hi=e.dt(window['start']),e.dt(window['end'])
-                        selected=[s for s in signals if s['control']==control and window['start']<=s['entry_utc']<window['end']]
+                        requested_lo,hi=e.dt(window['start']),e.dt(window['end'])
+                        lo=max(requested_lo,eligible_start)
+                        selected=[s for s in signals if s['control']==control and e.stamp(lo)<=s['entry_utc']<window['end']]
                         for mode in MODES:
                             label=control+'__'+window['window_id']+'__'+mode
                             checkpoint=pair_dir/'accounts'/(label+'.json.gz')
-                            if checkpoint.is_file():
+                            if lo>=hi:
+                                result=dict(summary=dict(status='NOT_EVALUABLE_BEFORE_INDICATOR_READINESS',closed_trades=0,
+                                           conditional_nav_cagr_pct=None,conditional_liquidation_equity_cagr_pct=None),
+                                           ledger=[],trades=[],financing=[],cash_events=[],monthly_observations=[],nav_samples=[],open_positions=[])
+                            elif checkpoint.is_file():
                                 saved=json.loads(gzip.decompress(checkpoint.read_bytes()))
                                 e.require(saved['signature']==self.signature and e.sha(e.canon(saved['result']))==saved['sha256'],'Account checkpoint failed')
                                 result=saved['result']
@@ -239,9 +254,15 @@ class Research:
                                 result=Replay(selected,lambda s:truncate(paths.get(s),hi),market,funding,evidence['instruments'],
                                               'END_ASC',mode,markup,initial=100.,start=lo,end=hi,progress=self.progress).run()
                                 e.require(result['summary']['status']=='COMPLETE_CONDITIONAL','Account replay stopped: '+str(result['summary']['stopped_reason']))
+                                result['summary'].update(requested_window_start_utc=window['start'],
+                                            effective_account_start_utc=e.stamp(lo),
+                                            warmup_exclusion_at_window_start=lo>requested_lo,
+                                            excluded_early_calendar_days=max(0.,(lo-requested_lo).total_seconds()/86400),
+                                            complete_requested_window=lo==requested_lo)
                                 saved=dict(signature=self.signature,result=result,sha256=e.sha(e.canon(result)))
                                 atomic(checkpoint,gzip.compress(e.canon(saved)))
-                            summaries.append(dict(pair=pair,control=control,window_id=window['window_id'],window_start=window['start'],window_end=window['end'],
+                            summaries.append(dict(pair=pair,control=control,window_id=window['window_id'],window_start=e.stamp(lo) if lo<hi else None,window_end=window['end'],
+                                                  requested_window_start=window['start'],indicator_eligibility=eligibility,
                                                   **result['summary'],scope='ISOLATED_ONE_PAIR_BOTH_DIRECTIONS_NOT_P32_COMBINED_PORTFOLIO'))
                             account_count+=1;self.progress(accounts_completed=account_count)
                 atomic(pair_dir/'account_summaries.json',e.canon(summaries))

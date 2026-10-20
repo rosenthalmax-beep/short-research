@@ -44,6 +44,42 @@ class SyntheticStore:
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_known_183_prestart_bars_delays_pair_and_accounts_without_aborting(self):
+        begin=e.dt('2020-03-02T00:00:00Z')
+        class SparseWarmupStore(SyntheticStore):
+            def range(self,pair,gran,start,end):
+                rows=super().range(pair,gran,start,end)
+                earliest=begin.timestamp()-183*e.STEP[gran]
+                return [r for r in rows if e.dt(r['time'])>=begin or e.dt(r['time']).timestamp()>=earliest]
+        with tempfile.TemporaryDirectory() as d:
+            env=dict(PULLBACK_START_UTC=e.stamp(begin),PULLBACK_END_UTC='2020-05-01T00:00:00Z',
+                     PULLBACK_WARMUP_START_UTC='2020-01-01T00:00:00Z',PULLBACK_PAIRS='GBP_USD',
+                     PULLBACK_OFFLINE='1',PULLBACK_REQUIRE_PERSISTENCE='0')
+            job=Research(output=d,environ=env,store_factory=SparseWarmupStore);job.run()
+            self.assertEqual(job.state['status'],'COMPLETE',job.state)
+            directory=job.work/'pairs'/'GBP_USD'
+            coverage=json.loads((directory/'coverage.json').read_bytes())
+            self.assertTrue(coverage['eligibility']['evaluation_delayed_for_warmup'])
+            self.assertEqual([s['warmup_bars'] for s in coverage['streams']],[183,183])
+            self.assertEqual([s['required_observed_warmup_bars'] for s in coverage['streams']],[250,1000])
+            ready=coverage['eligibility']['effective_evaluation_start_utc']
+            self.assertGreater(ready,e.stamp(begin))
+            signals=[json.loads(r) for r in gzip.decompress((directory/'qualifying_signals.jsonl.gz').read_bytes()).splitlines()]
+            self.assertTrue(signals)
+            self.assertTrue(all(s['entry_utc']>=ready for s in signals))
+            for r in json.loads((directory/'account_summaries.json').read_bytes()):
+                self.assertEqual(r['window_start'],ready)
+                self.assertTrue(r['warmup_exclusion_at_window_start'])
+                self.assertFalse(r['complete_requested_window'])
+                self.assertEqual(r['effective_account_start_utc'],ready)
+                years=(e.dt(r['window_end'])-e.dt(ready)).total_seconds()/(365.25*86400)
+                nav=r['conditional_ending_nav_gbp']
+                if nav>0:
+                    self.assertAlmostEqual(r['conditional_nav_cagr_pct'],((nav/100)**(1/years)-1)*100)
+            import csv,io
+            monthly=list(csv.DictReader(io.StringIO((directory/'monthly_qualifications.csv').read_text())))
+            self.assertTrue(all(r['qualifications']=='' for r in monthly if r['month']=='2020-03'))
+
     def test_full_job_report_manifest_cash_ledgers_and_resume(self):
         with tempfile.TemporaryDirectory() as d:
             env=dict(PULLBACK_START_UTC='2020-03-02T00:00:00Z',PULLBACK_END_UTC='2020-03-09T00:00:00Z',

@@ -1,6 +1,6 @@
 {
   "status": "PASS",
-  "offline_tests_passed": 28,
+  "offline_tests_passed": 31,
   "synthetic_integration": true,
   "real_historical_study_run_locally": false,
   "saved_broker_cash_checks": 82,
@@ -17,5 +17,10 @@
   "scope": "PULLBACK_PASS1_BASELINE_AND_SINGLE_FEATURE_DISCOVERY",
   "default_pairs": 9,
   "default_account_runs": 324,
-  "predeclared_filter_rows_including_unfiltered": 32
+  "predeclared_filter_rows_including_unfiltered": 32,
+  "version": "P32_PULLBACK_PASS1_V2_2026_10_20_WARMUP",
+  "warmup_183_bar_regression_passed": true,
+  "partial_period_cagr_denominator_checked": true,
+  "early_periods_not_imputed_as_zero_returns": true,
+  "canonical_cache_survives_update": true
 }

@@ -171,6 +171,13 @@ class SignalTests(unittest.TestCase):
         got=self.run_fixture(bars(rows),h,T+timedelta(hours=4))
         self.assertFalse(any(s['control']=='TREND_PULLBACK_ENGULF' for s in got))
 
+    def test_delayed_readiness_does_not_backfill_earlier_signals(self):
+        m,h=self.fixture();ready=T+timedelta(hours=2)
+        with patch('pullback_lab.signals.ema',side_effect=self.fake_ema),patch('pullback_lab.signals.atr',side_effect=lambda b:array('d',[1.]*len(b))):
+            got,counts=generate('GBP_USD',m,h,T,T+timedelta(hours=3),indicator_ready_from=ready)
+        self.assertTrue(all(e.dt(s['entry_utc'])>=ready for s in got))
+        self.assertGreater(counts['evaluation_bars_excluded_for_indicator_warmup'],0)
+
 
 class PathTests(unittest.TestCase):
     def test_missing_native_interval_qualifies_otherwise_observed_exit(self):
@@ -271,6 +278,21 @@ class AccountTests(unittest.TestCase):
 
 
 class StorageAndServiceTests(unittest.TestCase):
+    def test_same_canonical_cache_survives_code_update_without_reader(self):
+        start=e.floor_time(T,14*86400);end=start+timedelta(days=14)
+        class Reader:
+            receipts=[]
+            def get(self,ident):
+                return dict(instrument='GBP_USD',granularity='M15',candles=[candle(T)])
+        with tempfile.TemporaryDirectory() as d:
+            old=Store(d,reader=Reader())
+            first=old.exact('GBP_USD','M15',start,end)
+            self.assertEqual(old.downloads,1);old.close()
+            updated=Store(d,reader=None)
+            self.assertEqual(updated.exact('GBP_USD','M15',start,end),first)
+            self.assertEqual(updated.downloads,0)
+            self.assertEqual(updated.hits,1);updated.close()
+
     def test_partial_last_hour_is_not_reported_as_missing_completed_hour(self):
         b=bars([candle(T)])
         gaps=gap_rows(b,3600,'GBP_USD','H1',T,T+timedelta(hours=1,minutes=15))

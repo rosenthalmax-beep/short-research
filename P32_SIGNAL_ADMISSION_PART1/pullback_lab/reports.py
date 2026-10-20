@@ -87,7 +87,17 @@ def stats(rows):
                 scope='DIAGNOSTIC_INDEPENDENT_OPPORTUNITIES; NO_ACCOUNT_GATING_COMPOUNDING_OR_FILTER_REPLAY')
 
 
-def feature_study(pair, opportunities, start, end):
+def warmup_coverage(start, end, eligible_from):
+    start, end = e.dt(start), e.dt(end)
+    effective = max(start, e.dt(eligible_from))
+    return dict(requested_period_start_utc=e.stamp(start), period_end_utc=e.stamp(end),
+                eligible_period_start_utc=e.stamp(effective) if effective < end else None,
+                warmup_exclusion_at_period_start=effective > start,
+                eligible_calendar_years=max(0., (end-effective).total_seconds())/(365.25*86400),
+                warmup_excluded_calendar_days=max(0., (min(effective,end)-start).total_seconds())/86400)
+
+
+def feature_study(pair, opportunities, start, end, eligible_from=None):
     rows = []
     for cohort in cohorts(start, end):
         for side in ('BUY', 'SELL'):
@@ -96,6 +106,7 @@ def feature_study(pair, opportunities, start, end):
             for rule in FEATURE_FILTERS:
                 selected = [r for r in subset if accepts(r['features'], rule)]
                 rows.append(dict(pair=pair, side=side, entry_cohort=cohort['window_id'],
+                                 **warmup_coverage(cohort['start'],cohort['end'],eligible_from or start),
                                  filter_id=rule['filter_id'], feature=rule['feature'], operator=rule['operator'], threshold=rule['threshold'],
                                  retained_qualifications_pct=100*len(selected)/len(subset) if subset else None,
                                  **stats(selected),
@@ -104,20 +115,22 @@ def feature_study(pair, opportunities, start, end):
     return rows
 
 
-def opportunity_summary(pair, opportunities, start, end):
+def opportunity_summary(pair, opportunities, start, end, eligible_from=None):
     rows = []
     for control in ('RAW_ENGULF', 'TREND_ENGULF', 'TREND_PULLBACK_ENGULF'):
         for side in ('BUY', 'SELL'):
             for cohort in cohorts(start, end):
                 selected = [r for r in opportunities if r['control']==control and r['side']==side and
                             cohort['start'] <= r['entry_utc'] < cohort['end']]
-                years = (e.dt(cohort['end']) - e.dt(cohort['start'])).total_seconds()/(365.25*86400)
+                coverage = warmup_coverage(cohort['start'],cohort['end'],eligible_from or start)
+                years = coverage['eligible_calendar_years']
                 rows.append(dict(pair=pair, side=side, control=control, entry_cohort=cohort['window_id'],
+                                 **coverage,
                                  qualifications_per_year=len(selected)/years if years else None, **stats(selected)))
     return rows
 
 
-def frequency(pair, signals, start, end):
+def frequency(pair, signals, start, end, eligible_from=None):
     counts = Counter((s['control'], s['side'], s['entry_utc'][:7]) for s in signals)
     month = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     rows = []
@@ -126,7 +139,8 @@ def frequency(pair, signals, start, end):
         for control in ('RAW_ENGULF', 'TREND_ENGULF', 'TREND_PULLBACK_ENGULF'):
             for side in ('BUY','SELL'):
                 rows.append(dict(pair=pair, control=control, side=side, month=month.strftime('%Y-%m'),
-                                 qualifications=counts[(control,side,month.strftime('%Y-%m'))],
+                                 qualifications=counts[(control,side,month.strftime('%Y-%m'))] if nxt > (eligible_from or start) else None,
+                                 **warmup_coverage(max(month,start),min(nxt,end),eligible_from or start),
                                  partial_calendar_month=month < start or nxt > end))
         month = nxt
     return rows
@@ -145,6 +159,12 @@ the raw control cannot be attributed solely to a trend filter.
 `control_accounts.csv` contains fresh GBP100 accounts for ONE pair at a time,
 with both directions competing under the saved nonhedging terms. Risk 1% of
 marked NAV, whole units, fixed15 bounds, margin, conversion and funding apply.
+Each pair retains the 1,000-H1/250-M15 observed-bar warm-up requirements. If
+pre-2005 data is sparse, signals are quarantined until both requirements are
+met. Coverage reports state the delayed eligible date and excluded period.
+Each fresh account begins at the later of its requested start and that date;
+the excluded period is not credited as a zero-return flat investment period.
+Account summaries flag shortened windows; their CAGR uses the actual start.
 The accounts do not contain the live32. They are conditional historical
 experiments, not forecasts. Five-year era accounts reset flat with GBP100;
 the recent account overlaps those eras. {len(accounts)} account summaries saved.

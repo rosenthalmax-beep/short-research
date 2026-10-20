@@ -1,4 +1,5 @@
 test_full_job_report_manifest_cash_ledgers_and_resume (test_integration.IntegrationTests.test_full_job_report_manifest_cash_ledgers_and_resume) ... ok
+test_known_183_prestart_bars_delays_pair_and_accounts_without_aborting (test_integration.IntegrationTests.test_known_183_prestart_bars_delays_pair_and_accounts_without_aborting) ... ok
 test_exit_before_rollover_avoids_charge_at_same_instant (test_pullback.AccountTests.test_exit_before_rollover_avoids_charge_at_same_instant) ... ok
 test_feature_denominators_do_not_turn_missing_or_rejects_into_losses (test_pullback.AccountTests.test_feature_denominators_do_not_turn_missing_or_rejects_into_losses) ... ok
 test_funding_charges_base_units_and_preserves_three_day_multiplier (test_pullback.AccountTests.test_funding_charges_base_units_and_preserves_three_day_multiplier) ... ok
@@ -16,6 +17,7 @@ test_guard_rejection_keeps_counterfactual_separate (test_pullback.PathTests.test
 test_missing_exact_entry_is_not_replaced_by_later_quote (test_pullback.PathTests.test_missing_exact_entry_is_not_replaced_by_later_quote) ... ok
 test_missing_native_interval_qualifies_otherwise_observed_exit (test_pullback.PathTests.test_missing_native_interval_qualifies_otherwise_observed_exit) ... ok
 test_refinement_preserves_s5_double_touch_as_unresolved (test_pullback.PathTests.test_refinement_preserves_s5_double_touch_as_unresolved) ... ok
+test_delayed_readiness_does_not_backfill_earlier_signals (test_pullback.SignalTests.test_delayed_readiness_does_not_backfill_earlier_signals) ... ok
 test_expired_pullback_does_not_accept_late_engulf (test_pullback.SignalTests.test_expired_pullback_does_not_accept_late_engulf) ... ok
 test_first_trigger_consumes_pullback_and_stop_contains_earlier_low (test_pullback.SignalTests.test_first_trigger_consumes_pullback_and_stop_contains_earlier_low) ... ok
 test_h1_never_uses_future_hour_and_prefix_has_identical_signals (test_pullback.SignalTests.test_h1_never_uses_future_hour_and_prefix_has_identical_signals) ... ok
@@ -26,8 +28,9 @@ test_negative_spread_and_incomplete_candles (test_pullback.StorageAndServiceTest
 test_partial_last_hour_is_not_reported_as_missing_completed_hour (test_pullback.StorageAndServiceTests.test_partial_last_hour_is_not_reported_as_missing_completed_hour) ... ok
 test_reader_only_requests_allowlisted_candle_get_and_sanitizes_auth_error (test_pullback.StorageAndServiceTests.test_reader_only_requests_allowlisted_candle_get_and_sanitizes_auth_error) ... ok
 test_repeated_status_starts_one_worker (test_pullback.StorageAndServiceTests.test_repeated_status_starts_one_worker) ... ok
+test_same_canonical_cache_survives_code_update_without_reader (test_pullback.StorageAndServiceTests.test_same_canonical_cache_survives_code_update_without_reader) ... ok
 
 ----------------------------------------------------------------------
-Ran 28 tests in 0.655s
+Ran 31 tests in 2.439s
 
 OK
