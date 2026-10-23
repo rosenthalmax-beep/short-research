@@ -1,58 +1,46 @@
-AUD/USD LONG CONDITIONAL PULLBACK MATRIX
+AUD/USD MATRIX: FOCUSED SAVED-RECORD RECONCILIATION
 
-THIS IS A NEW RUN
-The earlier lightweight diagnostic could use saved first signals. This matrix
-must regenerate each variant's complete pullback state and price newly eligible
-entries. It needs to run on your existing separate research service.
-No historical matrix results are included or claimed from the offline tests.
+This audit explains the opportunity/account R gap for M_D1.25_B1.0. It reads
+existing records only. No candle downloads, account replays, strategy changes,
+executor calls or order APIs. No OANDA token is read by this code.
 
-1. Keep your current downloaded research archives as backups.
-2. Extract this ZIP and upload its CONTENTS to the SAME pullback research
-   service. Keep existing files and the existing mounted /data volume.
-   Matching engine files are exact copies of the already pinned V2 engine.
-3. Set the start command to:
-       python audusd_pullback_matrix.py
-   The supplied Procfile sets the same command for hosts that use Procfiles.
-4. Keep these existing variables:
-       PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
-       PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
-       OANDA_ENV=live
-       OANDA_TOKEN=<your existing token; no account-order access is used>
-   Add:
+1. Keep your downloaded matrix summary and research archives as backups.
+2. Extract this ZIP. Upload its CONTENTS to the SAME AUD/USD matrix research
+   service, keeping the existing files and mounted /data volume. This package
+   adds a separate entrypoint; it does not replace matrix calculation modules.
+   Its Procfile chooses the audit when the host uses Procfiles.
+3. Keep the existing value of AUDUSD_MATRIX_OUTPUT_DIR. Normally:
        AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
-   This is a NEW directory on the SAME mounted volume. Do not change the old
-   PULLBACK_OUTPUT_DIR to the new directory; it locates the frozen source study.
-   No new paid volume is needed just to configure this run.
-5. Redeploy. Open /health and check the service name is:
-       AUDUSD_PULLBACK_LONG_MATRIX_V1_2026_10_22
-6. Open /protocol if you want to inspect the fixed matrix, then /status to start.
-   The run checks the old source, loads AUD/USD native history, regenerates
-   signals and proves that the unfiltered signals match the old study exactly.
-   It reuses baseline paths and existing exact cached windows where available.
-   Previously evicted or newly needed candles may be downloaded again.
-7. Send the first /status JSON once it starts. Completion should show:
-       candidates_completed: 16
-       accounts_completed: 224
-       status: COMPLETE
-8. Download /results-summary.zip and upload that SMALL ZIP here for review.
-   /results.zip streams the larger full completed-candidate evidence if needed.
+   Add:
+       AUDUSD_RECON_OUTPUT_DIR=/data/p32_audusd_reconciliation
+   Keep the old matrix directory. Do not point its variable to the new output.
+4. Change the service's explicit START COMMAND to:
+       python audusd_pullback_reconcile.py
+5. Redeploy. Open /health and check:
+       AUDUSD_PULLBACK_RECONCILIATION_V1_2026_10_23
+6. Open /status to start the audit. It checks 14 SAVED accounts. The old
+   224-account matrix is not regenerated. Send any ERROR status JSON here.
+7. When status is COMPLETE and validation is PASS, download:
+       /results-reconciliation.zip
+   Upload that ZIP here. Reports are capped below 20 MB.
 
-DEFAULT STORAGE CONTROLS (NO NEED TO ADD THEM)
-       AUDUSD_MATRIX_RAW_CACHE_MB=128
-       AUDUSD_MATRIX_RESERVE_MB=96
-The private raw-body cache is bounded, paths are shared between variants and
-accounts checkpoint individually. Full download ZIPs are streamed without a
-second disk copy. The total study also needs space for reports and metadata;
-completion within the current volume cannot be guaranteed in advance.
+The source records already exist on /data; they were deliberately left out of
+the earlier small summary. The audit needs those files on the SAME service.
+Do not download or upload the large full matrix archive just for this step.
 
-If it stops, send /status. Do not delete the old source study or databases.
-On a safe redeploy/restart, the same code/config verifies and reuses completed
-candidates, accounts and private price paths. A frozen-price mismatch stops
-instead of silently accepting revised history. Raw re-downloads can take time.
+If the matrix output root is unusual, keep its current variable value.
+Only if necessary, explicitly set AUDUSD_RECON_SOURCE_DIR to the completed
+signature directory, not the parent:
+ /data/p32_audusd_long_matrix/d3e4d41b44993b99fd57f15cc18c213d940475b0286098e053cb84877f5e2f29
 
-If source discovery needs an explicit override:
-AUDUSD_MATRIX_SOURCE_DIR=/data/p32_pullback_pass1/ede17fd5f452abcf4fa9fc2ec0f73aad0660d2d1f582a96059c841ee64d61dd6
+The audit rejects changed inputs instead of silently rebuilding them. It uses
+the matrix runner's existing file lock to avoid reading while it is running.
+It needs 48 MiB free in the new report directory, leaves old caches alone,
+and recomputes this small attribution safely after restart.
 
-The fixed source ends 20 September 2026. No live executor/probe changes or
-strategy activation are part of this research service. Historical broker
-calls are constrained to candle GET requests. The server rejects POST requests.
+Optional console-only run:
+       python audusd_pullback_reconcile.py --run
+
+This diagnoses saved assumptions and accounting; it does not repair uncertain
+prices or prove the candidate tradable. The previous matrix found no passing
+plateau. Do not change the live executor or strategy probe for this audit.

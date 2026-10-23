@@ -1,16 +1,21 @@
-test_full_disk_bootstrap_reclaims_duplicate_before_free_space_check (test_replay_parity.ParityTests.test_full_disk_bootstrap_reclaims_duplicate_before_free_space_check) ... ok
-test_original_ledgers_identical_and_finished_pairs_resume_without_quotes (test_replay_parity.ParityTests.test_original_ledgers_identical_and_finished_pairs_resume_without_quotes) ... ok
-test_cache_compacts_physical_size_keeps_receipts_and_native_priority (test_storage_guard.CacheTests.test_cache_compacts_physical_size_keeps_receipts_and_native_priority) ... ok
-test_evicted_refetch_identical_then_revised_stops (test_storage_guard.CacheTests.test_evicted_refetch_identical_then_revised_stops) ... ok
-test_runtime_cache_bound_and_reserve_stop (test_storage_guard.CacheTests.test_runtime_cache_bound_and_reserve_stop) ... ok
-test_cleanup_preserves_reports_and_pending_bytes (test_storage_guard.RecoveryTests.test_cleanup_preserves_reports_and_pending_bytes) ... ok
-test_corrupt_witness_blocks_cleanup (test_storage_guard.RecoveryTests.test_corrupt_witness_blocks_cleanup) ... ok
-test_different_export_never_removes_checkpoint (test_storage_guard.RecoveryTests.test_different_export_never_removes_checkpoint) ... ok
-test_head_health_do_not_start_or_cleanup (test_storage_guard.RecoveryTests.test_head_health_do_not_start_or_cleanup) ... ok
-test_source_parity_and_deployed_signature (test_storage_guard.RecoveryTests.test_source_parity_and_deployed_signature) ... ok
-test_stream_valid_manifest_no_disk_archive_and_summary_scope (test_storage_guard.RecoveryTests.test_stream_valid_manifest_no_disk_archive_and_summary_scope) ... ok
+test_boundary_difference_is_explicit (test_reconciliation.ReconciliationTests.test_boundary_difference_is_explicit) ... ok
+test_complete_small_report_no_network_or_source_writes (test_reconciliation.ReconciliationTests.test_complete_small_report_no_network_or_source_writes) ... ok
+test_corrupt_checkpoint_stops_without_report (test_reconciliation.ReconciliationTests.test_corrupt_checkpoint_stops_without_report) ... ok
+test_exact_bridge_separates_blocked_assumed_and_matched_funding (test_reconciliation.ReconciliationTests.test_exact_bridge_separates_blocked_assumed_and_matched_funding) ... ok
+test_health_head_and_post_never_start_audit (test_reconciliation.ReconciliationTests.test_health_head_and_post_never_start_audit) ... ok
+test_matrix_writer_lock_blocks_read (test_reconciliation.ReconciliationTests.test_matrix_writer_lock_blocks_read) ... ok
+test_optional_best_five_stat_can_be_unavailable (test_reconciliation.ReconciliationTests.test_optional_best_five_stat_can_be_unavailable) ... ok
+test_reconciliation_writer_lock_prevents_overlapping_publish (test_reconciliation.ReconciliationTests.test_reconciliation_writer_lock_prevents_overlapping_publish) ... ok
+test_reject_changed_running_cash_even_when_final_total_matches (test_reconciliation.ReconciliationTests.test_reject_changed_running_cash_even_when_final_total_matches) ... ok
+test_reject_duplicate_decisions (test_reconciliation.ReconciliationTests.test_reject_duplicate_decisions) ... ok
+test_reject_missing_qualification (test_reconciliation.ReconciliationTests.test_reject_missing_qualification) ... ok
+test_reject_orphan_cash (test_reconciliation.ReconciliationTests.test_reject_orphan_cash) ... ok
+test_reject_wrong_r_denominator (test_reconciliation.ReconciliationTests.test_reject_wrong_r_denominator) ... ok
+test_reviewed_summary_mismatch_stops (test_reconciliation.ReconciliationTests.test_reviewed_summary_mismatch_stops) ... ok
+test_source_output_overlap_rejected (test_reconciliation.ReconciliationTests.test_source_output_overlap_rejected) ... ok
+test_unsafe_path_rejected (test_reconciliation.ReconciliationTests.test_unsafe_path_rejected) ... ok
 
 ----------------------------------------------------------------------
-Ran 11 tests in 1.220s
+Ran 16 tests in 0.160s
 
 OK

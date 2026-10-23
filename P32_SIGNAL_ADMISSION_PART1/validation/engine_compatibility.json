@@ -1,0 +1,21 @@
+{
+  "original_engine_synthetic_compatibility": "PASS",
+  "checks": [
+    {
+      "mode": "FROZEN_14OCT2026_RATES",
+      "closed_trades": 4,
+      "qualifications": 5,
+      "cash": "PASS",
+      "bridge_residual": -1.1102230246251565e-16
+    },
+    {
+      "mode": "ADVERSE_6PCT_ANNUAL",
+      "closed_trades": 4,
+      "qualifications": 5,
+      "cash": "PASS",
+      "bridge_residual": -1.1102230246251565e-16
+    }
+  ],
+  "candle_downloads": 0,
+  "actual_historical_reconciliation_run": false
+}
