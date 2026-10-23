@@ -1,0 +1,9 @@
+{
+  "signature": "2ef9e947aa1faa075df6f122d144c17094205b3e70659e1a02a109a2db4bf9fe",
+  "files": {
+    "protocol.json": "3f8608ed2d3bb37a3f12f49de606bc738dcdef01c46a7137fb9396302bb30e94",
+    "account_matrix.csv": "fa7e8d54f03629b519d201b5806c7f70124d30a300c021b947579ead2d8c2059",
+    "source_provenance.json": "3121a6577d49cdfabd61320b6a5b5cb017bfe2949802b16702c37ff4bcdb7c5a"
+  },
+  "native_m15_sha256": "125810c93c3c4c47ba4090d2dca28a169eceda60f43ea534892174caafbe8471"
+}
