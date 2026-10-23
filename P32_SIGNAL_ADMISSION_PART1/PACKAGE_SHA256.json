@@ -1,11 +1,14 @@
 {
-  "Procfile": "0c8f8dacc1bc040ff4c3768a39ec5f0a477519815407781d888a11cada445418",
-  "README.md": "e68ce45c5c0741f37090e69d5814a8913a0752c94bfe92cbf81f7100047f8027",
-  "START_HERE.txt": "3eaae2b3b5ce431715b8d0ec66404c8a723877d2cf1cffe6aa2751c3e1018146",
-  "audusd_pullback_reconcile.py": "7ba449dc1e3224a8f228ce2532a1577cec6e90a0c31ab0d90f863258218a495c",
-  "reconciliation_pins.json": "732e5c3c60298366e68f96b78d7d5028755cf50d4aed0db739a9413c3205a3d0",
-  "test_reconciliation.py": "2cd5f350d28eb57adf8f29d9b60f47bbea339100260e0eb26650bdfe9e23d428",
-  "validation/check_engine_compatibility.py": "84db95072c65112930050dd561c0dc21fe368b2053349a219b1fb5a14bd4547e",
-  "validation/engine_compatibility.json": "f887d463f91faaae9199d3f80385c407fa5dff76ee2706c5ae25caf4dd77d98a",
-  "validation/tests.txt": "52d06a530ac133b8be622c3032056be10c51c3d1d53e7c18f112bf6795247270"
+  "Procfile": "c04c1fc82083ace440a050719a1d786472cdb1c05c548bfe10cc12c8170d552c",
+  "README.md": "a9e8f80710d3d22ad556b7065f23e3f175c33c5bb5c34d14bb69055fa5788d1b",
+  "START_HERE.txt": "ad0401aa6ba488c78dbe61c69924c0527de2dccb10791be6681aca4cd990c2ee",
+  "audusd_path_coverage.py": "ad458ddd0dcb8aaa7b6667b721aa5e126870175bd609be8d570ff7e7028022f0",
+  "coverage_inputs.json.gz": "a9bf3df03d9b05ad77ffd320bec0662338d9cb07e84733311bceeff202e45e55",
+  "coverage_pins.json": "30618fc0df75698381b3590a6d8f3168f8dd684764a6c8cbfb1a3088a15fee24",
+  "coverage_support/__init__.py": "7f8b8305263d624363727ac7dae6c7a087373c6c7b56a5cf35114570f5e70905",
+  "coverage_support/core.py": "3837881385f3f3dbec2ab5b48738d4053ac54c7831bdcf05258177d6664334ac",
+  "coverage_support/storage.py": "31e2d53933a845a1370e19d1fa6429487831e8234deaf4422690cdc08e74643e",
+  "test_path_coverage.py": "dbe1cd34900cacabbbabc741fb62a13ae6b7c4926f700c8057e1fd02287db487",
+  "validation/acceptance.json": "d2a999ff313bf77e603f5c1604bf11caf10ea864f342620e98625d1e43f7f314",
+  "validation/tests.txt": "b0cd23871c1a04319d9d47934d88f36b829a30870619db86051a7b7cbe8b4e87"
 }

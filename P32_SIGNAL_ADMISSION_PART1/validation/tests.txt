@@ -1,21 +1,28 @@
-test_boundary_difference_is_explicit (test_reconciliation.ReconciliationTests.test_boundary_difference_is_explicit) ... ok
-test_complete_small_report_no_network_or_source_writes (test_reconciliation.ReconciliationTests.test_complete_small_report_no_network_or_source_writes) ... ok
-test_corrupt_checkpoint_stops_without_report (test_reconciliation.ReconciliationTests.test_corrupt_checkpoint_stops_without_report) ... ok
-test_exact_bridge_separates_blocked_assumed_and_matched_funding (test_reconciliation.ReconciliationTests.test_exact_bridge_separates_blocked_assumed_and_matched_funding) ... ok
-test_health_head_and_post_never_start_audit (test_reconciliation.ReconciliationTests.test_health_head_and_post_never_start_audit) ... ok
-test_matrix_writer_lock_blocks_read (test_reconciliation.ReconciliationTests.test_matrix_writer_lock_blocks_read) ... ok
-test_optional_best_five_stat_can_be_unavailable (test_reconciliation.ReconciliationTests.test_optional_best_five_stat_can_be_unavailable) ... ok
-test_reconciliation_writer_lock_prevents_overlapping_publish (test_reconciliation.ReconciliationTests.test_reconciliation_writer_lock_prevents_overlapping_publish) ... ok
-test_reject_changed_running_cash_even_when_final_total_matches (test_reconciliation.ReconciliationTests.test_reject_changed_running_cash_even_when_final_total_matches) ... ok
-test_reject_duplicate_decisions (test_reconciliation.ReconciliationTests.test_reject_duplicate_decisions) ... ok
-test_reject_missing_qualification (test_reconciliation.ReconciliationTests.test_reject_missing_qualification) ... ok
-test_reject_orphan_cash (test_reconciliation.ReconciliationTests.test_reject_orphan_cash) ... ok
-test_reject_wrong_r_denominator (test_reconciliation.ReconciliationTests.test_reject_wrong_r_denominator) ... ok
-test_reviewed_summary_mismatch_stops (test_reconciliation.ReconciliationTests.test_reviewed_summary_mismatch_stops) ... ok
-test_source_output_overlap_rejected (test_reconciliation.ReconciliationTests.test_source_output_overlap_rejected) ... ok
-test_unsafe_path_rejected (test_reconciliation.ReconciliationTests.test_unsafe_path_rejected) ... ok
+test_cache_restart_requires_exact_body_hash (test_path_coverage.CacheAndServiceTests.test_cache_restart_requires_exact_body_hash) ... ok
+test_existing_research_output_cannot_be_reused (test_path_coverage.CacheAndServiceTests.test_existing_research_output_cannot_be_reused) ... ok
+test_full_25_case_report_and_resume_without_fetching (test_path_coverage.CacheAndServiceTests.test_full_25_case_report_and_resume_without_fetching) ... ok
+test_health_head_post_never_start_research (test_path_coverage.CacheAndServiceTests.test_health_head_post_never_start_research) ... ok
+test_http_allowlist_blocks_order_endpoint (test_path_coverage.CacheAndServiceTests.test_http_allowlist_blocks_order_endpoint) ... ok
+test_http_attempt_budget_prevents_transport (test_path_coverage.CacheAndServiceTests.test_http_attempt_budget_prevents_transport) ... ok
+test_native_revision_is_refused_and_not_cached (test_path_coverage.CacheAndServiceTests.test_native_revision_is_refused_and_not_cached) ... ok
+test_original_native_cache_is_read_only (test_path_coverage.CacheAndServiceTests.test_original_native_cache_is_read_only) ... ok
+test_packaged_real_case_plan_is_pinned_and_bounded (test_path_coverage.CacheAndServiceTests.test_packaged_real_case_plan_is_pinned_and_bounded) ... ok
+test_request_budget_persists (test_path_coverage.CacheAndServiceTests.test_request_budget_persists) ... ok
+test_ambiguous_s5_order_stays_unknown (test_path_coverage.CoverageTests.test_ambiguous_s5_order_stays_unknown) ... ok
+test_changed_entry_quote_refused (test_path_coverage.CoverageTests.test_changed_entry_quote_refused) ... ok
+test_complete_m1_nonrollover_fallback (test_path_coverage.CoverageTests.test_complete_m1_nonrollover_fallback) ... ok
+test_complete_s5_resolves_interval (test_path_coverage.CoverageTests.test_complete_s5_resolves_interval) ... ok
+test_fine_requests_capped_and_old_exit_parent_has_priority (test_path_coverage.CoverageTests.test_fine_requests_capped_and_old_exit_parent_has_priority) ... ok
+test_missing_critical_minute_is_not_forward_filled (test_path_coverage.CoverageTests.test_missing_critical_minute_is_not_forward_filled) ... ok
+test_missing_native_prefix_not_assumed_safe (test_path_coverage.CoverageTests.test_missing_native_prefix_not_assumed_safe) ... ok
+test_native_nontouch_proof_skips_missing_children (test_path_coverage.CoverageTests.test_native_nontouch_proof_skips_missing_children) ... ok
+test_one_tick_barrier_contradiction_is_caught (test_path_coverage.CoverageTests.test_one_tick_barrier_contradiction_is_caught) ... ok
+test_original_s5_does_not_fall_back_to_m1 (test_path_coverage.CoverageTests.test_original_s5_does_not_fall_back_to_m1) ... ok
+test_rollover_does_not_fall_back_to_m1 (test_path_coverage.CoverageTests.test_rollover_does_not_fall_back_to_m1) ... ok
+test_s5_can_fill_missing_critical_minute (test_path_coverage.CoverageTests.test_s5_can_fill_missing_critical_minute) ... ok
+test_tier_revision_keeps_path_unresolved (test_path_coverage.CoverageTests.test_tier_revision_keeps_path_unresolved) ... ok
 
 ----------------------------------------------------------------------
-Ran 16 tests in 0.160s
+Ran 23 tests in 1.223s
 
 OK

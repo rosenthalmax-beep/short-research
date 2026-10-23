@@ -1,46 +1,55 @@
-AUD/USD MATRIX: FOCUSED SAVED-RECORD RECONCILIATION
+BOUNDED COVERAGE CHECK: 25 AUD/USD UNRESOLVED PATHS
 
-This audit explains the opportunity/account R gap for M_D1.25_B1.0. It reads
-existing records only. No candle downloads, account replays, strategy changes,
-executor calls or order APIs. No OANDA token is read by this code.
+This is the next step ONLY. It checks historical candle evidence for the 25
+reviewed unresolved paths. It does not start the larger-body matrix extension,
+replay any accounts, calculate a replacement CAGR or change the live portfolio.
 
-1. Keep your downloaded matrix summary and research archives as backups.
-2. Extract this ZIP. Upload its CONTENTS to the SAME AUD/USD matrix research
-   service, keeping the existing files and mounted /data volume. This package
-   adds a separate entrypoint; it does not replace matrix calculation modules.
-   Its Procfile chooses the audit when the host uses Procfiles.
-3. Keep the existing value of AUDUSD_MATRIX_OUTPUT_DIR. Normally:
-       AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
-   Add:
-       AUDUSD_RECON_OUTPUT_DIR=/data/p32_audusd_reconciliation
-   Keep the old matrix directory. Do not point its variable to the new output.
+1. Extract this ZIP and upload its CONTENTS to the SAME AUD/USD research
+   service. Keep all its existing files and the mounted /data volume.
+   The new coverage_support/ folder is separate from the existing engine.
+2. Keep these existing settings at their CURRENT values:
+      AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
+      PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
+      PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
+      OANDA_ENV=live
+      OANDA_TOKEN=<your existing token>
+   Existing directories supply optional read-only native candle cache reuse.
+   Do not paste the token into chat. No account/order endpoint is used.
+3. Add:
+      AUDUSD_COVERAGE_OUTPUT_DIR=/data/p32_audusd_path_coverage
+   This is a new directory on the SAME mounted volume. Keep the old variables.
 4. Change the service's explicit START COMMAND to:
-       python audusd_pullback_reconcile.py
-5. Redeploy. Open /health and check:
-       AUDUSD_PULLBACK_RECONCILIATION_V1_2026_10_23
-6. Open /status to start the audit. It checks 14 SAVED accounts. The old
-   224-account matrix is not regenerated. Send any ERROR status JSON here.
-7. When status is COMPLETE and validation is PASS, download:
-       /results-reconciliation.zip
-   Upload that ZIP here. Reports are capped below 20 MB.
+      python audusd_path_coverage.py
+5. Redeploy. Open /health. Service should be:
+      AUDUSD_PATH_COVERAGE_V1_2026_10_23
+6. Open /status to start. It must show cases_required: 25.
+   Some small historical candle GETs are expected. This is not a full-history
+   rebuild. If status is ERROR, send that JSON; do not delete old data.
+7. When status is COMPLETE and cases_completed is 25, download:
+      /results-summary.zip
+   Filename: AUDUSD_PATH_COVERAGE_RESULTS.zip
+   Upload that report here. Remaining uncertain cases are a valid finding;
+   COMPLETE means the bounded check finished, not that every path was resolved.
 
-The source records already exist on /data; they were deliberately left out of
-the earlier small summary. The audit needs those files on the SAME service.
-Do not download or upload the large full matrix archive just for this step.
+Fixed limits: at most 240 cache-miss candle GETs / 400 HTTP attempts across
+restarts, six S5 parent bars per case, 16 MiB compressed evidence cache,
+64 MiB free-space reserve and a report below 20 MB. No larger volume purchase
+or broad history download is part of this step. If storage is insufficient,
+send the status rather than clearing the old caches.
 
-If the matrix output root is unusual, keep its current variable value.
-Only if necessary, explicitly set AUDUSD_RECON_SOURCE_DIR to the completed
-signature directory, not the parent:
- /data/p32_audusd_long_matrix/d3e4d41b44993b99fd57f15cc18c213d940475b0286098e053cb84877f5e2f29
+Each case checkpoints. A safe redeploy with the same code/config reuses saved
+cases and exact checked evidence without repeating completed requests.
+Old output files and databases are never modified. Newly fetched fine candles
+are saved separately and checked against frozen M15 prices. Source revisions,
+missing critical candles and ambiguous barrier order preserve uncertainty.
 
-The audit rejects changed inputs instead of silently rebuilding them. It uses
-the matrix runner's existing file lock to avoid reading while it is running.
-It needs 48 MiB free in the new report directory, leaves old caches alone,
-and recomputes this small attribution safely after restart.
+The package includes the exact 25 reviewed case definitions and 23 required
+native-window checksums. You do not need to upload a large result archive.
 
-Optional console-only run:
-       python audusd_pullback_reconcile.py --run
+Optional console run:
+      python audusd_path_coverage.py --run
+Optional offline tests (synthetic evidence only):
+      python -m unittest -v test_path_coverage
 
-This diagnoses saved assumptions and accounting; it does not repair uncertain
-prices or prove the candidate tradable. The previous matrix found no passing
-plateau. Do not change the live executor or strategy probe for this audit.
+After reviewing this small report, we can decide the controlled larger-body
+extension while keeping RR3 and the account rules fixed.
