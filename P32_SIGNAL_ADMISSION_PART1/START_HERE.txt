@@ -1,55 +1,68 @@
-BOUNDED COVERAGE CHECK: 25 AUD/USD UNRESOLVED PATHS
+AUD/USD LONG: NINE-SETTING LARGER-BODY EXTENSION
 
-This is the next step ONLY. It checks historical candle evidence for the 25
-reviewed unresolved paths. It does not start the larger-body matrix extension,
-replay any accounts, calculate a replacement CAGR or change the live portfolio.
+This runs the agreed 3x3 conditional matrix:
+  minimum body / M15 ATR:        1.00, 1.25, 1.50
+  maximum H1 EMA100 distance:  1.00, 1.25, 1.50 H1 ATR
+RR3, 1% NAV risk, 15-tick entry limit, 10-tick stop buffer, per-strategy
+pyramiding zero and the original GBP funding/account assumptions remain fixed.
+The same frozen cutoff (20 September 2026) and observed warm-up are used.
 
-1. Extract this ZIP and upload its CONTENTS to the SAME AUD/USD research
-   service. Keep all its existing files and the mounted /data volume.
-   The new coverage_support/ folder is separate from the existing engine.
-2. Keep these existing settings at their CURRENT values:
-      AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
-      PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
-      PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
-      OANDA_ENV=live
-      OANDA_TOKEN=<your existing token>
-   Existing directories supply optional read-only native candle cache reuse.
-   Do not paste the token into chat. No account/order endpoint is used.
-3. Add:
-      AUDUSD_COVERAGE_OUTPUT_DIR=/data/p32_audusd_path_coverage
-   This is a new directory on the SAME mounted volume. Keep the old variables.
-4. Change the service's explicit START COMMAND to:
-      python audusd_path_coverage.py
-5. Redeploy. Open /health. Service should be:
-      AUDUSD_PATH_COVERAGE_V1_2026_10_23
-6. Open /status to start. It must show cases_required: 25.
-   Some small historical candle GETs are expected. This is not a full-history
-   rebuild. If status is ERROR, send that JSON; do not delete old data.
-7. When status is COMPLETE and cases_completed is 25, download:
-      /results-summary.zip
-   Filename: AUDUSD_PATH_COVERAGE_RESULTS.zip
-   Upload that report here. Remaining uncertain cases are a valid finding;
-   COMPLETE means the bounded check finished, not that every path was resolved.
+1. Keep your downloaded research reports as recovery copies.
+2. Extract this ZIP and upload its CONTENTS to the SAME AUD/USD research
+   service. Replace matching files; keep other files and mounted /data.
+   Original audusd_matrix/ and pullback_lab/ engine files are identical copies.
+   The new code lives in audusd_extension/ and a new root entrypoint.
+3. KEEP these existing directory variables at their current values:
+     AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
+     PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
+     PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
+   If AUDUSD_MATRIX_SOURCE_DIR was set, keep it unchanged too.
+   Keep OANDA_ENV=live and your existing OANDA_TOKEN.
+4. ADD:
+     AUDUSD_EXTENSION_OUTPUT_DIR=/data/p32_audusd_long_extension
+   Do NOT change AUDUSD_MATRIX_OUTPUT_DIR to the new extension directory: it
+   locates the completed old matrix for exact comparisons and cache reuse.
+5. Change the service's explicit START COMMAND to:
+     python audusd_pullback_extension.py
+6. Redeploy. Open /health and confirm:
+     AUDUSD_PULLBACK_LONG_EXTENSION_V1_2026_10_23
+   It should show candidates:9, accounts:126 and overlap_account_payloads:28.
+7. Open /status to start, then send the first status JSON here.
+   Both original overlapping settings run FIRST. Their regenerated signals,
+   independent opportunities and all 28 account payloads must match exactly.
+   A changed frozen source or mismatch stops before proceeding to new variants.
+8. When status is COMPLETE, expect:
+     candidates_completed: 9
+     accounts_completed: 126
+     overlap_account_payloads_matched: 28
+   Download /results-summary.zip (AUDUSD_EXTENSION_SUMMARY.zip) and upload here.
+   /results.zip streams the larger full evidence archive only if needed.
 
-Fixed limits: at most 240 cache-miss candle GETs / 400 HTTP attempts across
-restarts, six S5 parent bars per case, 16 MiB compressed evidence cache,
-64 MiB free-space reserve and a report below 20 MB. No larger volume purchase
-or broad history download is part of this step. If storage is insufficient,
-send the status rather than clearing the old caches.
+There are seven NEW settings and two overlapping reference settings. All nine
+have seven account windows under two funding assumptions. Controls are genuinely
+replayed on first run, not merely copied. Completed checkpoints are checked and
+reused on a safe restart. Native/history windows and price paths are reused from
+the old study/matrix when exact witnesses are available; missing windows can be
+re-downloaded, and only newly required geometries are priced.
 
-Each case checkpoints. A safe redeploy with the same code/config reuses saved
-cases and exact checked evidence without repeating completed requests.
-Old output files and databases are never modified. Newly fetched fine candles
-are saved separately and checked against frozen M15 prices. Source revisions,
-missing critical candles and ambiguous barrier order preserve uncertainty.
+DEFAULT STORAGE SETTINGS (no need to add):
+     AUDUSD_EXTENSION_RAW_CACHE_MB=64
+     AUDUSD_EXTENSION_RESERVE_MB=96
+The private raw-body cache is bounded. Reports/path checkpoints also take space;
+completion within the current volume cannot be guaranteed. No existing file or
+cache is deleted or compacted. If it stops or pauses, send the status JSON.
 
-The package includes the exact 25 reviewed case definitions and 23 required
-native-window checksums. You do not need to upload a large result archive.
+The 25-path coverage audit did not fully resolve any paths. Its new fine candle
+bodies are NOT imported. All original uncertainty flags and path assumptions
+stay in effect. This run does not rewrite prior account figures or outcomes.
 
-Optional console run:
-      python audusd_path_coverage.py --run
-Optional offline tests (synthetic evidence only):
-      python -m unittest -v test_path_coverage
+Plateau rules are unchanged: all four members of an adjacent 2x2 block must pass
+>=200 full-history trades, >=60 recent trades, >=20 in each era, original
+profitability/funding/best-five and era checks. Sparse profitable cells can fail;
+thresholds will not be lowered after seeing the results. No strategy activation,
+RR sweep or combined live32 overlap/admission change is included.
 
-After reviewing this small report, we can decide the controlled larger-body
-extension while keeping RR3 and the account rules fixed.
+Offline tests:
+     python -m unittest discover -s extension_tests -v
+Console run instead of HTTP server (optional):
+     python audusd_pullback_extension.py --run

@@ -1,0 +1,9 @@
+{
+  "account_results_revised": false,
+  "cases_completed": 25,
+  "new_candle_evidence_used_in_extension": false,
+  "note": "Bounded audit resolved zero full paths. Extension preserves original V2 path/account assumptions and source freezes; no coverage-audit candles or corrected outcomes are imported.",
+  "resolved_cases": 0,
+  "source_signature": "1abab93bc8511ac6674655d6336b00353865d98eda88865fbc737f0a02ae98fb",
+  "uncertain_cases": 25
+}

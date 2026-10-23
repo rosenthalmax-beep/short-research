@@ -1,0 +1,60 @@
+{
+  "files": {
+    "REVIEW.md": {
+      "bytes": 1854,
+      "sha256": "3433b46a4fe74661fb0b7ebd33092615f124d68f894344cc7f426ef688d322ce"
+    },
+    "account_matrix.csv": {
+      "bytes": 314841,
+      "sha256": "46ddb688ed3b7f3a63164f4df9c0465d763d26868d194ec0c936cf15f38e7102"
+    },
+    "baseline_parity.json": {
+      "bytes": 86,
+      "sha256": "0edbeabb7ecb5dff329f93ef515184532880784c8cc9a3ab73539c7dc6474a9a"
+    },
+    "broker_reconciliation.json": {
+      "bytes": 15470,
+      "sha256": "f340799cf5a40ab9bf96c36fe8ff0696843a9a107d9b1152d3fcb4a4245b97e4"
+    },
+    "candidate_screens.csv": {
+      "bytes": 9840,
+      "sha256": "0b73e2cd2dd3a4a06cedeeeefb6cde088968dccbfcd1adaf7010444b6fd23e00"
+    },
+    "opportunity_matrix.csv": {
+      "bytes": 84991,
+      "sha256": "e659778e29ffac7347de5aa4570994cc656272c33945220b157431c8a02e520f"
+    },
+    "plateau_regions.csv": {
+      "bytes": 12693,
+      "sha256": "f25aca59d1a51898f667ed0a528f643312db00e9ec7c605ebccefe783b156355"
+    },
+    "protocol.json": {
+      "bytes": 2901,
+      "sha256": "00e800125d613388f79a7b468d6c4f54c7e0ab9bbf285ca42c6dc61249456479"
+    },
+    "run_state.json": {
+      "bytes": 548,
+      "sha256": "5328042b55196467645857ee175d189f9f66404e4e2c2364d88a48d7efbcc08b"
+    },
+    "source_provenance.json": {
+      "bytes": 4092,
+      "sha256": "7849fbbfc155baacfaa04695cec2af99e2c848058a4c1154d679653017c55519"
+    }
+  },
+  "matrix_code": {
+    "__init__.py": "0b9c7904d0b7a17402613888e73e52d82a96f556ac2a6480ca5f06f492cd8bd0",
+    "audusd_pullback_matrix.py": "f4dbdf98e93a9282f2a4dca8d82687f4c240cd86f61aa17968ace01b10442009",
+    "cache.py": "1e1c156eebead5910ebf08f5a7ca63780f97c060e97f7eed7fc5e426e5874b16",
+    "download.py": "ee955247b6cdbf3d057d7b9443d35a24494a608258c8420539331614cc6a1616",
+    "engine_pins.json": "9484be7bfa419f455048c64d36326917de34361116e432804392aff9ea94dade",
+    "io.py": "a3b39398c0eb92fb45afa9f1f8f58cdfef5b3287a0fc98982dc10165828e2a77",
+    "pool.py": "682e13570c5b153854c020c81094408b79c21d8f503c77b1538b01dc1f2f6112",
+    "reporting.py": "80e3c612c36bbe49569de3bcca83254861aabcca60e6cfcf871d55bd3e2f2015",
+    "runner.py": "fc472a476424923243fb3339b5bf3ad2397cf18a6634636c7c06c2ce7d6edde4",
+    "signals.py": "fcdcd3f2a68bd061001f958f42d0b2a1bb86effd04111aff7a5634a4ecdeac7d",
+    "source_pins.json": "7555ec15686b20c992c26fb9fd72ddad67bcf70ab43eda8540296d1108a021fe",
+    "storage.py": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
+  },
+  "native_sha256": "125810c93c3c4c47ba4090d2dca28a169eceda60f43ea534892174caafbe8471",
+  "signature": "d3e4d41b44993b99fd57f15cc18c213d940475b0286098e053cb84877f5e2f29"
+}

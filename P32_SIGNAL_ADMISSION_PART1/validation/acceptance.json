@@ -1,20 +1,78 @@
 {
-  "actual_broker_requests_made_here": 0,
-  "documentation": [
-    "https://developer.oanda.com/rest-live-v20/instrument-df/",
-    "https://github.com/oanda/v20-openapi/blob/master/yaml/separate/v20_instrument.yaml"
+  "actual_candle_downloads": 0,
+  "actual_historical_extension_run": false,
+  "candidates": [
+    {
+      "body_min": 1.0,
+      "candidate_id": "M_D1.0_B1.0",
+      "distance_max": 1.0,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.0,
+      "candidate_id": "M_D1.25_B1.0",
+      "distance_max": 1.25,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.25,
+      "candidate_id": "M_D1.0_B1.25",
+      "distance_max": 1.0,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.5,
+      "candidate_id": "M_D1.0_B1.5",
+      "distance_max": 1.0,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.25,
+      "candidate_id": "M_D1.25_B1.25",
+      "distance_max": 1.25,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.5,
+      "candidate_id": "M_D1.25_B1.5",
+      "distance_max": 1.25,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.0,
+      "candidate_id": "M_D1.5_B1.0",
+      "distance_max": 1.5,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.25,
+      "candidate_id": "M_D1.5_B1.25",
+      "distance_max": 1.5,
+      "kind": "MATRIX"
+    },
+    {
+      "body_min": 1.5,
+      "candidate_id": "M_D1.5_B1.5",
+      "distance_max": 1.5,
+      "kind": "MATRIX"
+    }
   ],
-  "frozen_native_windows": 23,
-  "inputs_gzip_sha256": "a9bf3df03d9b05ad77ffd320bec0662338d9cb07e84733311bceeff202e45e55",
-  "m1_request_windows": 32,
-  "offline_test_status": "PASS",
-  "offline_tests": 23,
-  "original_source_files_modified": false,
-  "packet_sha256": "b62defba05b1b8263a0574861557266e0d1f374a8551a6bc7fed8b9260c6e9be",
-  "real_case_count": 25,
-  "real_historical_check_run_here": false,
-  "s5_request_upper_bound": 150,
-  "source_matrix_signature": "d3e4d41b44993b99fd57f15cc18c213d940475b0286098e053cb84877f5e2f29",
-  "source_reconciliation_signature": "42d4ddda9383d7f8c3a931c25c8a63b687d2b8cd8938561d4ce88797eb493a1d",
-  "total_planned_window_upper_bound": 205
+  "causal_prefix_and_H1_tests": "PASS",
+  "changed_reference_and_corrupt_checkpoint_refused": "PASS",
+  "exact_synthetic_overlap_account_payloads": 28,
+  "full_portfolio_validated": false,
+  "offline_tests_passed": 15,
+  "old_source_bytes_unchanged_in_integration_test": true,
+  "orders_sent": false,
+  "original_engine_files_verified": 14,
+  "original_matrix_code_files_verified": 12,
+  "overlaps": [
+    "M_D1.0_B1.0",
+    "M_D1.25_B1.0"
+  ],
+  "source_frozen_new_matrix_windows_test": "PASS",
+  "synthetic_extension_accounts_completed": 126,
+  "synthetic_original_accounts_completed": 224,
+  "synthetic_resume_without_replay": "PASS",
+  "test_command": "python -m unittest discover -s extension_tests -v"
 }
