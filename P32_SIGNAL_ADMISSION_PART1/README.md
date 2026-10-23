@@ -1,121 +1,174 @@
-# P32 fresh GBP100 entry-limit comparison — 19 October 2026
+# AUD/USD long conditional pullback matrix
 
-Extract the outer update ZIP and upload **its contents** into the application
-root of the **same separate research/audit service**, replacing matching files.
-**Do not delete the existing files first.** Retain `seed_01.zip` through
-`seed_05.zip`, the two supplied inner input ZIPs, and the mounted `/data` volume.
-Keep inner ZIPs zipped. This package is under 25 MB. It contains no credentials.
+This pass regenerates signals and replays GBP accounts for a small joint
+matrix. It follows the baseline/single-feature diagnostics and keeps RR fixed.
+It does not select or activate a strategy automatically.
 
-Start command remains **`python app.py`**. Standard library only; Python 3.10+
-with timezone data on Linux. Procfile remains supplied.
+## Frozen research design
 
-| Variable | Value |
+The nine joint cells combine:
+
+| Parameter | Tested values |
 | --- | --- |
-| OANDA_TOKEN | Keep your existing token in service variables |
-| OANDA_ENV | live |
-| P32_GBP_OUTPUT_DIR | /data/p32_signal_admission |
-| P32_SIGNAL_OUTPUT_DIR | /data/p32_signal_admission |
-| P32_SIGNAL_OFFLINE | Leave unset for the hosted run |
+| Maximum H1 trend distance, in H1 ATR | 0.75, 1.00, 1.25 |
+| Minimum engulfing body, in M15 ATR | 0.50, 0.75, 1.00 |
 
-This service only supports historical candle GET requests. It has no order,
-executor or strategy-probe submission route. Upload to the research service.
+There are also three distance-only controls, three body-only controls and one
+unfiltered baseline: 16 configurations. The controls help separate each
+feature's effect from the joint settings. They are research variants, not 16
+new live strategies or statistically independent trials.
 
-## Run and download
+H1 distance uses the latest completed native H1 CLOSE minus its EMA100 divided
+by H1 ATR14. It is not the M15 entry-to-EMA distance. Exact bullish engulfing,
+H1 close above rising EMA100, M15 EMA20 pullback, eight-bar expiry, original
+stop geometry and observed warm-up requirements remain as in the frozen study.
 
-1. Upload the extracted contents and redeploy using `python app.py`.
-2. Open your research URL followed by `/health`. Check service
-   `P32_SMALL_ACCOUNT_ENTRY_LIMIT_V1_2026_10_19` and
-   `persistence.separate_mount_detected: true`. The output directory should be
-   `/data/p32_signal_admission`. The existing persistence marker is retained.
-3. Open `/status` to start; refresh it for progress. Health checks and HEAD
-   requests do not start work. Repeated GETs do not start duplicate jobs.
-4. First, all **16 original full-history 10-tick account controls** must pass.
-   A failure stops the experiment before any fresh-account comparison.
-5. Then **864 fresh-account lanes** run. This is 18 windows × 3 policies ×
-   4 chronology assumptions × 4 funding assumptions. Watch `lanes_completed`
-   against `lanes_required`, `window_id`, `policy` and `through_utc`.
-6. At `status: COMPLETE_WITH_LIMITATIONS`, download `/results.zip` and return
-   **P32_SMALL_ACCOUNT_ENTRY_LIMIT_RESULTS.zip** for review.
+RR3.0, a 10-tick stop buffer, a separate 15-tick adverse entry allowance and
+1% marked NAV risk remain fixed. No RR optimization, session search, daily
+regime matrix, frequency-recovery trigger or live32 combination is added.
 
-If it reports ERROR, download the diagnostic ZIP from the same `/results.zip`
-route. Reopen `/status` after a restart to resume completed checksummed lanes.
-A partly completed account lane restarts from its own fresh account start;
-previous candle and path calculations remain cached. An exclusive process lock
-prevents two workers from writing this experiment simultaneously.
+## Complete conditional signal regeneration
 
-The three caps do not change live. No winner is chosen automatically.
+Each setting has its own setup/armed state. A candle that qualifies as an
+engulfing confirmation but fails that setting's body or distance filter does
+not consume the pullback. A later candle can qualify within the original
+expiry. Its stop includes every low from the original touch through the actual
+accepted candle. Trend failure, expiry or a M15 gap resets the setup.
+An accepted qualification consumes the setup even if execution later rejects
+it or a position gate blocks the trade. Filter decisions never inspect future
+quotes, exits, trade results or another candidate's state.
 
-## Frozen experiment
+Before any new candidate is priced, the unfiltered generator must match all
+4,086 saved AUD/USD long first-signal records field-for-field. Native M15
+history must match the original path source hash before baseline paths can be
+reused. Failure stops the research without changing the source data.
 
-- Policies: FIXED_10 (current control), FIXED_15, STOP10_MAX30.
-- Relative rule: `max(10,min(30,floor(0.10*original_stop_distance_ticks)))`.
-- Seventeen overlapping five-year windows, starting each 1 January from 2005
-  through 2021. Examples: 2005-01-01 to 2010-01-01; 2021-01-01 to 2026-01-01.
-- One separate recent diagnostic: 2021-01-01 to 2026-09-20 18:29 UTC, the existing
-  pinned data cutoff. This does not extend history through today's live market.
-- Every account starts with **GBP100 and no existing positions**. It compounds
-  within its window; no withdrawals, scaling resets or clipping of order sizes
-  occur inside a window. Strategies retain their original warmed indicators.
-- Signals enter at or after the window start and strictly before its end.
-  Earlier positions do not carry into a fresh account. This is a deliberate
-  fresh-start comparison, not a reconstruction of a continuously funded account.
-- Existing per-strategy pyramiding, opposite-pair gates, 1% NAV sizing (0.75% for
-  EUR_JPY_M15_SHORT), whole units, margin, conversion markup and broker limits
-  stay in force. Capacity rejections are counted and flagged, never suppressed.
-- Entry bid/ask evidence, rounded stop and target remain shared. Each cap uses
-  its own worst-permitted-entry sizing bound; targets are not moved to restore RR.
-- Chronologies: END_ASC, END_DESC, START_ASC, START_DESC, as before.
-- Funding assumptions: zero financing, frozen 14-Oct-2026 rates, adverse 3% annual,
-  adverse 6% annual, as before. They are not recovered historical rate schedules.
-- Primary comparison: END_ASC with frozen 14-Oct-2026 funding. Assess the other
-  lanes for sensitivity. Overlapping windows are not independent experiments.
+## Price and GBP account model
 
-## Correct treatment of the window end
+The exact original V2 price, refinement, funding, margin, conversion and account
+modules are included and hash-checked. Native M15 bid/ask opening prices are
+entry proxies. Barrier timing uses M1/S5 refinement. Actual live latency and
+cancellations are not reconstructed. END_ASC timing and STOP_FIRST ambiguous
+barrier handling are conditional assumptions, not mathematical return bounds.
 
-An exit scheduled after a window ends is censored for that account: the
-position remains open, accrues financing only through the cutoff, and is valued
-using causal M15 midpoint NAV and separate executable-side liquidation equity.
-Its later target/stop is never booked in cash or counted as a closed win/loss.
-There is no forced end-of-window closing transaction. Existing source/path gaps
-remain uncertain. A barrier interval straddling the cutoff under END chronology
-is additionally qualified rather than labelled definitely open.
+Immutable geometry paths and standalone funding results are shared between
+candidates. Signal identity and strategy gates remain candidate-specific. Each
+account is fresh GBP100 with one candidate and at most one open position.
+Two funding cases are replayed: frozen 14-Oct-2026 terms and adverse6% annual.
+Spread and conversion are included once. Historical funding/holiday, margin
+and conversion schedules are not independently reconstructed. Rejections,
+omissions, unresolved paths and propagated account uncertainty stay visible.
 
-## Storage and re-use
+Each variant has 14 accounts: full history, five era accounts and the recent
+2021-to-cutoff account, under both funding cases. Total: 224. Era accounts reset
+flat; the final era is partial. The first account starts after the same observed
+indicator warm-up exclusion. CAGR uses the actual effective duration. Windows
+overlap and have all been examined previously; none is an untouched holdout.
+These isolated account results do not measure added return in the live32.
 
-New reports/checkpoints:
-`/data/p32_signal_admission/small_account_entry_limit_v1`.
+Every saved account is checked for cash/P&L/financing consistency and maximum
+one open position before being accepted as a reusable checkpoint.
 
-The prior `entry_limit_v1/policy_paths.sqlite3` and its `new_execution_windows`
-are reused; the shared `gbp_execution_paths_v2` and `gbp_valuation_windows_v2`
-are reused. Do not clear, replace or move these directories. Previous reports
-and checkpoints are retained. This update performs no continuous MID-history
-or strategy-signal regeneration. Fresh account gates can expose a previously
-blocked path; a missing path or valuation window can still need candle GETs.
+## Plateau definition
 
-The previous experiment source is retained as `entry_limit_service.py` for
-regression checks; the hosted start command uses the new `app.py`.
+The four possible adjacent 2x2 blocks are checked. A single high-profit corner
+cannot pass alone. All four members of a region must meet:
+
+- At least 200 full-history and 60 recent closed account trades.
+- Positive ending NAV relative to GBP100 in full history and recent years under
+  BOTH funding cases.
+- Positive mean account net R after removing the five best trades in those
+  full/recent funding cases.
+- At least 20 closed trades in each frozen-funding era and positive ending NAV
+  in at least four of the five eras.
+
+These are declared descriptive screens, not statistical significance or proof
+of robustness. Failed sample/era/financing criteria are retained in the output.
+Account-lineage uncertainty remains visible even if a region passes; passing
+is conditional on that model. Regions overlap and are not independent
+candidates. Drawdown, return ranges and minimum trade counts are exposed so
+we can review risk and frequency alongside profitability. No setting is
+selected automatically and no high-return cell is promoted by itself.
 
 ## Reports
 
-Start with `recent_comparison.csv`, `rolling_window_summary.csv` and
-`window_comparison.csv`. REPORT_GUIDE.md explains comparisons, uncertainty,
-open end positions and the separate full-detail/equity downloads.
+`/results-summary.zip` is the small file to upload for review. It contains:
 
-Local validation:
+- account_matrix.csv: all completed fresh accounts, costs, frequency, sampled
+  drawdown, conditional CAGR and uncertainty flags.
+- opportunity_matrix.csv: independent opportunity diagnostics and exclusion
+  counts. These are not account returns; rejected counterfactuals are separate.
+- candidate_screens.csv: every completed variant's explicit screen results.
+- plateau_regions.csv: each 2x2 block, member failures, sample counts, return
+  ranges, sampled drawdowns and uncertainty.
+- baseline_parity.json, source_provenance.json, broker_reconciliation.json,
+  protocol/status/run-state metadata and REVIEW.md.
 
-    python -m unittest test_windows test_caps test_source_windows test_gbp test_execution
+`/results.zip` streams the full completed-candidate evidence: signals,
+standalone opportunities, complete account payloads with cash/trade/financing
+ledgers and monthly observations, per-file checksums, one shared unique path
+export and the private source index. Opportunity rows link to shared paths by
+path_cache_key. This avoids duplicating a full path history for every setting.
+Incomplete candidates are excluded from aggregate return/plateau results.
+Partial published summaries remain downloadable during a long run.
 
-Restricted CLI runs still perform all sixteen original controls first:
+## Storage and resume
 
-    python app.py --run --window RECENT_2021_TO_CUTOFF --policy FIXED_15 --scenario END_ASC --funding-mode FROZEN_14OCT2026_RATES
+Follow START_HERE.txt. Use the existing mounted /data volume. Outputs and raw
+caches go into a NEW matrix directory. The old source files and old caches are
+read-only. No cleanup deletes or modifies them. Old caches with a live WAL are
+skipped for immutable reuse, and data is fetched with checksum enforcement.
 
-The CLI adds the matching 10-tick window control automatically. Hosted `/status`
-always uses the complete frozen experiment. `--offline` requires every needed
-candle to be cached already.
+The raw compressed-body budget defaults to 128 MiB. A 96 MiB free reserve stops
+the run before filling the volume. Metadata, path checkpoints and reports need
+additional space, so this is not a whole-study quota or guaranteed disk fit.
+Old bodies may be evicted; source identities/checksums and receipts remain.
+Native history is preferred in the cache. A changed previously used source
+window stops the run; newly required fine windows are pinned on first use.
 
-These are conditional historical comparisons using selected strategies and
-previously examined history. Recent windows are not an untouched holdout;
-historical returns are not a forward forecast. Current broker and funding
-terms, candle-entry proxies, 11 original unknown entries, 170 qualified original
-paths and sampled drawdowns retain their stated limitations. See
-GBP_ACCOUNT_ASSUMPTIONS.md and the protocol in the results ZIP.
+The original source index is checked by canonical identities and price checksums
+for AUD/USD and GBP/USD. Recompressing the same index or changing cache-residency
+flags does not falsely change price provenance. No price checksums are ignored.
+
+Account files checkpoint one by one; candidate COMPLETE markers pin every
+finished report. Restart verifies these before reuse. Partial paths commit per
+geometry. Completed account results are not silently recomputed or overwritten.
+The full archive streams with bounded buffers and cancellation support; no
+second large full ZIP is saved on the server. The small summary is stored too.
+
+## Safety and scope
+
+Only historical OANDA candle GETs are supported. No executor URL, webhook,
+account-order route or live activation is introduced. The existing broker token
+is used solely for historical candles on the pinned live pricing host. The
+service HTTP interface supports GET/HEAD and rejects POST. Health/HEAD requests
+do not start the worker. Credentials are not written into reports.
+
+Source history remains 2005-to-20-Sep-2026 with the original observed warm-up
+exclusion. This does not extend the history or provide results through today.
+The first run will re-download evicted candles where exact reuse is unavailable.
+
+## Validation
+
+Run from this package directory:
+
+    python -m unittest discover -s tests -v
+
+Sixteen offline tests cover original-generator parity, H1 causal timestamps,
+prefix invariance under future-price changes, gaps, later qualifying triggers,
+setup expiry/consumption, independent states, isolated-peak rejection, adjacent
+regions, account cash identity, source-revision refusal, bounded cache,
+unsupported routes, immutable reports and streamed downloads.
+
+An end-to-end deterministic synthetic fixture exercises all 16 variants with
+nonzero generated signals, 224 actual account checkpoints, full publication,
+resume without replaying completed accounts, and refusal of a corrupted report.
+Synthetic test eras use a short fixture interval; they are functional tests,
+not historical performance evidence. The original/regenerated baseline
+produces identical full synthetic account payloads.
+
+The real saved source audit verifies five pinned exports, 22,739 relevant
+frozen price-window identities/checksums and 4,086 available baseline signals.
+Full real-history signal regeneration and matrix replay have NOT run locally:
+they require the original candle cache/broker access on your research service.
+No real return results are included. See validation/ for test and audit records.

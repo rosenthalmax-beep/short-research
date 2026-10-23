@@ -1,23 +1,58 @@
-P32 PULLBACK RESEARCH - PASS 1 WARM-UP FIX V2
+AUD/USD LONG CONDITIONAL PULLBACK MATRIX
 
-1. Extract the outer ZIP and upload its CONTENTS to the SAME SEPARATE RESEARCH
-   SERVICE. Preserve the pullback_lab folder. Do not delete existing files/data.
-2. Change the service start command to: python pullback_app.py
-3. Keep OANDA_TOKEN secret and OANDA_ENV=live.
-   Set PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
-   Set PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
-   Keep the persistent volume mounted at /data.
-4. Redeploy, then open /health. Confirm:
-   service=P32_PULLBACK_PASS1_V2_2026_10_20_WARMUP
-   persistence.separate_mount_detected=true
-   orders_supported=false
-5. Open /status to start; refresh for progress.
-6. Once COMPLETE, download /results.zip and send it back.
+THIS IS A NEW RUN
+The earlier lightweight diagnostic could use saved first signals. This matrix
+must regenerate each variant's complete pullback state and price newly eligible
+entries. It needs to run on your existing separate research service.
+No historical matrix results are included or claimed from the offline tests.
 
-The study is resumable. Historical downloads can take a long time and require
-several GB of persistent disk. It runs the baseline/discovery stage only.
-README_PULLBACK.md contains the exact rules, scope and report definitions.
+1. Keep your current downloaded research archives as backups.
+2. Extract this ZIP and upload its CONTENTS to the SAME pullback research
+   service. Keep existing files and the existing mounted /data volume.
+   Matching engine files are exact copies of the already pinned V2 engine.
+3. Set the start command to:
+       python audusd_pullback_matrix.py
+   The supplied Procfile sets the same command for hosts that use Procfiles.
+4. Keep these existing variables:
+       PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
+       PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
+       OANDA_ENV=live
+       OANDA_TOKEN=<your existing token; no account-order access is used>
+   Add:
+       AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
+   This is a NEW directory on the SAME mounted volume. Do not change the old
+   PULLBACK_OUTPUT_DIR to the new directory; it locates the frozen source study.
+   No new paid volume is needed just to configure this run.
+5. Redeploy. Open /health and check the service name is:
+       AUDUSD_PULLBACK_LONG_MATRIX_V1_2026_10_22
+6. Open /protocol if you want to inspect the fixed matrix, then /status to start.
+   The run checks the old source, loads AUD/USD native history, regenerates
+   signals and proves that the unfiltered signals match the old study exactly.
+   It reuses baseline paths and existing exact cached windows where available.
+   Previously evicted or newly needed candles may be downloaded again.
+7. Send the first /status JSON once it starts. Completion should show:
+       candidates_completed: 16
+       accounts_completed: 224
+       status: COMPLETE
+8. Download /results-summary.zip and upload that SMALL ZIP here for review.
+   /results.zip streams the larger full completed-candidate evidence if needed.
 
-V2 handles sparse early history by delaying affected pairs until the original
-250-M15 / 1000-H1 observed-bar requirements are satisfied. Excluded early
-periods and effective account starts are reported. Keep /data untouched.
+DEFAULT STORAGE CONTROLS (NO NEED TO ADD THEM)
+       AUDUSD_MATRIX_RAW_CACHE_MB=128
+       AUDUSD_MATRIX_RESERVE_MB=96
+The private raw-body cache is bounded, paths are shared between variants and
+accounts checkpoint individually. Full download ZIPs are streamed without a
+second disk copy. The total study also needs space for reports and metadata;
+completion within the current volume cannot be guaranteed in advance.
+
+If it stops, send /status. Do not delete the old source study or databases.
+On a safe redeploy/restart, the same code/config verifies and reuses completed
+candidates, accounts and private price paths. A frozen-price mismatch stops
+instead of silently accepting revised history. Raw re-downloads can take time.
+
+If source discovery needs an explicit override:
+AUDUSD_MATRIX_SOURCE_DIR=/data/p32_pullback_pass1/ede17fd5f452abcf4fa9fc2ec0f73aad0660d2d1f582a96059c841ee64d61dd6
+
+The fixed source ends 20 September 2026. No live executor/probe changes or
+strategy activation are part of this research service. Historical broker
+calls are constrained to candle GET requests. The server rejects POST requests.

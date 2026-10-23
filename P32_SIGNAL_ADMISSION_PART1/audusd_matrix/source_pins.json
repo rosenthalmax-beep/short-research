@@ -1,0 +1,14 @@
+{
+  "signature": "ede17fd5f452abcf4fa9fc2ec0f73aad0660d2d1f582a96059c841ee64d61dd6",
+  "protocol_sha256": "0129a0b3f7b78a007bc6998593e505f8e68c80e242103395bb9e77e2c1ab95d1",
+  "source_index_sha256": "65a49729870db00264225a373746f776b6752b76962f9983c74cd38948cd3371",
+  "files": {
+    "qualifying_signals.jsonl.gz": "c921855aa3a472f04f97fc512da6c5969c291788117681723f2da4fdb09bdb18",
+    "opportunities.jsonl.gz": "334ef3c33043e57400fbd00e41afc76ff1aee871a0c2b4384581ba08309057d5",
+    "price_paths.jsonl.gz": "0c5411a65745c2cbe23d020c17455c25703771c39b0b4001a3fb37202d77d563",
+    "coverage.json": "a05692f3dc6467dbf39a5af3ff5c817d8bcceec143b3933f82de8085653cfeeb",
+    "feature_study.json.gz": "dcfdd21d925efceae6f9cb1115a3176fb46542f2d5eb463fd11a90ed3aac5e8c"
+  },
+  "source_index_semantic_sha256": "663bfc99f5bfabdb50ff406b0dc4f51206d2f086069adf03a53b530d31be8f39",
+  "source_index_relevant_windows": 22739
+}

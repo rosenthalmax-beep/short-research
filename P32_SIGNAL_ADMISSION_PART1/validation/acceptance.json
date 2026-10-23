@@ -1,0 +1,22 @@
+{
+  "offline_tests_passed": 16,
+  "synthetic_accounts_checkpointed": 224,
+  "synthetic_candidates_with_nonzero_signals": 16,
+  "original_generator_parity": true,
+  "synthetic_original_and_regenerated_account_payloads_identical": true,
+  "future_price_prefix_invariance": true,
+  "gap_reset_parity": true,
+  "later_trigger_after_failed_filter": true,
+  "two_by_two_neighbourhood_screen_tested": true,
+  "completed_account_resume_without_replay": true,
+  "corrupted_completed_report_refused": true,
+  "source_revision_refused": true,
+  "bounded_raw_cache_tested": true,
+  "full_zip_streamed_without_disk_copy": true,
+  "pinned_v2_engine_files_unchanged": true,
+  "actual_saved_source_audit": "PASS",
+  "full_historical_matrix_run": false,
+  "external_deployment_tested": false,
+  "broker_requests_made_during_validation": 0,
+  "orders_sent": false
+}

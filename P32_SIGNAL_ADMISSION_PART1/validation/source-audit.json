@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "source_signature": "ede17fd5f452abcf4fa9fc2ec0f73aad0660d2d1f582a96059c841ee64d61dd6",
+  "pinned_pair_exports_verified": 5,
+  "relevant_frozen_price_windows": 22739,
+  "baseline_signal_records_available": 4086,
+  "historical_matrix_run": false,
+  "actual_candle_downloads": 0,
+  "orders_sent": false,
+  "audit_scope": "ACTUAL_SAVED_SOURCE_EXPORTS; REAL_NATIVE_CANDLE_REGENERATION_AWAITS_DEPLOYMENT"
+}

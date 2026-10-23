@@ -1,0 +1,21 @@
+test_cash_results_identical_for_original_and_regenerated_baseline (test_integration.IntegrationTests.test_cash_results_identical_for_original_and_regenerated_baseline) ... ok
+test_gap_reset_preserves_original_baseline_semantics (test_integration.IntegrationTests.test_gap_reset_preserves_original_baseline_semantics) ... ok
+test_runner_publishes_all_224_checkpoints_and_resumes_without_replaying_accounts (test_integration.IntegrationTests.test_runner_publishes_all_224_checkpoints_and_resumes_without_replaying_accounts) ... ok
+test_unfiltered_records_match_original_generator_and_future_bars_cannot_change_prefix (test_integration.IntegrationTests.test_unfiltered_records_match_original_generator_and_future_bars_cannot_change_prefix) ... ok
+test_engine_and_output_location_protection (test_matrix.CacheAndServiceTests.test_engine_and_output_location_protection) ... ok
+test_health_head_and_order_requests_do_not_start (test_matrix.CacheAndServiceTests.test_health_head_and_order_requests_do_not_start) ... ok
+test_original_window_revision_is_refused (test_matrix.CacheAndServiceTests.test_original_window_revision_is_refused) ... ok
+test_private_eviction_refetch_remains_consistent (test_matrix.CacheAndServiceTests.test_private_eviction_refetch_remains_consistent) ... ok
+test_streamed_zip_is_valid_and_does_not_write_a_full_copy (test_matrix.CacheAndServiceTests.test_streamed_zip_is_valid_and_does_not_write_a_full_copy) ... ok
+test_cash_reconciliation_and_single_position_invariant (test_matrix.PlateauTests.test_cash_reconciliation_and_single_position_invariant) ... ok
+test_four_neighbours_must_pass_and_isolated_peak_fails (test_matrix.PlateauTests.test_four_neighbours_must_pass_and_isolated_peak_fails) ... ok
+test_partial_region_cannot_pass_and_sample_failures_are_visible (test_matrix.PlateauTests.test_partial_region_cannot_pass_and_sample_failures_are_visible) ... ok
+test_accepted_signal_consumes_even_before_execution_result_is_known (test_matrix.TransitionTests.test_accepted_signal_consumes_even_before_execution_result_is_known) ... ok
+test_expiry_and_trend_failure_clear_setup (test_matrix.TransitionTests.test_expiry_and_trend_failure_clear_setup) ... ok
+test_failed_filter_retains_touch_and_a_later_candle_can_enter (test_matrix.TransitionTests.test_failed_filter_retains_touch_and_a_later_candle_can_enter) ... ok
+test_independent_candidate_states_and_fixed_matrix_size (test_matrix.TransitionTests.test_independent_candidate_states_and_fixed_matrix_size) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 37.301s
+
+OK

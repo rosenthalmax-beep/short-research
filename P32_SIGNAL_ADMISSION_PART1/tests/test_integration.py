@@ -1,120 +1,128 @@
-"""End-to-end deterministic synthetic run, including real signals and GBP replay."""
+"""Synthetic full replay/resume; no broker requests or real return claims."""
+import copy
 import gzip
+import io
 import json
-import math
 import tempfile
 import unittest
 import zipfile
-from collections import OrderedDict
 from pathlib import Path
+from unittest.mock import patch
+from fixture import SyntheticStore
 from pullback_lab import core as e
-from pullback_lab.runner import Research
+from pullback_lab.storage import load_bars
+from pullback_lab.signals import generate
+from pullback_lab.market import Market
+from pullback_lab.accounting import Replay
+from pullback_lab.funding import Funding
+from pullback_lab.paths import truncate
+from pullback_lab.broker_reconcile import reconcile
+from audusd_matrix.signals import generate_grid
+from audusd_matrix.runner import Research
+from audusd_matrix.pool import Pool
+from audusd_matrix.io import baseline_parity
+from audusd_matrix.download import Stream
 
-EPOCH=e.dt('2020-01-01T00:00:00Z').timestamp()
-OFFSETS=(0.,.0001,.0002,.0003,.0004,.0005,.0006,.0007,.0004,.0001,-.0002,-.0004,.0004,.0005,.0006,.0007)
+START='2020-03-02T00:00:00Z';END='2020-03-09T00:00:00Z';WARM='2020-01-01T00:00:00Z'
 
 
-def boundary(n):
-    return 1.25+(n//16)*.0008+OFFSETS[n%16]
-
-
-def price(t):
-    q=(t-EPOCH)/900;i=math.floor(q);f=q-i
-    return boundary(i)*(1-f)+boundary(i+1)*f
-
-
-class SyntheticStore:
-    calls=0
-    def __init__(self,directory,reader=None,legacy_root=None,progress=lambda **x:None):
-        self.memo=OrderedDict();self.downloads=0
-    def exact(self,pair,gran,start,end):return self.range(pair,gran,start,end)
-    def range(self,pair,gran,start,end):
-        SyntheticStore.calls+=1;step=e.STEP[gran];out=[]
-        for t in range(int(start.timestamp()),int(end.timestamp()),step):
-            points=[price(t),price(t+step)]
-            points.extend(price(s) for s in range(((t//900)+1)*900,t+step,900))
-            mid=dict(o=points[0],h=max(points),l=min(points),c=points[1])
-            out.append(dict(time=e.stamp(e.datetime.fromtimestamp(t,e.UTC)),complete=True,mid=mid,
-                            bid={k:v-.00002 for k,v in mid.items()},ask={k:v+.00002 for k,v in mid.items()}))
-        return out
-    def window(self,pair,start,end):return self.range(pair,'M15',start,end)
-    def difference_count(self):return 0
-    def index(self):return [dict(origin='SYNTHETIC_OFFLINE_TEST_ONLY')]
-    def close(self):pass
+def history():
+    store=SyntheticStore('unused')
+    m15,_=load_bars(store,'AUD_USD','M15',e.dt(WARM),e.dt(START),e.dt(END))
+    h1,_=load_bars(store,'AUD_USD','H1',e.dt(WARM),e.dt(START),e.dt(END))
+    return store,m15,h1
 
 
 class IntegrationTests(unittest.TestCase):
-    def test_known_183_prestart_bars_delays_pair_and_accounts_without_aborting(self):
-        begin=e.dt('2020-03-02T00:00:00Z')
-        class SparseWarmupStore(SyntheticStore):
-            def range(self,pair,gran,start,end):
-                rows=super().range(pair,gran,start,end)
-                earliest=begin.timestamp()-183*e.STEP[gran]
-                return [r for r in rows if e.dt(r['time'])>=begin or e.dt(r['time']).timestamp()>=earliest]
-        with tempfile.TemporaryDirectory() as d:
-            env=dict(PULLBACK_START_UTC=e.stamp(begin),PULLBACK_END_UTC='2020-05-01T00:00:00Z',
-                     PULLBACK_WARMUP_START_UTC='2020-01-01T00:00:00Z',PULLBACK_PAIRS='GBP_USD',
-                     PULLBACK_OFFLINE='1',PULLBACK_REQUIRE_PERSISTENCE='0')
-            job=Research(output=d,environ=env,store_factory=SparseWarmupStore);job.run()
-            self.assertEqual(job.state['status'],'COMPLETE',job.state)
-            directory=job.work/'pairs'/'GBP_USD'
-            coverage=json.loads((directory/'coverage.json').read_bytes())
-            self.assertTrue(coverage['eligibility']['evaluation_delayed_for_warmup'])
-            self.assertEqual([s['warmup_bars'] for s in coverage['streams']],[183,183])
-            self.assertEqual([s['required_observed_warmup_bars'] for s in coverage['streams']],[250,1000])
-            ready=coverage['eligibility']['effective_evaluation_start_utc']
-            self.assertGreater(ready,e.stamp(begin))
-            signals=[json.loads(r) for r in gzip.decompress((directory/'qualifying_signals.jsonl.gz').read_bytes()).splitlines()]
-            self.assertTrue(signals)
-            self.assertTrue(all(s['entry_utc']>=ready for s in signals))
-            for r in json.loads((directory/'account_summaries.json').read_bytes()):
-                self.assertEqual(r['window_start'],ready)
-                self.assertTrue(r['warmup_exclusion_at_window_start'])
-                self.assertFalse(r['complete_requested_window'])
-                self.assertEqual(r['effective_account_start_utc'],ready)
-                years=(e.dt(r['window_end'])-e.dt(ready)).total_seconds()/(365.25*86400)
-                nav=r['conditional_ending_nav_gbp']
-                if nav>0:
-                    self.assertAlmostEqual(r['conditional_nav_cagr_pct'],((nav/100)**(1/years)-1)*100)
-            import csv,io
-            monthly=list(csv.DictReader(io.StringIO((directory/'monthly_qualifications.csv').read_text())))
-            self.assertTrue(all(r['qualifications']=='' for r in monthly if r['month']=='2020-03'))
+    def test_unfiltered_records_match_original_generator_and_future_bars_cannot_change_prefix(self):
+        store,m15,h1=history()
+        source,_=generate('AUD_USD',m15,h1,e.dt(START),e.dt(END),indicator_ready_from=e.dt(START))
+        expected=[s for s in source if s['side']=='BUY' and s['control']=='TREND_PULLBACK_ENGULF']
+        signals,_=generate_grid(m15,h1,START,END,START)
+        self.assertGreater(len(expected),0)
+        self.assertTrue(all(len(v)>0 for v in signals.values()))
+        for rows in signals.values():
+            for row in rows:
+                age=(e.dt(row['signal_close_utc'])-e.dt(row['features']['h1_source_close_utc'])).total_seconds()
+                self.assertGreaterEqual(age,0);self.assertLess(age,3600)
+        self.assertEqual(baseline_parity(signals['BASELINE'],expected)['status'],'PASS')
+        future='2020-03-06T00:00:00Z'
+        # Prefix invariance: make much later prices materially different.
+        modified=copy.deepcopy(m15)
+        for i,t in enumerate(modified.times):
+            if t>=e.dt(future).timestamp():
+                for component in modified.values:
+                    for field in 'ohlc':modified.values[component][field][i]+=.1
+        after,_=generate_grid(modified,h1,START,END,START)
+        for cid in signals:
+            before_prefix=[s for s in signals[cid] if s['entry_utc']<future]
+            after_prefix=[s for s in after[cid] if s['entry_utc']<future]
+            self.assertEqual(before_prefix,after_prefix)
+        store.close()
 
-    def test_full_job_report_manifest_cash_ledgers_and_resume(self):
-        with tempfile.TemporaryDirectory() as d:
-            env=dict(PULLBACK_START_UTC='2020-03-02T00:00:00Z',PULLBACK_END_UTC='2020-03-09T00:00:00Z',
-                     PULLBACK_WARMUP_START_UTC='2020-01-01T00:00:00Z',PULLBACK_PAIRS='GBP_USD',
-                     PULLBACK_OFFLINE='1',PULLBACK_REQUIRE_PERSISTENCE='0')
-            job=Research(output=d,environ=env,store_factory=SyntheticStore);job.run()
-            self.assertEqual(job.state['status'],'COMPLETE',job.state)
-            self.assertEqual(job.state['pairs_completed'],1)
-            directory=job.work/'pairs'/'GBP_USD'
-            signals=[json.loads(row) for row in gzip.decompress((directory/'qualifying_signals.jsonl.gz').read_bytes()).splitlines()]
-            self.assertGreater(sum(s['control']=='TREND_PULLBACK_ENGULF' for s in signals),0)
-            summaries=json.loads((directory/'account_summaries.json').read_bytes())
-            self.assertEqual(len(summaries),6)
-            self.assertGreater(sum(r['closed_trades'] for r in summaries),0)
-            for result in directory.joinpath('accounts').glob('*.json.gz'):
-                r=json.loads(gzip.decompress(result.read_bytes()))['result']
-                summary=r['summary']
-                self.assertEqual(summary['status'],'COMPLETE_CONDITIONAL')
-                self.assertAlmostEqual(summary['ending_balance_gbp'],100+summary['price_pl_gbp']+summary['financing_gbp'],places=4)
-            archive=job.work/'P32_PULLBACK_PASS1_RESULTS.zip'
-            with zipfile.ZipFile(archive) as z:
-                self.assertIsNone(z.testzip());manifest=json.loads(z.read('report_manifest.json'))
-                self.assertFalse(any(name.endswith('.sqlite3') for name in z.namelist()))
-                for name,meta in manifest.items():
-                    raw=z.read(name);self.assertEqual(e.sha(raw),meta['sha256']);self.assertEqual(len(raw),meta['bytes'])
-                self.assertEqual(json.loads(z.read('RUN_COMPLETE.json'))['status'],'COMPLETE_RESEARCH_PASS1')
-            calls=SyntheticStore.calls
-            again=Research(output=d,environ=env,store_factory=SyntheticStore);again.run()
-            self.assertEqual(again.state['status'],'COMPLETE',again.state)
-            self.assertEqual(SyntheticStore.calls,calls)
-            # A corrupt completed witness must fail rather than silently reuse.
-            (directory/'generation_counts.json').write_text('{}')
-            failed=Research(output=d,environ=env,store_factory=SyntheticStore);failed.run()
-            self.assertEqual(failed.state['status'],'ERROR')
-            self.assertIn('checkpoint file',failed.state['error'])
+    def test_gap_reset_preserves_original_baseline_semantics(self):
+        store,m15,h1=history()
+        index=next(i for i,t in enumerate(m15.times) if t>=e.dt('2020-03-05T12:00:00Z').timestamp())
+        del m15.times[index]
+        for component in m15.values:
+            for field in 'ohlc':del m15.values[component][field][index]
+        old,_=generate('AUD_USD',m15,h1,e.dt(START),e.dt(END),indicator_ready_from=e.dt(START))
+        old=[s for s in old if s['side']=='BUY' and s['control']=='TREND_PULLBACK_ENGULF']
+        new,_=generate_grid(m15,h1,START,END,START)
+        self.assertEqual(baseline_parity(new['BASELINE'],old)['status'],'PASS')
+        store.close()
 
+    def test_cash_results_identical_for_original_and_regenerated_baseline(self):
+        store,m15,h1=history();old,_=generate('AUD_USD',m15,h1,e.dt(START),e.dt(END),indicator_ready_from=e.dt(START))
+        old=[s for s in old if s['side']=='BUY' and s['control']=='TREND_PULLBACK_ENGULF']
+        new,_=generate_grid(m15,h1,START,END,START)
+        evidence=json.loads((Path(__file__).resolve().parents[1]/'pullback_lab/saved_broker_evidence.json').read_bytes())
+        broker,_=reconcile(evidence);funding=Funding(evidence['funding_schedules'])
+        with tempfile.TemporaryDirectory() as tmp:
+            pool=Pool(Path(tmp),store,m15,'AUD_USD',e.dt(END),'SYNTHETIC_TEST')
+            results=[]
+            for selected in [old,new['BASELINE']]:
+                result=Replay(selected,pool.get,Market(store),funding,evidence['instruments'],'END_ASC','FROZEN_14OCT2026_RATES',
+                    broker['observed_symmetric_conversion_factor_markup'],initial=100.,start=START,end=END).run()
+                self.assertEqual(result['summary']['status'],'COMPLETE_CONDITIONAL');results.append(result)
+            self.assertGreater(results[0]['summary']['closed_trades'],0)
+            self.assertEqual(results[0],results[1]);pool.close()
+        store.close()
+
+    def test_runner_publishes_all_224_checkpoints_and_resumes_without_replaying_accounts(self):
+        # Exercise the production orchestrator on small deterministic data. Only
+        # source loading, cache seeding and dates are replaced by fixture inputs.
+        # Actual generator, path model, funding, account, checkpoints and reports run.
+        store,m15,h1=history();source=dict(start=START,end=END,warmup_start=WARM)
+        original,_=generate('AUD_USD',m15,h1,e.dt(START),e.dt(END),indicator_ready_from=e.dt(START))
+        original=[s for s in original if s['side']=='BUY' and s['control']=='TREND_PULLBACK_ENGULF']
+        coverage=dict(eligibility=dict(effective_evaluation_start_utc=START))
+        eras=[dict(window_id=f'ERA_{y}_{y+4}',start=START,end=END) for y in (2005,2010,2015,2020,2025)]
+        eras.append(dict(window_id='RECENT_2021_TO_CUTOFF',start=START,end=END))
+        def fixture_source(job):return source,coverage,original
+        def fixture_history(job,st,src):return m15,h1,e.dt(START),dict(source='SYNTHETIC_OFFLINE_TEST')
+        def fixture_store(job):return SyntheticStore('unused')
+        with tempfile.TemporaryDirectory() as tmp:
+            env=dict(AUDUSD_MATRIX_OUTPUT_DIR=tmp)
+            with patch.object(Research,'prepare_source',fixture_source),patch.object(Research,'load_history',fixture_history),patch.object(Research,'make_store',fixture_store),patch.object(Pool,'seed_source',return_value=dict(test_fixture=True)),patch('audusd_matrix.runner.windows',return_value=eras),patch('pullback_lab.runner.persistence',return_value=dict(separate_mount_detected=True)):
+                job=Research(env);job.run()
+                self.assertEqual(job.state['status'],'COMPLETE',job.state)
+                self.assertEqual(job.state['candidates_completed'],16);self.assertEqual(job.state['accounts_completed'],224)
+                saved=list(job.work.glob('candidates/*/accounts/*.json.gz'));self.assertEqual(len(saved),224)
+                for cid in generate_grid(m15,h1,START,END,START)[0]:
+                    rows=json.loads((job.work/'candidates'/cid/'account_summaries.json').read_bytes())
+                    self.assertGreater(sum(r['closed_trades'] for r in rows),0,cid)
+                for path in saved:
+                    r=json.loads(gzip.decompress(path.read_bytes()))['result'];s=r['summary']
+                    self.assertAlmostEqual(s['ending_balance_gbp'],100+s['price_pl_gbp']+s['financing_gbp'],places=4)
+                with zipfile.ZipFile(io.BytesIO(b''.join(Stream(job,True)))) as z:
+                    self.assertIsNone(z.testzip());self.assertEqual(json.loads(z.read('RUN_COMPLETE.json'))['accounts_completed'],224)
+                # Completed reports are immutable witnesses for resume.
+                with patch('audusd_matrix.runner.Replay.run',side_effect=AssertionError('Completed account replayed')):
+                    again=Research(env);again.run();self.assertEqual(again.state['status'],'COMPLETE',again.state)
+                target=next(job.work.glob('candidates/*/accounts/*.json.gz'));target.write_bytes(b'corrupt')
+                failed=Research(env);failed.run()
+                self.assertEqual(failed.state['status'],'ERROR');self.assertIn('report changed',failed.state['error'])
+        store.close()
 
 if __name__=='__main__':unittest.main()
