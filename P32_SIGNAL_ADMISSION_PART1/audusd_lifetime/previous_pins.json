@@ -1,0 +1,71 @@
+{
+  "signature": "2ef9e947aa1faa075df6f122d144c17094205b3e70659e1a02a109a2db4bf9fe",
+  "files": {
+    "REVIEW.md": {
+      "bytes": 2482,
+      "sha256": "8feca605e81f3b9b18073c3151d47fddd65e23326c03d5d42b58624dc2dedfbe"
+    },
+    "account_matrix.csv": {
+      "bytes": 168962,
+      "sha256": "fa7e8d54f03629b519d201b5806c7f70124d30a300c021b947579ead2d8c2059"
+    },
+    "baseline_parity.json": {
+      "bytes": 86,
+      "sha256": "0edbeabb7ecb5dff329f93ef515184532880784c8cc9a3ab73539c7dc6474a9a"
+    },
+    "broker_reconciliation.json": {
+      "bytes": 15470,
+      "sha256": "f340799cf5a40ab9bf96c36fe8ff0696843a9a107d9b1152d3fcb4a4245b97e4"
+    },
+    "candidate_screens.csv": {
+      "bytes": 4636,
+      "sha256": "50fff0721a4eaef0371ac094c29e268ee049b7066535723a7aad34c6e5c1f201"
+    },
+    "coverage_context.json": {
+      "bytes": 443,
+      "sha256": "793faf801ae3fc80742b97fb279a3afd1fdb7ce47fb2d2ce493a4638e6f8dfae"
+    },
+    "opportunity_matrix.csv": {
+      "bytes": 44660,
+      "sha256": "dc2f1dc9792dfcc76b6a7a5ccdcc375134de98d590889ecf2a35503cd93da54c"
+    },
+    "overlap_parity.json": {
+      "bytes": 5257,
+      "sha256": "d8a534ff3e2ec65d950656136d1e9a734b7ac7bc234ea8bf28e45a731ac69491"
+    },
+    "plateau_regions.csv": {
+      "bytes": 11086,
+      "sha256": "5ffa5f9c4151f12b26034c36afa318d11431ef2d1c7d1589bb3c44af696c1f9f"
+    },
+    "previous_matrix_witness.json": {
+      "bytes": 6609,
+      "sha256": "80a25aab5ce336c69709bd66482babddead82690e92e003cbf7f28a1568260a7"
+    },
+    "protocol.json": {
+      "bytes": 2178,
+      "sha256": "3f8608ed2d3bb37a3f12f49de606bc738dcdef01c46a7137fb9396302bb30e94"
+    },
+    "run_state.json": {
+      "bytes": 504,
+      "sha256": "907b2bd568d8d4e6800383184447723d3f9e5219bf30ab6d437a299ba6703d9c"
+    },
+    "source_provenance.json": {
+      "bytes": 5097,
+      "sha256": "3121a6577d49cdfabd61320b6a5b5cb017bfe2949802b16702c37ff4bcdb7c5a"
+    }
+  },
+  "matrix_code": {
+    "__init__.py": "0b9c7904d0b7a17402613888e73e52d82a96f556ac2a6480ca5f06f492cd8bd0",
+    "audusd_pullback_matrix.py": "f4dbdf98e93a9282f2a4dca8d82687f4c240cd86f61aa17968ace01b10442009",
+    "cache.py": "1e1c156eebead5910ebf08f5a7ca63780f97c060e97f7eed7fc5e426e5874b16",
+    "download.py": "ee955247b6cdbf3d057d7b9443d35a24494a608258c8420539331614cc6a1616",
+    "engine_pins.json": "9484be7bfa419f455048c64d36326917de34361116e432804392aff9ea94dade",
+    "io.py": "a3b39398c0eb92fb45afa9f1f8f58cdfef5b3287a0fc98982dc10165828e2a77",
+    "pool.py": "682e13570c5b153854c020c81094408b79c21d8f503c77b1538b01dc1f2f6112",
+    "reporting.py": "80e3c612c36bbe49569de3bcca83254861aabcca60e6cfcf871d55bd3e2f2015",
+    "runner.py": "fc472a476424923243fb3339b5bf3ad2397cf18a6634636c7c06c2ce7d6edde4",
+    "signals.py": "fcdcd3f2a68bd061001f958f42d0b2a1bb86effd04111aff7a5634a4ecdeac7d",
+    "source_pins.json": "7555ec15686b20c992c26fb9fd72ddad67bcf70ab43eda8540296d1108a021fe",
+    "storage.py": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "reviewed_diagnostic": {
+    "signature": "6a61fdcad58afcc4a1dbfc4219e960d5cf65515356726d165b67ed80d7bbf99f",
+    "files": {
+      "frequency_summary.csv": "7e5fb8b49e5ff0a8308522e74e836ba4182063d834e0cf138dc82cbdf430937f",
+      "near_misses.csv": "006658f2abb050d9ac1c24019cb18241e13c0514cdd32af80d9ea1a1a401eaee",
+      "parity.json": "03269093dc7c5d0bf76abdb753446b9a26271da3beea51ec838ebbbe297a0997",
+      "protocol.json": "5ccbf1775eee106d3f99bd9612dec6194b35a4a27147dbeb6ab16aa1e1f0e44c",
+      "source_provenance.json": "32bb133a39919cc3a6a22b9e0c660a602a235fcae8413e09ecb10cae4bf83247"
+    }
+  },
+  "late_observations_used_as_signals": false,
+  "source_cutoff_unchanged": true
+}
