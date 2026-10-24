@@ -1,15 +1,17 @@
 {
   "status": "PASS",
-  "offline_tests": 16,
-  "last_test_run_seconds": 35.827,
-  "synthetic_original_matrix_accounts": 224,
-  "synthetic_reference_extension_accounts": 126,
-  "synthetic_lifetime_matrix_accounts": 126,
-  "exact_eight_bar_control_payloads_matched": 42,
-  "checkpoint_reuse_without_account_replay": true,
-  "parity_tampering_and_corrupt_checkpoints_refused": true,
-  "prior_research_files_unchanged": true,
-  "byte_identical_original_reference_files": 35,
+  "offline_tests": 17,
+  "test_seconds": 25.253,
+  "synthetic_original_accounts": 224,
+  "synthetic_body_extension_accounts": 126,
+  "synthetic_previous_lifetime_accounts": 126,
+  "synthetic_final_extension_accounts": 126,
+  "exact_control_payloads_matched": 42,
+  "finished_accounts_resumed_without_replay": true,
+  "source_files_unchanged": true,
+  "byte_identical_reference_modules": 45,
+  "source_generator_unchanged": true,
   "real_historical_runs_during_build": 0,
-  "scope": "Offline invariant/synthetic validation; historical account parity is enforced at runtime"
+  "source_reference": "AUDUSD_LIFETIME_SUMMARY.zip",
+  "scope": "Offline synthetic and invariant checks; historical parity enforced at runtime"
 }

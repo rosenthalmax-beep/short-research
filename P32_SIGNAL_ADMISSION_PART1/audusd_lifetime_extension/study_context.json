@@ -1,0 +1,18 @@
+{
+  "final_bounded_lifetime_extension": true,
+  "prior_reviewed_signature": "a020cc76c4e6065ee0e47fe4008f887292ebafb55755a8f0498718be398e7d2f",
+  "prior_accounts_completed": 126,
+  "prior_control_payloads_matched": 42,
+  "prior_plateau_regions_passed": 0,
+  "late_observations_imported_as_signals": false,
+  "rr_fixed": 3.0,
+  "body_floor_fixed": 1.25,
+  "lifetime_values": [
+    16,
+    20,
+    24
+  ],
+  "further_expansion_requires_separate_review": true,
+  "uncertainty_preserved": true,
+  "unknown_entry_omissions_not_repaired": true
+}

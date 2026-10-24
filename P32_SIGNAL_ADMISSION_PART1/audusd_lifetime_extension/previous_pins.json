@@ -1,0 +1,87 @@
+{
+  "signature": "a020cc76c4e6065ee0e47fe4008f887292ebafb55755a8f0498718be398e7d2f",
+  "files": {
+    "REVIEW.md": {
+      "bytes": 3499,
+      "sha256": "db9df0b95b078d2a7b2daf7797e2f0b44a4b991ae1aa32940c5cff09490b2219"
+    },
+    "account_matrix.csv": {
+      "bytes": 170965,
+      "sha256": "f024d461ec6fb01a4b7dc4ab46a5862d5cc0097d6b59b16ffb7c640e09aa83b7"
+    },
+    "baseline_parity.json": {
+      "bytes": 86,
+      "sha256": "0edbeabb7ecb5dff329f93ef515184532880784c8cc9a3ab73539c7dc6474a9a"
+    },
+    "broker_reconciliation.json": {
+      "bytes": 15470,
+      "sha256": "f340799cf5a40ab9bf96c36fe8ff0696843a9a107d9b1152d3fcb4a4245b97e4"
+    },
+    "candidate_screens.csv": {
+      "bytes": 4510,
+      "sha256": "6679336cdc6155734cf2a86cd6c18b5346eb70bf0782731d6fd5d55e34727f78"
+    },
+    "control_comparisons.csv": {
+      "bytes": 33365,
+      "sha256": "e38b7553e01a662dbf3f21e18c75ded1c942f4e48e58dc6f829ee3378e6eae84"
+    },
+    "diagnostic_context.json": {
+      "bytes": 693,
+      "sha256": "3d6e6f87aeea81ceb8f4bb5539cb5aef7d7364987c54843a60efee223118133d"
+    },
+    "opportunity_matrix.csv": {
+      "bytes": 44721,
+      "sha256": "1f9cd057fda36942ad3f8dd20f8ac3563caecfadbc49c23e969a5cf46935c348"
+    },
+    "overlap_parity.json": {
+      "bytes": 7750,
+      "sha256": "749d927fb2c598272ee6c2c8def9be1314068c8d7e0e94a45e25bf531121f271"
+    },
+    "plateau_regions.csv": {
+      "bytes": 11316,
+      "sha256": "ee207bda8dc1fb937b6cf2ac9e6dd0619535a10fdc3e569ef8154291de36a780"
+    },
+    "previous_matrix_witness.json": {
+      "bytes": 9676,
+      "sha256": "8e8e9b1b3e490857c2082f3aaab431cfd2c6a8088c2f99ace5394f3c12e0dbad"
+    },
+    "protocol.json": {
+      "bytes": 2607,
+      "sha256": "4ed0b66451f91ce5bf1a5a718303cd6a4f1cb653dd3c7f11baebd199602a41d2"
+    },
+    "run_state.json": {
+      "bytes": 528,
+      "sha256": "72756ffd1e108b1dc9a379682835928fd2c5b1c781a6e9d6c7df65d9332f28fd"
+    },
+    "source_provenance.json": {
+      "bytes": 5179,
+      "sha256": "aa0f26e54bd7b4ece675035f5db2bc788c32f5ba637a8ab64381f5daf52d42f5"
+    }
+  },
+  "matrix_code": {
+    "__init__.py": "0b9c7904d0b7a17402613888e73e52d82a96f556ac2a6480ca5f06f492cd8bd0",
+    "audusd_pullback_matrix.py": "f4dbdf98e93a9282f2a4dca8d82687f4c240cd86f61aa17968ace01b10442009",
+    "cache.py": "1e1c156eebead5910ebf08f5a7ca63780f97c060e97f7eed7fc5e426e5874b16",
+    "download.py": "ee955247b6cdbf3d057d7b9443d35a24494a608258c8420539331614cc6a1616",
+    "engine_pins.json": "9484be7bfa419f455048c64d36326917de34361116e432804392aff9ea94dade",
+    "io.py": "a3b39398c0eb92fb45afa9f1f8f58cdfef5b3287a0fc98982dc10165828e2a77",
+    "pool.py": "682e13570c5b153854c020c81094408b79c21d8f503c77b1538b01dc1f2f6112",
+    "reporting.py": "80e3c612c36bbe49569de3bcca83254861aabcca60e6cfcf871d55bd3e2f2015",
+    "runner.py": "fc472a476424923243fb3339b5bf3ad2397cf18a6634636c7c06c2ce7d6edde4",
+    "signals.py": "fcdcd3f2a68bd061001f958f42d0b2a1bb86effd04111aff7a5634a4ecdeac7d",
+    "source_pins.json": "7555ec15686b20c992c26fb9fd72ddad67bcf70ab43eda8540296d1108a021fe",
+    "storage.py": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
+  },
+  "lifetime_code": {
+    "__init__.py": "01c769e387a88c3adb886221553ffa44a4770a82f85bbdcbf19191a62ae2903d",
+    "audusd_pullback_lifetime.py": "a729b3920b2a6e0c657189908699d52586b67e782efd5c9a6d8697116c15a8e1",
+    "config.py": "3c610c9551014623e5d4fe801f1e1e8825651deb4bd6df00a1192043218f31ed",
+    "diagnostic_context.json": "3d6e6f87aeea81ceb8f4bb5539cb5aef7d7364987c54843a60efee223118133d",
+    "download.py": "1fbf05428f2c41a9a944ba0106b7dc9d0b4227da5ddf8ca809d0f7f98c3e58c3",
+    "previous_pins.json": "aa604f5e02d1bc1a7846a2db748e661af31f10aadee950876fad1166d11d784e",
+    "reporting.py": "90bc9e0dbb3118d5eac98cb5d7e58e9fa0b0a888a911a5675672fedca55a3120",
+    "reuse.py": "113543183da3c8ed99e05587c039cc684365ee531b06faaab09337c72d4f0ad0",
+    "runner.py": "7a1b79cb6454322588025e455909b9dd40195e0eaa9fa3c1ce016cd711b4ad9f",
+    "signals.py": "5b56d53de95c4953d22ff3cd9921dcc0be23aa3fe1ebe7186fe71012cea45806"
+  }
+}
