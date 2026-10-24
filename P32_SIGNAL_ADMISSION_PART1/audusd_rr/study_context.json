@@ -1,0 +1,24 @@
+{
+  "reviewed_reference_signature": "ccc2901b52def6ae3de6f799887bfd772ff972d9c58ca7670bbc0d84df803ece",
+  "prior_accounts": 126,
+  "prior_passing_plateau_regions": 0,
+  "lifetime_search_finished": true,
+  "rr_values": [
+    2.5,
+    3.0,
+    3.5
+  ],
+  "lifetime_values": [
+    16,
+    20,
+    24
+  ],
+  "distance_values": [
+    1.0,
+    1.25
+  ],
+  "body_floor": 1.25,
+  "no_new_filters": true,
+  "original_uncertainty_retained": true,
+  "live_portfolio_modified": false
+}
