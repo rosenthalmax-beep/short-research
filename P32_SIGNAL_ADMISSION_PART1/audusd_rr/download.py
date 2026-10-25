@@ -10,7 +10,7 @@ from audusd_matrix import io as x
 FIXED=('protocol.json','status.json','ERROR.json','source_provenance.json','baseline_parity.json',
        'broker_reconciliation.json','account_matrix.csv','opportunity_matrix.csv','plateau_regions.csv',
        'candidate_screens.csv','REVIEW.md','run_state.json',
-       'overlap_parity.json','previous_matrix_witness.json','study_context.json','control_comparisons.csv','qualification_sequence_parity.json')
+       'overlap_parity.json','previous_matrix_witness.json','study_context.json','control_comparisons.csv','qualification_sequence_parity.json','provenance_verification.json')
 
 
 def snapshot(job,summary=False):

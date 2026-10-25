@@ -146,7 +146,7 @@ class SourceTests(unittest.TestCase):
    result=previous.ancestors(root/'matrix',root/'extension',root/'life');self.assertEqual(len(result),3)
    self.assertTrue(all(not a.source_rows for a,c in result))
    (extension/'previous_matrix_witness.json').write_text('changed')
-   with self.assertRaisesRegex(ValueError,'report changed'):previous.ancestors(root/'matrix',root/'extension',root/'life')
+   with self.assertRaisesRegex(ValueError,'summary changed'):previous.ancestors(root/'matrix',root/'extension',root/'life')
  def test_regions_keep_account_uncertainty_visible(self):
   rules=candidates();rows=[r for rule in rules for r in sample_rows(rule['candidate_id'])]
   self.assertTrue(all(b['account_lineage_uncertainty_present'] for b in regions(rules,rows)))
@@ -178,7 +178,7 @@ class ReplayTests(unittest.TestCase):
   def load(job,st,src):return m,h,e.dt(START),dict(fixture='SYNTHETIC_ONLY')
   def make(job):return SyntheticStore('unused')
   def fixture_pins(job):
-   names=('REVIEW.md','run_state.json','account_matrix.csv','protocol.json','previous_matrix_witness.json')
+   names=('REVIEW.md','run_state.json','account_matrix.csv','protocol.json','previous_matrix_witness.json','source_provenance.json')
    return dict(signature=job.signature,files={n:dict(bytes=(job.work/n).stat().st_size,sha256=x.sha_file(job.work/n)) for n in names if (job.work/n).is_file()})
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);oldroot=root/'matrix';extroot=root/'extension';priorroot=root/'lifetime';firstextroot=root/'final_extension';newroot=root/'rr'
@@ -207,12 +207,24 @@ class ReplayTests(unittest.TestCase):
     extjob.run();self.assertEqual(extjob.state['status'],'COMPLETE',extjob.state)
     (extjob.work/'private_source_index.json.gz').write_bytes(gzip.compress(e.canon([])))
     rr_pins=fixture_pins(extjob)
+    # Reproduce the reported failure: completed prior results stay unchanged,
+    # but a resume rewrites only its three operational path-work counters.
+    import audusd_rr.provenance_guard as guard
+    prov_path=extjob.work/'source_provenance.json';reviewed=json.loads(prov_path.read_bytes())
+    reviewed_sha=e.sha(e.canon(reviewed))
+    stack.enter_context(patch.dict(guard.REFERENCES,{reviewed_sha:dict(archive='SYNTHETIC_TEST_ONLY',payload=reviewed)}))
+    resumed=copy.deepcopy(reviewed)
+    for field in guard.COUNTERS:resumed[field]=0
+    prov_path.write_bytes(e.canon(resumed))
     def previous(path,progress):return Previous(path,progress,pins=rr_pins)
     stack.enter_context(patch('audusd_rr.runner.Previous',side_effect=previous))
     before={str(p.relative_to(root)):x.sha_file(p) for parent in [oldroot,extroot,priorroot,firstextroot] for p in parent.rglob('*') if p.is_file()}
     env=dict(AUDUSD_MATRIX_OUTPUT_DIR=str(oldroot),AUDUSD_EXTENSION_OUTPUT_DIR=str(extroot),AUDUSD_LIFETIME_OUTPUT_DIR=str(priorroot),AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR=str(firstextroot),AUDUSD_RR_OUTPUT_DIR=str(newroot))
     job=Research(env);job.run();self.assertEqual(job.state['status'],'COMPLETE',job.state)
     self.assertEqual(job.state['accounts_completed'],252);self.assertEqual(job.state['overlap_account_payloads_matched'],84)
+    audit=json.loads((job.work/'provenance_verification.json').read_bytes())
+    self.assertTrue(any(c['classification']=='COUNTERS_ONLY' for c in audit['checks']))
+    self.assertTrue(all(c['locked_fields_match'] for c in audit['checks']))
     self.assertEqual(len(list(job.work.glob('candidates/*/accounts/*.json.gz'))),252)
     with zipfile.ZipFile(io.BytesIO(b''.join(Stream(job,True)))) as z:
      self.assertIsNone(z.testzip());state=json.loads(z.read('RUN_COMPLETE.json'));self.assertEqual(state['accounts_completed'],252)

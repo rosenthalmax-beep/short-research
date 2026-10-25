@@ -1,6 +1,6 @@
 {
   "Procfile": "ac5d65d355dd2202355fb2c8c9bca0d0a55c10c52ae78df007e8791b0a7437e4",
-  "README.md": "4960571f2d00765543469ca99c0e3f7e7606de2b5671d777ecf5f24ac7a9233f",
+  "README.md": "b41111f14ab7ec7daeba743368c70f71ae35e34e3a3d3fd9f3ef76aa10c47c8b",
   "audusd_extension/__init__.py": "9af31f84e86417e73038939cbde7b44b00907b6d729b18db21a8c63ba762e183",
   "audusd_extension/config.py": "100f6016b687ebd0ae10062e07add3cfdf31015dd4bc64b04ae18e76bbcf55e4",
   "audusd_extension/coverage_context.json": "793faf801ae3fc80742b97fb279a3afd1fdb7ce47fb2d2ce493a4638e6f8dfae",
@@ -43,12 +43,14 @@
   "audusd_pullback_matrix.py": "f4dbdf98e93a9282f2a4dca8d82687f4c240cd86f61aa17968ace01b10442009",
   "audusd_pullback_rr.py": "95572199686f9b183776466e15ad5703ba9dce9d07d4f3ab2688f57b235b2cef",
   "audusd_rr/__init__.py": "e14fa59dcbb5c333847cbb2d208108edf4fb5fee6536290cf65c53b7be852f00",
-  "audusd_rr/config.py": "1fd6bdf877b99a356c48b3ba52437f6f0f48efee7290f14340b345815061e6de",
-  "audusd_rr/download.py": "f97e9384fe482455c1d74734aafe59e913037c36cf1b6f32cbf75d2aef01addc",
+  "audusd_rr/config.py": "00f6eca112bca80e19a441138af98a216e167f9b2d669358bd6a39ff5f238c45",
+  "audusd_rr/download.py": "65fb9b031ce62860828287ab0e3338b2072fe6862b1e3aa2cfc404b8c0c2e3f3",
   "audusd_rr/previous_pins.json": "96ca1486c1cbcfcfa120c9102c2029b3555465ced5212696a1fee365b9bbde6c",
+  "audusd_rr/provenance_guard.py": "018be07f6a9811b09fba7ca3d5222e00604e052d430a48451690259748a10edb",
   "audusd_rr/reporting.py": "572683ab4cbefa30b55da5b4f5221e9426c7b2e2b8427cffc4d8a5e8a532c4ec",
-  "audusd_rr/reuse.py": "ab1ab7745f390a15341a8c9a8fbdafefeb35615dcb8952a3139ea8971aa01d78",
-  "audusd_rr/runner.py": "ef6ea4f6cba2f2e1bace3ad0de550d0f6928154d01b28adc53e0e36356e28095",
+  "audusd_rr/reuse.py": "b36efb401bb6cc05a9140e4cd14d1ed15ae835f7a51c09d025e8e82949caf3d7",
+  "audusd_rr/reviewed_provenance.json": "d3bc0049b80a494a6df0e9b3088139b9af9da516fbe2ea1eadbbaa6fa67bf2b9",
+  "audusd_rr/runner.py": "ed235a0baa245396b46e15efc24c9d43f0a510d0dcf2b35e232808e19da76177",
   "audusd_rr/signals.py": "35076170ba1bd6cb59de97a6fb6e2e2853927fc65389c7e83b758a7971797918",
   "audusd_rr/study_context.json": "2dfe94e0a087414e9ca3cf223103719c88f8ef847113c4dd169f67b33c2418b6",
   "pullback_app.py": "55737cb0d4522520c251bcff84503edbf4ed6fc50bef2a7dedb09bc739d4f4bb",
@@ -66,6 +68,7 @@
   "pullback_lab/signals.py": "0825713093f170f1b58e92959fba3327ee391f1e65ed3b8fbc898b1ed0ddc123",
   "pullback_lab/storage.py": "31e2d53933a845a1370e19d1fa6429487831e8234deaf4422690cdc08e74643e",
   "rr_tests/fixture.py": "c9d98b066722410ad0560c38e565bc5a78f5b7751206595045c89c7db283ee5f",
-  "rr_tests/test_rr.py": "7b5ca43a336dc0c6cdc77d1838a1830206f4e3f1f5e8e5b9f5f8d3950bb18a57",
-  "validation/acceptance.json": "712130e9a9be5846574656ee8997d2843e2b28ccc69d3996cf151a8cc676d1e4"
+  "rr_tests/test_provenance_guard.py": "200ca025800c2d41ceab417f3216db6ccde110b22d715ebc017d04d790bad2b1",
+  "rr_tests/test_rr.py": "bb0b418e55b9d3d9301b85651b0cc6814a6cbe00a3e17e2de8f09a38735ab5f0",
+  "validation/acceptance.json": "853e34baeb78c70b01576c6e97178f809b2902a135a10d921902d1356d908766"
 }

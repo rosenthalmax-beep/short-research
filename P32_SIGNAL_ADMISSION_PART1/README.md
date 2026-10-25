@@ -6,6 +6,38 @@ distance caps 1.00 / 1.25 ATR. Body floor 1.25 M15 ATR, 1% NAV risk,
 18 settings x 7 reset windows x 2 financing assumptions = 252 accounts.
 This is a historical research service. It does not modify the live portfolio.
 
+## V2 fix for "Reviewed matrix summary changed: source_provenance.json"
+
+The old RR checker compared the complete provenance file byte-for-byte. The
+previous research runner rewrites three operational work counters after resume:
+new_geometry_paths_computed, previous_paths_copied and previous_paths_verified.
+A change to these counters can therefore fail the old check even though the
+reviewed price, code and account evidence is unchanged.
+
+V2 compares the complete reviewed provenance payload, allowing ONLY these three
+nonnegative integer counters to differ. Formatting-only JSON changes also pass.
+All other keys/values/types remain locked, including native-price SHA, history,
+source indices, code hashes, flags and assumptions. Missing/invalid counters,
+unknown added fields and unrecognized modified provenance versions still fail.
+Account CSVs, signal files, checkpoints and the 84 full control payloads remain
+strict. Every accepted difference is recorded in provenance_verification.json.
+Previous files are never edited, and changes during a running replay still fail.
+
+To install this fix, upload this ZIP's contents over the current RR project,
+keeping every existing file and /data. Keep ALL variables and the SAME command:
+
+   python audusd_pullback_rr.py
+
+Redeploy, check /health shows the V2 version above, then GET /status. No deletion,
+new directory variable or cache regeneration is required. The code-version
+signature changes, so V2 keeps the failed V1 output separately. The reported
+V1 run completed zero accounts. The original grid and pricing/accounting rules
+are unchanged. Expected finish remains 252 accounts / 84 control matches.
+
+The live prior-service provenance file was not supplied with the error message.
+This patch accepts the known counter-only case; if a locked field differs,
+it stops with the differing field names so the discrepancy can be reviewed.
+
 ## Install on the SAME research service with mounted /data
 
 1. Extract this ZIP and upload its CONTENTS to the project root, replacing
@@ -34,7 +66,7 @@ This is a historical research service. It does not modify the live portfolio.
    Keep the platform PORT variable and /health health path.
 5. Redeploy. /health must show:
 
-   AUDUSD_PULLBACK_RR_MATRIX_V1_2026_10_24
+   AUDUSD_PULLBACK_RR_MATRIX_V2_2026_10_25_PROVENANCE
 
 6. Open GET /status once to start. Refresh it for progress. /health, HEAD /status
    and /protocol do not start work.
@@ -82,6 +114,8 @@ Original observed warm-up eligibility is retained. Windows overlap; do not sum.
 - candidate_screens.csv and plateau_regions.csv: per-cell criteria and FOUR
   adjacent 2x2x2 regions across RR/lifetime/distance, with EIGHT members each.
 - overlap_parity.json: all 84 exact control account comparisons.
+- provenance_verification.json: reviewed/observed hashes, accepted counter changes
+  and proof that locked provenance fields match.
 - baseline_parity.json, source_provenance.json, broker_reconciliation.json,
   previous_matrix_witness.json and study_context.json: provenance/checks.
 
@@ -126,7 +160,8 @@ Offline checks:
 
    python -m unittest discover -s rr_tests -v
 
-The tests include full synthetic predecessor/RR replays, all 84 control payloads,
+28 offline tests include full synthetic predecessor/RR replays, all 84 control payloads,
+counter-only resume drift, rejection of locked-field changes and invalid counters,
 checkpoint resume/corruption, causal qualifications, distinct RR geometry and
 a price path where RR2.5 wins while RR3/RR3.5 stop. No actual historical run was
 performed while building this package.

@@ -9,6 +9,7 @@ from pullback_lab import core as e
 from audusd_matrix import io as x
 from audusd_matrix.pool import Pool
 from .config import OVERLAPS
+from .provenance_guard import verify_report
 
 HERE=Path(__file__).resolve().parent
 PINS=json.loads((HERE/'previous_pins.json').read_bytes())
@@ -40,12 +41,15 @@ def csv_value(value):
 
 class Previous:
     def __init__(self,root,progress=lambda **x:None,pins=None):
-        self.root=Path(root);self.pins=PINS if pins is None else pins;self.witness={}
+        self.root=Path(root);self.pins=PINS if pins is None else pins;self.witness={};self.provenance_checks=[];self.provenance_identity={}
         e.require(self.root.name==self.pins['signature'],'Previous extension path must end in its reviewed signature')
         for name,w in self.pins['files'].items():
             path=safe_file(self.root,name)
-            e.require(path.stat().st_size==w['bytes'] and x.sha_file(path)==w['sha256'],'Reviewed matrix summary changed: '+name)
-            self.witness[name]=w['sha256'];progress(phase='VERIFY_PREVIOUS_MATRIX',verified_previous_file=name)
+            observed,check=verify_report(path,w['sha256'],w['bytes'])
+            if check:
+                self.provenance_checks.append(check)
+                self.provenance_identity[name]=dict(reviewed_sha256=w['sha256'],stable_fields_sha256=check['stable_fields_sha256'])
+            self.witness[name]=observed;progress(phase='VERIFY_PREVIOUS_MATRIX',verified_previous_file=name)
         state=json.loads((self.root/'run_state.json').read_bytes())
         e.require(state['status']=='COMPLETE_CONDITIONAL_LIFETIME_EXTENSION' and state['accounts_completed']==126
                   and state['candidates_completed']==9 and state['signature']==self.pins['signature'],'Previous extension is incomplete')
@@ -91,8 +95,9 @@ class Previous:
             for name,digest in witness['files'].items():
                 if '/' in name:continue
                 path=safe_file(directory,name)
-                e.require(x.sha_file(path)==digest,'Ancestor report changed: '+name)
-                self.ancestor_files.append((path,digest))
+                observed,check=verify_report(path,digest)
+                if check:self.provenance_checks.append(check)
+                self.ancestor_files.append((path,observed))
             index=safe_file(directory,'private_source_index.json.gz');rows=source_rows(index)
             digest=e.sha(e.canon(rows))
             e.require(digest==witness['private_source_index_semantic_sha256'],'Ancestor price windows differ from reviewed witness: '+str(directory))
@@ -119,7 +124,13 @@ class Previous:
         e.require(e.sha(e.canon(selected))==self.index_semantic_sha256,'Previous price-source index changed during extension')
 
     def proof(self):
-        return dict(signature=self.pins['signature'],files=self.witness,
+        # Stable identity retains the reviewed hash for the provenance file.
+        # Observed byte hashes/counter changes live in the separate audit; actual
+        # observed bytes remain locked by assert_unchanged for this running job.
+        identity=dict(self.witness)
+        for name,check in self.provenance_identity.items():identity[name]=check['reviewed_sha256']
+        return dict(signature=self.pins['signature'],files=identity,
+                    provenance_identity=self.provenance_identity,
                     private_source_index_semantic_sha256=self.index_semantic_sha256,
                     price_windows=len(self.source_rows),source_files_modified=False)
 

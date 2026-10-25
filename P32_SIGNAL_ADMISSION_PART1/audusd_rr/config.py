@@ -1,5 +1,5 @@
 from audusd_matrix.reporting import SCREEN
-VERSION='AUDUSD_PULLBACK_RR_MATRIX_V1_2026_10_24'
+VERSION='AUDUSD_PULLBACK_RR_MATRIX_V2_2026_10_25_PROVENANCE'
 DISTANCE=(1.0,1.25)
 LIFETIME=(16,20,24)
 RR=(2.5,3.0,3.5)
@@ -30,6 +30,8 @@ def configuration():
         rejection_policy='FILTER_FAILURE_RETAINS_SETUP; ACCEPTED_SIGNAL_CONSUMES_SETUP_EVEN_IF_EXECUTION_REJECTS',
         overlap_checks='EXACT_SIGNALS_OPPORTUNITIES_AND_ALL_84_SAVED_ACCOUNT_PAYLOADS',
         plateau_screen=dict(SCREEN,region='EIGHT_MEMBERS_OF_EACH_ADJACENT_2_BY_2_BY_2_RR_DISTANCE_LIFETIME_BLOCK'),
+        provenance_guard='RR_PROVENANCE_GUARD_V1_2026_10_25',
+        mutable_provenance_fields=['new_geometry_paths_computed','previous_paths_copied','previous_paths_verified'],
         original_uncertainty_retained=True,coverage_audit_candles_used=False,untouched_holdout=False,
         automatic_selection=False,lifetime_search_finished=True,no_new_filters=True,
         historical_financing_known=False,full_portfolio_validated=False,orders_supported=False,orders_sent=False)
