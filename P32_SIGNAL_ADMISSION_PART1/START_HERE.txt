@@ -1,37 +1,41 @@
-AUD/USD CONDITIONAL-FEATURE DISCOVERY — 25 OCT 2026
+AUD/USD TWO-FACTOR COMBINATIONS — 27 OCTOBER 2026
 
-Use the SAME SEPARATE RESEARCH service. Extract this ZIP and upload its contents,
-replacing matching files. Keep old files, all /data contents, existing variables
-and OANDA token. Do not upload to executor or live strategy probe.
+Extract this ZIP and upload its CONTENTS to the SAME separate research service,
+replacing matching files. Keep old files, all /data contents, and all existing
+variables and the OANDA token. Do not upload to the live executor/strategy probe.
+
+Add:
+    AUDUSD_COMBINATIONS_OUTPUT_DIR=/data/p32_audusd_combinations
 
 Change start command to:
-    python audusd_pullback_conditional.py
+    python audusd_pullback_combinations.py
 
-Add variable:
-    AUDUSD_CONDITIONAL_OUTPUT_DIR=/data/p32_audusd_conditional
+After deploying, /health must show:
+    AUDUSD_PULLBACK_COMBINATIONS_V1_2026_10_27
 
-Optional (defaults):
-    AUDUSD_CONDITIONAL_RAW_CACHE_MB=64
-    AUDUSD_CONDITIONAL_RESERVE_MB=96
+Open /status to start once. GET starts; HEAD and /health do not start research.
+Completion targets:
+    candidates_completed: 32
+    accounts_completed: 448
+    overlap_account_payloads_matched: 196
+    status: COMPLETE
 
-Existing PULLBACK_OUTPUT_DIR, PULLBACK_LEGACY_CACHE_DIR,
+Download /results-summary.zip and return AUDUSD_COMBINATIONS_SUMMARY.zip.
+/results.zip streams complete ledgers on demand without making a second large
+archive on disk. Keep the completed source study on the persistent volume.
+
+All existing PULLBACK_OUTPUT_DIR, PULLBACK_LEGACY_CACHE_DIR,
 AUDUSD_MATRIX_OUTPUT_DIR, AUDUSD_EXTENSION_OUTPUT_DIR,
-AUDUSD_LIFETIME_OUTPUT_DIR, AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR remain unchanged.
-The completed original research directories and source volume must remain available.
-The previous RR results can stay in /data; this study does not write to them.
+AUDUSD_LIFETIME_OUTPUT_DIR, AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR,
+AUDUSD_CONDITIONAL_OUTPUT_DIR and OANDA settings stay unchanged.
+Default source is /data/p32_audusd_conditional/6658ff8f14d640507f929097a0d8865db20ea3747eb2ab5d05e5de5a866ab828.
+The earlier study directories, original history and saved account checkpoints
+must remain available. Stop any other research writers before starting this run.
 
-After deploy, /health must show AUDUSD_PULLBACK_CONDITIONAL_V1_2026_10_25.
-Open /status to start. GET /status starts once; HEAD and health do not.
-Completion target: 79 candidates, 1106 accounts, 84 exact control comparisons.
-Download /results-summary.zip when COMPLETE and return it for review.
-Keep full results and checkpoints on the volume; /results.zip streams on demand.
-No live orders, webhook or portfolio activation routes are available.
+Defaults (optional overrides):
+    AUDUSD_COMBINATIONS_RAW_CACHE_MB=64
+    AUDUSD_COMBINATIONS_RESERVE_MB=96
 
-Research order: this run completes anchor setup, fixed RR and one-feature tests,
-and produces account trade attribution. Results determine any justified
-combinations and local plateau confirmation. A separate alternative resumption
-trigger follows; it is deliberately not mixed into this discovery matrix.
-
-Cached history is reused when available, with read-only candle GET fallback and
-fixed source checks. Private raw cache is bounded; completed accounts resume.
-Do not delete /data to free space. Missing source evidence causes a stop.
+No live orders or activation routes. Pricing, account engine, RR3, 1% NAV risk,
+15-tick entry limit and 10-tick stop buffer are fixed. No timing/lifetime/RR
+search, third filter or alternative trigger is mixed into this run.

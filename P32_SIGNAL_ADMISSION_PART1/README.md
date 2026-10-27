@@ -1,56 +1,70 @@
-# AUD/USD pullback conditional-feature study
+# AUD/USD bounded conditional combinations
 
-This additive research package preserves all predecessor code and original GBP
-pricing/accounting modules. It adds 72 one-feature variants to seven controls:
+This study follows the reviewed 79-setting one-feature run. It tests ONLY the
+previous-candle close cap by pre-touch four-hour momentum interaction on the two
+quality anchors. Existing engine and predecessor modules are unchanged.
 
-| Anchor | Lifetime | H1 distance cap | Body minimum |
+| Anchor | Setup lifetime | H1 distance cap | Body minimum |
 |---|---:|---:|---:|
-| Broader M_D1.25_B1.0 | 8 | 1.25 ATR | 1.00 M15 ATR |
-| Quality L16_D1.25_B1.25 | 16 | 1.25 ATR | 1.25 M15 ATR |
-| Quality L24_D1.0_B1.25 | 24 | 1.00 ATR | 1.25 M15 ATR |
+| L16_D1.25_B1.25 | 16 M15 bars | 1.25 H1 ATR | 1.25 M15 ATR |
+| L24_D1.0_B1.25 | 24 M15 bars | 1.00 H1 ATR | 1.25 M15 ATR |
 
-The six old RR3 controls run first and must match all 84 previous lifetime-
-extension account payloads exactly. The seventh broader control uses the
-previously tested original eight-bar geometry; its generator is compared with
-the unchanged predecessor, but it is not counted in the 84 payload comparisons.
+For each anchor: one unchanged base, three close-only settings (<=0.40/0.50/0.60),
+three momentum-only settings (>=0/0.50/1.00 ATR), nine two-factor combinations.
+Total: 32 candidates x seven account windows x two funding cases = 448 accounts.
+The 14 unchanged controls run first; all signals, opportunities and 196 complete
+saved account payloads must match the reviewed previous study. A control failure
+stops the run before pricing/replaying any new combination.
 
-Each anchor receives eight numerical features with three thresholds apiece:
-M15/H1 ATR ratios; pre-touch four-hour rise and retracement fraction; range
-and previous-bar close location; distance from preceding 20/60-bar lows.
-Four conceptual families, no combinations, no new timing or RR searches.
+The previous candle is the completed M15 candle before the engulfing signal;
+its close location is (close-low)/(high-low), with flat candles missing. Momentum
+is the close immediately before the FIRST EMA20 touch minus the close sixteen
+M15 bars earlier, divided by ATR14 at that touch. Missing/gapped histories reject
+that feature. All previously recorded signal feature fields are preserved.
 
-Definitions and missing-value policies are frozen in /protocol. Relative ATR is
-normalized against the previous 50 observed finite ATR14 values, not absolute
-pips. The pre-touch rise ends before the FIRST EMA touch. Retracement fraction
-requires positive preceding rise. Prior lows exclude the signal candle and
-windows crossing an observed M15 gap are not eligible. Higher-timeframe
-features use completed native H1 observations only. No future swing pivots.
+Each candidate has an independent setup state. Failure of either filter leaves
+the original touch and all subsequent lows intact until expiry, gap or H1 trend
+failure. A qualifying candle consumes the setup even if the executor proxy or
+account subsequently rejects it. This regenerates signals instead of intersecting
+old accepted-trade CSVs. Later qualifying candles and admission can differ.
 
-Each candidate has its own original-touch state. A failed feature keeps the
-setup and lowest low alive until expiry, gap or trend reset; a qualification
-consumes it even if later blocked or rejected. Thus new rules regenerate full
-signals and replay fresh accounts rather than deleting old trade rows.
+Fixed RR3; GBP100 fresh accounts; 1% current modeled NAV risk; 15-tick entry
+limit; separate 10-tick stop buffer; original whole-unit sizing, margin,
+conversion, spread, funding and barrier conventions. Financing scenarios are
+frozen 14-Oct-2026 broker rates and adverse 6% annual assumptions, not historical
+rate reconstruction. The start eligibility and source cutoff remain unchanged.
 
-Every candidate runs seven windows under both frozen-2026-rate and adverse6
-funding assumptions: 79 x 7 x 2 = 1106 accounts. RR3, 15-tick entry limit,
-10-tick stop buffer, GBP100 and 1% NAV risk stay fixed. Existing spread,
-conversion, whole-unit sizing, margin, funding and chronology remain unchanged.
+Read account_matrix.csv and control_comparisons.csv to assess full/recent
+accounts and five fresh era resets. Comparisons include both single filters
+as well as the unfiltered anchor. Do not sum overlapping time windows.
+trade_attribution.csv partitions closed trades into removed/new/shared groups
+for every comparison, every account window and both funding cases. Signal IDs
+differ between new configurations, so identity matching uses entry time,
+reference, stop and target. Shared trades can have different sized cash outcomes.
 
-Summary files: account_matrix, control_comparisons, trade_attribution,
-opportunity_matrix, candidate_screens and plateau_regions. The last contains
-three-neighbour descriptive diagnostics, NOT approval of a combined plateau.
-Candidate screens preserve the existing 200/60/20 sample conventions. Do not
-promote a sparse peak or lower a gate after inspecting results. Inspect changes
-in net R, trade retention, both funding cases, weak eras and best-five fragility.
-Full completed ledgers, feature values and generation counts remain downloadable.
-Attribution matches closed trades by entry time, reference, stop and target;
-shared outcomes can differ with subsequent sizing. Account populations are
-conditional and distinct from all independent signal opportunities.
+Eight adjacent 2x2 plateau regions are reported. For a region to pass, all four
+members must pass the unchanged full/recent/era, sample and best-five screens.
+Descriptive profitability and fragility flags are reported separately from that
+approval screen. All history has been examined; neighbours are correlated.
+A stable region is sensitivity evidence, not independent OOS confirmation.
 
-Known source gaps, stale valuations, barrier assumptions and omitted unknown
-entries remain explicit. END_ASC is a conditional scenario, sampled NAV DD
-is not an intrabar bound, historical broker funding is not reconstructed, and
-all historical periods have already been examined. This does not validate
-combined live32 admission and cannot activate trading.
+The original gap, stale-mark, barrier-order and unknown-entry uncertainties
+stay explicit. Sampled NAV drawdown is not an intrabar bound. Fresh-account
+comparisons are not incremental live32 portfolio returns. No automatic strategy
+selection, live orders or combined portfolio admission happens here.
 
-Read START_HERE.txt for deployment and the planned result-dependent sequence.
+Original study outputs are read-only and locked against running writers. Prior
+source checksums are preserved, with the already-defined narrow exception for
+three nonnegative work counters in reviewed provenance. Code, history, price
+geometry and accounting assumptions cannot change under that exception.
+Completed accounts resume; the private raw cache defaults to 64 MiB with a
+96 MiB free-space reserve. Existing M15/H1 history and exact quote/path caches
+are reused when present. Missing evidence stops or uses read-only candle GETs
+subject to the frozen expected hashes; no MID history regeneration is requested.
+
+After review, perform one bounded local confirmation only if justified. The
+separately defined pullback-resumption trigger remains the next distinct research
+hypothesis afterwards. Do not reopen RR or add a third filter in this study.
+
+See START_HERE.txt for deployment. Offline tests are synthetic software checks;
+the actual historical replay runs on the research service.

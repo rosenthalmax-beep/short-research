@@ -1,19 +1,71 @@
 {
   "Procfile": {
-    "bytes": 43,
-    "sha256": "9de214f6ad5bd77d65c2b64d395b9b0629a32464a2da133c3e3aae4464625ae4"
+    "bytes": 44,
+    "sha256": "2c19942b9ba511052eee75e34ac3603e3cc2a64022fb879ce78c9a9e72b23a5e"
   },
   "README.md": {
-    "bytes": 3335,
-    "sha256": "71746779103220a747315767633d94f890e02072d48bb42f7ef64201ea57b817"
+    "bytes": 4351,
+    "sha256": "6fb038ffd868b08d3c3b85188f1b23e9f1abe623473287e056a73c4a8eba8828"
+  },
+  "README_COMBINATIONS.md": {
+    "bytes": 4351,
+    "sha256": "6fb038ffd868b08d3c3b85188f1b23e9f1abe623473287e056a73c4a8eba8828"
   },
   "README_CONDITIONAL.md": {
     "bytes": 3335,
     "sha256": "71746779103220a747315767633d94f890e02072d48bb42f7ef64201ea57b817"
   },
   "START_HERE.txt": {
-    "bytes": 1876,
-    "sha256": "065fdc1e0ede210b24ca3b01f75d5b2cb65b8d20d3294ed21e1729d243089a7c"
+    "bytes": 1823,
+    "sha256": "7fa9ff15f029122440ea378f8b45d8dd5ea393a5839e757065695673ac2ca75e"
+  },
+  "audusd_combinations/__init__.py": {
+    "bytes": 70,
+    "sha256": "e14fa59dcbb5c333847cbb2d208108edf4fb5fee6536290cf65c53b7be852f00"
+  },
+  "audusd_combinations/config.py": {
+    "bytes": 3031,
+    "sha256": "25a474bdcad9b0729a02f8b64ad3c679814312e0cfe30b69b0104f08f00d0412"
+  },
+  "audusd_combinations/download.py": {
+    "bytes": 4364,
+    "sha256": "ccc9fe5511cf3bf6d04773f2bacfbc50712c609ee7c32be5988a947d07058333"
+  },
+  "audusd_combinations/features.py": {
+    "bytes": 1857,
+    "sha256": "b52a32e2b1e70c46e50843e4ec95d26f9787ebdbd39e8cc2e5b20913e70edfc3"
+  },
+  "audusd_combinations/previous_pins.json": {
+    "bytes": 6485,
+    "sha256": "e161d7215576940e366c1d4c2b3efc8829e00323d4c25571afa43adb7af43a5b"
+  },
+  "audusd_combinations/provenance_guard.py": {
+    "bytes": 4026,
+    "sha256": "018be07f6a9811b09fba7ca3d5222e00604e052d430a48451690259748a10edb"
+  },
+  "audusd_combinations/reporting.py": {
+    "bytes": 8308,
+    "sha256": "c1cee622e679c0dd7ff382a349558d1aa140ae48ccfadfc591f58637e7201d6d"
+  },
+  "audusd_combinations/reuse.py": {
+    "bytes": 11858,
+    "sha256": "d43f83b8c02abc99ffb9c87d2491f42b23782ba62e26589da6b70f8a159902c5"
+  },
+  "audusd_combinations/reviewed_provenance.json": {
+    "bytes": 31297,
+    "sha256": "c7118d058108bb7e38597440a507c686f7e0947dd329ed96886e9ce1ebe5cb75"
+  },
+  "audusd_combinations/runner.py": {
+    "bytes": 23608,
+    "sha256": "5a065043a67185b46ceed61707f92f73aa81213124b7469d59463ed0c7568ecd"
+  },
+  "audusd_combinations/signals.py": {
+    "bytes": 6866,
+    "sha256": "0114ffb7faba6508b06d292bbcd5415f3c96f9412f75a8b3a1c422888e83f45c"
+  },
+  "audusd_combinations/study_context.json": {
+    "bytes": 285,
+    "sha256": "3abd908aadfb9eaaad323ecbd747814979c1fd7b7d83455d103044de25317cd9"
   },
   "audusd_conditional/__init__.py": {
     "bytes": 70,
@@ -207,6 +259,10 @@
     "bytes": 4704,
     "sha256": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
   },
+  "audusd_pullback_combinations.py": {
+    "bytes": 2761,
+    "sha256": "5469326b240119c62fcdd6ec2689ae9646a02189a4b343889aa634b2450a5796"
+  },
   "audusd_pullback_conditional.py": {
     "bytes": 2746,
     "sha256": "94502322f38ba571e6a813f791eafac1fe67f15064bbec56ab2d5f332b58e265"
@@ -335,6 +391,14 @@
     "bytes": 1568,
     "sha256": "c9d98b066722410ad0560c38e565bc5a78f5b7751206595045c89c7db283ee5f"
   },
+  "rr_tests/test_combinations.py": {
+    "bytes": 5849,
+    "sha256": "a6b2b9af2d462c506ba10933d951a7d9f7c26ed8f13112a7bbc495ba4e788752"
+  },
+  "rr_tests/test_combinations_integration.py": {
+    "bytes": 13350,
+    "sha256": "9ab07f29036825e5f7ceeb564d63f45cdbb707d8c2b539c676cec327be8937a6"
+  },
   "rr_tests/test_conditional.py": {
     "bytes": 3621,
     "sha256": "a13e3d365a98754604bedb2ab1a4da3d4ac45aed9d115006a458a5c32543fb21"
@@ -356,8 +420,12 @@
     "sha256": "bb0b418e55b9d3d9301b85651b0cc6814a6cbe00a3e17e2de8f09a38735ab5f0"
   },
   "validation/acceptance.json": {
-    "bytes": 406,
-    "sha256": "54a6f530e27ee3dff7368503976f2f06926d725398edbf8b37ca583140891db1"
+    "bytes": 631,
+    "sha256": "9c0545e4300359ec0b7df8d38fd7aaf6a0174eb3a88c1df96f3b626a817b5d38"
+  },
+  "validation/combinations_tests.txt": {
+    "bytes": 1338,
+    "sha256": "e532711eaa32a2a7b7cd28fbc8e6f37e91d35eb75de15573beddf8d22f8111a8"
   },
   "validation/conditional_tests.txt": {
     "bytes": 1388,

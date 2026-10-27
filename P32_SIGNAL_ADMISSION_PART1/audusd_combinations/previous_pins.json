@@ -1,0 +1,123 @@
+{
+  "signature": "6658ff8f14d640507f929097a0d8865db20ea3747eb2ab5d05e5de5a866ab828",
+  "files": {
+    "REVIEW.md": {
+      "bytes": 895,
+      "sha256": "ab66d484cdf2cdd72bf2822b33adeb10ce524928779dd18371b03bc6a191ce3d"
+    },
+    "account_matrix.csv": {
+      "bytes": 1503838,
+      "sha256": "74eba9f874c412e97e0a368a973b4e1f2fb3d22c18ca14990dd69c9d54a197c6"
+    },
+    "baseline_parity.json": {
+      "bytes": 86,
+      "sha256": "0edbeabb7ecb5dff329f93ef515184532880784c8cc9a3ab73539c7dc6474a9a"
+    },
+    "broker_reconciliation.json": {
+      "bytes": 15470,
+      "sha256": "f340799cf5a40ab9bf96c36fe8ff0696843a9a107d9b1152d3fcb4a4245b97e4"
+    },
+    "candidate_screens.csv": {
+      "bytes": 52347,
+      "sha256": "10aa62007ef52d2c361adf77985fbdd6411999e1a5d4efde3e412d14f1c96129"
+    },
+    "control_comparisons.csv": {
+      "bytes": 208301,
+      "sha256": "8af9f2d245be2f680cb98647db99f77e87694c48c0c7e9c9f94dc88fc3440bb8"
+    },
+    "opportunity_matrix.csv": {
+      "bytes": 434573,
+      "sha256": "92b0eb32d834d799da0ab07f5380cf657c57d3346e8c174ce61d1aa47c802782"
+    },
+    "overlap_parity.json": {
+      "bytes": 15237,
+      "sha256": "f279a51b98e3023514db9117277b03ce76fb31ac4e2470bcbfc96ff1cc46dae1"
+    },
+    "plateau_regions.csv": {
+      "bytes": 6353,
+      "sha256": "9ac981942566b57c9aa74e58522486120f21f21971bafb35cf5b64f786ec2346"
+    },
+    "previous_matrix_witness.json": {
+      "bytes": 18519,
+      "sha256": "e55d0e5cc71e71d8b3379fdaf0e8c2af4b7be79b7889765aae56b2108dac2659"
+    },
+    "protocol.json": {
+      "bytes": 22549,
+      "sha256": "b73134d8c9e1f479a5672dd5f2b829f9d2ad094fdaca1550f1b636b0fc8b1ad5"
+    },
+    "provenance_verification.json": {
+      "bytes": 2611,
+      "sha256": "67af9a762496dc986ffebfe11615dd5738d1cd97c27db5439e4652c6c81b55fa"
+    },
+    "run_state.json": {
+      "bytes": 3298,
+      "sha256": "8b2e2ef2495dd1090721e3305baa15725d66a19edb9ba17e2e572f7b52524797"
+    },
+    "source_provenance.json": {
+      "bytes": 5442,
+      "sha256": "e7d02c07d4302bd54d566b0c635710338450f333b68bd5d5e4a19ea3d87cd0d7"
+    },
+    "study_context.json": {
+      "bytes": 313,
+      "sha256": "24b4f00414e6287a72221d7c671a3843df07856da0a848897ca1011ad25e15ff"
+    },
+    "trade_attribution.csv": {
+      "bytes": 214856,
+      "sha256": "95ac249c171e16f3ab43623a8e6fe30fa94851c5df7d27d948e232797d782b6d"
+    }
+  },
+  "matrix_code": {
+    "__init__.py": "0b9c7904d0b7a17402613888e73e52d82a96f556ac2a6480ca5f06f492cd8bd0",
+    "audusd_pullback_matrix.py": "f4dbdf98e93a9282f2a4dca8d82687f4c240cd86f61aa17968ace01b10442009",
+    "cache.py": "1e1c156eebead5910ebf08f5a7ca63780f97c060e97f7eed7fc5e426e5874b16",
+    "download.py": "ee955247b6cdbf3d057d7b9443d35a24494a608258c8420539331614cc6a1616",
+    "engine_pins.json": "9484be7bfa419f455048c64d36326917de34361116e432804392aff9ea94dade",
+    "io.py": "a3b39398c0eb92fb45afa9f1f8f58cdfef5b3287a0fc98982dc10165828e2a77",
+    "pool.py": "682e13570c5b153854c020c81094408b79c21d8f503c77b1538b01dc1f2f6112",
+    "reporting.py": "80e3c612c36bbe49569de3bcca83254861aabcca60e6cfcf871d55bd3e2f2015",
+    "runner.py": "fc472a476424923243fb3339b5bf3ad2397cf18a6634636c7c06c2ce7d6edde4",
+    "signals.py": "fcdcd3f2a68bd061001f958f42d0b2a1bb86effd04111aff7a5634a4ecdeac7d",
+    "source_pins.json": "7555ec15686b20c992c26fb9fd72ddad67bcf70ab43eda8540296d1108a021fe",
+    "storage.py": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
+  },
+  "lifetime_code": {
+    "__init__.py": "01c769e387a88c3adb886221553ffa44a4770a82f85bbdcbf19191a62ae2903d",
+    "audusd_pullback_lifetime.py": "a729b3920b2a6e0c657189908699d52586b67e782efd5c9a6d8697116c15a8e1",
+    "config.py": "3c610c9551014623e5d4fe801f1e1e8825651deb4bd6df00a1192043218f31ed",
+    "diagnostic_context.json": "3d6e6f87aeea81ceb8f4bb5539cb5aef7d7364987c54843a60efee223118133d",
+    "download.py": "1fbf05428f2c41a9a944ba0106b7dc9d0b4227da5ddf8ca809d0f7f98c3e58c3",
+    "previous_pins.json": "aa604f5e02d1bc1a7846a2db748e661af31f10aadee950876fad1166d11d784e",
+    "reporting.py": "90bc9e0dbb3118d5eac98cb5d7e58e9fa0b0a888a911a5675672fedca55a3120",
+    "reuse.py": "113543183da3c8ed99e05587c039cc684365ee531b06faaab09337c72d4f0ad0",
+    "runner.py": "7a1b79cb6454322588025e455909b9dd40195e0eaa9fa3c1ce016cd711b4ad9f",
+    "signals.py": "5b56d53de95c4953d22ff3cd9921dcc0be23aa3fe1ebe7186fe71012cea45806"
+  },
+  "lifetime_extension_code": {
+    "__init__.py": "5c78ca1d2cec75054fb4bc3d4982922f8b968e9af467294c5df6ff201839a8b4",
+    "audusd_pullback_lifetime_extension.py": "22b1bb7b47030639ea96cf7b8c227658ee06ca791f5646c56026de971e6b222d",
+    "config.py": "a7afd69716558d67ca0bcf109f7779c6ab6d0b5aa40a6bc2231be2673fd2f95d",
+    "download.py": "bfe1d27a57224c7c5e210b53ff0440d529004020f5ff98142d3af59b007f8829",
+    "previous_pins.json": "e3e1dedbb2cd1a49f62f15b88870f0fcd6c3fb0615f8f709c32ebe1820f2867e",
+    "reporting.py": "964224f040361bcca7b60b295f02145a3dd24f9b1bb63806a35a2ef346666eba",
+    "reuse.py": "39c54d5d6ad71c7633ffb85c1517c7ad94a2e2961f1b0e0f614be3078921517e",
+    "runner.py": "abc5389e2ccb5e6ecf5b03714a932177ecd367543d8d3ed2cb4ff98a0f05898a",
+    "study_context.json": "7018724a648cb6a6cd908dd43e9d2770462357943eaa959f3678670f2877b882"
+  },
+  "conditional_code": {
+    "__init__.py": "e14fa59dcbb5c333847cbb2d208108edf4fb5fee6536290cf65c53b7be852f00",
+    "audusd_pullback_conditional.py": "94502322f38ba571e6a813f791eafac1fe67f15064bbec56ab2d5f332b58e265",
+    "config.py": "81fcdcd054f05b9bb7160ecabc7f896bcf90d7ee3757321e146432fbd0227a43",
+    "download.py": "ccc9fe5511cf3bf6d04773f2bacfbc50712c609ee7c32be5988a947d07058333",
+    "features.py": "b52a32e2b1e70c46e50843e4ec95d26f9787ebdbd39e8cc2e5b20913e70edfc3",
+    "previous_pins.json": "96ca1486c1cbcfcfa120c9102c2029b3555465ced5212696a1fee365b9bbde6c",
+    "provenance_guard.py": "018be07f6a9811b09fba7ca3d5222e00604e052d430a48451690259748a10edb",
+    "reporting.py": "5309cf80113e3eed24cf33ee21e3d5f156ff4727dbcce8b0af1838d7a4b948d0",
+    "reuse.py": "b36efb401bb6cc05a9140e4cd14d1ed15ae835f7a51c09d025e8e82949caf3d7",
+    "reviewed_provenance.json": "d3bc0049b80a494a6df0e9b3088139b9af9da516fbe2ea1eadbbaa6fa67bf2b9",
+    "runner.py": "3382d1b53772a98e05662820c6ba35c0505c69a4e3649c22cf29018136a637ae",
+    "signals.py": "c6ec8a73325d3ccd30092b045e4ca86a38bb9bade0c4689b39d369ad8fc5e189",
+    "study_context.json": "24b4f00414e6287a72221d7c671a3843df07856da0a848897ca1011ad25e15ff"
+  },
+  "completed_accounts": 1106,
+  "completed_candidates": 79
+}
