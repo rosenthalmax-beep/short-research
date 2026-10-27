@@ -1,68 +1,37 @@
-AUD/USD LONG: NINE-SETTING LARGER-BODY EXTENSION
+AUD/USD CONDITIONAL-FEATURE DISCOVERY — 25 OCT 2026
 
-This runs the agreed 3x3 conditional matrix:
-  minimum body / M15 ATR:        1.00, 1.25, 1.50
-  maximum H1 EMA100 distance:  1.00, 1.25, 1.50 H1 ATR
-RR3, 1% NAV risk, 15-tick entry limit, 10-tick stop buffer, per-strategy
-pyramiding zero and the original GBP funding/account assumptions remain fixed.
-The same frozen cutoff (20 September 2026) and observed warm-up are used.
+Use the SAME SEPARATE RESEARCH service. Extract this ZIP and upload its contents,
+replacing matching files. Keep old files, all /data contents, existing variables
+and OANDA token. Do not upload to executor or live strategy probe.
 
-1. Keep your downloaded research reports as recovery copies.
-2. Extract this ZIP and upload its CONTENTS to the SAME AUD/USD research
-   service. Replace matching files; keep other files and mounted /data.
-   Original audusd_matrix/ and pullback_lab/ engine files are identical copies.
-   The new code lives in audusd_extension/ and a new root entrypoint.
-3. KEEP these existing directory variables at their current values:
-     AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
-     PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
-     PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
-   If AUDUSD_MATRIX_SOURCE_DIR was set, keep it unchanged too.
-   Keep OANDA_ENV=live and your existing OANDA_TOKEN.
-4. ADD:
-     AUDUSD_EXTENSION_OUTPUT_DIR=/data/p32_audusd_long_extension
-   Do NOT change AUDUSD_MATRIX_OUTPUT_DIR to the new extension directory: it
-   locates the completed old matrix for exact comparisons and cache reuse.
-5. Change the service's explicit START COMMAND to:
-     python audusd_pullback_extension.py
-6. Redeploy. Open /health and confirm:
-     AUDUSD_PULLBACK_LONG_EXTENSION_V1_2026_10_23
-   It should show candidates:9, accounts:126 and overlap_account_payloads:28.
-7. Open /status to start, then send the first status JSON here.
-   Both original overlapping settings run FIRST. Their regenerated signals,
-   independent opportunities and all 28 account payloads must match exactly.
-   A changed frozen source or mismatch stops before proceeding to new variants.
-8. When status is COMPLETE, expect:
-     candidates_completed: 9
-     accounts_completed: 126
-     overlap_account_payloads_matched: 28
-   Download /results-summary.zip (AUDUSD_EXTENSION_SUMMARY.zip) and upload here.
-   /results.zip streams the larger full evidence archive only if needed.
+Change start command to:
+    python audusd_pullback_conditional.py
 
-There are seven NEW settings and two overlapping reference settings. All nine
-have seven account windows under two funding assumptions. Controls are genuinely
-replayed on first run, not merely copied. Completed checkpoints are checked and
-reused on a safe restart. Native/history windows and price paths are reused from
-the old study/matrix when exact witnesses are available; missing windows can be
-re-downloaded, and only newly required geometries are priced.
+Add variable:
+    AUDUSD_CONDITIONAL_OUTPUT_DIR=/data/p32_audusd_conditional
 
-DEFAULT STORAGE SETTINGS (no need to add):
-     AUDUSD_EXTENSION_RAW_CACHE_MB=64
-     AUDUSD_EXTENSION_RESERVE_MB=96
-The private raw-body cache is bounded. Reports/path checkpoints also take space;
-completion within the current volume cannot be guaranteed. No existing file or
-cache is deleted or compacted. If it stops or pauses, send the status JSON.
+Optional (defaults):
+    AUDUSD_CONDITIONAL_RAW_CACHE_MB=64
+    AUDUSD_CONDITIONAL_RESERVE_MB=96
 
-The 25-path coverage audit did not fully resolve any paths. Its new fine candle
-bodies are NOT imported. All original uncertainty flags and path assumptions
-stay in effect. This run does not rewrite prior account figures or outcomes.
+Existing PULLBACK_OUTPUT_DIR, PULLBACK_LEGACY_CACHE_DIR,
+AUDUSD_MATRIX_OUTPUT_DIR, AUDUSD_EXTENSION_OUTPUT_DIR,
+AUDUSD_LIFETIME_OUTPUT_DIR, AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR remain unchanged.
+The completed original research directories and source volume must remain available.
+The previous RR results can stay in /data; this study does not write to them.
 
-Plateau rules are unchanged: all four members of an adjacent 2x2 block must pass
->=200 full-history trades, >=60 recent trades, >=20 in each era, original
-profitability/funding/best-five and era checks. Sparse profitable cells can fail;
-thresholds will not be lowered after seeing the results. No strategy activation,
-RR sweep or combined live32 overlap/admission change is included.
+After deploy, /health must show AUDUSD_PULLBACK_CONDITIONAL_V1_2026_10_25.
+Open /status to start. GET /status starts once; HEAD and health do not.
+Completion target: 79 candidates, 1106 accounts, 84 exact control comparisons.
+Download /results-summary.zip when COMPLETE and return it for review.
+Keep full results and checkpoints on the volume; /results.zip streams on demand.
+No live orders, webhook or portfolio activation routes are available.
 
-Offline tests:
-     python -m unittest discover -s extension_tests -v
-Console run instead of HTTP server (optional):
-     python audusd_pullback_extension.py --run
+Research order: this run completes anchor setup, fixed RR and one-feature tests,
+and produces account trade attribution. Results determine any justified
+combinations and local plateau confirmation. A separate alternative resumption
+trigger follows; it is deliberately not mixed into this discovery matrix.
+
+Cached history is reused when available, with read-only candle GET fallback and
+fixed source checks. Private raw cache is bounded; completed accounts resume.
+Do not delete /data to free space. Missing source evidence causes a stop.

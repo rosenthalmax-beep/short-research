@@ -1,0 +1,15 @@
+test_baseline_and_seven_controls_unchanged (test_conditional.ConditionalTests.test_baseline_and_seven_controls_unchanged) ... ok
+test_filter_failure_retains_original_touch (test_conditional.ConditionalTests.test_filter_failure_retains_original_touch) ... ok
+test_future_prices_do_not_change_past_signals (test_conditional.ConditionalTests.test_future_prices_do_not_change_past_signals) ... ok
+test_health_head_and_post_do_not_start (test_conditional.ConditionalTests.test_health_head_and_post_do_not_start) ... ok
+test_missing_features_and_equality (test_conditional.ConditionalTests.test_missing_features_and_equality) ... ok
+test_predeclared_plan (test_conditional.ConditionalTests.test_predeclared_plan) ... ok
+test_structure_excludes_signal (test_conditional.ConditionalTests.test_structure_excludes_signal) ... ok
+test_volatility_normalizer_excludes_current (test_conditional.ConditionalTests.test_volatility_normalizer_excludes_current) ... ok
+test_geometry_matching_and_shared_sizing_are_explicit (test_conditional_attribution.AttributionTests.test_geometry_matching_and_shared_sizing_are_explicit) ... ok
+test_full_chain_1106_accounts_exact_84_controls_resume_tamper (test_conditional_integration.ReplayTests.test_full_chain_1106_accounts_exact_84_controls_resume_tamper) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 165.124s
+
+OK

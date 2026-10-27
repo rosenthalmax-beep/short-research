@@ -1,167 +1,56 @@
-# AUD/USD pullback: coarse RR comparison
+# AUD/USD pullback conditional-feature study
 
-Fixed grid: RR 2.5 / 3.0 / 3.5; lifetimes 16 / 20 / 24 M15 bars; H1 trend
-distance caps 1.00 / 1.25 ATR. Body floor 1.25 M15 ATR, 1% NAV risk,
-15-tick adverse entry bound, 10-tick stop buffer and all other filters fixed.
-18 settings x 7 reset windows x 2 financing assumptions = 252 accounts.
-This is a historical research service. It does not modify the live portfolio.
+This additive research package preserves all predecessor code and original GBP
+pricing/accounting modules. It adds 72 one-feature variants to seven controls:
 
-## V2 fix for "Reviewed matrix summary changed: source_provenance.json"
+| Anchor | Lifetime | H1 distance cap | Body minimum |
+|---|---:|---:|---:|
+| Broader M_D1.25_B1.0 | 8 | 1.25 ATR | 1.00 M15 ATR |
+| Quality L16_D1.25_B1.25 | 16 | 1.25 ATR | 1.25 M15 ATR |
+| Quality L24_D1.0_B1.25 | 24 | 1.00 ATR | 1.25 M15 ATR |
 
-The old RR checker compared the complete provenance file byte-for-byte. The
-previous research runner rewrites three operational work counters after resume:
-new_geometry_paths_computed, previous_paths_copied and previous_paths_verified.
-A change to these counters can therefore fail the old check even though the
-reviewed price, code and account evidence is unchanged.
+The six old RR3 controls run first and must match all 84 previous lifetime-
+extension account payloads exactly. The seventh broader control uses the
+previously tested original eight-bar geometry; its generator is compared with
+the unchanged predecessor, but it is not counted in the 84 payload comparisons.
 
-V2 compares the complete reviewed provenance payload, allowing ONLY these three
-nonnegative integer counters to differ. Formatting-only JSON changes also pass.
-All other keys/values/types remain locked, including native-price SHA, history,
-source indices, code hashes, flags and assumptions. Missing/invalid counters,
-unknown added fields and unrecognized modified provenance versions still fail.
-Account CSVs, signal files, checkpoints and the 84 full control payloads remain
-strict. Every accepted difference is recorded in provenance_verification.json.
-Previous files are never edited, and changes during a running replay still fail.
+Each anchor receives eight numerical features with three thresholds apiece:
+M15/H1 ATR ratios; pre-touch four-hour rise and retracement fraction; range
+and previous-bar close location; distance from preceding 20/60-bar lows.
+Four conceptual families, no combinations, no new timing or RR searches.
 
-To install this fix, upload this ZIP's contents over the current RR project,
-keeping every existing file and /data. Keep ALL variables and the SAME command:
+Definitions and missing-value policies are frozen in /protocol. Relative ATR is
+normalized against the previous 50 observed finite ATR14 values, not absolute
+pips. The pre-touch rise ends before the FIRST EMA touch. Retracement fraction
+requires positive preceding rise. Prior lows exclude the signal candle and
+windows crossing an observed M15 gap are not eligible. Higher-timeframe
+features use completed native H1 observations only. No future swing pivots.
 
-   python audusd_pullback_rr.py
+Each candidate has its own original-touch state. A failed feature keeps the
+setup and lowest low alive until expiry, gap or trend reset; a qualification
+consumes it even if later blocked or rejected. Thus new rules regenerate full
+signals and replay fresh accounts rather than deleting old trade rows.
 
-Redeploy, check /health shows the V2 version above, then GET /status. No deletion,
-new directory variable or cache regeneration is required. The code-version
-signature changes, so V2 keeps the failed V1 output separately. The reported
-V1 run completed zero accounts. The original grid and pricing/accounting rules
-are unchanged. Expected finish remains 252 accounts / 84 control matches.
+Every candidate runs seven windows under both frozen-2026-rate and adverse6
+funding assumptions: 79 x 7 x 2 = 1106 accounts. RR3, 15-tick entry limit,
+10-tick stop buffer, GBP100 and 1% NAV risk stay fixed. Existing spread,
+conversion, whole-unit sizing, margin, funding and chronology remain unchanged.
 
-The live prior-service provenance file was not supplied with the error message.
-This patch accepts the known counter-only case; if a locked field differs,
-it stops with the differing field names so the discrepancy can be reviewed.
+Summary files: account_matrix, control_comparisons, trade_attribution,
+opportunity_matrix, candidate_screens and plateau_regions. The last contains
+three-neighbour descriptive diagnostics, NOT approval of a combined plateau.
+Candidate screens preserve the existing 200/60/20 sample conventions. Do not
+promote a sparse peak or lower a gate after inspecting results. Inspect changes
+in net R, trade retention, both funding cases, weak eras and best-five fragility.
+Full completed ledgers, feature values and generation counts remain downloadable.
+Attribution matches closed trades by entry time, reference, stop and target;
+shared outcomes can differ with subsequent sizing. Account populations are
+conditional and distinct from all independent signal opportunities.
 
-## Install on the SAME research service with mounted /data
+Known source gaps, stale valuations, barrier assumptions and omitted unknown
+entries remain explicit. END_ASC is a conditional scenario, sampled NAV DD
+is not an intrabar bound, historical broker funding is not reconstructed, and
+all historical periods have already been examined. This does not validate
+combined live32 admission and cannot activate trading.
 
-1. Extract this ZIP and upload its CONTENTS to the project root, replacing
-   matching files. Keep all unrelated files and everything under /data.
-   Do not upload this to the live executor or strategy probe.
-2. Keep existing variables, including OANDA_ENV=live and the current OANDA token:
-
-   PULLBACK_OUTPUT_DIR=/data/p32_pullback_pass1
-   PULLBACK_LEGACY_CACHE_DIR=/data/p32_signal_admission
-   AUDUSD_MATRIX_OUTPUT_DIR=/data/p32_audusd_long_matrix
-   AUDUSD_EXTENSION_OUTPUT_DIR=/data/p32_audusd_long_extension
-   AUDUSD_LIFETIME_OUTPUT_DIR=/data/p32_audusd_lifetime
-   AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR=/data/p32_audusd_lifetime_extension
-
-   Keep AUDUSD_MATRIX_SOURCE_DIR if already set. Other old directory variables
-   can remain; they are not repurposed or overwritten.
-3. Add ONE variable:
-
-   AUDUSD_RR_OUTPUT_DIR=/data/p32_audusd_rr
-
-4. Set the start command:
-
-   python audusd_pullback_rr.py
-
-   Python 3.10+; standard library only. No additional pip packages are needed.
-   Keep the platform PORT variable and /health health path.
-5. Redeploy. /health must show:
-
-   AUDUSD_PULLBACK_RR_MATRIX_V2_2026_10_25_PROVENANCE
-
-6. Open GET /status once to start. Refresh it for progress. /health, HEAD /status
-   and /protocol do not start work.
-7. Wait for status COMPLETE with accounts_completed=252 and
-   overlap_account_payloads_matched=84. Download /results-summary.zip and send
-   that compact ZIP for review. The summary is capped below 20 MB.
-   /results.zip streams full evidence when needed; it can be larger.
-
-## Controls and qualification logic
-
-The SIX RR3 controls run first. All signal fields, standalone opportunity records
-and all 84 COMPLETE prior account payloads must match the reviewed 16/20/24
-lifetime-extension results. The original eight-bar unfiltered regression baseline
-must still match all 4,086 signal records. Mismatch stops the run before pricing
-new RR variants; a failing account is not saved as a valid checkpoint.
-
-The existing causal generator regenerates each distance/lifetime qualification
-sequence. RR does not affect trigger conditions, arming, expiry, inherited lows
-or setup consumption. A separate sequence check verifies identical entry times,
-stops and features across RR. RR3 payloads keep their exact original identities.
-New RR targets are calculated from reference entry/stop using the unchanged
-broker rounding. No old winning/losing R values are simply multiplied.
-
-Each target gets a separate exit path, with RR in the geometry cache identity.
-Every account reruns chronological exits, position blocking, sizing, margin,
-financing, GBP conversion and compounding. Different holding durations can change
-which later signals become trades, even though qualifications are the same.
-Accepted qualifications still consume a setup before execution/admission.
-
-## Windows, funding and reports
-
-Each candidate uses fresh GBP100 accounts for full history, five era windows
-and recent January-2021-to-cutoff, under frozen-14-Oct-2026 and adverse 6% annual
-financing assumptions. These are modeled rates, not actual historical schedules.
-The partial final era ends at the original 20 September 2026, 18:15 UTC cutoff.
-Original observed warm-up eligibility is retained. Windows overlap; do not sum.
-
-- account_matrix.csv: trades/frequency, wins, net R, financing, conditional
-  NAV/CAGR, sampled drawdown and uncertainty for each fresh account.
-- control_comparisons.csv: differences against RR3 at the SAME lifetime,
-  distance, window and funding assumption. These reflect changed exits and
-  admission, not incremental live32 return or additional-trade win rate.
-- qualification_sequence_parity.json: identical qualifications/stops/features
-  and correctly rounded targets across RR.
-- candidate_screens.csv and plateau_regions.csv: per-cell criteria and FOUR
-  adjacent 2x2x2 regions across RR/lifetime/distance, with EIGHT members each.
-- overlap_parity.json: all 84 exact control account comparisons.
-- provenance_verification.json: reviewed/observed hashes, accepted counter changes
-  and proof that locked provenance fields match.
-- baseline_parity.json, source_provenance.json, broker_reconciliation.json,
-  previous_matrix_witness.json and study_context.json: provenance/checks.
-
-Each of a region's eight cells must meet the unchanged per-account screen:
->=200 full-history closes, >=60 recent closes, >=20 per era; positive full/recent
-NAV and average net R without the best five trades in BOTH funding modes; at
-least four supported frozen-funding eras profitable. No numeric threshold is
-relaxed. An isolated peak cannot pass a full three-dimensional region. Sparse
-eras are unsupported, not automatically losses. No candidate is selected live.
-
-## Storage and restart
-
-All 54 prior reference modules, including the source signal, pricing and account
-engine, are included byte-for-byte unchanged. Old research files and caches are
-read-only. Source indices are frozen through the latest lifetime-extension,
-prior lifetime, body-extension and original matrix witness chain. Matching
-geometry evidence is reused; revised frozen candle windows stop the run.
-
-The new raw candle cache defaults to 64 MiB with a 96 MiB free reserve. Fine
-execution/conversion windows are fetched only when necessary. Completed account
-checkpoints resume independently. A restart verifies sources and regenerates
-qualifications, then reuses completed account checkpoints; it does not replay
-finished accounts. Full evidence ZIP streams without a second large disk copy.
-Do not delete existing research directories to install this package.
-
-If PAUSED_STORAGE, finished checkpoints are retained. If any source/parity check
-fails, send /status; do not edit evidence to make it pass. Existing research
-writers must have finished because this service takes shared ancestor locks.
-
-## Limits and verification
-
-Original gaps, barrier ambiguity, stale valuation quotes, unknown-entry omissions
-and conditional STOP_FIRST/END_ASC ordering are preserved. New coverage-audit
-candles are not imported and uncertain paths are not silently resolved. Sampled
-NAV drawdown is not worst intrabar drawdown. Historical broker terms/funding
-were not fully reconstructed. All researched history was already seen; this
-is not an untouched holdout or statistical proof of a plateau.
-No further lifetime expansion, new filters, automatic peak selection, combined
-live32 validation or live-order/activation change is part of this package.
-
-Offline checks:
-
-   python -m unittest discover -s rr_tests -v
-
-28 offline tests include full synthetic predecessor/RR replays, all 84 control payloads,
-counter-only resume drift, rejection of locked-field changes and invalid counters,
-checkpoint resume/corruption, causal qualifications, distinct RR geometry and
-a price path where RR2.5 wins while RR3/RR3.5 stop. No actual historical run was
-performed while building this package.
+Read START_HERE.txt for deployment and the planned result-dependent sequence.
