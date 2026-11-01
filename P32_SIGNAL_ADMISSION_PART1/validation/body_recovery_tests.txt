@@ -1,0 +1,14 @@
+test_all_twelve_control_signals_exact_and_every_new_case_causal (test_body_recovery.BodyRecoveryTests.test_all_twelve_control_signals_exact_and_every_new_case_causal) ... ok
+test_body_and_both_filter_boundaries_missing_and_nan (test_body_recovery.BodyRecoveryTests.test_body_and_both_filter_boundaries_missing_and_nan) ... ok
+test_bounded_grid_36_cases_12_controls_first_and_original_screens (test_body_recovery.BodyRecoveryTests.test_bounded_grid_36_cases_12_controls_first_and_original_screens) ... ok
+test_guard_locks_new_reviewed_provenance_and_only_allows_named_counters (test_body_recovery.BodyRecoveryTests.test_guard_locks_new_reviewed_provenance_and_only_allows_named_counters) ... ok
+test_output_roots_http_and_no_automatic_start (test_body_recovery.BodyRecoveryTests.test_output_roots_http_and_no_automatic_start) ... ok
+test_relaxed_acceptance_consumes_and_can_displace_later_strict_trade (test_body_recovery.BodyRecoveryTests.test_relaxed_acceptance_consumes_and_can_displace_later_strict_trade) ... ok
+test_same_filter_original_body_and_same_body_factor_comparisons (test_body_recovery.BodyRecoveryTests.test_same_filter_original_body_and_same_body_factor_comparisons) ... ok
+test_ten_regions_keep_samples_and_require_all_four_or_eight_members (test_body_recovery.BodyRecoveryTests.test_ten_regions_keep_samples_and_require_all_four_or_eight_members) ... ok
+test_complete_504_accounts_168_exact_controls_resume_and_tamper (test_body_recovery_integration.BodyRecoveryReplayTests.test_complete_504_accounts_168_exact_controls_resume_and_tamper) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 26.875s
+
+OK

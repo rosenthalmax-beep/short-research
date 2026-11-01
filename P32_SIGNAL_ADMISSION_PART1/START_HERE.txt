@@ -1,41 +1,52 @@
-AUD/USD TWO-FACTOR COMBINATIONS — 27 OCTOBER 2026
+AUDUSD_PULLBACK_BODY_RECOVERY_V1_2026_11_01
 
-Extract this ZIP and upload its CONTENTS to the SAME separate research service,
-replacing matching files. Keep old files, all /data contents, and all existing
-variables and the OANDA token. Do not upload to the live executor/strategy probe.
+1. Extract this ZIP. Upload its CONTENTS over the SAME SEPARATE research project,
+   replacing matching files. Keep existing project files, variables and /data.
+   Do not upload it to the live strategy probe or executor.
 
-Add:
-    AUDUSD_COMBINATIONS_OUTPUT_DIR=/data/p32_audusd_combinations
+2. Keep the completed combination run and its predecessors on the mounted /data
+   volume. The expected combination signature is:
+   125b1fd695ec71bbfa955b9e223a88d76654d2e65fb7f4a82ce3e31892e39ae1
+   Default path:
+   /data/p32_audusd_combinations/<signature>
+   Keep AUDUSD_COMBINATIONS_OUTPUT_DIR at its existing value.
+   Likewise keep the existing conditional, lifetime-extension, lifetime,
+   body-extension, matrix and original pullback directories and variables.
+   Stop any other active research writer before this study starts.
 
-Change start command to:
-    python audusd_pullback_combinations.py
+3. Add this environment variable:
+   AUDUSD_BODY_RECOVERY_OUTPUT_DIR=/data/p32_audusd_body_recovery
+   Keep OANDA token/environment variables and mounted /data as already configured.
+   Optional cache/reserve overrides (defaults shown):
+   AUDUSD_BODY_RECOVERY_RAW_CACHE_MB=64
+   AUDUSD_BODY_RECOVERY_RESERVE_MB=96
 
-After deploying, /health must show:
-    AUDUSD_PULLBACK_COMBINATIONS_V1_2026_10_27
+4. Change the service start command to:
+   python audusd_pullback_body_recovery.py
+   Procfile is also included. Python 3.11+; standard library only.
 
-Open /status to start once. GET starts; HEAD and /health do not start research.
-Completion targets:
-    candidates_completed: 32
-    accounts_completed: 448
-    overlap_account_payloads_matched: 196
-    status: COMPLETE
+5. Redeploy. Open /health to confirm:
+   service: AUDUSD_PULLBACK_BODY_RECOVERY_V1_2026_11_01
+   candidates: 36
+   accounts: 504
+   overlap_controls: 12
+   overlap_account_payloads: 168
+   orders_supported: false
+   Health/HEAD requests do not start the study.
 
-Download /results-summary.zip and return AUDUSD_COMBINATIONS_SUMMARY.zip.
-/results.zip streams complete ledgers on demand without making a second large
-archive on disk. Keep the completed source study on the persistent volume.
+6. Open /status with a normal browser GET once to start. Repeat /status to check
+   progress. You can close the browser while the service continues running.
+   The first twelve configurations must reproduce all 168 prior account payloads.
+   Completion targets: status COMPLETE, candidates_completed 36,
+   accounts_completed 504, overlap_account_payloads_matched 168.
+   Read /protocol for the frozen test specification.
 
-All existing PULLBACK_OUTPUT_DIR, PULLBACK_LEGACY_CACHE_DIR,
-AUDUSD_MATRIX_OUTPUT_DIR, AUDUSD_EXTENSION_OUTPUT_DIR,
-AUDUSD_LIFETIME_OUTPUT_DIR, AUDUSD_LIFETIME_EXTENSION_OUTPUT_DIR,
-AUDUSD_CONDITIONAL_OUTPUT_DIR and OANDA settings stay unchanged.
-Default source is /data/p32_audusd_conditional/6658ff8f14d640507f929097a0d8865db20ea3747eb2ab5d05e5de5a866ab828.
-The earlier study directories, original history and saved account checkpoints
-must remain available. Stop any other research writers before starting this run.
+7. Download /results-summary.zip when complete and send that small ZIP here.
+   The filename will be AUDUSD_BODY_RECOVERY_SUMMARY.zip.
+   /results.zip is the larger full evidence archive, if recovery is needed.
+   Do not delete /data or old caches to fit a download. If the job reports
+   PAUSED_STORAGE or ERROR, send /status first. Partial evidence is preserved.
 
-Defaults (optional overrides):
-    AUDUSD_COMBINATIONS_RAW_CACHE_MB=64
-    AUDUSD_COMBINATIONS_RESERVE_MB=96
-
-No live orders or activation routes. Pricing, account engine, RR3, 1% NAV risk,
-15-tick entry limit and 10-tick stop buffer are fixed. No timing/lifetime/RR
-search, third filter or alternative trigger is mixed into this run.
+This is a fixed historical research run; no live orders or strategy activation.
+Keep the original screening requirements and examine frequency plus NEW/REMOVED
+trade outcomes, rather than choosing the single highest CAGR.

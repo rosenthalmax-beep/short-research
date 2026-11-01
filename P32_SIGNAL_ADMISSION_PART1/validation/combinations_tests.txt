@@ -1,0 +1,13 @@
+test_all_14_control_signals_exact_and_combo_is_causal (test_combinations.CombinationTests.test_all_14_control_signals_exact_and_combo_is_causal) ... ok
+test_both_conditions_required_missing_rejected_and_boundaries_included (test_combinations.CombinationTests.test_both_conditions_required_missing_rejected_and_boundaries_included) ... ok
+test_combination_filter_failure_preserves_touch_until_next_qualification (test_combinations.CombinationTests.test_combination_filter_failure_preserves_touch_until_next_qualification) ... ok
+test_eight_regions_require_every_member_to_pass (test_combinations.CombinationTests.test_eight_regions_require_every_member_to_pass) ... ok
+test_fixed_32_settings_and_14_controls_first (test_combinations.CombinationTests.test_fixed_32_settings_and_14_controls_first) ... ok
+test_guard_accepts_only_counter_drift (test_combinations.CombinationTests.test_guard_accepts_only_counter_drift) ... ok
+test_output_roots_and_http_are_protected (test_combinations.CombinationTests.test_output_roots_and_http_are_protected) ... ok
+test_complete_448_accounts_196_exact_controls_resume_and_tamper (test_combinations_integration.CombinationReplayTests.test_complete_448_accounts_196_exact_controls_resume_and_tamper) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 162.147s
+
+OK

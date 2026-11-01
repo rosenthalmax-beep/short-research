@@ -1,70 +1,84 @@
-# AUD/USD bounded conditional combinations
+# AUD/USD bounded body-size confirmation
 
-This study follows the reviewed 79-setting one-feature run. It tests ONLY the
-previous-candle close cap by pre-touch four-hour momentum interaction on the two
-quality anchors. Existing engine and predecessor modules are unchanged.
+This is the final bounded body-relaxation check after the reviewed two-factor
+study. It holds the six promising close-position by pre-touch momentum settings
+fixed and tests whether a smaller engulfing body can recover useful frequency.
+It does not activate a strategy or submit orders.
 
-| Anchor | Setup lifetime | H1 distance cap | Body minimum |
-|---|---:|---:|---:|
-| L16_D1.25_B1.25 | 16 M15 bars | 1.25 H1 ATR | 1.25 M15 ATR |
-| L24_D1.0_B1.25 | 24 M15 bars | 1.00 H1 ATR | 1.25 M15 ATR |
+| Variable | Fixed test values |
+|---|---|
+| Body minimum, M15 ATR14 | 1.00 / 1.125 / 1.25 |
+| Previous completed M15 close location cap | 0.40 / 0.50 / 0.60 |
+| Original pre-touch four-hour rise minimum | 0 / 0.50 touch ATR |
+| Setup lifetime | 16 M15 bars |
+| Completed H1 EMA100 distance cap | 1.25 H1 ATR |
+| RR / adverse entry bound / stop buffer | 3 / 15 ticks / 10 ticks |
+| Account | Fresh GBP100, 1% modeled NAV risk |
 
-For each anchor: one unchanged base, three close-only settings (<=0.40/0.50/0.60),
-three momentum-only settings (>=0/0.50/1.00 ATR), nine two-factor combinations.
-Total: 32 candidates x seven account windows x two funding cases = 448 accounts.
-The 14 unchanged controls run first; all signals, opportunities and 196 complete
-saved account payloads must match the reviewed previous study. A control failure
-stops the run before pricing/replaying any new combination.
+There are 18 two-factor cases. Each body also has its unfiltered account, three
+close-only accounts and two momentum-only accounts: 36 configurations in total.
+Seven reset windows and two financing cases give 504 accounts. The twelve
+unchanged 1.25-body configurations run first, and all 168 complete account
+payloads must exactly match the completed combination study. Their signals and
+opportunities must also match. A mismatch stops the study.
 
-The previous candle is the completed M15 candle before the engulfing signal;
-its close location is (close-low)/(high-low), with flat candles missing. Momentum
-is the close immediately before the FIRST EMA20 touch minus the close sixteen
-M15 bars earlier, divided by ATR14 at that touch. Missing/gapped histories reject
-that feature. All previously recorded signal feature fields are preserved.
+Each case regenerates causal setup state independently. Accepting a smaller
+body may consume the setup earlier and displace a later original-body entry.
+Therefore, smaller bodies need not produce a superset of signals or closed
+account trades. A failed filter retains the original touch and all subsequent
+lows; acceptance consumes the setup before pricing or account admission.
 
-Each candidate has an independent setup state. Failure of either filter leaves
-the original touch and all subsequent lows intact until expiry, gap or H1 trend
-failure. A qualifying candle consumes the setup even if the executor proxy or
-account subsequently rejects it. This regenerates signals instead of intersecting
-old accepted-trade CSVs. Later qualifying candles and admission can differ.
+Previous close location is (close-low)/(high-low) for the completed M15 candle
+before the signal. A flat candle has no usable value. Pre-touch momentum uses
+the close immediately before the ORIGINAL first EMA20 touch minus the close
+sixteen M15 bars earlier, divided by ATR at that touch; gaps make it missing.
+These definitions and all prior recorded features remain unchanged. Native H1
+candles are only used once complete. Eligibility is 9 February 2005 12:00 UTC
+through the unchanged 20 September 2026 cutoff; early missing warm-up stays
+excluded rather than being filled with synthetic or future observations.
 
-Fixed RR3; GBP100 fresh accounts; 1% current modeled NAV risk; 15-tick entry
-limit; separate 10-tick stop buffer; original whole-unit sizing, margin,
-conversion, spread, funding and barrier conventions. Financing scenarios are
-frozen 14-Oct-2026 broker rates and adverse 6% annual assumptions, not historical
-rate reconstruction. The start eligibility and source cutoff remain unchanged.
+Reports:
 
-Read account_matrix.csv and control_comparisons.csv to assess full/recent
-accounts and five fresh era resets. Comparisons include both single filters
-as well as the unfiltered anchor. Do not sum overlapping time windows.
-trade_attribution.csv partitions closed trades into removed/new/shared groups
-for every comparison, every account window and both funding cases. Signal IDs
-differ between new configurations, so identity matching uses entry time,
-reference, stop and target. Shared trades can have different sized cash outcomes.
+- account_matrix.csv: all full, recent and five fresh era accounts.
+- control_comparisons.csv: same-filter original body comparisons, plus each
+  combination against its same-body unfiltered and both single-filter controls.
+- trade_attribution.csv: removed, new and shared CLOSED ACCOUNT trades for every
+  comparison, window and funding case. Identity is entry/reference/stop/target;
+  shared trade sizing and cash can change with account history.
+- frequency_recovery.csv: counts, qualifications, annual frequency, returns,
+  sampled NAV DD and best-five sensitivity vs the same-filter 1.25-body case.
+- plateau_regions.csv: six adjacent 2x2 close/momentum blocks within bodies and
+  four adjacent-body 2x2x2 blocks. Every member must pass for a region to pass.
+- candidate_screens.csv: unchanged 200 full / 60 recent / 20 per-era samples,
+  era coverage, positivity under both funding cases and best-five sensitivity.
 
-Eight adjacent 2x2 plateau regions are reported. For a region to pass, all four
-members must pass the unchanged full/recent/era, sample and best-five screens.
-Descriptive profitability and fragility flags are reported separately from that
-approval screen. All history has been examined; neighbours are correlated.
-A stable region is sensitivity evidence, not independent OOS confirmation.
+Recovering count alone is not success. Inspect the newly admitted and displaced
+trades, weak eras, both funding cases and nearby settings. No thresholds are
+lowered and no winner is selected automatically. After reviewing this bounded
+confirmation, freeze this family and move to the separate resumption-trigger
+hypothesis; there is no third-filter, lifetime, distance or RR search here.
 
-The original gap, stale-mark, barrier-order and unknown-entry uncertainties
-stay explicit. Sampled NAV drawdown is not an intrabar bound. Fresh-account
-comparisons are not incremental live32 portfolio returns. No automatic strategy
-selection, live orders or combined portfolio admission happens here.
+All history has been examined. Overlapping settings and windows are correlated
+and cannot be summed or treated as independent validation. All results are
+conditional standalone accounts, not incremental live32 portfolio returns.
+Original source gaps, stale marks, ambiguous barrier timing and unknown entries
+remain explicit. Sampled NAV DD is not a worst intrabar equity bound. Actual
+historical funding, margin and conversion schedules are not reconstructed;
+frozen 14-Oct-2026 rates, adverse 6% annual funding and current terms are models.
+Saved broker reconciliation verifies fixture mechanics, not all historical terms.
 
-Original study outputs are read-only and locked against running writers. Prior
-source checksums are preserved, with the already-defined narrow exception for
-three nonnegative work counters in reviewed provenance. Code, history, price
-geometry and accounting assumptions cannot change under that exception.
-Completed accounts resume; the private raw cache defaults to 64 MiB with a
-96 MiB free-space reserve. Existing M15/H1 history and exact quote/path caches
-are reused when present. Missing evidence stops or uses read-only candle GETs
-subject to the frozen expected hashes; no MID history regeneration is requested.
+All existing pricing/accounting and predecessor Python/JSON files are unchanged.
+The preceding combination outputs and all five earlier report/source ancestors
+are verified read-only and locked against running writers. Only the existing
+three named nonnegative work counters may drift in reviewed provenance; code,
+price evidence and history stay locked. Completed accounts resume, partial runs
+replay missing checkpoints only, and corrupt checkpoints fail closed.
 
-After review, perform one bounded local confirmation only if justified. The
-separately defined pullback-resumption trigger remains the next distinct research
-hypothesis afterwards. Do not reopen RR or add a third filter in this study.
+The private raw cache defaults to 64 MiB, with a 96 MiB free-space reserve. Prior
+native history and exact quote/path caches are reused where available. New
+geometry may need additional read-only candle GETs. No original source is
+rewritten or automatically deleted; the summary archive stays under 20 MB and
+full results stream without making a second large ZIP on the volume.
 
-See START_HERE.txt for deployment. Offline tests are synthetic software checks;
-the actual historical replay runs on the research service.
+See START_HERE.txt. Offline tests use deterministic synthetic data to check the
+software; the real historical replay takes place on your research service.

@@ -1,11 +1,11 @@
 {
   "Procfile": {
-    "bytes": 44,
-    "sha256": "2c19942b9ba511052eee75e34ac3603e3cc2a64022fb879ce78c9a9e72b23a5e"
+    "bytes": 45,
+    "sha256": "4db035185cc37018e8f52f5c83d2eadb1cceea0c7b142155c916ddc49100fa2e"
   },
   "README.md": {
-    "bytes": 4351,
-    "sha256": "6fb038ffd868b08d3c3b85188f1b23e9f1abe623473287e056a73c4a8eba8828"
+    "bytes": 5151,
+    "sha256": "101d7380268d54541db7989d37961ee9a8403771be62c2f219812388fbf9ea32"
   },
   "README_COMBINATIONS.md": {
     "bytes": 4351,
@@ -16,8 +16,56 @@
     "sha256": "71746779103220a747315767633d94f890e02072d48bb42f7ef64201ea57b817"
   },
   "START_HERE.txt": {
-    "bytes": 1823,
-    "sha256": "7fa9ff15f029122440ea378f8b45d8dd5ea393a5839e757065695673ac2ca75e"
+    "bytes": 2545,
+    "sha256": "26bf79e06550da43dcb0a29f9095e59ba502660f139f56bde42419932e91cd2c"
+  },
+  "audusd_body_recovery/__init__.py": {
+    "bytes": 70,
+    "sha256": "e14fa59dcbb5c333847cbb2d208108edf4fb5fee6536290cf65c53b7be852f00"
+  },
+  "audusd_body_recovery/config.py": {
+    "bytes": 3261,
+    "sha256": "12db9676fa173d8bec461f483c349246f2ab7fa96d451989b666edc6aad37e4c"
+  },
+  "audusd_body_recovery/download.py": {
+    "bytes": 4389,
+    "sha256": "d2df3e4943fdfc318187e280236ffea41d3223fac614ddff1b000392a9274645"
+  },
+  "audusd_body_recovery/features.py": {
+    "bytes": 1857,
+    "sha256": "b52a32e2b1e70c46e50843e4ec95d26f9787ebdbd39e8cc2e5b20913e70edfc3"
+  },
+  "audusd_body_recovery/previous_pins.json": {
+    "bytes": 6864,
+    "sha256": "b285825b67a21dc525dbe5fff3ee4432b8325cc0fc3fdfa16e4c65fa2213e40c"
+  },
+  "audusd_body_recovery/provenance_guard.py": {
+    "bytes": 4026,
+    "sha256": "018be07f6a9811b09fba7ca3d5222e00604e052d430a48451690259748a10edb"
+  },
+  "audusd_body_recovery/reporting.py": {
+    "bytes": 10379,
+    "sha256": "849597a14fe161c2f60d38c98012489824881b7fbef7f139dde8d18c00990fce"
+  },
+  "audusd_body_recovery/reuse.py": {
+    "bytes": 11982,
+    "sha256": "87476c0cbb59e7e73dde06f8ce97dac4f71d6a7dcede75fa8380cee365ae0876"
+  },
+  "audusd_body_recovery/reviewed_provenance.json": {
+    "bytes": 31153,
+    "sha256": "86d6f191e67c5558396b62d43c9edbea3a27360eb0d412877152b1057d0ab394"
+  },
+  "audusd_body_recovery/runner.py": {
+    "bytes": 24558,
+    "sha256": "24119fc3cfe39c0201fe3801a15fa3738393bbe6176d882497ca80643ee763a9"
+  },
+  "audusd_body_recovery/signals.py": {
+    "bytes": 6866,
+    "sha256": "0114ffb7faba6508b06d292bbcd5415f3c96f9412f75a8b3a1c422888e83f45c"
+  },
+  "audusd_body_recovery/study_context.json": {
+    "bytes": 283,
+    "sha256": "b0aa1ceababadc2aec9555f66b79a0d2627ec5aaf3f3d58f22379b70b3da2044"
   },
   "audusd_combinations/__init__.py": {
     "bytes": 70,
@@ -259,6 +307,10 @@
     "bytes": 4704,
     "sha256": "5ddee1644e40124db64fdd75f15d1947c7be755cc74b7817e4ca99c1f134b0f8"
   },
+  "audusd_pullback_body_recovery.py": {
+    "bytes": 2766,
+    "sha256": "e5ed4999fce7cefc997730dbe77ccfe909c3ce8a26de795fa6c6e7bb55e404a6"
+  },
   "audusd_pullback_combinations.py": {
     "bytes": 2761,
     "sha256": "5469326b240119c62fcdd6ec2689ae9646a02189a4b343889aa634b2450a5796"
@@ -391,6 +443,14 @@
     "bytes": 1568,
     "sha256": "c9d98b066722410ad0560c38e565bc5a78f5b7751206595045c89c7db283ee5f"
   },
+  "rr_tests/test_body_recovery.py": {
+    "bytes": 7474,
+    "sha256": "bdcb19010a247f768c5adeb84711426cf1ff6d73a31341e0ad180c3066328d2f"
+  },
+  "rr_tests/test_body_recovery_integration.py": {
+    "bytes": 16384,
+    "sha256": "ec6882808558e045c68d3ff41d81d045b8f7bd59f0274e15a7ba1bf69fe61bee"
+  },
   "rr_tests/test_combinations.py": {
     "bytes": 5849,
     "sha256": "a6b2b9af2d462c506ba10933d951a7d9f7c26ed8f13112a7bbc495ba4e788752"
@@ -420,8 +480,12 @@
     "sha256": "bb0b418e55b9d3d9301b85651b0cc6814a6cbe00a3e17e2de8f09a38735ab5f0"
   },
   "validation/acceptance.json": {
-    "bytes": 631,
-    "sha256": "9c0545e4300359ec0b7df8d38fd7aaf6a0174eb3a88c1df96f3b626a817b5d38"
+    "bytes": 1083,
+    "sha256": "e74c671840d9578bbcc517b1eef887764afb48dd44aef85734d2b59970383c77"
+  },
+  "validation/body_recovery_tests.txt": {
+    "bytes": 1663,
+    "sha256": "fe0d670c3861245c616153bdfdd71567a705290da831b6f7062eab01aeb644db"
   },
   "validation/combinations_tests.txt": {
     "bytes": 1338,
