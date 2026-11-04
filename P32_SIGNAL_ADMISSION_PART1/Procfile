@@ -1,1 +1,1 @@
-web: python audusd_pullback_body_recovery.py
+web: python audusd_pullback_resumption.py
