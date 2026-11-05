@@ -1,1 +1,1 @@
-web: python audusd_pullback_resumption.py
+web: python audusd_pullback_resumption_cap.py

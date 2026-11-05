@@ -1,51 +1,52 @@
-AUDUSD_PULLBACK_RESUMPTION_PASS1_V1_2026_11_01
+AUDUSD_RESUMPTION_H1_CAP_V1_2026_11_04
 
 1. Extract this ZIP. Upload its CONTENTS over the SAME SEPARATE research project,
-   replacing matching files. Keep existing project files, variables and /data.
+   replacing matching files. Keep existing files, variables and mounted /data.
    Use the research project, not the live strategy probe or executor.
 
-2. Keep the completed body-recovery run and all its predecessors on mounted /data.
-   The expected completed body-recovery signature is:
-   590ccb0730322e82f74306d5bb9269dba0714081c84331622a86104c4d503647
-   Default path: /data/p32_audusd_body_recovery/<signature>
-   Keep AUDUSD_BODY_RECOVERY_OUTPUT_DIR at its existing value, along with all
-   preceding combination, conditional, lifetime-extension, lifetime, extension,
-   matrix and original pullback variables/directories. Stop other research writers.
+2. Keep the completed broad resumption run and all predecessor evidence.
+   Expected broad resumption signature:
+   ffdacd3863216104b7fb6a00231b8cbc7faaa722d721edaa30b9ceaac1dd14f1
+   Default path: /data/p32_audusd_resumption/<signature>
+   Keep AUDUSD_RESUMPTION_OUTPUT_DIR and all body/combination/conditional/lifetime/
+   extension/matrix/original-pullback variables unchanged. Stop other research
+   writers before the new job starts. Do not delete existing /data contents.
 
 3. Add:
-   AUDUSD_RESUMPTION_OUTPUT_DIR=/data/p32_audusd_resumption
-   Keep existing OANDA token/environment variables and /data mount.
+   AUDUSD_RESUMPTION_CAP_OUTPUT_DIR=/data/p32_audusd_resumption_cap
+   Keep the existing OANDA token/environment and /data mount.
    Optional defaults:
-   AUDUSD_RESUMPTION_RAW_CACHE_MB=64
-   AUDUSD_RESUMPTION_RESERVE_MB=96
+   AUDUSD_RESUMPTION_CAP_RAW_CACHE_MB=64
+   AUDUSD_RESUMPTION_CAP_RESERVE_MB=96
 
 4. Change the service start command to:
-   python audusd_pullback_resumption.py
-   Procfile is also supplied. Python 3.11+; standard library only.
+   python audusd_pullback_resumption_cap.py
+   Procfile is supplied. Python 3.11+; standard library only.
 
 5. Redeploy. /health should show:
-   service: AUDUSD_PULLBACK_RESUMPTION_PASS1_V1_2026_11_01
-   candidates: 5
-   accounts: 70
-   overlap_controls: 3
-   overlap_account_payloads: 42
+   service: AUDUSD_RESUMPTION_H1_CAP_V1_2026_11_04
+   candidates: 8
+   accounts: 112
+   overlap_controls: 5
+   overlap_account_payloads: 70
    orders_supported: false
-   Health and HEAD requests do not start the job.
+   Health/HEAD requests do not start the job.
 
-6. Open /status with a normal browser GET once to start. Repeat it for progress.
-   You can close the browser while the research worker continues. New broad
-   signals may need extra candle/path work even though only 70 accounts run.
-   Completion targets: status COMPLETE, candidates_completed 5,
-   accounts_completed 70, overlap_account_payloads_matched 42.
-   /protocol contains the exact fixed specification.
+6. Open /status with a normal browser GET once to start. Repeat it for progress;
+   the service worker continues if you close the browser. /protocol shows the
+   frozen specification. Completion targets:
+   status COMPLETE
+   candidates_completed 8
+   accounts_completed 112
+   overlap_account_payloads_matched 70
 
-7. Download /results-summary.zip when complete and send it here.
-   Filename: AUDUSD_RESUMPTION_SUMMARY.zip
-   /results.zip streams larger full evidence if needed for recovery.
-   Keep /data and old evidence. If ERROR or PAUSED_STORAGE appears, send /status
-   first; completed checkpoints are retained. No automatic cache deletion of
-   earlier studies or regeneration of the original native history is required.
+7. Download /results-summary.zip and send it here when complete.
+   Filename: AUDUSD_RESUMPTION_CAP_SUMMARY.zip
+   /results.zip streams larger full evidence if recovery is needed.
+   If ERROR or PAUSED_STORAGE appears, send /status first. Completed accounts
+   and path checkpoints are retained; preserve old files and caches.
 
-The primary comparison is broad resumption vs MATCHED broad engulfing, both
-without a minimum body-size filter. Features are diagnostics, not filtered
-strategy results. No plateau is tested in this first pass; nothing activates live.
+Only the 0.20 / 0.25 / 0.30 H1 ATR caps are new. All three are independently
+regenerated and replayed under both costs. cap_regions.csv reports both adjacent
+pairs and all three together; every member must pass the existing screen.
+There is no automatic live activation or extra feature/RR search.

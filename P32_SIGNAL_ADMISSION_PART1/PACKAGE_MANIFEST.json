@@ -1,11 +1,11 @@
 {
   "Procfile": {
-    "bytes": 42,
-    "sha256": "43111bec8cfeb7c10cd50727043dcccb673aacb715bb47d3b701b089bce480df"
+    "bytes": 46,
+    "sha256": "fa59d33acd55732634b25251e9dd462466220ef32626b8094563a4d0afced8e8"
   },
   "README.md": {
-    "bytes": 6229,
-    "sha256": "b4418ce75f9c6bad7ea9d7e7d55dc2bc89e93497047e6207fda9392af8b0b379"
+    "bytes": 5589,
+    "sha256": "1c8511ebbc62460dbaf0fdd444795a52d48ca2be296224d71ffc4ad3fe260113"
   },
   "README_COMBINATIONS.md": {
     "bytes": 4351,
@@ -16,8 +16,8 @@
     "sha256": "71746779103220a747315767633d94f890e02072d48bb42f7ef64201ea57b817"
   },
   "START_HERE.txt": {
-    "bytes": 2490,
-    "sha256": "6851de5b04345c1ff3d275565798789f04fd8358b6a2cd45fbedc67919bcf5ca"
+    "bytes": 2328,
+    "sha256": "248469e6bdb7d38ed23e5fd2851fbef7dde558b143ab5de57fca09f84ad0241f"
   },
   "audusd_body_recovery/__init__.py": {
     "bytes": 70,
@@ -339,6 +339,10 @@
     "bytes": 2751,
     "sha256": "8d51a7d6e16bcd0c899b911e42f41c2b48962da9200c60853766b97dadbb8231"
   },
+  "audusd_pullback_resumption_cap.py": {
+    "bytes": 2773,
+    "sha256": "0359f2c8e298f511cf8ea17d8593400d7bd34a78e5a53cc65cc0e675c1914ac8"
+  },
   "audusd_pullback_rr.py": {
     "bytes": 2631,
     "sha256": "95572199686f9b183776466e15ad5703ba9dce9d07d4f3ab2688f57b235b2cef"
@@ -394,6 +398,58 @@
   "audusd_resumption/study_context.json": {
     "bytes": 311,
     "sha256": "a4e00155bbbd5c9d72456e268094036ccd0f87b3b2eeb3a4908b6beb1c6a9317"
+  },
+  "audusd_resumption_cap/__init__.py": {
+    "bytes": 70,
+    "sha256": "e14fa59dcbb5c333847cbb2d208108edf4fb5fee6536290cf65c53b7be852f00"
+  },
+  "audusd_resumption_cap/config.py": {
+    "bytes": 2323,
+    "sha256": "e3612c35863812f8e7bd1b3628920289818ad6e5fd9a32c4fd2b0ed60baa9973"
+  },
+  "audusd_resumption_cap/diagnostics.py": {
+    "bytes": 5374,
+    "sha256": "99b9c29140f7e8538035877d682a008d088f32da0da3550319d8277e5704b5b9"
+  },
+  "audusd_resumption_cap/download.py": {
+    "bytes": 4452,
+    "sha256": "8edd0aa017f833951fe3153dd84c4d6446854b1e89bb91c6f144469bd75907b0"
+  },
+  "audusd_resumption_cap/features.py": {
+    "bytes": 1857,
+    "sha256": "b52a32e2b1e70c46e50843e4ec95d26f9787ebdbd39e8cc2e5b20913e70edfc3"
+  },
+  "audusd_resumption_cap/previous_pins.json": {
+    "bytes": 9527,
+    "sha256": "e04cd7699c624ca6c459a22078671481027c8f276b96057874cd89d093f81bbd"
+  },
+  "audusd_resumption_cap/provenance_guard.py": {
+    "bytes": 4026,
+    "sha256": "018be07f6a9811b09fba7ca3d5222e00604e052d430a48451690259748a10edb"
+  },
+  "audusd_resumption_cap/reporting.py": {
+    "bytes": 9300,
+    "sha256": "4b3899797dedb8c04445fcbf2c327a11a9aa376771108728d79356b12618c6ea"
+  },
+  "audusd_resumption_cap/reuse.py": {
+    "bytes": 12261,
+    "sha256": "7b7bfe2a91fa86edabc9e276039d9cfcaed57126da1c73fd874a946c098aaad3"
+  },
+  "audusd_resumption_cap/reviewed_provenance.json": {
+    "bytes": 42370,
+    "sha256": "9646f86ea9a39a23ce3c0f4631315cf22204b64b7258645fcfb67db0271e025b"
+  },
+  "audusd_resumption_cap/runner.py": {
+    "bytes": 26111,
+    "sha256": "53fd9f5396315e4c80f63558718e1ee8ca54569645da36e5bf3c083c76ef4d07"
+  },
+  "audusd_resumption_cap/signals.py": {
+    "bytes": 7236,
+    "sha256": "452424a195179100e582a57173966259d4bacfaf443fbb40c90f5e0de4190927"
+  },
+  "audusd_resumption_cap/study_context.json": {
+    "bytes": 359,
+    "sha256": "868a996fda6cdcae761f449545bf064a5dc08ad07023b4b269afbb5db11174f0"
   },
   "audusd_rr/__init__.py": {
     "bytes": 70,
@@ -535,6 +591,14 @@
     "bytes": 7659,
     "sha256": "17fbc4a842e6db75bd2ca723940246a70baed075d54ce12d3172abeae80d8c31"
   },
+  "rr_tests/test_resumption_cap.py": {
+    "bytes": 10315,
+    "sha256": "4a6a6212e190747b82bfb616dddcfae0949914831b56ce4da0a22b84bb1e25a5"
+  },
+  "rr_tests/test_resumption_cap_integration.py": {
+    "bytes": 20444,
+    "sha256": "ebc31d1f6ce4e08c2fd5810e057478d6c7dae564e24682acef3d7d25a661f0a4"
+  },
   "rr_tests/test_resumption_integration.py": {
     "bytes": 18750,
     "sha256": "d764e3764e6d2037259c2896b4bfbb65e8fdceb282a28eafa0ef55f4792926b3"
@@ -544,8 +608,8 @@
     "sha256": "bb0b418e55b9d3d9301b85651b0cc6814a6cbe00a3e17e2de8f09a38735ab5f0"
   },
   "validation/acceptance.json": {
-    "bytes": 1451,
-    "sha256": "5b933033a2b9faab37c19995b6203afd43fa15bf8860c505e3dce2ec039d05bc"
+    "bytes": 1552,
+    "sha256": "6abf5792976136dc61d51a0d2885d3961a615cb9d2171e212b76e9ad039864cd"
   },
   "validation/body_recovery_tests.txt": {
     "bytes": 1663,
@@ -558,6 +622,10 @@
   "validation/conditional_tests.txt": {
     "bytes": 1388,
     "sha256": "0c3c05a97b7a62248785ac8a1dcaedf47ffabcad91ddb006bfac9b362142b18e"
+  },
+  "validation/resumption_cap_tests.txt": {
+    "bytes": 2088,
+    "sha256": "a5a139db9434815f6cc5408f1ac138b04167d6bff08d6a3c3bfee27ff5da70cd"
   },
   "validation/resumption_tests.txt": {
     "bytes": 1646,
