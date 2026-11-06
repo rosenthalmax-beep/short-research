@@ -1,0 +1,194 @@
+[
+  {
+    "strategy_id": "EUR_USD_H1_LONG",
+    "pair": "EUR_USD",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "GBP_USD_H1_LONG",
+    "pair": "GBP_USD",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "USD_JPY_H1_LONG",
+    "pair": "USD_JPY",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "USD_CAD_H1_LONG",
+    "pair": "USD_CAD",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EUR_GBP_H1_LONG",
+    "pair": "EUR_GBP",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EUR_JPY_H1_LONG",
+    "pair": "EUR_JPY",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "AUD_USD_H1_LONG",
+    "pair": "AUD_USD",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "AUD_JPY_H1_LONG_TIGHT_QUALITY",
+    "pair": "AUD_JPY",
+    "side": "BUY",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EUR_USD_H1_SHORT",
+    "pair": "EUR_USD",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "GBP_USD_H1_SHORT",
+    "pair": "GBP_USD",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "USD_JPY_H1_SHORT",
+    "pair": "USD_JPY",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "USD_CAD_H1_SHORT",
+    "pair": "USD_CAD",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EUR_GBP_H1_SHORT",
+    "pair": "EUR_GBP",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "AUD_USD_H1_SHORT",
+    "pair": "AUD_USD",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EUR_JPY_H1_SHORT",
+    "pair": "EUR_JPY",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "AUD_JPY_H1_SHORT_PRIMARY_RR3P25",
+    "pair": "AUD_JPY",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "EURCHF_H1_SHORT_PRIMARY_L060_D0075_SC035_PC075_RR3P50_V1",
+    "pair": "EUR_CHF",
+    "side": "SELL",
+    "timeframe": "H1"
+  },
+  {
+    "strategy_id": "AUD_JPY_M15_LONG",
+    "pair": "AUD_JPY",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "AUD_JPY_M15_SHORT",
+    "pair": "AUD_JPY",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "AUD_USD_M15_SHORT",
+    "pair": "AUD_USD",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_GBP_M15_LONG",
+    "pair": "EUR_GBP",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_GBP_M15_SHORT",
+    "pair": "EUR_GBP",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_JPY_M15_LONG",
+    "pair": "EUR_JPY",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_JPY_M15_SHORT",
+    "pair": "EUR_JPY",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_USD_M15_LONG",
+    "pair": "EUR_USD",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "EUR_USD_M15_SHORT",
+    "pair": "EUR_USD",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "GBP_USD_M15_LONG",
+    "pair": "GBP_USD",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "GBP_USD_M15_SHORT",
+    "pair": "GBP_USD",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "USD_CAD_M15_LONG",
+    "pair": "USD_CAD",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "USD_CAD_M15_SHORT",
+    "pair": "USD_CAD",
+    "side": "SELL",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "USD_JPY_M15_LONG",
+    "pair": "USD_JPY",
+    "side": "BUY",
+    "timeframe": "M15"
+  },
+  {
+    "strategy_id": "USD_JPY_M15_SHORT",
+    "pair": "USD_JPY",
+    "side": "SELL",
+    "timeframe": "M15"
+  }
+]

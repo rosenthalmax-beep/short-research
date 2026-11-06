@@ -1,1 +1,1 @@
-# Standard library only. Python 3.10+ with system timezone data.
+# Python 3.11+ standard library only. No additional pip packages required.
